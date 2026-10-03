@@ -8061,8 +8061,10 @@ function recordBypassesOnly(
       }
     }
     // Which of the person's checks is now off or back on, in plain words.
+    // The lines above already name any other file that still records a
+    // cleared switch.
     const switchLines = [...new Set(mutations.flatMap((change) =>
-      recordSwitchChange(projectDir, change.target, change.previous, change.next)
+      recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
     ))];
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);

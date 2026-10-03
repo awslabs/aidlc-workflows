@@ -174,14 +174,11 @@ function where(target: SettingsTarget): string {
   return target === "global" ? "on this machine" : "for this project";
 }
 
-export function clearSwitchCommand(
-  name: RecordableProjectBypass,
-  target: SettingsTarget,
-  projectDir?: string,
-): string {
-  const elsewhere = projectDir !== undefined && target !== "global" &&
-    resolve(projectDir) !== resolve(process.cwd());
-  return `${aidlcInvocation()} config flags --clear-bypass ${name} --${target} --yes${
+// The way back: a clear with no layer turns the switch off in every settings
+// file that records it, so the check is really back on.
+export function clearSwitchCommand(name: RecordableProjectBypass, projectDir?: string): string {
+  const elsewhere = projectDir !== undefined && resolve(projectDir) !== resolve(process.cwd());
+  return `${aidlcInvocation()} config flags --clear-bypass ${name} --yes${
     elsewhere ? ` --project-dir ${shellArg(projectDir)}` : ""
   }`;
 }
@@ -196,7 +193,7 @@ export function switchOffLine(off: SwitchOff, now: Date = new Date()): string {
     ? `because you said: "${quoted(off.entry.words)}"`
     : "set after your last message in the chat";
   return `The ${label} is off ${where(off.target)} since ${since}, ${how}. ` +
-    `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.target, off.projectDir)}).`;
+    `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.projectDir)}).`;
 }
 
 /** Every switch still off, worded: for session start, --show, and doctor. */
@@ -238,14 +235,16 @@ export function markSwitchOffNoticesSaid(projectDir: string, env: NodeJS.Process
 /**
  * Record how `config flags` changed the switches in one settings file, after
  * the write succeeded, and return what the person should read now: a line for
- * each check it turned off, and one for each it turned back on.
+ * each check it turned off, and one for each it turned back on. A caller that
+ * already names the other files still recording a cleared switch passes
+ * `otherFiles: false`, so the person reads that once.
  */
 export function recordSwitchChange(
   projectDir: string,
   target: SettingsTarget,
   previous: AidlcSettingsFile | null,
   next: AidlcSettingsFile | null,
-  env: NodeJS.ProcessEnv = process.env,
+  { env = process.env, otherFiles = true }: { env?: NodeJS.ProcessEnv; otherFiles?: boolean } = {},
 ): string[] {
   const before = new Set<string>(previous?.flags?.bypasses ?? []);
   const after = new Set<string>(next?.flags?.bypasses ?? []);
@@ -286,10 +285,11 @@ export function recordSwitchChange(
           "Start the editor or CLI without it to turn the check back on.",
       );
     } else if (still) {
+      if (!otherFiles) continue;
       const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
       lines.push(
         `The ${label} is still off: ${file} also records it. ` +
-          `Say "turn it back on" to restore it (${clearSwitchCommand(name, still.target, projectDir)}).`,
+          `Say "turn it back on" to restore it (${clearSwitchCommand(name, projectDir)}).`,
       );
     } else {
       lines.push(`The ${label} is on again ${where(target)}.`);

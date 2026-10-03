@@ -1520,7 +1520,7 @@ the pipeline handoff check) are always said. The next step the agent relays
 carries one line naming the check, since when, how it was set, and the command
 that turns it back on, for example:
 
-> The review freeze check is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Say "turn it back on" to restore it (aidlc config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes).
+> The review freeze check is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Say "turn it back on" to restore it (aidlc config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes).
 
 When no message of yours in the chat stood behind it, the line says `set from a
 terminal or a file, not from your chat` instead. Every new chat opens with the
