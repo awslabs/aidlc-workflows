@@ -137,6 +137,7 @@ import {
   applyModelPolicyToProjection,
   HARNESS_HONESTY,
   harnessHonestyNotes,
+  HARNESS_PRODUCT_NAMES,
   isModelEffort,
   isModelPreset,
   MODEL_EFFORTS,
@@ -2281,11 +2282,14 @@ function setupMapRows(
   const workspace = outstanding.filter((action) => action.section === "workspace");
   // Harness-owned model access is complete regardless of a legacy answer.
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
-  const providerNeeds = providerManaged &&
-    (providers.length > 0 || records.providers === null);
   // Where the session sets every agent, there is no policy to ask for: the
   // row names the host's session as the lever and is never walked.
   const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  // On those hosts (Copilot, Cursor) no answer means the session's own model
+  // access, as the Models row says, so it is not a gap; Bedrock stays a choice.
+  const sessionAccess = providerManaged && sessionSet && records.providers === null;
+  const providerNeeds = providerManaged && !sessionAccess &&
+    (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
   const modelDetail = sessionSet
     ? sessionModelsDetail(modelHarness(distribution), policy)
@@ -2326,6 +2330,9 @@ function setupMapRows(
     : "no unmet host trust";
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
+    : sessionAccess
+    ? `model access comes with your ${HARNESS_PRODUCT_NAMES[modelHarness(distribution)]} session; ` +
+      `to use your own Amazon Bedrock access instead, run \`${configCommand("providers")}\``
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0

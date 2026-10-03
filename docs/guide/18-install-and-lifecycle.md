@@ -372,7 +372,10 @@ runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
 row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
-their own model access. On GitHub Copilot, Cursor, and Kiro IDE the Models row
+their own model access, and on GitHub Copilot and Cursor, where no answer means
+the session's own model access (for example `model access comes with your GitHub
+Copilot session`); `aidlc config providers` records Amazon Bedrock there if you
+bring your own. On GitHub Copilot, Cursor, and Kiro IDE the Models row
 reads `[ok]` and names the host, for example `every agent uses your GitHub
 Copilot session's model and effort`: those hosts cannot pin an agent's model or
 effort, so there is no policy to ask for, and a recorded one is named as not

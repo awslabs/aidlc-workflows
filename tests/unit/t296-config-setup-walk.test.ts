@@ -789,6 +789,16 @@ describe("t296 first-run config setup walk", () => {
         `every agent uses your ${product} session's model and effort`,
       );
       expect(models, harness).not.toContain("does not apply");
+      // No provider answer on these hosts is the session's own model access,
+      // so the Providers row reads like the Models row, never "needs".
+      const providers = setupRows(fresh.stdout).find((line) => line.includes("Providers"));
+      expect(providers, harness).toContain("[ok]");
+      expect(providers, harness).not.toContain("provider access unverified");
+      expect(providers, harness).toContain(
+        harness === "kiro-ide"
+          ? "model access comes with Kiro IDE; nothing for AI-DLC to configure"
+          : `model access comes with your ${product} session; to use your own Amazon Bedrock access instead, run \``,
+      );
       expect(fresh.stdout, harness).not.toContain("config models");
       expect(fresh.stdout, harness).not.toContain("Models [Enter keep everything");
       expect(existsSync(join(path, "aidlc.settings.json")), harness).toBe(false);
