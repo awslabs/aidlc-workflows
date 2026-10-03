@@ -1390,8 +1390,22 @@ function writeAll(rows: RegistryRow[]): void {
   writeFileSync(REGISTRY_PATH, registryJson(rows));
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  // Units are read from dist/claude. Packaged from other sources than this
+  // checkout, it would describe old code, so refuse and name the fix. The
+  // AIDLC_COVERAGE_* seams point at temp trees that carry dist/ but no core/.
+  // Loaded here so modules that import this file's helpers (the runner, the
+  // live filter) never need the packager's module.
+  if (existsSync(join(REPO_ROOT, "core"))) {
+    const { stalePackageMessage } = await import("../scripts/package-sources.ts");
+    const stale = stalePackageMessage(REPO_ROOT, "claude");
+    if (stale) {
+      console.error(`coverage registry: ${stale}`);
+      process.exit(1);
+    }
+  }
 
   if (args.includes("--check")) {
     const r = runCheck();
@@ -1443,4 +1457,4 @@ function main(): void {
   console.log(`  ${"TOTAL".padEnd(11)} ${rows.filter((r) => r.status === "covered").length}/${rows.length}`);
 }
 
-if (import.meta.main) main();
+if (import.meta.main) await main();

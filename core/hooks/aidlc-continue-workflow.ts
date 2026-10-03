@@ -155,6 +155,7 @@ import {
   hookChildEnv,
   isEngineToolCall,
   hooksHealthDir,
+  writeHookStatusFile,
   isoTimestamp,
   intentUuidForSelection,
   isTeamUnitOwnership,
@@ -1562,8 +1563,7 @@ try {
 // Write a health heartbeat (mirrors the other hooks' .aidlc-engine/hooks-health beat).
 try {
   const healthDir = hooksHealthDir(projectDir);
-  mkdirSync(healthDir, { recursive: true });
-  writeFileSync(join(healthDir, "continue-workflow.last"), isoTimestamp(), "utf-8");
+  writeHookStatusFile(healthDir, "continue-workflow.last", isoTimestamp());
 } catch {
   // Heartbeat failure is non-fatal — never let it affect the stop decision.
 }
