@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1276,
+    "total": 1279,
     "enumeratedByClass": {
-      "function": 944,
+      "function": 947,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 579,
+      "function": 582,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -1563,6 +1563,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:aidlcAgentClaim",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t223-naming-enforcement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3729,6 +3741,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:foreignAgentFiles",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t223-naming-enforcement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:forgetGateWords",
       "minMechanism": "none",
       "coveredBy": [
@@ -4853,6 +4877,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAidlcAgentFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t223-naming-enforcement.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8420,6 +8456,10 @@
         },
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -15314,6 +15354,10 @@
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15484,6 +15528,10 @@
         },
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workflow-selector-names.test.ts",
           "mechanism": "cli"
         },
         {

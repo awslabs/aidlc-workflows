@@ -414,7 +414,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 ## Adding an Agent
 
-Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every `.md` file in that directory and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
+Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every persona `.md` file in that directory (one named `aidlc-*` or carrying `display_name`, `examples`, `tier`, or `plugin`) and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
 
 ### Steps
 
@@ -446,8 +446,8 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 ### What validates automatically
 
-- `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next invocation — no code edit.
-- The parser throws if `name` or `display_name` is missing, naming the file and the missing field.
+- `loadAgents()` discovers any new persona `.md` file in `.claude/agents/` on next invocation — no code edit. A persona is a file named `aidlc-*` or one whose frontmatter carries `display_name`, `examples`, `tier`, or `plugin`; any other file there is the host's own agent and is left alone.
+- The parser throws if a persona's `name` or `display_name` is missing, naming the file, the missing field, and (for a file not named `aidlc-*`) the key that made it a persona.
 - Agents are returned alphabetically sorted by slug, so `readdirSync` order on any platform produces the same output.
 - Intent creation creates the empty space-level `aidlc/knowledge/` directory (it does not seed per-agent subdirectories or READMEs).
 - Statusline rendering derives the display name from the same metadata source.

@@ -1284,7 +1284,7 @@ describe("t230 version-aware startup", () => {
       });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(readFileSync(marker, "utf-8")).toBe("reserved\n");
-      expect(existsSync(join(machine, "reservations"))).toBe(false);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
     },
   );
 

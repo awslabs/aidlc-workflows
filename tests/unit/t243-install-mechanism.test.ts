@@ -30,7 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createTarGz,
   extractTarGz,
@@ -2706,6 +2706,23 @@ describe("t243 project initialization", () => {
       "Upstream overlay probe.",
     );
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a host subagent in .claude/agents does not stop a refresh", () => {
+    const project = temp("aidlc-t243-host-agent-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const hostAgent = join(project, ".claude", "agents", "foo-agent.md");
+    const body = "---\nname: foo-agent\ndescription: A subagent another tool installed.\ntools: Read\n---\n\nYou review pull requests.\n";
+    writeFileSync(hostAgent, body);
+
+    const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout + refreshed.stderr).not.toContain("missing required frontmatter");
+    expect(readFileSync(hostAgent, "utf-8")).toBe(body);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pre-manifest adoption preserves all mutable harness policy keys", () => {
@@ -5538,6 +5555,7 @@ describe("t243 release lifecycle", () => {
     process.env.AIDLC_BIN_DIR = join(machine, "bin");
     const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
     try {
+      expect(releaseReservation).not.toBeNull();
       const protectedPrune = run(
         LIFECYCLE,
         ["versions", "prune", "--yes"],
@@ -5548,7 +5566,7 @@ describe("t243 release lifecycle", () => {
       expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
       expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
     } finally {
-      releaseReservation();
+      releaseReservation?.();
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
       if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
@@ -5558,7 +5576,169 @@ describe("t243 release lifecycle", () => {
     const pruned = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
     expect(pruned.status, pruned.stdout + pruned.stderr).toBe(0);
     expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(false);
-    expect(existsSync(join(machine, "reservations"))).toBe(false);
+    // Release keeps the directory; removing it outside the lock races other reservations.
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")(
+    "a dispatched-version reservation waits out a live transaction lock holder",
+    () => {
+      const activeRelease = fixtureRelease();
+      const retainedRelease = fixtureRelease(NEXT_VERSION);
+      const machine = temp("aidlc-t243-reservation-wait-machine-");
+      const project = temp("aidlc-t243-reservation-wait-project-");
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      expect(run(LIFECYCLE, [
+        "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+      ], project, env).status).toBe(0);
+      expect(run(LIFECYCLE, [
+        "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+      ], project, env).status).toBe(0);
+
+      const saved = {
+        root: process.env.AIDLC_INSTALL_ROOT,
+        bin: process.env.AIDLC_BIN_DIR,
+      };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const holder = spawnSync("sh", ["-c", "sleep 1 >/dev/null 2>&1 & echo $!"], {
+          encoding: "utf-8",
+        });
+        const pid = Number(holder.stdout.trim());
+        expect(Number.isSafeInteger(pid) && pid > 0, holder.stderr).toBe(true);
+        const lockPath = join(machineTransactionRoot(), ".aidlc-transaction.lock");
+        writeFileSync(lockPath, `${JSON.stringify({ pid, staging: ".aidlc-txn-held" })}\n`);
+
+        const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
+        try {
+          expect(releaseReservation).not.toBeNull();
+          expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
+          expect(existsSync(lockPath)).toBe(false);
+        } finally {
+          releaseReservation?.();
+        }
+        expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
+  test("parallel dispatched-version reservations all land, as parallel hooks make them", async () => {
+    const activeRelease = fixtureRelease();
+    const retainedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-parallel-machine-");
+    const project = temp("aidlc-t243-reservation-parallel-project-");
+    const barrier = temp("aidlc-t243-reservation-parallel-barrier-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+    ], project, env).status).toBe(0);
+
+    // Each child signals ready, then all reserve at once when `go` appears.
+    const child = join(barrier, "reserve.ts");
+    writeFileSync(child, [
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      `const { reserveDispatchedVersion } = await import(${
+        JSON.stringify(pathToFileURL(LIFECYCLE).href)
+      });`,
+      `const barrier = ${JSON.stringify(barrier)};`,
+      `writeFileSync(join(barrier, "ready-" + process.pid), "");`,
+      `while (!existsSync(join(barrier, "go"))) Bun.sleepSync(5);`,
+      `const release = reserveDispatchedVersion(${JSON.stringify(NEXT_VERSION)});`,
+      `if (!release) throw new Error("the reservation gave up on a busy lock");`,
+      `Bun.sleepSync(Math.random() * 50);`,
+      `release();`,
+      "",
+    ].join("\n"));
+    const children = Array.from({ length: 8 }, () =>
+      Bun.spawn([BUN, child], {
+        cwd: project,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+    );
+    const results = Promise.all(children.map(async (spawned) => {
+      const [status, stderr] = await Promise.all([
+        spawned.exited,
+        new Response(spawned.stderr).text(),
+      ]);
+      return { status, stderr };
+    }));
+    const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
+    while (
+      readdirSync(barrier).filter((name) => name.startsWith("ready-")).length < children.length &&
+      children.every((spawned) => spawned.exitCode === null) &&
+      Date.now() < deadline
+    ) {
+      await Bun.sleep(10);
+    }
+    writeFileSync(join(barrier, "go"), "");
+    for (const result of await results) {
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    expect(existsSync(join(machine, ".aidlc-transaction.lock"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned hook still runs, with a one-line note, when the machine lock stays busy", async () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-busy-machine-");
+    const project = temp("aidlc-t243-reservation-busy-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const hookEnv = { ...env, AIDLC_PROJECT_DIR: project, AIDLC_PIN_RESERVATION_TIMEOUT_MS: "200" };
+    const note = `so this ran on aidlc ${NEXT_VERSION} without waiting for it to finish`;
+
+    const free = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+    expect(free.status, free.stdout + free.stderr).toBe(0);
+    expect(free.stderr).not.toContain(note);
+
+    // A live process that never releases stands in for a stuck lock owner.
+    const holder = Bun.spawn([BUN, "-e", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const lockPath = join(machine, ".aidlc-transaction.lock");
+    try {
+      writeFileSync(lockPath, `${JSON.stringify({ pid: holder.pid, staging: ".aidlc-txn-held" })}\n`);
+      const busy = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+      expect(busy.status, busy.stdout + busy.stderr).toBe(0);
+      expect(busy.stderr).toContain(
+        `aidlc: another AI-DLC command is still changing this machine's install, ${note}.`,
+      );
+      expect(existsSync(lockPath)).toBe(true);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
