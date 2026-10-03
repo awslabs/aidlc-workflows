@@ -120,8 +120,8 @@ bash tests/run-tests.sh --integration --filter "t25|t26"
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses eight isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/8
+# Run one deterministic unit shard. CI uses twelve isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/12
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -174,8 +174,8 @@ Use the shared profiles in `tests/harness/test-budget.ts` for native startup
 and multi-worktree cases (one hour). These ceilings tolerate variable
 runner load and do not delay successful operations. Explicit deadline and
 performance calibration tests keep their own bounds.
-PR CI runs Linux smoke, eight weighted unit shards, and deterministic integration.
-Full Suite runs smoke, the same eight unit shards, integration, and isolated
+PR CI runs Linux smoke, twelve weighted unit shards, and deterministic integration.
+Full Suite runs smoke, the same twelve unit shards, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
@@ -187,12 +187,17 @@ inside a 270-minute step and five-hour job. Live credentialed jobs retain
 their separate lease-bound ceilings. Nested operations share actual remaining
 file time; deliberately short timeout calibrations keep their explicit bounds.
 Sanitized `tests/logs/` and root `tmp/ci-deterministic/` captures
-are retained together for 90 days.
+are retained together for 90 days. Nothing downloads CI's evidence, so in CI a
+failed upload does not fail a job whose tests passed; Full Suite evidence stays
+required.
 POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. The merge queue, and manual CI with
 `platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same eight shards and provisioning.
+all unit regressions through the same twelve shards and provisioning. Only the
+merge queue reruns a smoke, unit or integration file whose assertions failed,
+once, in a fresh process; a pass on that attempt shows a `Flaky test` warning
+and is listed in the run's `retries.json`. PR CI never retries.
 
 For a single deterministic reproduction, manually dispatch
 `deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,

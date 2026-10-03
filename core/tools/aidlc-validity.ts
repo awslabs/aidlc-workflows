@@ -294,6 +294,16 @@ function projectTypeFrom(
   return raw === "brownfield" || raw === "greenfield" ? raw : null;
 }
 
+// A project-type change (the person said the work is existing code, or a new
+// project) makes a finished stage stale only when its work follows the type:
+// its inputs change with it (a conditional consume), or it builds (the
+// Construction testing plan and in-place rule follow it). Every other finished
+// stage stays valid, so the advisory names a stage worth redoing.
+function workDependsOnProjectType(stage: StageValidityNode): boolean {
+  return stage.phase === "construction" ||
+    (stage.consumes ?? []).some((consume) => consume.conditional_on !== undefined);
+}
+
 function consumeIsApplicable(
   conditionalOn: string | undefined,
   projectType: "brownfield" | "greenfield" | null,
@@ -743,7 +753,9 @@ export function inspectStageValidity(
       );
       continue;
     }
-    const changes = diffStageValidationBasis(previous, current);
+    const changes = diffStageValidationBasis(previous, current).filter(
+      (change) => change !== "project-type" || workDependsOnProjectType(stage),
+    );
     if (changes.length > 0) directReasons.set(slug, changes);
   }
 

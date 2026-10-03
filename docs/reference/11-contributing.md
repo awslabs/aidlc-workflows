@@ -298,10 +298,17 @@ field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
 `.aidlc-engine/document-input-path` transport. Customer-chosen path bytes never enter
-the shell command. The handler resolves one exact project-root path, records
-the contained file identity, and requires the opened descriptor to match it
-before reading; parent-directory replacement, redirects, and unsupported input
-are refused. Successful reads emit the same inline untrusted-path and
+the shell command. The handler resolves the path from the project root,
+records the contained file identity, and requires the opened descriptor to
+match it before reading; parent-directory replacement, redirects, and
+unsupported input are refused. When nothing exists at that path, it lists the
+project's regular files with that name through `git ls-files --cached --others
+--exclude-standard` (a walk that skips `.git`, `node_modules`, hidden folders,
+and nested repositories, only outside a repository), matching only document
+files outside hidden folders, never offering symlinks or a path with a secret-looking file or folder name, and reads a sole match or returns the
+matches for a numbered pick. When git fails inside a repository or the walk
+hits its cap, it chooses nothing and asks for the path. `project-description` splits a pasted
+document from the person's directions, so no stage splits it by itself. Successful reads emit the same inline untrusted-path and
 untrusted-content notices as DocumentKB.
 
 ### LLM-driven handlers
@@ -332,7 +339,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
    - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
    - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
 
-   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Every shipped scope declares all three explicitly: classic enables sensors and learnings and disables summary confirmation, express disables all three, and the other nine enable all three. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
+   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Every shipped scope declares all three explicitly: classic enables sensors and learnings and disables summary confirmation, bugfix enables sensors and disables learnings and summary confirmation, express disables all three, and the other eight enable all three. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 
@@ -414,7 +421,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 ## Adding an Agent
 
-Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every `.md` file in that directory and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
+Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every persona `.md` file in that directory (one named `aidlc-*` or carrying `display_name`, `examples`, `tier`, or `plugin`) and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
 
 ### Steps
 
@@ -446,8 +453,8 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 ### What validates automatically
 
-- `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next invocation — no code edit.
-- The parser throws if `name` or `display_name` is missing, naming the file and the missing field.
+- `loadAgents()` discovers any new persona `.md` file in `.claude/agents/` on next invocation — no code edit. A persona is a file named `aidlc-*` or one whose frontmatter carries `display_name`, `examples`, `tier`, or `plugin`; any other file there is the host's own agent and is left alone.
+- The parser throws if a persona's `name` or `display_name` is missing, naming the file, the missing field, and (for a file not named `aidlc-*`) the key that made it a persona.
 - Agents are returned alphabetically sorted by slug, so `readdirSync` order on any platform produces the same output.
 - Intent creation creates the empty space-level `aidlc/knowledge/` directory (it does not seed per-agent subdirectories or READMEs).
 - Statusline rendering derives the display name from the same metadata source.

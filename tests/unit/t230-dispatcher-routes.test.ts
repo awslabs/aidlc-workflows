@@ -654,6 +654,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "workspace reclassify maps to utility reclassify",
+      routerArgs: ["engine", "workspace", "reclassify", "--project-type", "brownfield"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["reclassify", "--project-type", "brownfield"],
+      fixture: true,
+    },
+    {
       name: "workspace codekb maps to utility codekb-path",
       routerArgs: ["engine", "workspace", "codekb"],
       tool: "aidlc-utility.ts",
@@ -1284,7 +1291,7 @@ describe("t230 version-aware startup", () => {
       });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(readFileSync(marker, "utf-8")).toBe("reserved\n");
-      expect(existsSync(join(machine, "reservations"))).toBe(false);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
     },
   );
 
@@ -2246,6 +2253,7 @@ describe("t230 dispatcher route completeness", () => {
       [["engine", "scope", "resolve-env"], "scope"],
       [["engine", "orchestrate", "help"], "engine-orchestrate-help"],
       [["engine", "workspace", "detect"], "workspace"],
+      [["engine", "workspace", "reclassify"], "workspace"],
       [["engine", "workspace", "codekb"], "workspace"],
       [["engine", "workspace", "codekb-scope-diff"], "workspace"],
       [["engine", "gen", "stage-table"], "gen"],

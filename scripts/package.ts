@@ -67,6 +67,7 @@ import {
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
+import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
@@ -579,7 +580,7 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   // Emitted only when a manifest sets it, so the three-field output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
-  // Likewise conditional: only a host that gates hooks on trust declares it.
+  // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
   if (m.hookActivation) data.hookActivation = m.hookActivation;
   // Only the Kiro rows declare a layout; the runtime reads it in place of the row name.
   if (m.kiroLayout) data.kiroLayout = m.kiroLayout;
@@ -1836,6 +1837,8 @@ if (check) {
       `for ${targets.join(", ")}.`,
   );
 } else {
+  const builtFrom = packageInputsFingerprint(REPO_ROOT);
+  forgetPackagedSources(REPO_ROOT, targets);
   cleanWriteOutputs(targets, named === undefined);
   for (const n of targets) {
     writeHarness(n);
@@ -1845,4 +1848,11 @@ if (check) {
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
+  // Last, so only a finished build from unchanged sources is recorded as current.
+  if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {
+    console.error(
+      "[sources] a packaging input changed while packaging, so the generated trees may mix old and new files: run `bun scripts/package.ts` again.",
+    );
+    process.exit(1);
+  }
 }

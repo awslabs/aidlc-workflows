@@ -42,6 +42,41 @@ const manifest: HarnessManifest = {
   name: "copilot",
   productName: "GitHub Copilot",
   configNextStep: "start Copilot CLI or VS Code agent mode, then run `/aidlc --doctor`",
+  // VS Code runs repo hooks only in a trusted workspace with Chat: Use Hooks
+  // on, which an organization policy can switch off, and skips them without a
+  // word in the chat; the CLI runs them only in a folder it trusts. AIDLC can
+  // see neither switch, so it tells the person what it can see: no hook has
+  // run. The adapter leaves a heartbeat at a chat's SessionStart before the
+  // first workflow, and the PreToolUse guards leave one in the record before
+  // each engine command the agent runs, so a working install never sees
+  // notRunYet after a chat or notRunInWorkflow at all.
+  hookActivation: {
+    recovery:
+      "In VS Code, AI-DLC's hooks run only in a trusted folder with the Chat: Use Hooks " +
+      "setting on, and your organization can switch that setting off: check Workspace Trust " +
+      "for this folder and that setting, then start a new chat in this folder. In the Copilot " +
+      "CLI, trust this folder when it asks (it is then listed under trustedFolders in its " +
+      "config.json), and give headless `copilot -p` runs " +
+      "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
+    // Says what happened and what lets the next chat record replies; it adds no
+    // step to the refusal it joins.
+    missedReply:
+      "If the person already replied, Copilot is not running AI-DLC's hooks here, so that " +
+      "reply was not recorded. Tell them that, and that trusting this folder and turning " +
+      "Chat: Use Hooks on in VS Code (in the Copilot CLI, trusting this folder) lets the next " +
+      "chat record their replies.",
+    notRunYet:
+      "This is expected before your first Copilot chat in this folder. If you already started " +
+      "one, Copilot is not running AI-DLC's hooks here. In VS Code, check that this folder is " +
+      "trusted and that the Chat: Use Hooks setting is on (your organization can switch it " +
+      "off). In the Copilot CLI, trust this folder when it asks. Then start a new chat in this " +
+      "folder and run doctor again.",
+    notRunInWorkflow:
+      "AI-DLC's hooks have not run in this project, so it cannot record your replies and " +
+      "approvals or run its checks. In VS Code, check that this folder is trusted and that the " +
+      "Chat: Use Hooks setting is on (your organization can switch it off). In the Copilot " +
+      "CLI, trust this folder when it asks. Then start a new chat in this folder and carry on.",
+  },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
   tierFlavor: "copilot",
@@ -55,6 +90,8 @@ const manifest: HarnessManifest = {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:f52e6097d36c2e5bc199a2529469a4c6e7c507f7960f94a0b2b46f9aeee60e56",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:1a25bf94915b9f1c67136cfb36f5c82c03c6f6540deddd2af9e760e0f93069df",
         ],
       },
     },
@@ -91,6 +128,9 @@ const manifest: HarnessManifest = {
           // The pre-plan-offer shipped variant (its onboarding said the init
           // runner always creates the first record in one step).
           "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
+          // The variant whose folder-trust bullet said both Copilot surfaces
+          // read trustedFolders (VS Code never does).
+          "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
         ],
       },
     },

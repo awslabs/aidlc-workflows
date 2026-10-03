@@ -27,8 +27,9 @@ under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
 elevated installer runs, and asked to confirm. `-Yes` confirms without a prompt;
 a non-interactive run without `-Yes` (including `-Json` and `-Quiet`) stops with
-that guidance. `aidlc uninstall` gives the same warning in its confirmation, or
-in its result with `--yes`. Sessions that already hold a full administrator
+that guidance. `aidlc uninstall` gives the same warning but asks nothing: at a
+terminal it prints the warning before it removes anything, and with `--yes` the
+warning is in its result. Sessions that already hold a full administrator
 token without UAC elevation, such as the built-in Administrator on Windows
 Server, see no warning. Running PowerShell with another account's credentials
 installs for that account. There is no all-users mode.
@@ -303,7 +304,10 @@ tree, the `aidlc/` workspace shell, root integrations, a projection stamp, and
 an ownership baseline. It does not create a workflow intent.
 
 When more than one harness is present, every `aidlc config` invocation must
-include `--harness <name>`, including previews and refreshes. See
+include `--harness <name>`, including previews and refreshes. The one exception
+is recording or clearing a bypass with `aidlc config flags --bypass` or
+`--clear-bypass` and nothing else to change: a bypass belongs to the project,
+not to one harness. See
 [Root Integrations and Ownership](#root-integrations-and-ownership) for which
 harnesses can coexist and how their shipped `.gitignore` entries are combined.
 
@@ -368,7 +372,12 @@ runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
 row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
-their own model access. Runtime leads with the immediate action and points to
+their own model access. On GitHub Copilot, Cursor, and Kiro IDE the Models row
+reads `[ok]` and names the host, for example `every agent uses your GitHub
+Copilot session's model and effort`: those hosts cannot pin an agent's model or
+effort, so there is no policy to ask for, and a recorded one is named as not
+applying there. See [Choosing a Model and Effort](#choosing-a-model-and-effort).
+Runtime leads with the immediate action and points to
 `aidlc config runtime --show` for diagnostics. The closing ledger is a compact
 label-to-command list. Section-named commands, non-TTY runs, `--dry-run`,
 `--json`, and `--quiet` keep their deterministic output and never render the
@@ -440,12 +449,19 @@ Model and flag policy resolves leaf-by-leaf through this hierarchy:
 4. Personal `aidlc.settings.local.json`
 5. Environment variables
 
-The project file is committed team policy. The local file is personal and is
-added to `.gitignore` when the config command creates it. Mutations require
-exactly one of `--project`, `--local`, or `--global`; the interactive wizard
-asks for the layer and recommends project policy inside a repository. Outside
-a recognized project only the machine layer is valid, so `--global` is
-inferred. `--show` labels each effective value with its winning source.
+Bypasses add up instead of overriding: a switch is on while any of the three
+files records it.
+
+The project file is committed team policy. The local file is personal: AI-DLC's
+managed `.gitignore` block lists it, and on an install whose `.gitignore`
+predates that, the config command that creates it adds it to the clone's own
+`.git/info/exclude` instead. Neither file counts as the team's code. Mutations
+require exactly one of `--project`, `--local`, or `--global`, except a bypass:
+`--bypass` with no layer records in the local file, and `--clear-bypass` with
+no layer clears every file that records it. The interactive wizard asks for the
+layer and recommends project policy inside a repository. Outside a recognized
+project only the machine layer is valid, so `--global` is inferred. `--show`
+labels each effective value with its winning source.
 
 All three files use one strict schema. Unknown keys fail closed, and
 update/release keys such as `offline` and `release-base-url` are machine-only.
@@ -490,10 +506,54 @@ to `xhigh`. opencode clamps `xhigh` down to `high`. Kiro CLI cannot express
 group effort dials, but a per-agent model exception can carry effort through
 `chat.modelDefaults`. Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
 agent models or effort, so the command records the policy and reports the
-unsupported fields instead of writing inert keys.
+unsupported fields instead of writing inert keys. On those three, every agent
+uses the session's model and effort: the setup check and `aidlc doctor` say so
+instead of asking for a policy, and doctor warns only about an agent model
+recorded for that harness by name.
 
 Model policy is agent-scoped. Stage files never carry model or effort keys;
 scopes continue to own stage criticality.
+
+### Choosing a Model and Effort
+
+AI-DLC works best with a capable reasoning model; the recommended model is
+Claude Opus 4.8. Where you set the model and effort depends on the harness:
+
+- **GitHub Copilot, Cursor, and Kiro IDE:** in the host, for the whole session.
+  Every agent uses the model and effort of the chat you run `/aidlc` in, and
+  nothing AI-DLC records changes that. On Kiro IDE, a `model:` line you add
+  to an agent's `.md` file by hand changes that agent until the next refresh
+  (see [Customization](13-customization.md)); on Copilot such a pin is not
+  portable, because the CLI and VS Code read model names differently.
+- **Claude Code, Codex CLI, and opencode:** the session's model and effort
+  drive the conductor and every agent that inherits; `aidlc config models`
+  can set agent efforts (the `balanced` preset sets them to medium) and
+  per-agent exceptions.
+- **Kiro CLI:** the session model (`/model`) and effort (`/effort`); see
+  [Kiro CLI](harnesses/kiro-cli.md).
+
+If your organization offers only a mid-tier model, such as a Claude Sonnet
+model, without Opus:
+
+- **Start the session at medium effort.** A workflow runs many turns, and
+  higher effort makes the model think longer on every one of them, so high or
+  maximum effort makes the whole run much slower and more expensive. Medium is
+  what the `balanced` preset gives agents on harnesses that can set them.
+- **Raise effort only for a stage that needs it,** for example Code Generation
+  on a hard Unit, then lower it again. On GitHub Copilot, Cursor, Kiro IDE,
+  and Kiro CLI that is the session's effort. On Claude Code, Codex CLI, and
+  opencode, Code Generation runs on the developer agent, which follows the
+  session only while no preset or effort is recorded for it. Otherwise its
+  effort is the recorded one for every Unit of the workflow: to raise it,
+  record it before the workflow starts, for example
+  `aidlc config models --agent developer --effort high --project --yes`, and
+  it then applies to all of Code Generation, because config does not refresh
+  agent files while a workflow is active.
+- **Change model or effort between stages, in a new chat.** See
+  [Changing Model Mid-Workflow](11-session-management.md#changing-model-mid-workflow).
+
+Running a workshop? The [Facilitator Guide](facilitator-guide.md) covers the
+readiness check and keeping each run small.
 
 ### In-session alias
 
@@ -662,6 +722,17 @@ For the `kiro-ide` distribution, trust ships in the conductor's `permissions`
 (`.kiro/agents/aidlc.md`), so the check adds nothing there; Kiro IDE 1.x no
 longer reads `.vscode/settings.json` `kiroAgent.trustedCommands`. `--show` lists
 the selected harness's trust and allowlist files.
+
+For Copilot, the check reads the Copilot CLI's `trustedFolders` (in
+`config.json` under `COPILOT_HOME`, else `%USERPROFILE%\.copilot` on Windows
+and `~/.copilot` elsewhere) and warns when it does not cover the project; a
+folder above the project counts. VS Code never reads that list: its hooks need
+a trusted workspace and the Chat: Use Hooks setting on, which AI-DLC cannot
+see, so the Trust row names them. When the CLI has not trusted the project,
+`aidlc config trust` (and the setup walk) says how: run `copilot` in the
+project once and choose "Yes, and remember this folder for future sessions".
+AI-DLC never edits the CLI's `config.json` itself, since trusting a folder lets
+its code run.
 
 The trust check also verifies the project siblings that copy installs often
 miss: `aidlc/` for every harness, `.agents/` for Codex, and the `.aidlc/`
@@ -915,7 +986,7 @@ shipped block copy is available (`merge (combined with <harness>)`); older
 installs without that copy keep ownership until refreshed. Each harness records
 the same combined block hash on its next config invocation.
 Once more than one harness is present, every `aidlc config` invocation needs
-`--harness <name>`.
+`--harness <name>`, except recording or clearing a bypass on its own.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
@@ -1251,7 +1322,8 @@ check. Warnings are advisory and exit 0; any failed check exits 1.
 
 `--no-color` and `NO_COLOR` disable ANSI output. `--project-dir <path>` selects
 project context without changing the shell directory. Destructive operations
-such as `uninstall` prompt on a TTY and require `--yes` without one. `--yes` never bypasses
+such as `uninstall` ask nothing on a TTY: they print what they remove and
+keep, then do it. Without a TTY they require `--yes`. `--yes` never bypasses
 ownership, integrity, active-workflow, or release-authentication refusals.
 
 | Code | Meaning |
@@ -1452,8 +1524,9 @@ unrelated changes made afterward are preserved. An install without an
 ownership record leaves User PATH alone. `-NoModifyPath` on a later installer
 run preserves an earlier record, so that entry is still removed on uninstall.
 
-Uninstall requires confirmation and refuses filesystem, home, shared-system,
-and project roots, as well as root-owned, package-manager-owned, or
+At a terminal, uninstall says what it removes and keeps, then proceeds; without
+a terminal it needs `--yes`. It refuses filesystem, home, shared-system, and
+project roots, as well as root-owned, package-manager-owned, or
 mixed-ownership commands. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command

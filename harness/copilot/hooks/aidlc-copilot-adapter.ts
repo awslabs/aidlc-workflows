@@ -102,6 +102,8 @@ import {
   isReadOnlyNextArgv,
   normalizeDriveLetter,
   recordCopilotHumanSequence,
+  recordHookDrop,
+  recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
@@ -279,36 +281,14 @@ export async function run(
   // --- Core-hook subprocess plumbing -----------------------------------------
 
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
-    const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
-    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
-    const command = executable
-      ? authorityToken
-        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
-        : [executable, "engine", "hook", hook]
-      : authorityToken
-        ? [
-            process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
-            "--internal-aidlc-record-human-turn",
-            join(HOOKS_DIR, hookFile),
-          ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
-    const r = Bun.spawnSync(command, {
-      stdin: Buffer.from(stdin, "utf-8"),
-      stdout: "pipe",
-      stderr: "ignore",
-      cwd: projectDir,
-      env: authorityToken
-        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-        : projectEnv,
-    });
-    return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+    const { stdout, code } = runCoreWithStderr(hookFile, stdin);
+    return { stdout, code };
   }
 
-  // Variant capturing stderr — the guard hooks' block channel (exit 2 + the
-  // reason on stderr) must survive the pipe so it can be converted to the
-  // Copilot deny JSON.
+  // Every core hook's stderr is kept: the guard hooks' block channel (exit 2 +
+  // the reason on stderr) must survive the pipe so it can be converted to the
+  // Copilot deny JSON, and a hook that fails any other way still fails open
+  // but leaves its reason where doctor reads it (failedCoreHookDrop).
   function runCoreWithStderr(
     hookFile: string,
     stdin: string,
@@ -337,11 +317,57 @@ export async function run(
         ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
         : projectEnv,
     });
+    const stderr = r.stderr?.toString() ?? "";
+    failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr, forwardedSessionId(stdin));
     return {
       stdout: r.stdout?.toString() ?? "",
-      stderr: r.stderr?.toString() ?? "",
+      stderr,
       code: r.exitCode ?? 0,
     };
+  }
+
+  // The session a core hook ran for: the forwarded payload's (the prior
+  // session for a reconciled session-end), else this event's.
+  function forwardedSessionId(stdin: string): string {
+    try {
+      const forwarded = (JSON.parse(stdin) as { session_id?: unknown }).session_id;
+      if (typeof forwarded === "string" && forwarded.length > 0) return forwarded;
+    } catch {
+      // Not JSON: this event's session.
+    }
+    return sessionId;
+  }
+
+  // Exit 0 is success and exit 2 is a hook's deny or block. Any other exit or
+  // a signal is a failure the host never shows: record the hook, the exit, and
+  // the error line (Bun's `error:` line, else the last line) for doctor. The
+  // line is the hook's own text, so a severity tag in it is neutralized: only
+  // the hook that writes a drop decides whether doctor fails on it.
+  function failedCoreHookDrop(
+    hook: string,
+    exitCode: number | null,
+    signalCode: string | null,
+    stderr: string,
+    hookSessionId: string,
+  ): void {
+    if (exitCode === 0 || exitCode === 2) return;
+    const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+    const line = (lines.find((entry) => entry.startsWith("error:")) ??
+      lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
+      .replace(/\[(degraded|advisory)\]/gi, "($1)");
+    const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
+    // The record that session works in, not the shared cursor's, so doctor
+    // shows the failure beside the workflow it hit.
+    let intent: string | undefined;
+    let space: string | undefined;
+    try {
+      const selection = resolveWorkflowSelection(projectDir, hookSessionId ? { sessionId: hookSessionId } : {});
+      intent = selection.intent ?? undefined;
+      space = intent ? selection.space : undefined;
+    } catch {
+      // No resolvable record: the default one takes the line.
+    }
+    recordHookDrop(projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`, intent, space);
   }
 
   // The one deny dialect both surfaces honor (difference #4). stdout JSON,
@@ -404,6 +430,18 @@ export async function run(
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
     : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+  // PowerShell itself: cmd never splits a command line at `;`.
+  const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
+  // The plan-approval guard reads a PowerShell command the way PowerShell runs
+  // it. Only the adapter says which shell ran, never the payload.
+  function withShellReading(raw: string): string {
+    try {
+      const { aidlc_shell: _shell, ...parsed } = JSON.parse(raw) as Record<string, unknown>;
+      return JSON.stringify(powerShellTerminal ? { ...parsed, aidlc_shell: "powershell" } : parsed);
+    } catch {
+      return raw;
+    }
+  }
   // In PowerShell and cmd a backslash is a path separator, never an escape,
   // so a word may also hold one (`C:\work\app`, `.aidlc\tools`). bun splits
   // the words with the Windows rule, where a backslash counts only right
@@ -440,6 +478,25 @@ export async function run(
     return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
   }
 
+  // In PowerShell an agent often moves to the project first:
+  // `cd C:\work\app; aidlc engine orchestrate next`. A `cd` or `Set-Location`
+  // to the project folder itself, by an absolute path, is set aside with its
+  // `;`, and the command after it is read as if typed alone. PowerShell runs
+  // that command even when the cd fails, so it never runs anywhere its bare
+  // form could not. Any other folder, a subfolder too, keeps the whole
+  // command: the installed engine takes its working folder as the project.
+  const PROJECT_CD = /^ *(?:cd|Set-Location)(?: +-(?:Literal)?Path)? +(?:'([A-Za-z0-9_./:\\ -]+)'|"([A-Za-z0-9_./:\\ -]+)"|([A-Za-z0-9_./:\\-]+)) *; */i;
+  function projectCdLead(command: string): string {
+    const match = powerShellTerminal ? PROJECT_CD.exec(command) : null;
+    if (!match) return "";
+    const target = terminalPath(match[1] ?? match[2] ?? match[3]);
+    try {
+      return isAbsolute(target) && normalizeDriveLetter(realpathSync(target)) === normalizeDriveLetter(realpathSync(projectDir)) ? match[0] : "";
+    } catch {
+      return "";
+    }
+  }
+
   // A bare `aidlc` is vouched for only as the installed launcher. cmd runs a
   // matching file in the working directory before it searches PATH, and a
   // PATH entry inside the project holds the project's own code, so a
@@ -458,9 +515,10 @@ export async function run(
   }
 
   // "terminal": a simple AI-DLC command that is not claimed as coordination
-  // (a read-only `next` form or another AI-DLC project command).
+  // (a read-only `next` form or another AI-DLC project command). "attempt": a
+  // new call that already carries the attempt flag AI-DLC adds itself.
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" }
+    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" | "attempt" }
     | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
 
   // Doctor also checks the machine and may refresh the update cache over the
@@ -544,6 +602,10 @@ export async function run(
       case "top-recompose": return !personActedSinceGate();
       case "jump": return verb === "execute";
       case "scope": return verb === "change";
+      // The person's word on new project vs existing code runs click-free once
+      // they have typed since the last gate (they answered the question or
+      // said so); the agent reclassifying on its own keeps the prompt.
+      case "workspace": return verb === "reclassify" && !personActedSinceGate();
       // Switching the active intent or space redirects the work that follows.
       case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
       case "space": return !["", "list", "create"].includes(verb);
@@ -722,9 +784,15 @@ export async function run(
     return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
   }
 
-  function orchestrationCommand(): ParsedOrchestration {
-    const command = nativeToolInput?.command;
+  function orchestrationCommand(command: unknown = nativeToolInput?.command, lead = ""): ParsedOrchestration {
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
+    // After a cd to the project, only a command claimed or vouched for alone
+    // changes; every other form keeps the answer a cd-led command had.
+    const projectLead = lead ? "" : projectCdLead(command);
+    if (projectLead) {
+      const bare = orchestrationCommand(command.slice(projectLead.length), projectLead);
+      return bare.status === "recognized" || bare.status === "terminal" ? bare : { status: "unrelated" };
+    }
     const prefix = executionPrefix(command);
     let prefixCursor = 0;
     const prefixFirst = prefix[prefixCursor++] ?? "";
@@ -795,7 +863,8 @@ export async function run(
     for (let i = 0; i < args.length; i++) {
       if (args[i] === ATTEMPT_FLAG) {
         const carried = args[++i];
-        if (target === "guard-tool-call" || !safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
+        if (target === "guard-tool-call") return { status: "attempt" };
+        if (!safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
         attemptId = carried;
         continue;
       }
@@ -841,7 +910,7 @@ export async function run(
         (subArgs[0] === "knowledge" && ["onboard", "sync"].includes(subArgs[1] ?? "")) ||
         (subArgs[0] === "plugin" && ["sync", "select", "build"].includes(subArgs[1] ?? "")))) ||
         !argumentsStayInProject(subArgs),
-      rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
+      rewrite: (selectedAttemptId) => `${lead}${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
@@ -1509,6 +1578,9 @@ export async function run(
         ...(sessionId ? { session_id: sessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
+      // The heartbeat doctor's "have not run in this project yet" warning
+      // waits for (the manifest's notRunYet).
+      recordPreWorkflowHeartbeat(projectDir, "session-start");
       if (r.stdout) {
         try {
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
@@ -1706,7 +1778,7 @@ export async function run(
         }
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
-          canonicalInput,
+          withShellReading(canonicalInput),
         );
         if (planApproval.code === 2) {
           process.stdout.write(denyJson(planApproval.stderr));
@@ -1716,14 +1788,23 @@ export async function run(
           process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
           return 0;
         }
+        if (command.status === "attempt") {
+          // An id copied from an earlier command. The text is fixed: the
+          // command is never echoed back or edited here, and the same command
+          // without the flag gets this call's own id.
+          process.stdout.write(denyJson(`AI-DLC adds \`${ATTEMPT_FLAG}\` to its own commands, so a command that already carries it did not run. Run the same command again without \`${ATTEMPT_FLAG}\` and the id after it.`));
+          return 0;
+        }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
         // for the call: the host's own approval applies. A workflow command is
         // vouched once its coordination claim succeeds or the check stands
         // aside for it, and no call without a host session is vouched for.
+        const typed = typeof nativeToolInput?.command === "string" ? nativeToolInput.command : "";
+        const bare = typed.slice(projectCdLead(typed).length);
         const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
-            plainInEveryShell(nativeToolInput?.command) &&
-            !(shellWords(String(nativeToolInput?.command))?.[0] === "aidlc" && projectSuppliesLauncher())
+            plainInEveryShell(bare) &&
+            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
           ? ALLOW_DECISION
           : null;
         if (command.status === "terminal") {

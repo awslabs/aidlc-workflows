@@ -1633,7 +1633,7 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(result.out).toContain(
       '"reason_codes":["REVIEW_EVIDENCE_MISSING"]',
     );
-    expect(result.out).toContain('Ask \\"What should change?\\"');
+    expect(result.out).toContain('Otherwise ask \\"What should change?\\"');
     expect(result.out).not.toContain("Record the verdict for pending review");
     expect(result.out).not.toContain("--retry-pending");
     expect(readFileSync(statePath(p), "utf-8")).toBe(stateBefore);

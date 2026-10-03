@@ -53,6 +53,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 - **Default depth:** Minimal
 - **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
+- **Ceremony:** No "Anything to add for next time?" question after each stage and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on; type `/aidlc --learnings on` or `/aidlc --summary-confirmation on` to bring either back for this piece of work
 
 ### refactor
 
@@ -239,7 +240,7 @@ The exemption checks every keyword, so "security vulnerability CVE-2026-12345" c
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid. On a new project it reads like this; on an existing codebase bugfix also runs Reverse Engineering, so the line says 9 of 33 stages and 6 approval gates:
 
 ```
-This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 8 of 33 stages, 5 approval gates.
+This looks like "bugfix" work, so I'd run the "bugfix" plan for: "fix login bug" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation.
 Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 

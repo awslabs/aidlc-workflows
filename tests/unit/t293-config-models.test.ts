@@ -20,6 +20,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
+  HARNESS_PRODUCT_NAMES,
   MODEL_PRESETS,
   modelPolicyDoctorIssues,
   modelPolicySurfaceDrift,
@@ -966,7 +967,118 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.pass).toBe(false);
     expect(check.severity).toBe("warn");
     expect(check.label).toContain("policy issue");
-    expect(check.fix).toContain("not expressible on cursor");
+    // The model was recorded for Cursor by name, so it still warns; the shared
+    // effort is not a Cursor problem.
+    expect(check.fix).toContain("architect: model policy is not expressible on cursor");
+    expect(check.fix).not.toContain("effort policy");
+  });
+
+  test("doctor names the session where it sets every agent, and still warns on Kiro CLI", () => {
+    // The first-run default records balanced on every harness. Where the host
+    // cannot pin an agent's model or effort, that is not a problem to fix.
+    const preset = (project: string) => {
+      const settings = projectSettingsPath(project);
+      writeFileSync(settings, `${JSON.stringify({
+        schemaVersion: 1,
+        models: { schemaVersion: 1, preset: "balanced" },
+      }, null, 2)}\n`);
+      invalidateSettingsCache(settings);
+    };
+    for (const [harness, product] of [
+      ["copilot", "GitHub Copilot"],
+      ["cursor", "Cursor"],
+      ["kiro-ide", "Kiro IDE"],
+    ] as const) {
+      const project = temp(`aidlc-t293-doctor-session-${harness}-`);
+      cpSync(join(DIST, harness), project, { recursive: true });
+      expect(modelsPolicyCheck(project, true), harness).toEqual({
+        pass: true,
+        label: `Models: every agent uses your ${product} session's model and effort`,
+      });
+      preset(project);
+      expect(modelsPolicyCheck(project, true), harness).toEqual({
+        pass: true,
+        label: `Models: every agent uses your ${product} session's model and effort; ` +
+          "the recorded balanced preset does not apply here",
+      });
+    }
+    const kiro = temp("aidlc-t293-doctor-session-kiro-");
+    cpSync(join(DIST, "kiro"), kiro, { recursive: true });
+    preset(kiro);
+    const check = modelsPolicyCheck(kiro, true);
+    expect(check.pass).toBe(false);
+    expect(check.fix).toContain("effort policy is not expressible on kiro");
+
+    // Beside a harness that applies the preset, the preset is not called
+    // inert; each harness gets its own account, from the policy's real state.
+    const mixed = temp("aidlc-t293-doctor-session-mixed-");
+    cpSync(join(DIST, "claude"), mixed, { recursive: true });
+    cpSync(join(DIST, "cursor"), mixed, { recursive: true });
+    expect(modelsPolicyCheck(mixed, true)).toEqual({
+      pass: true,
+      label: "Models: no recorded policy for Claude Code; " +
+        "every agent uses your Cursor session's model and effort",
+    });
+    preset(mixed);
+    expect(modelsPolicyCheck(mixed, true)).toEqual({
+      pass: true,
+      label: "Models: recorded policy is expressible on Claude Code; " +
+        "every agent uses your Cursor session's model and effort",
+    });
+    // A model recorded for one harness by name is that harness's policy only.
+    const partial = temp("aidlc-t293-doctor-session-partial-");
+    for (const harness of ["claude", "codex", "cursor"]) {
+      cpSync(join(DIST, harness), partial, { recursive: true });
+    }
+    const partialSettings = projectSettingsPath(partial);
+    writeFileSync(partialSettings, `${JSON.stringify({
+      schemaVersion: 1,
+      models: {
+        schemaVersion: 1,
+        agents: { architect: { model: { claude: "opus" } } },
+      },
+    }, null, 2)}\n`);
+    invalidateSettingsCache(partialSettings);
+    expect(modelsPolicyCheck(partial, true)).toEqual({
+      pass: true,
+      label: "Models: recorded policy is expressible on Claude Code; no recorded policy for Codex CLI; " +
+        "every agent uses your Cursor session's model and effort",
+    });
+
+    // Two session-set harnesses and no other: the preset applies on neither.
+    // They are listed in the project's harness discovery order.
+    const hosts = temp("aidlc-t293-doctor-session-hosts-");
+    cpSync(join(DIST, "cursor"), hosts, { recursive: true });
+    cpSync(join(DIST, "kiro-ide"), hosts, { recursive: true });
+    preset(hosts);
+    const inert = "the recorded balanced preset does not apply here";
+    expect(modelsPolicyCheck(hosts, true)).toEqual({
+      pass: true,
+      label: `Models: every agent uses your Kiro IDE session's model and effort; ${inert}; ` +
+        `every agent uses your Cursor session's model and effort; ${inert}`,
+    });
+  });
+
+  test("the host names messages use match each shipped harness", () => {
+    // The names are fixed in the tools so a project file cannot change them;
+    // they must still say what each harness calls itself.
+    for (const [harness, dir] of [
+      ["claude", ".claude"],
+      ["codex", ".codex"],
+      ["copilot", ".aidlc"],
+      ["cursor", ".cursor"],
+      ["kiro", ".kiro"],
+      ["kiro-ide", ".kiro"],
+      ["opencode", ".aidlc"],
+    ] as const) {
+      const shipped = JSON.parse(
+        readFileSync(join(DIST, harness, dir, "tools", "data", "harness.json"), "utf-8"),
+      ) as { productName: string };
+      expect(HARNESS_PRODUCT_NAMES[harness], harness).toBe(shipped.productName);
+    }
+    expect(Object.keys(HARNESS_PRODUCT_NAMES).sort()).toEqual(
+      ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
+    );
   });
 });
 

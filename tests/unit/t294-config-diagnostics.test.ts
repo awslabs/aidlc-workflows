@@ -15,8 +15,8 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join, posix } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
@@ -25,6 +25,11 @@ import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-outpu
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  copilotCliTrust,
+  copilotConfigPath,
+  copilotFolderTrusted,
+  copilotTrustedFolderKey,
+  copilotTrustIssues,
   deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
@@ -717,25 +722,25 @@ describe("t294 runtime diagnostics", () => {
     }));
   });
 
-  // VS Code's Copilot Chat puts a stand-in `copilot` on its terminals' PATH.
-  // Without the real CLI it prints this line and exits 0 (#1411).
-  const STAND_IN = {
-    interactivePath: "/vscode/globalStorage/github.copilot-chat/copilotCli",
-    which: () => "/vscode/globalStorage/github.copilot-chat/copilotCli/copilot",
+  // A `copilot` whose --version reply has no version number, like the line
+  // VS Code's stand-in prints when the real CLI is missing (#1411).
+  const NO_VERSION = {
+    interactivePath: "/usr/local/bin",
+    which: () => "/usr/local/bin/copilot",
     run: () => ({
       status: 0,
       stdout: "Cannot find GitHub Copilot CLI (https://docs.github.com/copilot/how-tos/copilot-cli)\n",
     }),
   };
-  const printsVersion = (stdout: string) => ({ ...STAND_IN, run: () => ({ status: 0, stdout }) });
+  const printsVersion = (stdout: string) => ({ ...NO_VERSION, run: () => ({ status: 0, stdout }) });
 
   test("a --version reply with no version number is not an installed CLI", () => {
-    expect(probeHarnessCli("copilot", STAND_IN)).toEqual(expect.objectContaining({
+    expect(probeHarnessCli("copilot", NO_VERSION)).toEqual(expect.objectContaining({
       command: "copilot",
       required: false,
       status: "missing",
     }));
-    expect(probeHarnessCli("copilot", STAND_IN).version).toBeUndefined();
+    expect(probeHarnessCli("copilot", NO_VERSION).version).toBeUndefined();
     expect(probeHarnessCli("copilot", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
       status: "found",
       version: "1.0.80",
@@ -749,6 +754,101 @@ describe("t294 runtime diagnostics", () => {
       required: true,
       status: "missing",
     }));
+  });
+
+  // VS Code's Copilot Chat puts a stand-in `copilot` first on its terminals'
+  // PATH. With no real CLI it asks "Install GitHub Copilot CLI? (y/N)" on the
+  // console, so doctor and setup must never run it, only look past it.
+  test("the CLI probe never runs VS Code's stand-in copilot", () => {
+    const root = temp("aidlc-t294-copilot-stand-in-");
+    const standIn = join(root, "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli");
+    const real = join(root, "npm", "bin");
+    const ran = join(root, "stand-in-ran");
+    mkdirSync(standIn, { recursive: true });
+    mkdirSync(real, { recursive: true });
+    // Scripts this host can run: a .cmd on Windows, a shell script elsewhere.
+    const windows = process.platform === "win32";
+    const command = windows ? "copilot.cmd" : "copilot";
+    const script = (lines: string[]) =>
+      windows ? `@echo off\r\n${lines.join("\r\n")}\r\n` : `#!/bin/sh\n${lines.join("\n")}\n`;
+    writeFileSync(
+      join(standIn, command),
+      windows
+        ? script([`type nul > "${ran}"`, "echo Install GitHub Copilot CLI? (y/N):", "exit /b 0"])
+        : script([`touch '${ran}'`, "printf 'Install GitHub Copilot CLI? (y/N): '", "exit 0"]),
+      { mode: 0o755 },
+    );
+    const host = { platform: process.platform, env: {} };
+    const separator = windows ? ";" : ":";
+    // Only the stand-in: the CLI is not installed, and nothing ran.
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: standIn })).toEqual(
+      expect.objectContaining({ status: "missing", required: false }),
+    );
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${windows ? "\\" : "/"}` }).status)
+      .toBe("missing");
+    // The real CLI after it on PATH is the one probed. npm on Windows writes
+    // an extensionless shell script beside copilot.cmd; the .cmd is the one run.
+    writeFileSync(join(real, command), script(["echo 1.0.80"]), { mode: 0o755 });
+    if (windows) writeFileSync(join(real, "copilot"), "#!/bin/sh\necho 9.9.9\n");
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${separator}${real}` })).toEqual(
+      expect.objectContaining({ status: "found", version: "1.0.80", path: join(real, command) }),
+    );
+    expect(existsSync(ran)).toBe(false);
+    if (windows) {
+      // cmd.exe would expand % in the path, so such a .cmd is not run.
+      const expanding = join(root, "npm%PATH%");
+      const expandingRan = join(root, "expanding-ran");
+      mkdirSync(expanding, { recursive: true });
+      writeFileSync(join(expanding, command), script([`type nul > "${expandingRan}"`, "echo 1.0.80"]));
+      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding }).status).toBe("missing");
+      expect(existsSync(expandingRan)).toBe(false);
+    }
+
+    // npm's Windows layout: the extensionless shell script, copilot.cmd and
+    // copilot.ps1 side by side. The resolver picks what Windows can run.
+    const npmLayout = join(root, "npm-layout");
+    mkdirSync(npmLayout, { recursive: true });
+    for (const name of ["copilot", "copilot.cmd", "copilot.ps1"]) writeFileSync(join(npmLayout, name), "");
+    expect(resolveExecutableOnPath("copilot", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+    expect(resolveExecutableOnPath("copilot.cmd", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+
+    // Windows spelling: any case, backslashes, a trailing separator. The
+    // search skips the folder, and a resolver that names it anyway is ignored.
+    const appData = "C:\\Users\\dev\\AppData\\Roaming";
+    const windowsStandIn = `${appData}\\Code\\User\\globalStorage\\GitHub.copilot-chat\\copilotCli\\`;
+    const searched: string[] = [];
+    const never = (command: string) => {
+      throw new Error(`ran ${command}`);
+    };
+    expect(probeHarnessCli("copilot", {
+      platform: "win32",
+      env: {},
+      interactivePath: `${windowsStandIn};${appData}\\npm`,
+      which: (_command, pathValue) => {
+        searched.push(pathValue);
+        return null;
+      },
+      run: never,
+    }).status).toBe("missing");
+    expect(searched).toEqual([`${appData}\\npm`]);
+    expect(probeHarnessCli("copilot", {
+      platform: "win32",
+      env: {},
+      interactivePath: windowsStandIn,
+      which: () => `${windowsStandIn}copilot.bat`,
+      run: never,
+    }).status).toBe("missing");
+    // Another CLI's folder is searched as before.
+    expect(probeHarnessCli("codex", {
+      platform: "win32",
+      env: {},
+      interactivePath: windowsStandIn,
+      which: (_command, pathValue) => {
+        searched.push(pathValue);
+        return null;
+      },
+    }).status).toBe("missing");
+    expect(searched.at(-1)).toBe(windowsStandIn);
   });
 
   test("doctor's report and fix lines reach the agent whole in VS Code", () => {
@@ -891,13 +991,26 @@ describe("t294 runtime diagnostics", () => {
       return row;
     };
 
-    // VS Code-only install: the stand-in is not the CLI, so it is just absent.
-    const standIn = cliRow(copilot, ".aidlc", STAND_IN);
+    // VS Code-only install: the stand-in is not the CLI, so it is just absent,
+    // and it is never run.
+    const standInFolder = "/vscode/User/globalStorage/github.copilot-chat/copilotCli";
+    const standIn = cliRow(copilot, ".aidlc", {
+      interactivePath: standInFolder,
+      which: () => `${standInFolder}/copilot`,
+      run: (command) => {
+        if (command.includes("copilot")) throw new Error(`ran ${command}`);
+        return { status: 0, stdout: "/usr/bin:/bin\n" };
+      },
+    });
     expect(standIn).toEqual(expect.objectContaining({
       pass: true,
       label: "Harness CLI: optional copilot is not installed",
     }));
     expect(standIn.severity).toBeUndefined();
+    expect(cliRow(copilot, ".aidlc", NO_VERSION)).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
     expect(cliRow(copilot, ".aidlc", { which: () => null })).toEqual(expect.objectContaining({
       pass: true,
       label: "Harness CLI: optional copilot is not installed",
@@ -912,7 +1025,7 @@ describe("t294 runtime diagnostics", () => {
     }));
     expect(cliRow(copilot, ".aidlc", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
       pass: true,
-      label: `Harness CLI: copilot 1.0.80 at ${STAND_IN.which()}`,
+      label: `Harness CLI: copilot 1.0.80 at ${NO_VERSION.which()}`,
     }));
 
     // Required CLIs are unchanged: missing or too old is a warning.
@@ -1437,6 +1550,105 @@ describe("t294 trust diagnostics", () => {
     })).toEqual([]);
     expect(readFileSync(join(project, ".codex", "trust-seed.toml"), "utf-8"))
       .toBe(seed);
+  });
+
+  test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {
+    const configIn = (dir: string) => join(dir, ".copilot", "config.json");
+    // A Windows desktop process has no HOME; the CLI reads USERPROFILE. The
+    // old lookup read HOME alone and looked for a relative .copilot instead.
+    expect(copilotConfigPath({ USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    // A HOME that is set on Windows is not where the CLI looks either.
+    expect(copilotConfigPath({ HOME: "H:\\", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    expect(copilotConfigPath({ HOME: "/home/dev", USERPROFILE: "/elsewhere" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({ COPILOT_HOME: "/copilot", HOME: "/home/dev" }, "linux"))
+      .toBe(join("/copilot", "config.json"));
+    expect(copilotConfigPath({ COPILOT_HOME: "D:\\copilot", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(join("D:\\copilot", "config.json"));
+    // The CLI ignores an empty COPILOT_HOME, and with no home variable at all
+    // the lookup still lands in the account's home, never under the cwd.
+    expect(copilotConfigPath({ COPILOT_HOME: "", HOME: "/home/dev" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({}, "win32")).toBe(configIn(homedir()));
+  });
+
+  test("Copilot folder trust matches entries the way the Copilot CLI does", () => {
+    // Windows: case, drive-letter spelling (VS Code says c:\, a terminal C:\),
+    // separator style, and trailing separators never change the folder, and
+    // a trusted parent covers the project. These paths do not exist, so the
+    // comparison is the string rule alone on every host.
+    const app = "C:\\aidlc-t294-copilot-trust\\Work\\App";
+    for (const entry of [
+      app,
+      "c:\\aidlc-t294-copilot-trust\\Work\\App",
+      "C:/aidlc-t294-copilot-trust/Work/App/",
+      "C:\\AIDLC-T294-COPILOT-TRUST\\WORK\\APP\\",
+      "c:/aidlc-t294-copilot-trust/work",
+    ]) {
+      expect(copilotFolderTrusted(app, [entry], "win32"), entry).toBe(true);
+    }
+    expect(copilotFolderTrusted("c:\\aidlc-t294-copilot-trust\\Work\\App", [app], "win32"))
+      .toBe(true);
+    expect(copilotFolderTrusted(`${app}Other`, [app], "win32")).toBe(false);
+    expect(copilotFolderTrusted("C:\\aidlc-t294-copilot-trust\\Work", [app], "win32"))
+      .toBe(false);
+    expect(copilotFolderTrusted(app, ["", 42, null], "win32")).toBe(false);
+    // Linux and macOS: the CLI keeps case, and a backslash is no separator.
+    const posixApp = "/aidlc-t294-copilot-trust/work/App";
+    expect(copilotFolderTrusted(posixApp, [`${posixApp}/`], "linux")).toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work"], "linux"))
+      .toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work/app"], "linux"))
+      .toBe(false);
+    expect(copilotFolderTrusted(`${posixApp}Other`, [posixApp], "linux")).toBe(false);
+  });
+
+  test("Copilot folder trust resolves links on either side", () => {
+    const root = temp("aidlc-t294-copilot-trust-links-");
+    const app = join(root, "work", "App");
+    mkdirSync(join(app, "sub"), { recursive: true });
+    const link = join(root, "link");
+    symlinkSync(app, link, process.platform === "win32" ? "junction" : "dir");
+    expect(copilotFolderTrusted(link, [app])).toBe(true);
+    expect(copilotFolderTrusted(app, [link])).toBe(true);
+    expect(copilotFolderTrusted(join(link, "sub"), [join(root, "work")])).toBe(true);
+    expect(copilotFolderTrusted(app, [join(root, "gone")])).toBe(false);
+  });
+
+  test("Copilot CLI trust reads the list the CLI reads, and the setup check warns when it misses the folder", () => {
+    expect(copilotTrustedFolderKey({})).toBe("trustedFolders");
+    expect(copilotTrustedFolderKey({ trusted_folders: [] })).toBe("trusted_folders");
+    // With both keys the CLI takes the later one in the file.
+    expect(copilotTrustedFolderKey({ trustedFolders: [], trusted_folders: [] })).toBe("trusted_folders");
+    expect(copilotTrustedFolderKey({ trusted_folders: [], trustedFolders: [] })).toBe("trustedFolders");
+
+    const project = temp("aidlc-t294-copilot-cli-trust-");
+    const home = temp("aidlc-t294-copilot-cli-home-");
+    const env = { COPILOT_HOME: home };
+    const configPath = join(home, "config.json");
+    expect(copilotCliTrust(project, env).state).toBe("absent");
+    expect(copilotTrustIssues(project, env)).toEqual([]);
+
+    writeFileSync(configPath, `// managed\n{ "trusted_folders": [${JSON.stringify(project)}], }\n`);
+    expect(copilotCliTrust(project, env).state).toBe("trusted");
+    writeFileSync(configPath, JSON.stringify({ trusted_folders: [project], trustedFolders: [] }));
+    expect(copilotCliTrust(project, env).state).toBe("untrusted");
+    const [untrusted] = copilotTrustIssues(project, env);
+    expect(untrusted.id).toBe("copilot-folder-untrusted");
+    expect(untrusted.severity).toBe("warn");
+    expect(untrusted.message).toBe("Copilot CLI has not trusted this folder");
+    expect(untrusted.remediation).toContain(`add ${JSON.stringify(project)} to trustedFolders in ${configPath}`);
+    expect(untrusted.remediation).toContain(`Run copilot in this folder once and choose "Yes, and remember this folder for future sessions"`);
+
+    for (const broken of ["{ \"trustedFolders\": [", "[]", "null", "{ \"trustedFolders\": \"/one/folder\" }"]) {
+      writeFileSync(configPath, broken);
+      expect(copilotCliTrust(project, env).state, broken).toBe("unreadable");
+      const [issue] = copilotTrustIssues(project, env);
+      expect(issue.id, broken).toBe("copilot-cli-config-unreadable");
+      expect(issue.severity, broken).toBeUndefined();
+    }
   });
 
   test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {

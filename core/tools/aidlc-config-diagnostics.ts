@@ -505,6 +505,20 @@ function defaultRun(
   command: string,
   args: readonly string[],
 ): { status: number; stdout: string } {
+  // Windows runs a .cmd or .bat (what npm installs, for example copilot.cmd)
+  // only through cmd.exe. The path is quoted whole; one that cmd.exe would
+  // expand (% or !) or cannot quote (") is not run.
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    if (/[%!"]/.test(command) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) {
+      return { status: -1, stdout: "" };
+    }
+    const result = spawnSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", `""${command}" ${args.join(" ")}"`],
+      { encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, windowsVerbatimArguments: true },
+    );
+    return { status: result.status ?? -1, stdout: result.stdout ?? "" };
+  }
   const result = spawnSync(command, [...args], {
     encoding: "utf-8",
     timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -521,7 +535,9 @@ function pathEntries(value: string, platform: NodeJS.Platform): string[] {
 
 function executableCandidates(command: string, platform: NodeJS.Platform): string[] {
   if (platform !== "win32" || extname(command)) return [command];
-  return [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`];
+  // Windows runs only a file with an executable extension; npm puts an
+  // extensionless shell script beside its copilot.cmd, so it comes last.
+  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command];
 }
 
 export function resolveExecutableOnPath(
@@ -813,6 +829,8 @@ const HARNESS_CLI: Record<
     required: boolean;
     minimumVersion?: string;
     install: string;
+    // A PATH folder whose `command` is a stand-in that must never be run.
+    standIn?: (directory: string) => boolean;
   }
 > = {
   claude: {
@@ -831,6 +849,7 @@ const HARNESS_CLI: Record<
     required: false,
     minimumVersion: "1.0.74",
     install: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    standIn: isVsCodeCopilotStandInFolder,
   },
   cursor: {
     command: "cursor",
@@ -855,6 +874,18 @@ const HARNESS_CLI: Record<
     install: "Install opencode and ensure `opencode --version` works.",
   },
 };
+
+// VS Code's Copilot Chat writes a stand-in `copilot` to
+// <user data>/User/globalStorage/github.copilot-chat/copilotCli and puts that
+// folder on its terminals' PATH. With no real CLI the stand-in asks "Install
+// GitHub Copilot CLI? (y/N)" on the console, past any pipe, and with an old
+// one it offers an update. So the probe never runs it: like the stand-in
+// itself, it looks past that folder for the real CLI.
+function isVsCodeCopilotStandInFolder(directory: string): boolean {
+  const parts = directory.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1)?.toLowerCase() === "copilotcli" &&
+    parts.at(-2)?.toLowerCase() === "github.copilot-chat";
+}
 
 function versionTuple(value: string): [number, number, number] | null {
   const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -892,7 +923,16 @@ export function probeHarnessCli(
   const interactivePath = options.interactivePath ?? env.PATH ?? "";
   const which = options.which ?? ((command: string, pathValue: string) =>
     resolveExecutableOnPath(command, pathValue, platform));
-  const path = which(spec.command, interactivePath);
+  const standIn = spec.standIn;
+  const searchPath = standIn
+    ? pathEntries(interactivePath, platform)
+      .filter((directory) => !standIn(directory))
+      .join(platform === "win32" ? ";" : delimiter)
+    : interactivePath;
+  const resolved = which(spec.command, searchPath);
+  const path = resolved && standIn?.(resolved.replace(/[\\/][^\\/]*$/, ""))
+    ? null
+    : resolved;
   if (!path) {
     return {
       harness,
@@ -2201,6 +2241,127 @@ export function providerIssues(
   return issues;
 }
 
+// The Copilot CLI keeps folder trust in config.json under COPILOT_HOME, else
+// <home>/.copilot, and finds home the way Node does: USERPROFILE on Windows,
+// HOME elsewhere. A Windows desktop process usually has no HOME at all, and a
+// HOME that is set (a network drive, say) is not where the CLI looks.
+export function copilotConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
+}
+
+// True when a trustedFolders entry covers the project the way the CLI judges
+// it: the folder itself or any folder above it, after resolving links and
+// dropping trailing separators. On Windows the CLI also ignores case and
+// separator style, so `c:/work` covers `C:\work\app` there.
+export function copilotFolderTrusted(
+  projectDir: string,
+  trustedFolders: readonly unknown[],
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  const windows = platform === "win32";
+  const separator = windows ? "\\" : "/";
+  const norm = (path: string): string => {
+    let out = path;
+    try {
+      out = realpathSync(path);
+    } catch {
+      // keep the recorded form; a recorded-but-deleted path never matches
+    }
+    if (windows) out = out.replaceAll("/", "\\").toLowerCase();
+    return out.replace(/[/\\]+$/, "");
+  };
+  const project = norm(projectDir);
+  return trustedFolders.some((entry) => {
+    if (typeof entry !== "string" || entry === "") return false;
+    const folder = norm(entry);
+    return project === folder || project.startsWith(`${folder}${separator}`);
+  });
+}
+
+// The list the CLI reads: trustedFolders, or the older trusted_folders it
+// still honours. With both present the later one in the file wins.
+export function copilotTrustedFolderKey(
+  config: Record<string, unknown>,
+): "trustedFolders" | "trusted_folders" {
+  const last = Object.keys(config).findLast((key) =>
+    key === "trustedFolders" || key === "trusted_folders"
+  );
+  return last === "trusted_folders" ? "trusted_folders" : "trustedFolders";
+}
+
+export type CopilotCliTrust =
+  | { state: "absent" | "unreadable"; configPath: string }
+  | {
+      state: "trusted" | "untrusted";
+      configPath: string;
+      raw: string;
+      config: Record<string, unknown>;
+    };
+
+// What the Copilot CLI's config says about this folder. Absent means no CLI
+// config at all (a VS Code-only install; the CLI asks on its first run).
+// Unreadable covers bad JSON and a trusted-folders value that is not a list,
+// which the CLI ignores.
+export function copilotCliTrust(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): CopilotCliTrust {
+  const configPath = copilotConfigPath(env, platform);
+  if (!existsSync(configPath)) return { state: "absent", configPath };
+  let raw: string;
+  let config: unknown;
+  try {
+    raw = readFileSync(configPath, "utf-8");
+    config = Bun.JSONC.parse(raw);
+  } catch {
+    return { state: "unreadable", configPath };
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return { state: "unreadable", configPath };
+  }
+  const record = config as Record<string, unknown>;
+  const list = record[copilotTrustedFolderKey(record)];
+  if (list !== undefined && !Array.isArray(list)) return { state: "unreadable", configPath };
+  return {
+    state: copilotFolderTrusted(projectDir, Array.isArray(list) ? list : [], platform)
+      ? "trusted"
+      : "untrusted",
+    configPath,
+    raw,
+    config: record,
+  };
+}
+
+// The setup check's view of Copilot CLI folder trust. Untrusted is a warning
+// for the same reason as in doctor: VS Code never reads this list and the
+// interactive CLI asks first; only headless `copilot -p` runs skip silently.
+export function copilotTrustIssues(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiagnosticIssue[] {
+  const trust = copilotCliTrust(projectDir, env);
+  if (trust.state === "unreadable") {
+    return [{
+      id: "copilot-cli-config-unreadable",
+      message: `${trust.configPath} is not a Copilot CLI config AI-DLC can read, so the CLI's folder trust is unknown`,
+      remediation: `Repair ${trust.configPath}: valid JSON (comments are allowed) with trustedFolders as a list, then rerun the setup check.`,
+    }];
+  }
+  if (trust.state !== "untrusted") return [];
+  return [{
+    id: "copilot-folder-untrusted",
+    message: "Copilot CLI has not trusted this folder",
+    remediation:
+      `Run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(resolve(projectDir))} to trustedFolders in ${trust.configPath} yourself.`,
+    severity: "warn",
+  }];
+}
+
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
   table: string;
   hash: string;
@@ -2358,7 +2519,9 @@ export function trustFilesForHarness(
       join(projectDir, harnessDir, "cli.json"),
     );
   }
-  if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+  if (harness === "copilot") {
+    files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
+  }
   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
   return [...new Set(files)];
 }
@@ -2410,6 +2573,9 @@ export function trustStatus(
   const issues = workspaceSiblingIssues(projectDir, harness, harnessDir);
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
+  }
+  if (harness === "copilot") {
+    issues.push(...copilotTrustIssues(projectDir, env));
   }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),

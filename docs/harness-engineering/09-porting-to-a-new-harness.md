@@ -72,12 +72,20 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
   `aidlc config` there makes this harness the wizard's default choice.
   `hookActivation` is for a host that runs no hooks until the person acts: its
-  `recovery` and `missedReply` text feed doctor and the approval refusals.
-  Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
-  first chat message; doctor then warns with that text while no heartbeat
-  exists. Kiro IDE declares all three. Kiro CLI declares `recovery` and
-  `missedReply` because its two engines read disjoint hook registrations, so a
-  restart on the wrong engine never brings the hooks back.
+  `recovery` and `missedReply` text feed doctor and the approval refusals; every
+  attended "no new human reply" refusal adds `missedReply` (an
+  `AIDLC_UNATTENDED=1` run gets its own explanation instead), so word it for a
+  person who may not have replied yet ("If the person already replied, ...").
+  Set its
+  `notRunYet` only when the harness's hooks leave a heartbeat on the first chat
+  message; doctor then warns with that text while no heartbeat exists. Set
+  `notRunInWorkflow` only when a hook on the agent's own shell command leaves a
+  heartbeat in the record before the engine runs; the engine then adds that
+  sentence to every directive's `change_notices` once a stage has started with
+  no heartbeat at all. Copilot declares all four. Kiro IDE declares the first
+  three. Kiro CLI declares `recovery` and `missedReply` because its v2 and v3
+  engines read disjoint hook registrations, so a restart on the wrong engine
+  never brings the hooks back.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and

@@ -161,7 +161,11 @@ request through composer/creation handoffs until successful intent creation.
 
 For `unit-paused` (`response_route: "command"`), execute `resume_command`
 verbatim only when the human chooses to resume, then re-run `next`; otherwise
-take no engine action and wait for their direction. `claim` follows the Unit
+take no engine action and wait for their direction. For `project-type`
+(`response_route: "command"`), execute `existing_code_command` verbatim when
+the person says the folder holds existing code to work on, or
+`new_project_command` when they say it is a new project, print its output,
+then re-run `next`; when the reply says neither, ask again. `claim` follows the Unit
 claim contract and
 `execute-remedy` follows only the human-selected executable guard remedy's
 command or action; empty remedies remain terminal. These routes do not fall
@@ -203,8 +207,9 @@ Then map the response back to the exact option label, persist `[Answer]: Looks
 correct` or `[Answer]: Request changes`, and run the matching checkpoint-specific `aidlc-log.ts answer`
 command. Strip any source letter, numbered-prose index, punctuation, and option
 description before writing. `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`,
-and a self-selected answer are invalid. On Request changes, ask
-**"What should change?"** and END THE TURN again; do not update any answer
+and a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
 until that feedback arrives. Then record the feedback, update the affected
 answers, reset this tag to blank, and present the consolidated summary again.
 Do not generate the artifact until the file contains the human's explicit
@@ -233,9 +238,11 @@ Rules:
 - **multiSelect: true** → say "Reply with all numbers that apply (e.g. 1, 3)."
 - **Answer capture**: map the user's number back to the exact option `label`
   and record that label verbatim (protocol: never summarize User Input). A
-  free-text reply that clearly matches an option counts as that option;
-  anything else is an "Other" answer — treat it per the protocol (discuss,
-  then re-ask for a final pick).
+  free-text reply that clearly matches an option counts as that option. A
+  reply in their own words that answers the question is their answer: record
+  it as the "Other" answer, in their words. Only a reply that asks about the
+  question or wants to talk it through is discussed first; then take what they
+  settle on.
 - **File-backed questions**: retain A-E and X labels in the markdown source,
   but remap those choices to numbered prose when presenting them in chat.
   Preserve source order and map the selected number back to the stored label.

@@ -50,8 +50,7 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookOutsideGate,
@@ -72,6 +71,7 @@ import {
   guardRefusalOutput,
   humanAuthorityState,
   hooksHealthDir,
+  writeHookStatusFile,
   intentRepos,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -177,9 +177,9 @@ export function judgeFreeze(
 // the quote-at-gate route for suggestions, and names the state-correct route
 // that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
-  "Ask the human what should change, then record their Request Changes " +
-  "decision before editing the document; that unlocks it for revision and a " +
-  "fresh review.";
+  "Record the person's Request Changes decision, with what they said should " +
+  "change (ask only if they have not said), before editing the document; that " +
+  "unlocks it for revision and a fresh review.";
 
 export function reviewFreezeRecoveryGuidance(
   projectDir: string,
@@ -233,8 +233,7 @@ export async function run(input: string): Promise<number> {
 async function checkFreeze(input: string, projectDir: string): Promise<number> {
   try {
     const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }

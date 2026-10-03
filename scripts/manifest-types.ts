@@ -139,12 +139,13 @@ export type HarnessManifest = {
   editorTerminalApp?: string;
   /**
    * For a host that runs no project hooks until the person acts (for example
-   * trusts the folder and reloads the window): what to tell them.
+   * trusts the folder and reloads the window, or starts the engine that reads
+   * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
     /** Doctor's fix when the hooks are not running. */
     recovery: string;
-    /** Sentence added to the engine's "no new human reply" refusals. */
+    /** Sentence added to the engine's attended "no new human reply" refusals. */
     missedReply: string;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
@@ -152,6 +153,13 @@ export type HarnessManifest = {
      * warns with this text instead of passing.
      */
     notRunYet?: string;
+    /**
+     * Sentence the engine adds to every directive's change_notices while this
+     * workflow has started a stage but no hook heartbeat exists. Set only when
+     * a hook on the agent's own shell command leaves a heartbeat in the record
+     * before the engine runs, so an install whose hooks run never sees it.
+     */
+    notRunInWorkflow?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;

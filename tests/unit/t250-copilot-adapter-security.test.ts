@@ -160,7 +160,9 @@ export function enterHookWorkflow(projectDir: string, sessionId?: unknown) {
     restore: () => {},
   };
 }
-export function hookStandsOutside(): boolean { return false; }\n`;
+export function hookStandsOutside(): boolean { return false; }
+export function recordHookDrop(): void {}
+export function recordPreWorkflowHeartbeat(): void {}\n`;
 
 interface Scratch {
   projectRoot: string;
@@ -827,6 +829,41 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           expect(denied.stdout, `${dialect}: ${command}`).not.toContain("modifiedArgs");
           expect(denied.stdout, `${dialect}: ${command}`).not.toContain("updatedInput");
         }
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("12b: a command that already carries AI-DLC's attempt id is refused for that, and the same command without it runs", () => {
+    // AI-DLC adds --aidlc-attempt-id to each workflow command itself, so an
+    // agent that copies one from an earlier command into a new call was told
+    // to avoid chaining and redirection it never used (#1411).
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const guard = (command: string) => shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+      const copied = "--aidlc-attempt-id 11111111-1111-4111-8111-111111111111";
+      // The refusal is fixed text: the command is never echoed back or edited.
+      const refusal = "AI-DLC adds `--aidlc-attempt-id` to its own commands, so a command that already carries it did not run. " +
+        "Run the same command again without `--aidlc-attempt-id` and the id after it.";
+      for (const [command, retry] of [
+        [`aidlc engine orchestrate next ${copied}`, "aidlc engine orchestrate next"],
+        [`aidlc continue ABCD1234 ${copied}`, "aidlc continue ABCD1234"],
+        [`bun .aidlc/tools/aidlc-orchestrate.ts next ${copied} 2>&1`, "bun .aidlc/tools/aidlc-orchestrate.ts next 2>&1"],
+        [`aidlc engine orchestrate report --stage requirements-analysis --result completed ${copied}`, "aidlc engine orchestrate report --stage requirements-analysis --result completed"],
+        ["aidlc engine orchestrate next --aidlc-attempt-id", "aidlc engine orchestrate next"],
+        [`aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'ok \`run this\`' ${copied}`,
+          "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'ok'"],
+      ]) {
+        const denied = guard(command);
+        expect(denied.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+        expect(denied.hookSpecificOutput?.permissionDecisionReason, command).toBe(refusal);
+        expect(denied.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+        // The same command without the flag is the next step, and it works.
+        const next = guard(retry);
+        expect(next.hookSpecificOutput?.permissionDecision, retry).toBe("allow");
+        expect(next.hookSpecificOutput?.updatedInput?.command, retry).toContain(STUB_ATTEMPT);
       }
     } finally {
       s.cleanup();
@@ -1788,6 +1825,33 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("27j: a project-type change runs click-free only once the person has spoken since the last gate", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, acted: boolean) =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command), { T250_HUMAN_ACTED: acted ? "1" : undefined })).hookSpecificOutput?.permissionDecision;
+      for (const command of [
+        "aidlc engine workspace reclassify --project-type brownfield",
+        "aidlc engine workspace reclassify --project-type greenfield --intent 261003-tooltip --space default",
+        "bun .aidlc/tools/aidlc.ts engine workspace reclassify --project-type brownfield",
+      ]) {
+        // The person answered the question or said it: no second confirmation.
+        expect(decision(command, true), command).toBe("allow");
+        // The agent reclassifying with no word from the person keeps the prompt.
+        expect(decision(command, false), command).toBeUndefined();
+      }
+      // The utility called directly (never what the engine names) always keeps it.
+      const direct = "bun .aidlc/tools/aidlc-utility.ts reclassify --project-type brownfield";
+      expect(decision(direct, true)).toBeUndefined();
+      expect(decision(direct, false)).toBeUndefined();
+      // The read-only scan stays click-free either way.
+      expect(decision("aidlc engine workspace detect --json", false)).toBe("allow");
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("27i: a Construction checkpoints change the person already chose runs click-free; autonomy keeps the prompt", () => {
     const s = scratch();
     try {
@@ -1813,7 +1877,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
 
   test("27h: in a Windows terminal a backslash is a plain path separator; under a POSIX shell it keeps the prompt", () => {
     // VS Code's Windows terminal is PowerShell or cmd, where `C:\work\app` is
-    // an ordinary path (#1411, Clarivate). The payload's shell is simulated
+    // an ordinary path (#1411). The payload's shell is simulated
     // here so the Windows rule also runs on Linux.
     const s = scratch();
     try {
@@ -1854,6 +1918,76 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           expect(decision("aidlc engine knowledge summarize --text-file docs\\notes.txt", shell), String(shell)).toBeUndefined();
           expect(decision("aidlc engine knowledge summarize --text-file docs/notes.txt", shell), String(shell)).toBe("allow");
         }
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27k: in PowerShell a cd to the project before an AI-DLC command runs like the bare command; any other cd or chain keeps today's answer", () => {
+    // An agent in VS Code on Windows often moves to the project first:
+    // `cd C:\work\app; aidlc engine orchestrate next` (#1411). The payload's
+    // shell is simulated here so the Windows rule also runs on Linux.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      mkdirSync(join(s.projectRoot, "src"));
+      const outside = mkdtempSync(join(tmpdir(), "t250-outside-"));
+      try {
+        const win = (path: string) => path.replaceAll("/", "\\");
+        const root = s.projectRoot;
+        const call = (command: string, shell?: string, toolName = "run_in_terminal", extra: Record<string, unknown> = {}) =>
+          shellDecision(runAdapter(s, "guard-tool-call", {
+            ...shellCall(command, "S-ALLOW", toolName),
+            ...extra,
+            tool_input: { command, ...(shell ? { shell } : {}) },
+          }));
+        // The shell the guards were told the command runs in.
+        const guardShell = () => capturedInputs(s.captureDir, "aidlc-plan-approval-guard.ts").at(-1)?.aidlc_shell;
+        const leads = [
+          `cd ${win(root)}; `,
+          `cd '${win(root)}' ; `,
+          `Set-Location ${root}; `,
+          `Set-Location -LiteralPath "${win(root)}";`,
+        ];
+        for (const shell of ["pwsh", "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "powershell.exe", ...(process.platform === "win32" ? [undefined] : [])]) {
+          for (const lead of leads) {
+            const claimed = call(`${lead}aidlc engine orchestrate next`, shell);
+            expect(claimed.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
+            // The rewrite keeps the agent's own cd.
+            expect(claimed.hookSpecificOutput?.updatedInput?.command, `${shell}: ${lead}`).toBe(`${lead}aidlc engine orchestrate next ${STUB_ATTEMPT}`);
+            expect(guardShell(), `${shell}: ${lead}`).toBe("powershell");
+            const terminal = call(`${lead}aidlc engine log answers`, shell);
+            expect(terminal.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
+            expect(terminal.hookSpecificOutput?.updatedInput, `${shell}: ${lead}`).toBeUndefined();
+          }
+          for (const command of [
+            // another folder, a subfolder (the installed engine takes its
+            // working folder as the project), or a relative path
+            `cd ${win(outside)}; aidlc engine orchestrate next`,
+            `cd ${win(join(root, "src"))}; aidlc engine orchestrate next`,
+            "cd .; aidlc engine orchestrate next",
+            // any other chain
+            `cd ${win(root)}; aidlc engine orchestrate next; rm -rf build`,
+            `cd ${win(root)}; aidlc engine orchestrate next | Out-File next.txt`,
+            `cd ${win(root)}; cd ${win(root)}; aidlc engine orchestrate next`,
+            `cd ${win(root)} && aidlc engine orchestrate next`,
+            `cd ${win(root)}; git status`,
+            `cd ${win(root)}; rm -rf build`,
+          ]) {
+            expect(call(command, shell), `${shell}: ${command}`).toEqual({});
+          }
+        }
+        // cmd never splits on `;`, and a POSIX shell keeps its own reading, so
+        // the cd-led command keeps today's answer there and is not PowerShell.
+        for (const shell of ["cmd.exe", "C:\\Windows\\System32\\cmd.exe", "bash", ...(process.platform === "win32" ? [] : [undefined])]) {
+          expect(call(`cd ${root}; aidlc engine orchestrate next`, shell, "run_in_terminal", { aidlc_shell: "powershell" }), String(shell)).toEqual({});
+          expect(guardShell(), String(shell)).toBeUndefined();
+        }
+        expect(call(`cd ${root}; aidlc engine orchestrate next`, undefined, "Bash")).toEqual({});
+        expect(guardShell()).toBeUndefined();
       } finally {
         rmSync(outside, { recursive: true, force: true });
       }

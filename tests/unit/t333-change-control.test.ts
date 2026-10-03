@@ -176,9 +176,16 @@ function utilityError(stderr: string): string {
   return parsed.error;
 }
 
-async function waitForPath(path: string): Promise<void> {
+/**
+ * Wait for a barrier file's whole line and return it. The child writes one
+ * newline-terminated line, and on Windows the file can exist before its
+ * content does, so the path alone is not enough.
+ */
+async function waitForBarrierLine(path: string): Promise<string> {
   const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
-  while (!existsSync(path)) {
+  for (;;) {
+    const content = existsSync(path) ? readFileSync(path, "utf-8") : "";
+    if (content.endsWith("\n")) return content;
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await Bun.sleep(10);
   }
@@ -1499,8 +1506,7 @@ describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow",
     const stdout = new Response(child.stdout).text();
     const stderr = new Response(child.stderr).text();
 
-    await waitForPath(`${barrier}.selected`);
-    expect(readFileSync(`${barrier}.selected`, "utf-8")).toBe(`alt/${selected.targetIntent}\n`);
+    expect(await waitForBarrierLine(`${barrier}.selected`)).toBe(`alt/${selected.targetIntent}\n`);
     writeFileSync(join(altIntents, "active-intent"), `${secondIntent}\n`);
     writeFileSync(`${barrier}.release`, "release\n");
 
@@ -1634,7 +1640,7 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     const stdout = new Response(child.stdout).text();
     const stderr = new Response(child.stderr).text();
 
-    await waitForPath(`${barrier}.snapshotted`);
+    await waitForBarrierLine(`${barrier}.snapshotted`);
     declareAltMemoryStrict(selected.proj);
     writeFileSync(`${barrier}.release`, "release\n");
 
@@ -2330,7 +2336,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const error = JSON.parse(refused.stderr).error;
     expect(error).toStartWith(refusal);
     expect(error).toContain("AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count as a human reply.");
-    expect(error).toEndWith("This needs a fresh human turn: wait for the person to reply, then record it again.");
+    expect(error).toEndWith("Unset AIDLC_UNATTENDED before returning to interactive mode, then submit a new human response.");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);

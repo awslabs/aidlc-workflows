@@ -23,6 +23,8 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       GIT_CONFIG_GLOBAL: join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
       SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe",
       PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      // Windows live legs only: the runner binds AIDLC_HOOK_TRACE_DIR per test file.
+      AIDLC_TEST_HOOK_TRACE: "1",
     });
     if (family === "codex" && source.AIDLC_CODEX_BIN !== undefined) {
       const managed = win32.join(win32.dirname(home), "tools", "codex-managed.exe");
@@ -50,6 +52,9 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
     Object.assign(env, CI_BEDROCK_MODELS.claude, {
       CLAUDE_CODE_USE_BEDROCK: "1", CLAUDE_CODE_SKIP_BEDROCK_AUTH: "1", ANTHROPIC_BEDROCK_BASE_URL: url.origin,
     });
+  } else if (family === "codex") {
+    // Select the dummy profile written below; the broker alone holds real credentials.
+    env.AIDLC_CODEX_AWS_PROFILE = "codex";
   } else if (family === "opencode") {
     env.AWS_PROFILE = "broker";
     env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ provider: { "amazon-bedrock": { options: {

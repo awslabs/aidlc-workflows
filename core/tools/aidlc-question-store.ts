@@ -2,9 +2,6 @@ import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
-  CEREMONY_KEYS,
-  type CeremonyKey,
-  type CeremonySetting,
   listSpaces,
   readIntentRegistry,
   readRegularFileNoFollowOrThrow,
@@ -36,22 +33,6 @@ export interface QuestionTarget {
   uuid: string;
 }
 
-/**
- * The creation settings an answer carried when a routing question stopped it:
- * an approved plan's stage changes and settings, as typed values, and the
- * request that approval answered. Starting the work as new work replays them.
- */
-export interface QuestionCreation {
-  request?: string;
-  depth?: string;
-  testStrategy?: string;
-  review?: string;
-  guardPolicy?: string;
-  ceremony?: Partial<Record<CeremonyKey, CeremonySetting>>;
-  skip?: string[];
-  add?: string[];
-}
-
 export interface StoredQuestion {
   id: string;
   text: string;
@@ -63,9 +44,32 @@ export interface StoredQuestion {
   newWork?: true;
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
-  /** For a routing question: the creation settings of the answer it stopped. */
-  creation?: QuestionCreation;
+  /**
+   * For a routing question shown about an active workflow: that workflow's
+   * state digest when it was asked. A reply that only names one of its options
+   * answers it while that work has not moved.
+   */
+  stateSha256?: string;
+  /**
+   * For a routing question: the settings typed with the request, as `next`
+   * flags, for an answer that starts new work and for one that acts on the
+   * work it names. A reply that only names an option replays them.
+   */
+  settings?: QuestionSettings;
   createdAt: string;
+}
+
+export interface QuestionSettings {
+  newWork: string[];
+  existingWork: string[];
+}
+
+// Flag names and their one-word values only: `next`'s own parser reads them
+// back and checks each value.
+const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9-]*$/;
+
+function isSettingTokens(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((token) => typeof token === "string" && SETTING_TOKEN.test(token));
 }
 
 export const QUESTION_UNAVAILABLE =
@@ -92,33 +96,6 @@ function questionRel(projectDir: string, id?: string): string {
   return relative(projectDir, id === undefined ? dir : join(dir, `${id}.json`));
 }
 
-// Every value is one of the words its flag accepts, and every stage a slug, so
-// a replayed setting can only ever be a setting.
-const LEVELS = ["minimal", "standard", "comprehensive"];
-const STAGE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function isCreation(value: unknown): value is QuestionCreation {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const creation = value as Record<string, unknown>;
-  const oneOf = (field: unknown, words: string[]): boolean =>
-    field === undefined || (typeof field === "string" && words.includes(field));
-  const stages = (field: unknown): boolean =>
-    field === undefined || (Array.isArray(field) && field.every((slug) => typeof slug === "string" && STAGE_SLUG.test(slug)));
-  const ceremony = creation.ceremony;
-  return (creation.request === undefined || (typeof creation.request === "string" && QUESTION_ID.test(creation.request))) &&
-    oneOf(creation.depth, LEVELS) &&
-    oneOf(creation.testStrategy, LEVELS) &&
-    oneOf(creation.review, ["adversarial", "advisory", "none"]) &&
-    oneOf(creation.guardPolicy, ["strict", "relaxed", "off"]) &&
-    (ceremony === undefined ||
-      (typeof ceremony === "object" && ceremony !== null && !Array.isArray(ceremony) &&
-        Object.entries(ceremony).every(([key, setting]) =>
-          (CEREMONY_KEYS as readonly string[]).includes(key) && (setting === "on" || setting === "off")
-        ))) &&
-    stages(creation.skip) &&
-    stages(creation.add);
-}
-
 function isTargetList(value: unknown): value is QuestionTarget[] {
   return Array.isArray(value) && value.every((target) =>
     typeof target?.intent === "string" && isRecordName(target.intent) &&
@@ -142,7 +119,10 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
         isTargetList(question.askedAbout.targets))) &&
     (question.newWork === undefined || question.newWork === true) &&
-    (question.creation === undefined || isCreation(question.creation))
+    (question.stateSha256 === undefined ||
+      (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256))) &&
+    (question.settings === undefined ||
+      (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork)))
   ) {
     return question as StoredQuestion;
   }
@@ -259,6 +239,31 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
 }
 
 /**
+ * The question stored most recently, of any origin (a `compose` entry
+ * included), unexpired: the one a reply that only names an option is about.
+ */
+export function latestQuestion(projectDir: string): StoredQuestion | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let latest: { question: StoredQuestion; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question === null || Number.isNaN(at)) continue;
+    if (latest === null || at > latest.at) latest = { question, at };
+  }
+  if (latest === null) return null;
+  const { question } = latest;
+  return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/**
  * The first new-work question asked at or after `since` and within `withinMs`
  * of it: the request described right after words said before any was open. A
  * `compose` entry counts, so words said just before a composition answer it.
@@ -320,7 +325,8 @@ export function saveQuestion(
   askedAbout?: { space: string; targets: QuestionTarget[] },
   newWork = false,
   composedFrom?: string,
-  creation?: QuestionCreation,
+  stateSha256?: string,
+  settings?: QuestionSettings,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -331,7 +337,8 @@ export function saveQuestion(
     ...(askedAbout ? { askedAbout } : {}),
     ...(newWork ? { newWork: true as const } : {}),
     ...(composedFrom ? { composedFrom } : {}),
-    ...(creation ? { creation } : {}),
+    ...(stateSha256 ? { stateSha256 } : {}),
+    ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

@@ -341,6 +341,14 @@
             {
               "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "the ancestor check relaxes only ownership, and only under the opt-in"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "e2e setup names the ownership opt-in, which then admits a sandbox-owned /"
             }
           ]
         },
@@ -2036,6 +2044,14 @@
             {
               "classname": "native private namespace",
               "name": "unsafe roots and records are rejected, never chmod-repaired"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "the ancestor check relaxes only ownership, and only under the opt-in"
+            },
+            {
+              "classname": "native private namespace",
+              "name": "e2e setup names the ownership opt-in, which then admits a sandbox-owned /"
             }
           ]
         },

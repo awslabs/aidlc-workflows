@@ -22,6 +22,7 @@ interface Step {
   "timeout-minutes"?: number | string;
   uses?: string;
   if?: string;
+  "continue-on-error"?: boolean | string;
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
@@ -58,7 +59,7 @@ const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/
 };
 const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
   on: {
-    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }>; secrets?: unknown; outputs?: unknown };
+    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string | boolean }>; secrets?: unknown; outputs?: unknown };
     workflow_dispatch: { inputs: Record<string, { description?: string; type: string; required?: boolean; default?: string; options?: string[] }> };
   };
   permissions: Record<string, string>;
@@ -200,7 +201,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "ref", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "ref", "retry-once", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -238,6 +239,8 @@ describe("t345 complete nightly coverage", () => {
       tier: { type: "string", required: true },
       "unit-shard": { type: "string", default: "" },
       "artifact-label": { type: "string", required: true },
+      "evidence-optional": { type: "boolean", default: false },
+      "retry-once": { type: "boolean", default: false },
     });
     expect(callable.inputs.diagnostic_filter).toBeUndefined();
     expect(callable.inputs.diagnostic_backend).toBeUndefined();
@@ -353,9 +356,9 @@ describe("t345 complete nightly coverage", () => {
       const suites = matrix.suite!.filter((suite) =>
         !excluded.some((row) => row.suite.name === suite.name && row.suite.tier === suite.tier));
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(8).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
-      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 33 : 10);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
+      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 45 : 14);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
     expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
@@ -365,15 +368,21 @@ describe("t345 complete nightly coverage", () => {
     expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
   });
 
-  for (const [tier, shard, filter, expected] of [
-    ["smoke", "", "", ["--smoke"]],
-    ["unit", "3/8", "", ["--unit", "--shard", "3/8"]],
-    ["integration", "", "", ["--integration"]],
-    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"]],
-    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"]],
-    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"]],
+  for (const [tier, shard, filter, expected, retry] of [
+    ["smoke", "", "", ["--smoke"], "false"],
+    ["unit", "3/8", "", ["--unit", "--shard", "3/8"], "false"],
+    ["integration", "", "", ["--integration"], "false"],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "false"],
+    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"], "false"],
+    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"], "false"],
+    // The merge queue retries smoke, unit and integration files once; isolated
+    // e2e never takes the flag.
+    ["smoke", "", "", ["--smoke", "--file-retries", "1"], "true"],
+    ["unit", "3/12", "", ["--unit", "--shard", "3/12", "--file-retries", "1"], "true"],
+    ["integration", "", "", ["--integration", "--file-retries", "1"], "true"],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "true"],
   ] as const) {
-    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""} preserves arguments, captured output and failure status`, () => {
+    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""}${retry === "true" ? " in the merge queue" : ""} preserves arguments, captured output and failure status`, () => {
       const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
       const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
       try {
@@ -395,7 +404,7 @@ describe("t345 complete nightly coverage", () => {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
             cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
@@ -865,6 +874,73 @@ describe("t345 complete nightly coverage", () => {
     expect(upload.with?.path).toBe("tests/logs/\ntmp/ci-deterministic/\n");
   });
 
+  test("a failed CI evidence upload never fails passing tests, and Full Suite evidence stays required", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job & { "continue-on-error"?: unknown }>;
+    };
+    // Only CI opts in. Full Suite verification runs and manual probes never
+    // pass the input, and a missing input compares unequal to true.
+    expect(ci.jobs.deterministic.with?.["evidence-optional"] as unknown).toBe(true);
+    expect(workflow.jobs.deterministic.with?.["evidence-optional"]).toBeUndefined();
+    // Only merge groups retry; PR pushes, dispatches and Full Suite stay strict.
+    expect(ci.jobs.deterministic.with?.["retry-once"]).toBe(`\${{ github.event_name == 'merge_group' }}`);
+    expect(workflow.jobs.deterministic.with?.["retry-once"]).toBeUndefined();
+    expect(deterministic.on.workflow_dispatch.inputs["retry-once"]).toBeUndefined();
+    expect(deterministic.on.workflow_dispatch.inputs["evidence-optional"]).toBeUndefined();
+    // These are the three uploads in the required check's chain; each test step
+    // keeps its own exit code, so a real failure still fails the job.
+    for (const [job, testStep, tolerance] of [
+      [deterministic.jobs.test, "Run deterministic tier", `\${{ inputs.evidence-optional == true }}`],
+      [ci.jobs.test_native_terminal, "Run native terminal contracts", true],
+      [ci.jobs.test_guards, "Exercise recovery with production guards", true],
+    ] as const) {
+      const all = steps(job);
+      const tolerant = all.filter((step) => step["continue-on-error"] !== undefined);
+      expect(tolerant.map((step) => step.uses?.split("@")[0]), testStep).toEqual(["actions/upload-artifact"]);
+      expect(tolerant[0]["continue-on-error"], testStep).toBe(tolerance);
+      expect(tolerant[0].if, testStep).toContain("always()");
+      const run = all.findIndex((step) => step.name === testStep);
+      expect(run, testStep).toBeGreaterThanOrEqual(0);
+      expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
+      expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
+    }
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    // Uploads outside the required chain, and every Full Suite upload, stay fatal.
+    const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
+      steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
+    expect(ciTolerant.sort()).toEqual([
+      "test_guards: Preserve guard evidence",
+      "test_native_terminal: Preserve native terminal evidence",
+    ]);
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of steps(job).filter((entry) => entry.uses?.startsWith("actions/upload-artifact@"))) {
+        expect(step["continue-on-error"], step.name).toBeUndefined();
+      }
+    }
+  });
+
+  test("the stale test-weight report is advisory: it runs after the tests and cannot fail a job", () => {
+    const all = steps(deterministic.jobs.test);
+    const index = all.findIndex((step) => step.name === "Report outdated test weights");
+    expect(index).toBeGreaterThan(all.findIndex((step) => step.name === "Run deterministic tier"));
+    expect(index).toBeLessThan(all.findIndex((step) => step.name === "Sanitize deterministic evidence"));
+    const report = all[index];
+    expect(report.if).toBe(`\${{ always() && (inputs.tier == 'unit' || inputs.tier == 'integration') }}`);
+    expect(report.env).toEqual({ TEST_TIER: `\${{ inputs.tier }}` });
+    // No continue-on-error (only the evidence upload may carry it); the script
+    // always exits 0 and `|| true` covers a crash of Bun itself.
+    expect(report["continue-on-error"]).toBeUndefined();
+    expect(report.run).toBe('bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true');
+    // The flaky-test report follows it with the same never-fails shape.
+    const retries = all[index + 1];
+    expect(retries.name).toBe("Report tests that passed on retry");
+    expect(retries.if).toBe(`\${{ always() && inputs.retry-once == true && inputs.tier != 'e2e' }}`);
+    expect(retries["continue-on-error"]).toBeUndefined();
+    expect(retries.run).toBe("bun scripts/ci-retry-report.ts tmp/ci-deterministic/stamp.txt || true");
+    const execution = all.find((step) => step.name === "Run deterministic tier")!;
+    expect(execution.env?.RETRY_ONCE).toBe(`\${{ inputs.retry-once == true }}`);
+  });
+
   test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {
     expect(CI_BEDROCK_MODELS.claude).toMatchObject({
       ANTHROPIC_DEFAULT_FABLE_MODEL: "global.anthropic.claude-fable-5[1m]",
@@ -1088,6 +1164,7 @@ describe("t345 complete nightly coverage", () => {
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
     const inherited = {
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: "mint-token", AWS_ACCESS_KEY_ID: "secret-key", GITHUB_TOKEN: "github",
+      AIDLC_CODEX_AWS_PROFILE: "runner-profile",
       AIDLC_BROKER_URL: "http://127.0.0.1:1234", AIDLC_BROKER_IDENTITY: JSON.stringify({ account: "123456789012", arn: "arn:aws:sts::123456789012:assumed-role/ci/test" }),
     };
     for (const family of ["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"] as const) {
@@ -1100,13 +1177,20 @@ describe("t345 complete nightly coverage", () => {
       expect(Object.keys(env).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_CONFIG_FILE", "AWS_PROFILE"] : family === "codex" ? ["AWS_CONFIG_FILE"] : []);
       if (family === "opencode") expect(env.AWS_PROFILE).toBe("broker");
+      if (family === "codex") expect(env.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
+      else expect(env.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(env).toMatchObject(FAMILIES[family].env);
       const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
         ...inherited, PATHEXT: ".UNTRUSTED",
       });
+      // The hook phase trace is on for the Windows live legs only.
+      expect(windows.AIDLC_TEST_HOOK_TRACE).toBe("1");
+      expect(env.AIDLC_TEST_HOOK_TRACE).toBeUndefined();
       // Native `where claude` needs the executable suffix list after scrubbing.
       expect(windows.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
       expect(windows.PATH).toBe("C:\\aidlc-live\\tools");
+      if (family === "codex") expect(windows.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
+      else expect(windows.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(Object.keys(windows).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_CONFIG_FILE", "AWS_PROFILE"] : family === "codex" ? ["AWS_CONFIG_FILE"] : []);
     }
@@ -1118,6 +1202,35 @@ describe("t345 complete nightly coverage", () => {
     expect(() => sandboxEnvironment("codex", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
       ...inherited, AIDLC_CODEX_BIN: "C:\\runner\\untrusted.cmd",
     })).toThrow("sealed native Codex launcher");
+  });
+
+  test("the Windows wait loop snapshots stalled hooks for live runs only, from process metadata", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+    const snapshot = source.match(/^function Write-HookStallSnapshot\b[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(snapshot).toContain("Get-CimInstance Win32_Process");
+    // Hooks enter the dispatcher both ways; an adapter runs its core hook as a child.
+    expect(snapshot).toContain("Contains('engine hook ')");
+    expect(snapshot).toContain("Contains('engine adapter ')");
+    // Every CIM query is capped at what is left of the snapshot's budget (at
+    // most 15 seconds), so a slow provider cannot hold the wait loop; ownership
+    // is checked for the stalled processes and their parents, not every process.
+    expect(snapshot).toContain("[int]$BudgetSeconds = 60");
+    expect(snapshot).toContain("$remaining = { [int][Math]::Min(15, [Math]::Floor(($budget - [DateTime]::UtcNow).TotalSeconds)) }");
+    const cimCalls = snapshot.match(/(?:Get-CimInstance|Invoke-CimMethod)[^\n]*/g) ?? [];
+    expect(cimCalls.length).toBeGreaterThanOrEqual(3);
+    for (const call of cimCalls) expect(call).toMatch(/-OperationTimeoutSec (?:\$seconds|\(\[Math\]::Max\(1, \(& \$remaining\)\)\))/);
+    expect(snapshot).not.toMatch(/foreach \(\$process in \$processes\) \{[^}]*GetOwnerSid/);
+    // A lookup that reports a failure without throwing is unknown, not "not owned".
+    expect(snapshot).toContain("$owner.ReturnValue -ne 0 -or [string]::IsNullOrEmpty($owner.Sid)) { return $null }");
+    // Reading files the isolated run uses could add a handle to the stall.
+    expect(snapshot).not.toMatch(/Get-Content|ReadAll|OpenRead|::Open\(|Get-ChildItem/);
+    // One call site, gated to the live run's scheduled-task wait and evidence-only.
+    expect(source.match(/Write-HookStallSnapshot \$/g) ?? []).toHaveLength(1);
+    expect(source).toMatch(
+      /if \(\$Label -eq 'run' -and \[DateTime\]::UtcNow -ge \$nextStallCheck\) \{\s+\$nextStallCheck = \[DateTime\]::UtcNow\.AddMinutes\(1\)\s+try \{ Write-HookStallSnapshot \$stallDirectory \$stallSeen /,
+    );
+    // A runner-only sibling of the task's log root, collected with the launch logs.
+    expect(source).toContain("$stallDirectory = Join-Path (Join-Path $tools 'logs') ('hook-stalls-' + $id)");
   });
 
   test("Kiro and Cursor are excluded without exposing vendor API keys", () => {
@@ -1431,7 +1544,7 @@ describe("t345 complete nightly coverage", () => {
     expect(suites.some((suite) => suite.tier === "deep")).toBe(false);
     expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);
     const shards = suites.filter((suite) => suite.tier === "unit");
-    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
+    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
     const files = readdirSync(join(REPO_ROOT, "tests/unit")).filter((file) => file.endsWith(".test.ts")).sort();
     const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests/unit-shard-weights.json"), "utf8")) as ShardConfig;
     const assignments = shards.map((suite) => selectShard(files, parseShardSpec(suite.shard!), config));

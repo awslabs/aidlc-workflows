@@ -88,6 +88,8 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   assignWeightedShards,
+  orderLongestFirst,
+  parseOrderWeights,
   parseShardSpec,
   type ShardConfig,
 } from "../lib/test-sharding.ts";
@@ -267,11 +269,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).not.toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
-  test("eight weighted unit shards cover every file once and preserve binary affinity", () => {
+  test("twelve weighted unit shards cover every file once and preserve binary affinity", () => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 8, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 12, UNIT_SHARD_CONFIG);
     const flattened = shards.flat();
 
     expect(shards.every((shard) => shard.length > 0)).toBe(true);
@@ -415,6 +417,23 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     const banner =
       r.out.split("\n").find((l) => l.startsWith("## Integration Tests")) ?? "";
     expect(banner).toContain("(parallel=4)");
+  }, PER_TEST_TIMEOUT);
+
+  // --- 5b. Parallel integration admits the longest file first --------------
+  // A long file admitted last sets the tier's wall time, so the runner orders
+  // parallel integration files by tests/integration-weights.json (prior CI
+  // durations); unweighted files and ties keep name order.
+  test("parallel integration starts files longest-first by their recorded weights", () => {
+    const pair = ["t12-state-fixture-validation", "t89"];
+    const order = parseOrderWeights(readFileSync(join(TESTS_ROOT, "integration-weights.json"), "utf-8"));
+    expect(order).toBeDefined();
+    const expected = orderLongestFirst(pair, (name) => name, order!);
+    // The pair proves the ordering only while its weights reverse name order.
+    expect(expected, "pick two integration files whose weights reverse name order").toEqual(["t89", "t12-state-fixture-validation"]);
+    const r = run(["--integration", "--parallel", "2", "--no-llm", "--filter", "^(t12-state-fixture-validation|t89)$"]);
+    expect(r.status, r.out).toBe(0);
+    const starts = [...r.out.matchAll(/^=== START (\S+)\.test\.ts ===$/gm)].map((match) => match[1]);
+    expect(starts).toEqual(expected);
   }, PER_TEST_TIMEOUT);
 
   // --- 6. Interleaving observed under --parallel 4 -------------------------
