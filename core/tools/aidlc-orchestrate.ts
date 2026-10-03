@@ -2901,11 +2901,11 @@ function composeDispatchDirective(
 //
 // This consults the deterministic query layer (listIntents over the active
 // space) and, when intents EXIST but none is flagged active, NAMES the
-// disambiguation move as an `ask` directive that lists the existing intents and
+// disambiguation move as an `ask` directive that lists the unfinished intents and
 // asks the human to pick one via `/aidlc intent <name>` - instead of creating.
-// Returns null when creation should proceed unchanged (zero intents in the space,
-// or one already resolved active — the latter only when this is reached with an
-// explicit scope/intent that didn't load a cursor'd state). The engine stays
+// Returns null when creation should proceed unchanged (zero unfinished intents
+// in the space, or one already resolved active - the latter only when this is
+// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
@@ -2916,18 +2916,20 @@ function intentPickPromptIfRecordsExist(
   // Archived intents are retired work: they never block creation and are never
   // offered as a pick (the listing shows them only under --all). A space whose
   // every record is archived therefore reads as zero intents here.
-  const intents = listIntents(projectDir, space, selection.intent).filter(
+  const recorded = listIntents(projectDir, space, selection.intent).filter(
     (intent) => !isArchivedIntent(intent),
   );
-  if (intents.length === 0) return null; // zero intents → creation is correct
-  // Finished work alone leaves nothing to continue, so new work is created
-  // rather than asked about. Beside live work it stays listed, annotated.
-  if (intents.every((intent) => isCompletedIntent(intent))) return null;
-  if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
+  if (recorded.length === 0) return null; // zero intents -> creation is correct
+  if (recorded.some((i) => i.active)) return null; // a cursor already resolves -> not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // Carry exact record-dir selectors accepted by `intent <name>`. Slugs remain
   // display labels because duplicate labels are legal and ambiguous to switch.
-  const intentStates = intents.map((intent) => {
+  // Finished work has nothing left to continue or reshape, so it is neither
+  // listed nor counted as work in progress, and a space holding only finished
+  // work creates. Either signal marks it finished: the registry row, or the
+  // state file a finalize completed. `intent list` and `intent <record>` still
+  // reach it.
+  const intentStates = recorded.map((intent) => {
     let state = "";
     if (intent.dirName) {
       try {
@@ -2940,7 +2942,11 @@ function intentPickPromptIfRecordsExist(
       }
     }
     return { intent, state };
-  });
+  }).filter(({ intent, state }) =>
+    !isCompletedIntent(intent) && getField(state, "Status") !== "Completed"
+  );
+  const intents = intentStates.map(({ intent }) => intent);
+  if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
   const present = intentStates.filter(({ intent }) => intent.dirName);
@@ -2967,15 +2973,10 @@ function intentPickPromptIfRecordsExist(
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
     if (annotate) {
-      const completed =
-        intent.status.toLowerCase() === "complete" ||
-        getField(state, "Status") === "Completed";
       const parked = (getField(state, "Parked") ?? "").trim();
       const parkedAt = (getField(state, "Parked At Stage") ?? "").trim();
       const currentStage = (getField(state, "Current Stage") ?? "").trim();
-      if (completed) {
-        annotation = "complete";
-      } else if (parked && parkedAt && parkedAt === currentStage) {
+      if (parked && parkedAt && parkedAt === currentStage) {
         annotation = `parked at ${parkedAt}`;
       } else if (
         intent.dirName &&
