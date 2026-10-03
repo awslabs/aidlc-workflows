@@ -1269,6 +1269,20 @@ describe("t294 provider diagnostics", () => {
     expect(provider).toContain("config providers --reset --yes");
     // An answer does not change how the open work runs, so nothing claims it does.
     expect(acknowledged + reset + provider).not.toContain("picks this up");
+    // The undo brings back the acknowledgement and the actions marked done too.
+    const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      acknowledged: true,
+      pendingActions: [{ id: "bedrock-model-access", status: "done" }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    const back = answer("providers", "--provider", "current");
+    expect(back).toContain(`Changed the providers answer in ${file}. To undo: `);
+    expect(back).toContain("config providers --provider amazon-bedrock --region us-east-1 --acknowledge --mark-done bedrock-model-access --yes");
   });
 
   test("pending actions drive check and doctor until marked done", () => {

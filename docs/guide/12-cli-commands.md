@@ -1508,8 +1508,9 @@ command that undoes it. With no `--local`, `--project`, or `--global`, a
 clears the switch from every file that records it. A switch is on while any of
 the files records it. A command that also changes
 another flag is a settings change too and is done the same way, with a line for
-each part; only a command that brings in a release (`--download` on a machine
-that lacks it) waits for the workflow.
+each part; only a command that must bring in other release files (a
+`--download`, or the update a project pinned to another release needs first)
+waits for the workflow.
 
 #### `/aidlc --plan-approval` - Plan approval
 

@@ -111,6 +111,8 @@ import {
   stateFilePath,
   isArchivedIntent,
   isCompletedIntent,
+  isSafeIntentRecordName,
+  SPACE_NAME_REGEX,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
   withAuditLock,
@@ -4933,7 +4935,11 @@ function activeWorkflowDescriptions(projectDir: string): string[] {
         const status = getField(readFileSync(path, "utf-8"), "Status");
         if (status === "Completed" || status === "Archived") continue;
       }
-      active.push(`${space.name}/${intent.dirName}`);
+      // Printed for the person and read by agents: committed names pass the
+      // model-facing name rules, else a placeholder stands in.
+      active.push(`${SPACE_NAME_REGEX.test(space.name) ? space.name : "(unnamed space)"}/${
+        isSafeIntentRecordName(intent.dirName) ? intent.dirName : "(unnamed intent)"
+      }`);
     }
   }
   return active;
@@ -7949,7 +7955,16 @@ const FLAG_LEAVES: ReadonlyArray<{
   { key: "questionRetentionDays", label: "question retention (days)", flag: "--question-retention-days" },
 ];
 
-/** Every setting a settings file records apart from bypasses, keyed by where it lives. */
+// A committed value as printed: one line, with control characters shown as "?".
+function shownValue(value: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  return value.replace(/[\u0000-\u001f\u007f]/g, "?");
+}
+
+/**
+ * Every setting a settings file records apart from bypasses, keyed by where it
+ * lives. `args` is empty when no one command sets the value back by itself.
+ */
 function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf> {
   const leaves = new Map<string, SettingLeaf>();
   const flags = file?.flags;
@@ -7988,11 +8003,15 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
     }
     for (const [harness, model] of Object.entries(policy.model ?? {})) {
       if (!model) continue;
+      // --agent always takes --effort, so the model comes back with the
+      // agent's effort, and only when one is recorded.
       leaves.set(`models.agents.${agent}.model.${harness}`, {
         section: "models",
         label: `${agent} model (${harness})`,
         value: model,
-        args: ["--agent", agent, "--model", model, "--harness", harness],
+        args: policy.effort
+          ? ["--agent", agent, "--effort", policy.effort, "--model", model, "--harness", harness]
+          : [],
       });
     }
   }
@@ -8009,7 +8028,9 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
     return target === "global" ? path : relative(projectDir, path);
   };
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget): string =>
-    `${configInvocationFor(projectDir)} config ${section} ${args.join(" ")} --${target} --yes${projectTarget(projectDir)}`;
+    `${configInvocationFor(projectDir)} config ${section} ${
+      args.map((arg) => quoteCommandArgument(arg)).join(" ")
+    } --${target} --yes${projectTarget(projectDir)}`;
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
@@ -8032,13 +8053,15 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
         .filter((id) => id.startsWith(`${section}.`) && was.get(id)?.value !== now.get(id)?.value)
         .sort();
       if (ids.length === 0) continue;
-      const remaining = [...now.keys()].filter((id) => id.startsWith(`${section}.`));
-      const resetUndoes = ids.every((id) => !was.has(id)) &&
-        remaining.length === ids.length &&
-        (section === "models" || after.size === 0);
+      // --reset removes the whole section, so it is the undo only when the
+      // file had none of it before (saved profiles included) and, for flags,
+      // it would not also clear a bypass.
+      const before = change.previous?.[section];
+      const sectionWasEmpty = !before || Object.keys(before).every((key) => key === "schemaVersion");
+      const resetUndoes = sectionWasEmpty && (section === "models" || after.size === 0);
       if (resetUndoes) {
         lines.push(
-          `Recorded ${ids.map((id) => `${now.get(id)?.label} ${now.get(id)?.value}`).join(", ")} in ${file}. To undo: ${
+          `Recorded ${ids.map((id) => shownValue(`${now.get(id)?.label} ${now.get(id)?.value}`)).join(", ")} in ${file}. To undo: ${
             command(section, ["--reset"], change.target)
           }`,
         );
@@ -8048,12 +8071,14 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
         const old = was.get(id);
         const fresh = now.get(id);
         const label = old?.label ?? fresh?.label ?? id;
-        const undo = old
+        const undo = old && old.args.length > 0
           ? ` To undo: ${command(section, old.args, change.target)}`
+          : old
+          ? ""
           : id === "flags.questionRetentionDays"
           ? ` To undo: ${command(section, ["--question-retention-days", "unlimited"], change.target)}`
           : " It was not set there before.";
-        lines.push(`${label}: ${old?.value ?? "not set"} -> ${fresh?.value ?? "not set"} in ${file}.${undo}`);
+        lines.push(shownValue(`${label}: ${old?.value ?? "not set"} -> ${fresh?.value ?? "not set"} in ${file}.${undo}`));
       }
     }
   }
@@ -8081,7 +8106,9 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
   if (canonical(context.previous) === canonical(context.next)) return [];
   const file = `${context.harnessDir}/tools/data/harness.json`;
   const command = (args: string[]): string =>
-    `${configInvocationFor(projectDir)} config ${context.section} ${args.join(" ")} --yes${projectTarget(projectDir)}`;
+    `${configInvocationFor(projectDir)} config ${context.section} ${
+      args.map((arg) => quoteCommandArgument(arg)).join(" ")
+    } --yes${projectTarget(projectDir)}`;
   if (context.previous === null) {
     return [`Recorded the ${context.section} answer in ${file}. To undo: ${command(["--reset"])}`];
   }
@@ -8094,6 +8121,8 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
         ...(earlier.region ? ["--region", earlier.region] : []),
         ...(earlier.profile ? ["--profile", earlier.profile] : []),
         ...(earlier.opencodeDefault === undefined ? [] : ["--opencode-default", earlier.opencodeDefault ? "yes" : "no"]),
+        ...(earlier.acknowledged ? ["--acknowledge"] : []),
+        ...(earlier.pendingActions ?? []).filter((item) => item.status === "done").flatMap((item) => ["--mark-done", item.id]),
       ])}`];
     }
   }
@@ -8111,13 +8140,26 @@ function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undef
   const open = activeWorkflowDescriptions(projectDir);
   if (open.length === 0) return null;
   const who = `${open.length} open workflow${open.length === 1 ? "" : "s"} (${open.join(", ")})`;
+  const verb = (word: string): string => `${word}${open.length === 1 ? "s" : ""}`;
   const was = settingLeaves(mutation?.previous ?? null);
   const now = settingLeaves(mutation?.next ?? null);
   const changed = [...new Set([...was.keys(), ...now.keys()])].filter((id) => was.get(id)?.value !== now.get(id)?.value);
-  if (changed.length === 1 && changed[0] === "flags.defaultScope") {
-    return `The default scope applies to new work; ${who} keep${open.length === 1 ? "s" : ""} the scope it started with.`;
+  // A guard reads its bypass every time it checks, so a switch applies at the
+  // very next check, a retry in the same step included.
+  const bypasses = (file: AidlcSettingsFile | null | undefined): string =>
+    canonical([...(file?.flags?.bypasses ?? [])].sort());
+  const switched = bypasses(mutation?.previous) !== bypasses(mutation?.next);
+  const scope = changed.includes("flags.defaultScope");
+  const settings = changed.some((id) => id !== "flags.defaultScope");
+  const later = "a step already running keeps what it started with";
+  const scopeNote = "the default scope applies to new work only";
+  if (switched && settings) {
+    return `${who} ${verb("get")} the switch at the next check, with no restart, and the other settings from the next step; ${later}${scope ? `; ${scopeNote}` : ""}.`;
   }
-  return `${who} pick${open.length === 1 ? "s" : ""} this up from the next step; a step already running keeps what it started with.`;
+  if (switched) return `${who} ${verb("pick")} this up at the next check, with no restart${scope ? `; ${scopeNote}` : ""}.`;
+  if (settings) return `${who} ${verb("pick")} this up from the next step; ${later}${scope ? `; ${scopeNote}` : ""}.`;
+  if (scope) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
+  return null;
 }
 
 // The machine settings file lives outside the project, so its change runs as
