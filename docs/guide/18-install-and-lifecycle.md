@@ -988,6 +988,18 @@ the same combined block hash on its next config invocation.
 Once more than one harness is present, every `aidlc config` invocation needs
 `--harness <name>`, except recording or clearing a bypass on its own.
 
+`aidlc doctor` compares the release each harness tree records in
+`tools/data/aidlc-stamp.json`. When they differ it warns `Harness trees on
+different releases`, names each tree's release, and gives the commands that
+bring the others level. Natively that is `aidlc config --harness <name>` for
+each tree not on the engine's release. On a copied project each tree runs its
+own release, so the newest tree's tool refreshes the others from that release's
+`aidlc-copy-runtime-<version>.tar.gz` with `--from`; a tree no config run has
+recorded first takes one `--download` refresh at its own release. While a
+workflow runs, config does not refresh a tree, so the warning names the tool
+whose files are on that release to continue in, and the commands to run after
+the workflow completes.
+
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
 modified unmarked `.gitignore` content remains user-owned, including AI-DLC

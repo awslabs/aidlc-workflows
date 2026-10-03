@@ -1582,6 +1582,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeWorkflowDescriptions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-doctor-harness-tree-versions.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:advanceContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [

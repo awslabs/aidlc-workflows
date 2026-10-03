@@ -3687,6 +3687,36 @@ export function listIntents(
   return infos;
 }
 
+// The workflows still running in a project, as `<space>/<record dir>`: every
+// space's intents that neither the registry nor the state file marks completed
+// or archived. config refuses to refresh a harness tree while any runs, and
+// doctor names the same list.
+export function activeWorkflowDescriptions(projectDir: string): string[] {
+  const active: string[] = [];
+  for (const space of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space.name)) {
+      if (
+        isCompletedIntent(intent) ||
+        isArchivedIntent(intent) ||
+        !intent.dirName
+      ) continue;
+      const path = stateFilePath(projectDir, intent.dirName, space.name);
+      let stateFile = false;
+      try {
+        stateFile = lstatSync(path).isFile();
+      } catch {
+        // No state file yet: the registry row alone says it runs.
+      }
+      if (stateFile) {
+        const status = getField(readFileSync(path, "utf-8"), "Status");
+        if (status === "Completed" || status === "Archived") continue;
+      }
+      active.push(`${space.name}/${intent.dirName}`);
+    }
+  }
+  return active;
+}
+
 // Materialize the active-space cursor without overwriting a concurrent explicit
 // switch. A clone does not carry this gitignored file, so SessionStart and any
 // active-intent write recreate the resolved pointer on first use. Publish a

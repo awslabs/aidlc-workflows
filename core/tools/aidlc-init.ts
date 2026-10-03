@@ -102,15 +102,10 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
+  activeWorkflowDescriptions,
   DEFAULT_SPACE,
-  getField,
-  listIntents,
-  listSpaces,
   normalizeProjectFlagsRecord,
   RECORDABLE_PROJECT_BYPASSES,
-  stateFilePath,
-  isArchivedIntent,
-  isCompletedIntent,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
   withAuditLock,
@@ -4917,26 +4912,6 @@ function prepareRefreshSource(
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
   }
-}
-
-function activeWorkflowDescriptions(projectDir: string): string[] {
-  const active: string[] = [];
-  for (const space of listSpaces(projectDir)) {
-    for (const intent of listIntents(projectDir, space.name)) {
-      if (
-        isCompletedIntent(intent) ||
-        isArchivedIntent(intent) ||
-        !intent.dirName
-      ) continue;
-      const path = stateFilePath(projectDir, intent.dirName, space.name);
-      if (regularFile(path)) {
-        const status = getField(readFileSync(path, "utf-8"), "Status");
-        if (status === "Completed" || status === "Archived") continue;
-      }
-      active.push(`${space.name}/${intent.dirName}`);
-    }
-  }
-  return active;
 }
 
 function assertRefreshSafe(projectDir: string): void {
