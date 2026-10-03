@@ -1023,6 +1023,7 @@ describe("documentation parity derives current behavior from authored implementa
       read("core", "tools", "aidlc-utility.ts"),
       read("core", "tools", "aidlc-doctor.ts"),
       read("core", "tools", "aidlc-init.ts"),
+      read("core", "tools", "aidlc-model-policy.ts"),
       read("core", "tools", "aidlc-config-diagnostics.ts"),
       read("core", "tools", "aidlc-plugin.ts"),
       read("core", "tools", "aidlc-state.ts"),
@@ -1031,12 +1032,15 @@ describe("documentation parity derives current behavior from authored implementa
     for (const phrase of [
       "Setup check - ",
       "hook PATH ready",
+      "every agent uses your ",
+      "session's model and effort",
       "Runtime hook PATH",
       "Hooks last fired: ",
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
       "Human-turn receipts: 0 HUMAN_TURN rows",
       "Plan Approval authority is ambiguous or stale",
+      "cannot select one approval target",
       "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
     ]) {

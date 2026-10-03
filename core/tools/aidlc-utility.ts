@@ -57,8 +57,10 @@ import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
+  ARCHIVED_FROM_FIELD,
   type LegacyDoctorResult,
   redactSecretPatterns,
+  stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
 import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
@@ -265,6 +267,7 @@ import {
   type StageEntry,
   setCheckbox,
   setField,
+  setOrInsertField,
   setPhaseProgress,
   setStageSuffix,
   scopeGridPath,
@@ -595,8 +598,8 @@ Utilities:
   --new-scope "<task>"  Build a custom plan even when a ready-made one matches
   intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
-  intent archive <name> [--reason <text>]  Retire an in-flight intent; its record stays on disk and leaves the default list
-  intent unarchive <name>  Bring an archived intent back to in-flight
+  intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
+  intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
@@ -4731,7 +4734,7 @@ export async function collectDoctorReport(
       const wcIdx = auditContent.lastIndexOf("**Event**: WORKFLOW_COMPLETED");
       if (wcIdx !== -1) {
         const status = stateContent.match(/^- \*\*Status\*\*:\s*(\S+)/m);
-        if (status && status[1] !== "Completed") {
+        if (status && !stateShowsCompletion(stateContent)) {
           results.push({
             pass: false,
             label: `State/audit drift: audit has WORKFLOW_COMPLETED but state Status=${status[1]}`,
@@ -5855,11 +5858,11 @@ export async function collectDoctorReport(
     for (const space of listSpaces(projectDir)) {
       for (const intent of listIntents(projectDir, space.name)) {
         // Only workflows that can still run. A finished workflow needs no scope
-        // definition, and holding one to this standard would be unrecoverable:
-        // `intent archive` refuses a completed intent outright, so the only exit
-        // would be recreating a scope the user deliberately deleted. Mirrors the
-        // enumeration activeWorkflowDependencyViolations already uses in this file
-        // (which t224 pins), so completion releases this check the same way it
+        // definition, and holding one to this standard would make the person
+        // archive finished work, or recreate a scope they deliberately deleted,
+        // just to clear a doctor failure. Mirrors the enumeration
+        // activeWorkflowDependencyViolations already uses in this file (which
+        // t224 pins), so completion releases this check the same way it
         // releases the plugin-selection block.
         if (isArchivedIntent(intent) || isCompletedIntent(intent) || !intent.dirName) {
           continue;
@@ -8147,11 +8150,12 @@ function auditReason(raw: string | undefined): string | null {
   return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
 }
 
-// The refusals that keep `intent archive` from hiding live work. A completed
-// intent is already terminal (nothing to retire). A record with Bolt worktrees
-// or claimed team Units still has work in flight in other checkouts that the
-// archive would orphan. Claim inspection fails closed: inability to prove the
-// registry is claim-free is not permission to retire shared work.
+// The refusals that keep `intent archive` from hiding live work. Claimed team
+// Units are held by other people's checkouts, so archiving them would retire
+// work someone else is doing. Claim inspection fails closed: inability to prove
+// the registry is claim-free is not permission to retire shared work. A
+// completed intent and one with Bolt worktrees archive like any other: nothing
+// is deleted, the worktrees stay on disk, and unarchive brings the record back.
 function refuseUnlessArchivable(
   projectDir: string,
   space: string,
@@ -8161,17 +8165,6 @@ function refuseUnlessArchivable(
 ): void {
   if (isArchivedIntent(row) || getField(state, "Status") === "Archived") {
     die(`Intent "${dirName}" is already archived.`);
-  }
-  if (row.status === "complete" || getField(state, "Status") === "Completed") {
-    die(
-      `Intent "${dirName}" is complete. A completed workflow is already terminal and is not archived.`,
-    );
-  }
-  const boltRefs = parseRefsList(getField(state, "Bolt Refs") ?? "");
-  if (boltRefs.length > 0) {
-    die(
-      `Intent "${dirName}" still has Bolt worktree(s) in flight (${boltRefs.join(", ")}). Merge or discard them before archiving.`,
-    );
   }
   if (!isTeamUnitOwnership(state)) return;
   const dependencyPath = unitDependencyPath(projectDir, dirName, space);
@@ -8198,16 +8191,18 @@ function refuseUnlessArchivable(
 }
 
 // `/aidlc intent archive <name> [--reason <text>]` · `/aidlc intent unarchive
-// <name>`. Archiving retires an in-flight intent without deleting anything:
-// the record dir, its artifacts, and its audit shards stay on disk; the
-// registry row flips to `archived`; the state file's Status flips to `Archived`
+// <name>`. Archiving retires an in-flight or completed intent without deleting
+// anything: the record dir, its artifacts, its audit shards, and any Bolt
+// worktrees stay on disk; the registry row flips to `archived`; the state
+// file's Status flips to `Archived` (the Status it replaced is kept beside it)
 // so the engine refuses to route its stages; and the default listing hides it.
-// Unarchiving reverses exactly those two field writes. Both run under the
-// WORKSPACE lock (invariant 2: every intents.json mutation takes the sentinel
-// bucket), then the target intent lock, so registry and state changes cannot
-// race either another registry writer or a workflow-local mutation. Both emit
-// their audit row FIRST (audit-first atomicity) into the target intent's own
-// shard, so the row lands even when that intent is not active.
+// Unarchiving reverses exactly those field writes, restoring `Completed` /
+// `complete` or `Running` / `in-flight`. Both run under the WORKSPACE lock
+// (invariant 2: every intents.json mutation takes the sentinel bucket), then
+// the target intent lock, so registry and state changes cannot race either
+// another registry writer or a workflow-local mutation. Both emit their audit
+// row FIRST (audit-first atomicity) into the target intent's own shard, so the
+// row lands even when that intent is not active.
 function handleIntentLifecycle(
   projectDir: string,
   verb: IntentLifecycleVerb,
@@ -8216,15 +8211,15 @@ function handleIntentLifecycle(
   missingValueFlags: ReadonlySet<string>,
 ): void {
   if (!target) die(`Usage: aidlc-utility intent ${verb} <name>`);
-  // Only `archive` records a reason. Refusing it on `unarchive` keeps a user
-  // from believing a reason was audited when nothing captures it.
+  // Only `archive` records a reason. `unarchive` still does what was asked and
+  // says the reason was not recorded, so nobody believes it was audited.
   const reasonGiven = flags.reason !== undefined || missingValueFlags.has("reason");
-  if (verb === "unarchive" && reasonGiven) {
-    die("intent unarchive refused: --reason is only accepted by intent archive.");
-  }
   // A bare or blank `--reason` would otherwise land in the audit shard as the
   // flag's boolean placeholder ("Reason: true") - a usage error, not a reason.
-  if (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === "")) {
+  if (
+    verb === "archive" &&
+    (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === ""))
+  ) {
     die("intent archive refused: --reason requires a nonblank value.");
   }
   const selection = resolveWorkflowSelection(projectDir);
@@ -8237,7 +8232,7 @@ function handleIntentLifecycle(
       `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`,
     );
   }
-  const stage = withAuditLock(projectDir, () => {
+  const { stage, completed, boltRefs } = withAuditLock(projectDir, () => {
     return withAuditLock(projectDir, () => {
       const row = readIntentRegistry(projectDir, space).find((entry) =>
         recordDirMatches(entry, dirName),
@@ -8250,31 +8245,57 @@ function handleIntentLifecycle(
       const timestamp = isoTimestamp();
       if (verb === "archive") {
         refuseUnlessArchivable(projectDir, space, dirName, row, state);
+        const priorStatus = (getField(state, "Status") ?? "").trim();
+        // Built before the audit row: appendUnderHeading throws when
+        // `## Current Status` is absent, so a malformed state file fails
+        // before anything is written.
+        let content: string;
+        try {
+          content = setOrInsertField(state, "## Current Status", ARCHIVED_FROM_FIELD, priorStatus);
+        } catch (cause) {
+          die(`Intent "${dirName}" cannot be archived: its state file could not be updated (${errorMessage(cause)}).`);
+        }
+        content = setField(content, "Status", "Archived");
+        content = setField(content, "Last Updated", timestamp);
         const fields: Record<string, string> = { Stage: currentStage };
         const reason = auditReason(flags.reason);
         if (reason) fields.Reason = reason;
         appendAuditEntryUnlocked("WORKFLOW_ARCHIVED", fields, projectDir, dirName, space);
-        let content = setField(state, "Status", "Archived");
-        content = setField(content, "Last Updated", timestamp);
         writeStateFile(projectDir, content, dirName, space);
         updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
-        return currentStage;
+        return {
+          stage: currentStage,
+          completed: priorStatus === "Completed",
+          boltRefs: parseRefsList(getField(state, "Bolt Refs") ?? ""),
+        };
       }
       const stateArchived = getField(state, "Status") === "Archived";
       if (!isArchivedIntent(row) && !stateArchived) {
         die(`Intent "${dirName}" is not archived (status: ${row.status}); nothing to unarchive.`);
       }
+      // Anything but a recorded `Completed` comes back running: an archive
+      // made before the field existed could only have been running work. A
+      // state already brought back (an unarchive stopped before its registry
+      // write) keeps the Status it has.
+      const restoreCompleted = stateArchived
+        ? getField(state, ARCHIVED_FROM_FIELD) === "Completed"
+        : getField(state, "Status") === "Completed";
       appendAuditEntryUnlocked("WORKFLOW_UNARCHIVED", { Stage: currentStage }, projectDir, dirName, space);
-      let content = setField(state, "Status", "Running");
+      let content = setField(state, "Status", restoreCompleted ? "Completed" : "Running");
+      content = removeField(content, ARCHIVED_FROM_FIELD);
       content = setField(content, "Last Updated", timestamp);
       writeStateFile(projectDir, content, dirName, space);
-      updateIntentStatus(projectDir, dirName, "in-flight", space);
-      return currentStage;
+      updateIntentStatus(projectDir, dirName, restoreCompleted ? "complete" : "in-flight", space);
+      return { stage: currentStage, completed: restoreCompleted, boltRefs: [] };
     }, dirName, space);
   });
   if (verb === "unarchive") {
+    const back = completed
+      ? "it is complete again and back in the default /aidlc intent list."
+      : `it is in-flight again at "${stage}". Switch to it with /aidlc intent ${dirName}.`;
     process.stdout.write(
-      `Unarchived intent → ${dirName} (space: ${space}); it is in-flight again at "${stage}". Switch to it with /aidlc intent ${dirName}.\n`,
+      `Unarchived intent → ${dirName} (space: ${space}); ${back}\n` +
+        (reasonGiven ? "The --reason was not recorded: only intent archive records a reason.\n" : ""),
     );
     return;
   }
@@ -8293,7 +8314,13 @@ function handleIntentLifecycle(
     clearSessionIntentUuid(projectDir, sid);
   }
   process.stdout.write(
-    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; /aidlc intent list --all shows it and /aidlc intent unarchive ${dirName} brings it back.\n`,
+    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; /aidlc intent list --all shows it and /aidlc intent unarchive ${dirName} brings it back.\n` +
+      (completed
+        ? "It was complete, so it now leaves the default /aidlc intent list; unarchive brings it back as complete.\n"
+        : "") +
+      (boltRefs.length > 0
+        ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); /aidlc intent unarchive ${dirName} brings that work back.\n`
+        : ""),
   );
 }
 

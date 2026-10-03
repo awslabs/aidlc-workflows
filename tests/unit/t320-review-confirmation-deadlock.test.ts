@@ -272,7 +272,7 @@ describe("t320 review/summary deadlock prevention", () => {
     const blocked = runHook(proj, artifact);
     expect(blocked.status).toBe(2);
     expect(blocked.stderr).toContain(
-      'Ask "What should change?" for stage "requirements-analysis"',
+      'When the person already said what should change for stage "requirements-analysis"',
     );
     expect(blocked.stderr).toContain("their exact text unchanged");
     expect(
@@ -538,7 +538,7 @@ describe("t320 recovery guidance", () => {
         "- [-] requirements-analysis — EXECUTE",
         "requirements-analysis",
       ),
-    ).toContain('Ask "What should change?"');
+    ).toContain('Otherwise ask "What should change?"');
     expect(
       recoveryGuidance(
         "/p",

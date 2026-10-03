@@ -73,11 +73,13 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
   its structured `operation`. Selection is sufficient to attempt it; the owning
   tool still enforces lifecycle and evidence. Process returned orchestrator
   directives through the ordinary loop.
-- `human-input`: render the action's follow-up and end the turn. Request Changes
-  needs a separate answer to "What should change?"; preserve that feedback
-  unchanged as the report's `--reason`, separate from
-  `--user-input "Request Changes"`. Obtain the human's concrete Scope when
-  required.
+- `human-input`: render the action's follow-up and end the turn. For Request
+  Changes, a reply that already says what should change is the feedback, and
+  when the person's last reply asked for changes and said what, the remedy is
+  already chosen and the ask is not presented; otherwise ask "What should
+  change?" and wait for a separate answer. Preserve that feedback unchanged as
+  the report's `--reason`, separate from `--user-input "Request Changes"`.
+  Obtain the human's concrete Scope when required.
 - `external-work`: follow the `action` through its existing protocol and tools.
   Selection needs no additional feedback turn and does not prove completion.
 

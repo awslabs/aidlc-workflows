@@ -649,7 +649,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       "If this is a reviewer suggestion, quote it at the gate",
     );
     expect(blocked.stderr).toContain(
-      'Ask "What should change?" for stage "requirements-analysis"',
+      'When the person already said what should change for stage "requirements-analysis"',
     );
     expect(blocked.stderr).toContain("their exact text unchanged");
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");

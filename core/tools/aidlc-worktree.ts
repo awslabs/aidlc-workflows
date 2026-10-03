@@ -2582,6 +2582,23 @@ function handleMerge(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  // An archived workflow's Bolt work stays on disk as it is, and lands nowhere
+  // until the person brings the workflow back.
+  if (selection.intent !== null) {
+    let parentState = "";
+    try {
+      parentState = readStateFile(pd, selection.intent, selection.space);
+    } catch {
+      // No parent state to read: the checks below decide.
+    }
+    if (getField(parentState, "Status") === "Archived") {
+      errorWithSlug(
+        slug,
+        "Cannot merge a Bolt for an Archived workflow. Bring it back first with " +
+          `\`/aidlc intent unarchive ${selection.intent}\`.`,
+      );
+    }
+  }
   const identity = resolveCommandBoltIdentity(pd, slug, selection);
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
