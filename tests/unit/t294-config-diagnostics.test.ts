@@ -766,21 +766,30 @@ describe("t294 runtime diagnostics", () => {
     const ran = join(root, "stand-in-ran");
     mkdirSync(standIn, { recursive: true });
     mkdirSync(real, { recursive: true });
+    // Scripts this host can run: a .cmd on Windows, a shell script elsewhere.
+    const windows = process.platform === "win32";
+    const command = windows ? "copilot.cmd" : "copilot";
+    const script = (lines: string[]) =>
+      windows ? `@echo off\r\n${lines.join("\r\n")}\r\n` : `#!/bin/sh\n${lines.join("\n")}\n`;
     writeFileSync(
-      join(standIn, "copilot"),
-      `#!/bin/sh\ntouch '${ran}'\nprintf 'Install GitHub Copilot CLI? (y/N): '\nexit 0\n`,
+      join(standIn, command),
+      windows
+        ? script([`type nul > "${ran}"`, "echo Install GitHub Copilot CLI? (y/N):", "exit /b 0"])
+        : script([`touch '${ran}'`, "printf 'Install GitHub Copilot CLI? (y/N): '", "exit 0"]),
       { mode: 0o755 },
     );
-    const linux = { platform: "linux" as const, env: {} };
+    const host = { platform: process.platform, env: {} };
+    const separator = windows ? ";" : ":";
     // Only the stand-in: the CLI is not installed, and nothing ran.
-    expect(probeHarnessCli("copilot", { ...linux, interactivePath: standIn })).toEqual(
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: standIn })).toEqual(
       expect.objectContaining({ status: "missing", required: false }),
     );
-    expect(probeHarnessCli("copilot", { ...linux, interactivePath: `${standIn}/` }).status).toBe("missing");
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${windows ? "\\" : "/"}` }).status)
+      .toBe("missing");
     // The real CLI after it on PATH is the one probed.
-    writeFileSync(join(real, "copilot"), "#!/bin/sh\necho 1.0.80\n", { mode: 0o755 });
-    expect(probeHarnessCli("copilot", { ...linux, interactivePath: `${standIn}:${real}` })).toEqual(
-      expect.objectContaining({ status: "found", version: "1.0.80", path: join(real, "copilot") }),
+    writeFileSync(join(real, command), script(["echo 1.0.80"]), { mode: 0o755 });
+    expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${separator}${real}` })).toEqual(
+      expect.objectContaining({ status: "found", version: "1.0.80", path: join(real, command) }),
     );
     expect(existsSync(ran)).toBe(false);
 
