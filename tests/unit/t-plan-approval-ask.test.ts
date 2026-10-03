@@ -524,11 +524,14 @@ describe("the engine asks for Plan Approval", () => {
     expect(auditText(proj)).toContain("**Person Reply**: what does step 1 do?\\nok, go ahead");
   });
 
-  test("a question about switching plan approval off, typed or in the picker, records nothing, and a plain yes after it asks for a confirm", () => {
+  // A question is the agent's to answer: the words are kept for it, nothing is
+  // recorded, and a plain "yes" after it is the agent's to read too.
+  test("a question about switching plan approval off, typed or in the picker, records nothing; the agent reads it", () => {
     const proj = project();
     const question = String(askFor(proj).question);
-    expect(reply(proj, "skip plan approval?")).toContain("asked a question, so nothing was recorded");
-    expect(reply(proj, "yes")).toContain("nothing was recorded");
+    reply(proj, "skip plan approval?");
+    reply(proj, "yes");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     const asked = [{
       question, header: "Plan", multiSelect: false,
       options: [{ label: "Approve Plan (Recommended)", description: "" }, { label: "Request Changes", description: "" }],
@@ -545,8 +548,8 @@ describe("the engine asks for Plan Approval", () => {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     expect(picked.status, picked.stderr).toBe(0);
-    expect(picked.stdout).toContain("asked a question, so nothing was recorded");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
     expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
     expect(next(proj).kind).toBe("ask");
   });
