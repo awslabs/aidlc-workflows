@@ -896,7 +896,10 @@ instead: in a project that has one of them, `aidlc config --harness kiro-ide`
 (or `--harness kiro`) switches `.kiro/` to the other in place. The switch is a
 refresh planned from the installed row's ownership baseline: it removes the files
 only that row shipped, keeps `aidlc/`, reports a locally modified file it would
-replace or remove as a conflict, and is refused while a workflow is active. It needs that baseline
+replace or remove as a conflict, and is refused while a workflow is active.
+Switching to `kiro-ide` names every `.kiro/hooks/*.json` file AI-DLC does not
+own: Kiro runs those on its v3 engine, which the switch pins in
+`.kiro/settings/cli.json`, and in Kiro IDE. It needs that baseline
 (`.kiro/tools/data/aidlc-manifest.json`); without it, refresh the installed row
 with `aidlc config --harness <installed>` first. A release passed with `--from`
 and no `--harness` never switches the row. OpenCode and Copilot are not switched

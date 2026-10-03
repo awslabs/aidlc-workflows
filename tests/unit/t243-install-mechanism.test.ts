@@ -869,6 +869,9 @@ describe("t243 project initialization", () => {
     expect(preview.status, preview.stdout + preview.stderr).toBe(0);
     expect(preview.stdout).toContain("(switches .kiro in place from kiro to kiro-ide)");
     expect(preview.stdout).toContain("conflict=0");
+    const hookWarning =
+      "AI-DLC does not own .kiro/hooks/my-hook.json; Kiro runs this hook file on its v3 engine, which .kiro/settings/cli.json now pins, and in Kiro IDE";
+    expect(preview.stdout).toContain(hookWarning);
     expect(stamp()).toBe("kiro");
 
     const switched = run(INIT, [
@@ -876,6 +879,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
+    expect(switched.stdout).toContain(hookWarning);
     expect(stamp()).toBe("kiro-ide");
     expect(layout()).toBe("kas");
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8"))["chat.agentEngine"])
@@ -894,6 +898,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain("switched .kiro in place from kiro-ide to kiro (aidlc/ kept)");
+    expect(back.stdout).not.toContain("AI-DLC does not own");
     expect(stamp()).toBe("kiro");
     expect(layout()).toBe("agent-v1");
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(true);
@@ -969,8 +974,20 @@ describe("t243 project initialization", () => {
     const missing = run(INIT, switchArgs, project);
     expect(missing.status).toBe(4);
     expect(missing.stdout).toContain(
-      "cannot switch .kiro from kiro to kiro-ide: installed kiro has no ownership baseline (.kiro/tools/data/aidlc-manifest.json); run aidlc config --harness kiro first",
+      "cannot switch .kiro from kiro to kiro-ide: installed kiro has no ownership baseline (.kiro/tools/data/aidlc-manifest.json); refresh it from the release it was installed from first",
     );
+    expect(missing.stdout.trim()).toEndWith("config --harness kiro");
+    // Quiet output is the fix line alone, so it has to be the run that records
+    // the baseline, aimed at this project when run from elsewhere.
+    const quiet = run(INIT, [...switchArgs, "--quiet"], temp("aidlc-t243-kiro-switch-elsewhere-"));
+    expect(quiet.status).toBe(4);
+    expect(quiet.stdout.trim()).toEndWith(`config --harness kiro --project-dir ${project}`);
+    // The refusal comes before any source is read or fetched for the switch.
+    const unread = run(INIT, [
+      "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
+    ], project);
+    expect(unread.status).toBe(4);
+    expect(unread.stdout).toContain("cannot switch .kiro from kiro to kiro-ide: installed kiro has no ownership baseline");
     expect(transactionSourceHash(project)).toBe(unowned);
 
     // The named remedy records the baseline, and the switch then goes through.
@@ -983,6 +1000,32 @@ describe("t243 project initialization", () => {
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
     expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch does not carry the trust acknowledgement to the other row", () => {
+    const project = temp("aidlc-t243-kiro-switch-trust-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const trust = () =>
+      JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "harness.json"), "utf-8")).trust;
+    const acknowledged = run(INIT, ["config", "trust", "--acknowledge", "--yes", "--project-dir", project], project);
+    expect(acknowledged.status, acknowledged.stdout + acknowledged.stderr).toBe(0);
+    expect(trust()).toEqual({ schemaVersion: 1, reviewed: true });
+
+    const refreshed = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(trust()).toEqual({ schemaVersion: 1, reviewed: true });
+
+    const switched = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ], project);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(trust()).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro release without --harness does not switch the installed row and names the flag that does", () => {

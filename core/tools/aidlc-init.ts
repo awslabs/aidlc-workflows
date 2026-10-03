@@ -3463,6 +3463,31 @@ function switchesInPlace(installed: string, requested: string): boolean {
     IN_PLACE_SWITCHABLE.has(requested);
 }
 
+// A switch refusal names the config run that gets past it. The handler renders
+// that run with this invocation's command form and project target, so every
+// output mode prints it.
+class SwitchRefusal extends Error {
+  constructor(message: string, readonly remedy: { harness: string; withSource: boolean }) {
+    super(message);
+  }
+}
+
+// Without the occupant's baseline nothing says which of its files are AI-DLC's,
+// so the files only it ships would be left behind.
+function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void {
+  const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
+  const baseline = readBaseline(path);
+  if (!baseline) {
+    throw new SwitchRefusal(
+      `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution} has no ownership baseline (${occupant.harnessDir}/tools/data/aidlc-manifest.json); refresh it from the release it was installed from first`,
+      { harness: occupant.distribution, withSource: false },
+    );
+  }
+  if (baseline.distribution !== occupant.distribution || baseline.harnessDir !== occupant.harnessDir) {
+    throw new Error(`${path}: baseline identity does not match the installed harness`);
+  }
+}
+
 function predatesFrameworkVersion(version: string | undefined, incoming: string): boolean {
   if (version === undefined) return true;
   try {
@@ -4390,8 +4415,12 @@ function prepareRefreshSource(
           `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
       );
     }
+    // A trust acknowledgement covers the row's own allowlist and hook files.
+    // Another row ships different ones, so a switch does not carry it.
+    const rowChanged = current.distribution !== staged.distribution;
     for (const [key, value] of Object.entries(current)) {
-      if (!HARNESS_IDENTITY_KEYS.has(key)) staged[key] = value;
+      if (HARNESS_IDENTITY_KEYS.has(key) || (rowChanged && key === "trust")) continue;
+      staged[key] = value;
     }
   }
   delete staged.models;
@@ -5171,11 +5200,13 @@ function selectSource(
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
       // A source alone never replaces the installed harness; naming the
       // harness is the request to switch.
-      throw new Error(
-        switchesInPlace(existingDistribution, stamp.distribution)
-          ? `existing project uses ${existingDistribution}; refusing ${stamp.distribution} without --harness ${stamp.distribution}, which switches ${stamp.harnessDir} to it in place`
-          : `existing project uses ${existingDistribution}; refusing ${stamp.distribution}`,
-      );
+      if (switchesInPlace(existingDistribution, stamp.distribution)) {
+        throw new SwitchRefusal(
+          `existing project uses ${existingDistribution}; refusing ${stamp.distribution} without --harness ${stamp.distribution}, which switches ${stamp.harnessDir} to it in place`,
+          { harness: stamp.distribution, withSource: true },
+        );
+      }
+      throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
     }
     return { ...source, stamp, descriptor };
   }
@@ -7907,6 +7938,12 @@ export async function main(
   const sourceNotes: string[] = [];
   try {
     const existing = existingProject(projectDir, requestedHarness);
+    // A switch that cannot proceed is refused before any release is fetched
+    // for it; the same check runs again once the source is selected.
+    const switchOccupant = !existing.distribution && requestedHarness
+      ? projectHarnesses.find((candidate) => switchesInPlace(candidate.distribution, requestedHarness))
+      : undefined;
+    if (switchOccupant && requestedHarness) assertSwitchBaseline(switchOccupant, requestedHarness);
     const pinPath = join(projectDir, ".aidlc-version");
     if (pathPresent(pinPath) && !regularFile(pinPath)) {
       throw new Error("project pin .aidlc-version is not a regular file");
@@ -8164,21 +8201,7 @@ export async function main(
         );
       }
       if (collision) {
-        // Without the occupant's baseline nothing says which of its files are
-        // AI-DLC's, so the files only it ships would be left behind.
-        const occupantBaselinePath = join(collision.root, "tools", "data", "aidlc-manifest.json");
-        const occupantBaseline = readBaseline(occupantBaselinePath);
-        if (!occupantBaseline) {
-          throw new Error(
-            `cannot switch ${descriptor.harnessDir} from ${collision.distribution} to ${stamp.distribution}: installed ${collision.distribution} has no ownership baseline (${descriptor.harnessDir}/tools/data/aidlc-manifest.json); run aidlc config --harness ${collision.distribution} first`,
-          );
-        }
-        if (
-          occupantBaseline.distribution !== collision.distribution ||
-          occupantBaseline.harnessDir !== collision.harnessDir
-        ) {
-          throw new Error(`${occupantBaselinePath}: baseline identity does not match the installed harness`);
-        }
+        assertSwitchBaseline(collision, stamp.distribution);
         switchingFrom = collision;
       }
     }
@@ -8440,12 +8463,30 @@ export async function main(
         descriptor.rootIntegrations.some((integration) => integration.path === ".gitignore")
         ? committedRecordIgnoreConflicts(projectDir)
         : [];
-    prepared.notes.push(...hiddenRecords);
+    // Kiro's v3 engine and Kiro IDE run every hook JSON file in the hooks
+    // directory; the v2 engine the agent-v1 row runs on reads none. A switch to
+    // a row that registers its hooks that way names each such file AI-DLC does
+    // not own, so the person sees what Kiro will now run.
+    const hooksDir = `${descriptor.harnessDir}/hooks`;
+    const hookJson = (rel: string) => rel.startsWith(`${hooksDir}/`) && /^[^/]+\.json$/.test(rel.slice(hooksDir.length + 1));
+    const unownedHooks = switchingFrom && Object.keys(files).some(hookJson) &&
+        pathPresent(join(projectDir, hooksDir)) && lstatSync(join(projectDir, hooksDir)).isDirectory()
+      ? readdirSync(join(projectDir, hooksDir))
+        .map((name) => `${hooksDir}/${name}`)
+        .filter((rel) => hookJson(rel) && !Object.hasOwn(files, rel) && regularFile(join(projectDir, rel)))
+        .sort()
+      : [];
+    const switchWarnings = unownedHooks.length > 0
+      ? [`AI-DLC does not own ${unownedHooks.join(", ")}; Kiro runs ${unownedHooks.length === 1 ? "this hook file" : "these hook files"} on its v3 engine, which ${descriptor.harnessDir}/settings/cli.json now pins, and in Kiro IDE`]
+      : [];
+    prepared.notes.push(...hiddenRecords, ...switchWarnings);
     // Quiet output is one line when clean. Like the outstanding-actions line,
-    // each record-hiding rule adds one Warning line, on dry run and apply.
+    // each record-hiding rule and each switch warning adds one Warning line, on
+    // dry run and apply.
+    const quietWarnings = [...hiddenRecords, ...switchWarnings];
     const withQuietWarnings = (message: string): string =>
-      options.mode === "quiet" && hiddenRecords.length > 0
-        ? `${message}${hiddenRecords.map((warning) => `\nWarning: ${warning}`).join("")}`
+      options.mode === "quiet" && quietWarnings.length > 0
+        ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`
         : message;
     const baseline: Baseline = {
       schemaVersion: 1,
@@ -8830,7 +8871,6 @@ export async function main(
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
       candidate.distribution === selected?.stamp.distribution
     );
-    const switchTarget = /; refusing (\S+) without --harness \1, which switches /.exec(rawMessage)?.[1];
     emitResult(failure(
       rawMessage,
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
@@ -8842,8 +8882,10 @@ export async function main(
       // project or fail to select the same source in a copied installation.
       /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
         ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
-        : switchTarget && from
-        ? configCommand(`--from ${quoteCommandArgument(from)} --harness ${switchTarget}${projectTarget(projectDir)}`)
+        : error instanceof SwitchRefusal
+        ? configCommand(
+          `${error.remedy.withSource && from ? `--from ${quoteCommandArgument(from)} ` : ""}--harness ${error.remedy.harness}${projectTarget(projectDir)}`,
+        )
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
