@@ -55,7 +55,8 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { engineDirFor } from "../tools/aidlc-lib.ts";
+import { engineDirFor, promptMovesSelection } from "../tools/aidlc-lib.ts";
+import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -95,8 +96,8 @@ export async function run(
           permission: "deny",
           agent_message:
             "AIDLC could not read this tool call's hook input, so its safety checks could not run and the call " +
-            "was stopped. Retry it once; if it is stopped again, tell the person to run `aidlc doctor` in a " +
-            "terminal, which names what is broken.",
+            "was stopped. Retry it once; if it is stopped again, tell the person to run " +
+            `\`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`,
         })}\n`);
       }
       return 0;
@@ -2825,8 +2826,8 @@ export async function run(
       r.code === 2
         ? r.stderr.trim() || "blocked by AIDLC guard hook"
         : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
-          "call was stopped. Retry it once; if it is stopped again, tell the person to run `aidlc doctor` in a " +
-          "terminal, which names what is broken.";
+          "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
+          `\`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`;
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }
@@ -2944,21 +2945,15 @@ export async function run(
       // A Cursor background agent submits prompts with no human present; its
       // turn must not mint HUMAN_TURN (the approval gates' presence evidence).
       if (isBackground()) return 0;
-      // A real human acted this turn.
-      runCore(
-        "aidlc-record-human-turn.ts",
-        JSON.stringify({
-          hook_event_name: "UserPromptSubmit",
-          ...(sessionId ? { session_id: sessionId } : {}),
-          prompt: cursor.prompt ?? cursor.user_message ?? "",
-        }),
-      );
+      const prompt = cursor.prompt ?? cursor.user_message ?? "";
       // Cursor's sessionStart fires only for a new conversation and carries no
       // startup/resume discriminator. Probe the core resume-rebind logic here,
-      // where the same session_id is available. The person's prompt always goes
-      // through: beforeSubmitPrompt cannot add context, so the probe leaves its
-      // one line for this conversation's next directive instead.
-      if (sessionId) {
+      // where the same session_id is available, BEFORE the turn is recorded,
+      // so the turn lands on the work this chat's prompt goes to. The person's
+      // prompt always goes through: beforeSubmitPrompt cannot add context, so
+      // the probe leaves its one line for this conversation's next directive
+      // instead. A typed switch to other work needs no line.
+      if (sessionId && !promptMovesSelection(prompt)) {
         runCore(
           "aidlc-session-start.ts",
           JSON.stringify({
@@ -2969,6 +2964,15 @@ export async function run(
           }),
         );
       }
+      // A real human acted this turn.
+      runCore(
+        "aidlc-record-human-turn.ts",
+        JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          ...(sessionId ? { session_id: sessionId } : {}),
+          prompt,
+        }),
+      );
       return 0;
     }
 

@@ -387,16 +387,15 @@ if (sessionId) {
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
           if (rebindCheckOnly) {
-            // The prompt that ran this probe goes through; say where it went.
+            // The prompt that ran this probe goes through on this chat's own
+            // work: its binding (or, for a chat stamped by an earlier version,
+            // the binding written from that stamp above) selected it.
             const wasLabel = intentDisplayLabel(was);
             writeSessionSelectionNotice(
               projectDir,
               sessionId,
-              binding && selectedUuid
-                ? `Another chat selected ${liveSlug}; this chat stays on ${wasLabel}. ` +
-                  `To make ${wasLabel} the selected work again, ${switchInstruction}.`
-                : `Another chat selected ${liveSlug}, so this chat now works on ${liveSlug} too. ` +
-                  `To go back to ${wasLabel}, ${switchInstruction}.`,
+              `Another chat selected ${liveSlug}; this chat stays on ${wasLabel}. ` +
+                `To make ${wasLabel} the selected work again, ${switchInstruction}.`,
             );
           }
         }

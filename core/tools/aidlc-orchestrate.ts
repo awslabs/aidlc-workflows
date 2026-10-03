@@ -554,14 +554,6 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage_validity: activeStageValidityAdvisory,
     } as Directive;
   }
-  // A conversation whose prompt hook cannot add context (Cursor) left its
-  // rebind line for this step: another chat moved the selection. Said once.
-  if (engineProjectDir && engineSessionId && !isReadOnlyEngineProbe() && !isRouteCheckProbe()) {
-    const selectionNotice = takeSessionSelectionNotice(engineProjectDir, engineSessionId);
-    if (selectionNotice) {
-      directive = withChangeNotices(directive, [selectionNotice, ...(directive.change_notices ?? [])]);
-    }
-  }
   // Per-unit Construction beats: `unit` is attached by callers after the
   // run-stage is built, so the builder's stage-entry line is wrong here (the
   // stage was entered on the first unit, not on this one). Every path that sets
@@ -600,6 +592,18 @@ function prepareEmission(directive: Directive): PreparedEmission {
     transported = withChangeNotices(transported, directive.change_notices ?? []);
     if (activeStageValidityAdvisory) {
       transported.stage_validity = activeStageValidityAdvisory;
+    }
+  }
+  // A conversation whose prompt hook cannot add context (Cursor) left its
+  // rebind line for this step: another chat moved the selection. It rides the
+  // first step the person hears (never a rules part), once.
+  if (
+    engineProjectDir && engineSessionId && transported.kind !== "load-steering" &&
+    !isReadOnlyEngineProbe() && !isRouteCheckProbe()
+  ) {
+    const selectionNotice = takeSessionSelectionNotice(engineProjectDir, engineSessionId);
+    if (selectionNotice) {
+      transported = withChangeNotices(transported, [selectionNotice, ...(transported.change_notices ?? [])]);
     }
   }
   const result = validateDirective(transported);

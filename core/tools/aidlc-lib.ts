@@ -5309,6 +5309,17 @@ export function writeSessionSelectionNotice(projectDir: string, sessionId: strin
   }
 }
 
+// A typed workspace switch or create ("/aidlc intent login") moves this
+// conversation's selection itself, so no rebind line is written for it. The
+// command head is the one the typed guard switch parser reads.
+export function promptMovesSelection(prompt: string): boolean {
+  const text = prompt.trim();
+  const head = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
+  if (head === null) return false;
+  const kind = parseWorkspaceCommand(splitKiroCommandArgs(text.slice(head[0].length).trim())).kind;
+  return kind === "switch" || kind === "create" || kind === "create-intent";
+}
+
 export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {
   const path = sessionSelectionNoticePath(projectDir, sessionId);
   if (!path) return null;

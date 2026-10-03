@@ -710,6 +710,7 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(first[0]).toContain("intent-a");
     expect(first[0]).toContain("intent-b");
     expect(first[0]).toContain(`/aidlc intent ${a.dirName}`);
+    expect(first[0]).toContain("this chat stays on");
     expect(first[0]).not.toContain("INTENT REBIND OFFER");
     // Said once: the following step and a further prompt for the same move
     // carry no second copy.
@@ -721,6 +722,64 @@ describe("t276 cursor adapter payload conversion", () => {
     );
     expect(again.stdout.trim()).toBe("");
     expect(next()).toHaveLength(0);
+  });
+
+  // A chat an earlier version stamped but never bound keeps its own work, so
+  // the person's turn is recorded there, and the line says so.
+  test("8b: a stamped, unbound chat keeps its own work and its turn after another chat moved the selection", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    for (const name of readdirSync(sessions)) {
+      if (name.endsWith(".binding.json")) rmSync(join(sessions, name));
+    }
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const turns = (dir: string) =>
+      readAllAuditShards(proj, dir, "default").split("**Event**: HUMAN_TURN").length - 1;
+    const [onA, onB] = [turns(a.dirName), turns(b.dirName)];
+    const sent = runAdapter(proj, "mint", payload("beforeSubmitPrompt", proj, { session_id: undefined }));
+    expect(sent.stdout.trim()).toBe("");
+    expect(turns(a.dirName)).toBe(onA + 1);
+    expect(turns(b.dirName)).toBe(onB);
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+    });
+    const lines = ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+      .filter((line) => line.startsWith("Another chat selected"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("this chat stays on");
+    expect(lines[0]).toContain("intent-a");
+  });
+
+  // The person typed the switch themselves: no line about the old selection.
+  test("8c: a typed switch to the other work carries no rebind line", () => {
+    const proj = installedProject();
+    const a = createIntent(proj, "intent-a", "default", "feature");
+    const b = createIntent(proj, "intent-b", "default", "feature");
+    setActiveIntentCursor(proj, a.dirName, "default");
+    expect(runAdapter(proj, "session-start", payload("sessionStart", proj, { session_id: undefined })).code).toBe(0);
+    setActiveIntentCursor(proj, b.dirName, "default");
+    const sent = runAdapter(
+      proj,
+      "mint",
+      payload("beforeSubmitPrompt", proj, { session_id: undefined, prompt: `/aidlc intent ${b.dirName}` }),
+    );
+    expect(sent.stdout.trim()).toBe("");
+    const session = (JSON.parse(payload("beforeSubmitPrompt", proj)) as { conversation_id: string }).conversation_id;
+    const r = spawnSync("bun", [join(proj, ".cursor", "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor", AIDLC_SESSION_OVERRIDE: session },
+    });
+    const lines = ((JSON.parse(r.stdout) as { change_notices?: string[] }).change_notices ?? [])
+      .filter((line) => line.startsWith("Another chat selected"));
+    expect(lines).toHaveLength(0);
   });
 
   test("9: beforeSubmitPrompt is silent when the session's intent is unchanged", () => {
@@ -997,7 +1056,8 @@ describe("t276 cursor adapter payload conversion", () => {
         const denied = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
         expect(denied.permission).toBe("deny");
         // The refusal names the way out for the person, not only the failure.
-        expect(denied.agent_message ?? "").toContain("tell the person to run `aidlc doctor` in a terminal");
+        // This tree runs from source, so the command is the install's own spelling.
+        expect(denied.agent_message ?? "").toContain("tell the person to run `bun .cursor/tools/aidlc.ts doctor` in a terminal");
       } else {
         expect(r.stdout.trim(), `${target}: advisory malformed input`).toBe("");
       }
