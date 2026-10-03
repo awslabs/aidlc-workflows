@@ -1464,10 +1464,10 @@ function continuationReason(
     return `The work on unit "${finishedUnit}"${where} is recorded and the workflow is not finished. Run \`${aidlcDispatcherInvocation("orchestrate next")}\` for the next step, then follow the step it returns. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\` instead.`;
   }
   if (kind === "rehydrate") {
-    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt.`;
+    return `AI-DLC coordination evidence is missing or stale. Run one fresh \`${aidlcToolInvocation("orchestrate")} next\`; do not reuse an earlier receipt. If the person asked to stop here, run \`${aidlcToolInvocation("orchestrate")} park\` instead.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
-    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
+    return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user. If the person asked to stop here, run \`${aidlcToolInvocation("orchestrate")} park\` instead.`;
   }
   if (retained && kind === "run-stage") {
     // The marker is a writable file: only a valid Unit name reaches the agent.
@@ -1484,7 +1484,8 @@ function continuationReason(
       `The AIDLC workflow still has rules to load${where}. ` +
       `Run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and ` +
       "follow each step it returns until it answers `run-stage`. Do not summarise or " +
-      "narrate rule chunks to the user."
+      "narrate rule chunks to the user. If the person asked to stop here, run " +
+      `\`${aidlcToolInvocation("orchestrate")} park\` instead.`
     );
   }
   return (

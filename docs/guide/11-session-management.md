@@ -134,6 +134,36 @@ Compaction is a normal part of long sessions. The state file and artifacts on di
 
 ---
 
+## Changing Model Mid-Workflow
+
+Switching to another model inside a running chat is slow and uses many tokens:
+the new model reads the whole conversation again before it answers. On Claude
+models the provider's cache of the conversation belongs to one model, so none
+of it carries over, and changing the effort level in the same chat usually
+discards it too.
+
+AI-DLC keeps everything it needs on disk, so a new chat is the cheaper switch:
+
+1. Stop at a stage boundary: approve the stage and ask to stop in the same
+   reply, for example `Approved. Stop here for today.` The workflow parks
+   before the next stage starts (see
+   [Interaction Modes](07-interaction-modes.md)). `/aidlc park` also parks it
+   where it is.
+2. Open a new chat or session and choose the new model and effort there. On
+   Kiro IDE, also choose the **aidlc** agent in the chat panel's agent picker,
+   because a new chat starts on Kiro's Default agent (see
+   [Start AI-DLC in a Kiro IDE chat](harnesses/kiro-ide.md#start-ai-dlc-in-a-kiro-ide-chat)).
+3. Run `/aidlc --resume`. The new chat reads the saved state, artifacts, and
+   audit trail from disk instead of the old conversation, and continues where
+   the workflow stopped.
+
+Anything the old chat discussed but did not write to a file does not carry
+over, which is why the end of a stage is the best moment. On Codex CLI, type
+`$aidlc` instead of `/aidlc`. For which model and effort to choose, see
+[Choosing a Model and Effort](18-install-and-lifecycle.md#choosing-a-model-and-effort).
+
+---
+
 ## Stage Jumps
 
 You can jump forward or backward in the workflow using utility commands.

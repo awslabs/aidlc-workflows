@@ -392,8 +392,10 @@ there, writes `plugin-compose-<key>.json` and hash-proven
 `plugin-owned-<key>.json`, then commits the staged diff through the shared
 transaction engine. A fault restores all files, modes, stamps, and ownership
 records. `--prune-missing` is intentionally stricter: it requires a proved full
-host inventory, explicit confirmation (`--yes` in automation), and unchanged
-owned hashes; local or unowned bytes are refused.
+host inventory, `--yes` in automation, and unchanged owned hashes; local or
+unowned bytes are refused. At a terminal it asks nothing: it names the plugins
+it prunes and how to get them back (reinstall in the host, then sync), then
+prunes.
 
 ### Project selection
 

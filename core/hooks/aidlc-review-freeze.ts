@@ -177,9 +177,9 @@ export function judgeFreeze(
 // the quote-at-gate route for suggestions, and names the state-correct route
 // that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
-  "Ask the human what should change, then record their Request Changes " +
-  "decision before editing the document; that unlocks it for revision and a " +
-  "fresh review.";
+  "Record the person's Request Changes decision, with what they said should " +
+  "change (ask only if they have not said), before editing the document; that " +
+  "unlocks it for revision and a fresh review.";
 
 export function reviewFreezeRecoveryGuidance(
   projectDir: string,

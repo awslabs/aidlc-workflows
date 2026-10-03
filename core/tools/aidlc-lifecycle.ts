@@ -28,7 +28,6 @@ import {
   emitResult,
   failure,
   globalOptions,
-  readTerminalLine,
   success,
   usage,
   valueAfter,
@@ -424,15 +423,18 @@ function pathEntryExists(path: string): boolean {
   }
 }
 
-function requireConfirmation(argv: readonly string[], message: string): void {
+// The person typed the command, so at a terminal it says what it removes and
+// keeps, then does it. A script or an agent has no terminal and passes --yes.
+function announceRemoval(argv: readonly string[], message: string): void {
   if (argv.includes("--yes")) return;
   if (!process.stdin.isTTY) {
-    commandError(`${message}; non-interactive use requires --yes`, EXIT.usage);
+    commandError(
+      `${message.replace(/\.$/, "")}; non-interactive use requires --yes`,
+      EXIT.usage,
+    );
   }
-  const answer = readTerminalLine(`${message}\nContinue [y/N]:`);
-  if (!/^y(?:es)?$/i.test(answer?.trim() ?? "")) {
-    commandError("operation cancelled", EXIT.failure);
-  }
+  // Printed before anything is removed; stdout stays the JSON result's own.
+  (argv.includes("--json") ? process.stderr : process.stdout).write(`${message}\n`);
 }
 
 function windowsLauncherOwnedByInstaller(): boolean {
@@ -1314,6 +1316,98 @@ export function previousWindowsShimHelpers(): string[] {
   ];
 }
 
+// The running binary and the active executable can name one file in different
+// spellings: the pointer keeps the install root's 8.3 short name (RUNNER~1, for
+// example; Bun's realpath does not expand it), while the process path is the
+// long one. File identity settles it.
+function runningActiveExecutable(active: string): boolean {
+  if (canonicalPolicyPath(process.execPath).toLowerCase() === active.toLowerCase()) return true;
+  try {
+    const running = statSync(process.execPath, { bigint: true });
+    const target = statSync(active, { bigint: true });
+    return running.isFile() && running.ino !== 0n &&
+      running.ino === target.ino && running.dev === target.dev;
+  } catch {
+    return false;
+  }
+}
+
+// What doctor says about a previous helper the installer wrote. "replace":
+// this binary replaces it on its next command. "blocked": it cannot, and
+// why. Both fixes activate the verified active version again, which
+// rewrites both launcher files and keeps the version and channel; a held
+// machine lock is not a reason, the next command retries. "install": the
+// active version marker is damaged or disagrees with the command target,
+// which no other doctor row reports; the person picks the version. Null: a
+// missing or invalid command target, or an incomplete version, which the
+// Command pointer and Installed runtime rows report with their own repair.
+export type PreviousShimHelperState =
+  | { kind: "replace" | "blocked" | "install"; reason: string; fix: string }
+  | null;
+
+export function previousWindowsShimHelperState(): PreviousShimHelperState {
+  const reinstall = "rerun the same verified AI-DLC installer (install.ps1)";
+  let active: string | null;
+  try {
+    active = readActiveExecutable();
+  } catch {
+    return null;
+  }
+  if (!active) return null;
+  const target = basename(dirname(active));
+  // With aidlc.cmd moved aside, or stopped by the old helper, an aidlc.exe
+  // runs `use` by full path.
+  const reactivate = `run \`& '${active.replaceAll("'", "''")}' use ${target}\``;
+  let version: string | null = null;
+  try {
+    version = readVersionMarker(activeVersionPath());
+  } catch {
+    // Reported below as a damaged marker.
+  }
+  // The new helper refuses what the oldest one accepted without a marker.
+  if (version !== target) {
+    return {
+      kind: "install",
+      reason: version
+        ? `the active version marker ${activeVersionPath()} names ${version} but the command target names ${target}`
+        : `the active version marker ${activeVersionPath()} is missing or damaged`,
+      fix: `if you use ${target}, ${reactivate}; for another retained version, run that version's aidlc.exe under ${versionsRoot()} with \`use <version>\`; or ${reinstall}`,
+    };
+  }
+  try {
+    if (!completeVersion(target)) return null;
+    if (!previousWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))) {
+      // The installer owns aidlc.cmd only beside its own helper, so both go.
+      return {
+        kind: "blocked",
+        reason: `${windowsShimPath()} was changed after it was installed`,
+        fix: `move ${commandPath()} and ${windowsShimPath()} aside, then ${reactivate}`,
+      };
+    }
+    if (readFileSync(commandPath(), "utf-8") !== windowsShim()) {
+      return {
+        kind: "blocked",
+        reason: `${commandPath()} was changed after it was installed`,
+        fix: `move ${commandPath()} aside, then ${reactivate}`,
+      };
+    }
+  } catch {
+    return null;
+  }
+  if (!runningActiveExecutable(active)) {
+    return {
+      kind: "blocked",
+      reason: `this aidlc.exe is not the active one, ${active}`,
+      fix: "run any command through `aidlc`, for example `aidlc version`",
+    };
+  }
+  return {
+    kind: "replace",
+    reason: "the next aidlc command replaces it",
+    fix: `run \`aidlc version\`; if this row is still here, run \`aidlc use ${target}\`, which rewrites the launcher for the version you have and says why if it cannot`,
+  };
+}
+
 // `aidlc update` runs in the binary it replaces, which writes its own helper,
 // so the active binary replaces a previous helper the installer wrote. The
 // update's version probe runs this binary while the update holds the machine
@@ -1323,24 +1417,7 @@ export function previousWindowsShimHelpers(): string[] {
 export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
-    const helper = readFileSync(windowsShimPath(), "utf-8");
-    if (
-      !previousWindowsShimHelpers().includes(helper) ||
-      readFileSync(commandPath(), "utf-8") !== windowsShim()
-    ) {
-      return;
-    }
-    // The new helper refuses what the oldest one accepted without a marker.
-    const version = readVersionMarker(activeVersionPath());
-    const active = readActiveExecutable();
-    if (
-      !version ||
-      !active ||
-      active !== resolve(installedExecutablePath(version)) ||
-      canonicalPolicyPath(process.execPath).toLowerCase() !== active.toLowerCase()
-    ) {
-      return;
-    }
+    if (previousWindowsShimHelperState()?.kind !== "replace") return;
     const root = machineTransactionRoot();
     executePlan({
       schemaVersion: 1,
@@ -1545,9 +1622,9 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
         { removed: [], protected: protectedVersions },
       );
     }
-    requireConfirmation(
+    announceRemoval(
       argv,
-      `Prune retained versions ${removable.map((item) => item.version).join(", ")}?`,
+      `Pruning retained versions ${removable.map((item) => item.version).join(", ")}.`,
     );
     const refreshed = retainedVersions();
     if (refreshed.pinWarnings.length > 0) {
@@ -1707,13 +1784,10 @@ function uninstallCommand(argv: string[]): CommandResult {
   }
   const purge = argv.includes("--purge");
   // The cleanup worker inherits this window's token. A UAC-elevated window is
-  // warned, and confirmation (or --yes) lets the user proceed anyway.
+  // warned before anything is removed; the person asked, so it proceeds.
   const elevation = process.platform === "win32" ? currentWindowsElevationType() : 3;
-  const warned = (text: string, prompting: boolean): string => {
-    const warning = elevatedUninstallWarning(elevation, prompting);
-    return warning ? `${warning}\n${text}` : text;
-  };
-  const warnings = elevatedUninstallWarning(elevation, false);
+  const warnings = elevatedUninstallWarning(elevation);
+  const warned = (text: string): string => warnings ? `${warnings}\n${text}` : text;
   if (process.platform === "win32") {
     // Uninstall is the explicit retry: it resumes a continuation that already
     // removed files, and re-plans one that failed before removing any.
@@ -1724,7 +1798,7 @@ function uninstallCommand(argv: string[]): CommandResult {
           recovery.retriedFailures.length > 0
             ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
             : ""
-        }`, false),
+        }`),
         { purge, deferred: true, recovered: recovery.resumed, ...(warnings ? { warnings: [warnings] } : {}) },
       );
     }
@@ -1760,13 +1834,13 @@ function uninstallCommand(argv: string[]): CommandResult {
   const { versions } = retainedVersions();
   const plan = buildUninstallPlan(purge);
   const settings = purge
-    ? "Machine configuration and cache are selected for removal."
+    ? "Machine settings, update cache, pins, harness default, and release channel will be removed."
     : "Machine configuration, update cache, pins, and harness default will be kept.";
-  requireConfirmation(
+  announceRemoval(
     argv,
-    warned(`Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed. ${settings}${
+    warned(`Uninstalling AI-DLC (${versions.length} retained version(s)). Project trees will not be changed. ${settings}${
       preservedUninstallPaths(plan.preserved)
-    }`, true),
+    }`),
   );
   if (process.platform === "win32") {
     return scheduleWindowsUninstall(purge, plan, warnings);
@@ -1986,7 +2060,10 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     ? installedDistributions(active).filter((item) => !installedDistributions(target).includes(item))
     : [];
   if (missing.length > 0 && !argv.includes("--allow-harness-loss")) {
-    throw new Error(`rollback target lacks harnesses: ${missing.join(", ")}`);
+    throw new Error(
+      `rollback target ${target} lacks harnesses: ${missing.join(", ")}; ` +
+        "to roll back anyway, without them, run it again with --allow-harness-loss",
+    );
   }
   activate(target);
   return success(`rolled back to ${target}`, { version: target });

@@ -312,6 +312,48 @@ describe("t194 recompose - rejections", () => {
     expect(readState(proj)).toMatch(/- \[ \] functional-design — SKIP/);
   });
 
+  test("each refused stage names what the person can do instead", () => {
+    const proj = createdProject();
+    const before = readState(proj);
+    // Done: jump back to run it again.
+    const done = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "state-init"]);
+    expect(done.status).not.toBe(0);
+    expect(done.out).toContain("not pending");
+    expect(done.out).toContain("jump back to it with `/aidlc --stage state-init`");
+    // Started (intent-capture is the current stage): skipping names the jump
+    // past it, adding names the isolated run.
+    const skipCurrent = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "intent-capture"]);
+    expect(skipCurrent.status).not.toBe(0);
+    expect(skipCurrent.out).toContain("jump to the next stage with `/aidlc --stage market-research`");
+    const addCurrent = run(proj, "aidlc-utility.ts", ["recompose", "--add", "intent-capture"]);
+    expect(addCurrent.status).not.toBe(0);
+    expect(addCurrent.out).toContain("`/aidlc --stage intent-capture --single`");
+    // A starved input names both ways to make the change.
+    const starved = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "domain-design"]);
+    expect(starved.status).not.toBe(0);
+    expect(starved.out).toContain("also add a stage that produces what is missing, or also skip the stage that needs it");
+    // Moving the skeleton anchor names jumping past it and the scopes that skip it.
+    const anchorSkip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "functional-design"]);
+    expect(anchorSkip.status).not.toBe(0);
+    expect(anchorSkip.out).toContain("jump past it when the workflow reaches it");
+    expect(anchorSkip.out).toContain("change to a scope that skips it (bugfix, ");
+    expect(readState(proj)).toBe(before);
+    // Adding ahead of the anchor names the isolated run and the scopes that run it.
+    const bugfix = createdProject("bugfix");
+    const anchorAdd = run(bugfix, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
+    expect(anchorAdd.status).not.toBe(0);
+    expect(anchorAdd.out).toContain("`/aidlc --stage functional-design --single`");
+    expect(anchorAdd.out).toContain("change to a scope that runs it (");
+    expect(anchorAdd.out).toContain("feature");
+  });
+
+  test("--reason lands on the RECOMPOSED row", () => {
+    const proj = createdProject("bugfix");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories", "--reason", "jump to user-stories"]);
+    expect(r.status, r.out).toBe(0);
+    expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
+  });
+
   test("autonomous Construction rejected: recompose refuses with the remediation named", () => {
     // The engine-side anchor for the "never recompose under autonomous
     // Construction" rule (mirrors the park guard). A created feature project has no
@@ -428,5 +470,51 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     const body = JSON.parse(back.out) as { stages_reset: string[] };
     expect(body.stages_reset).toContain("user-stories");
     expect(readState(proj)).toMatch(/- \[ \] user-stories — EXECUTE/);
+  });
+
+  test("a jump to a stage the plan skips puts it back on the plan, then jumps", () => {
+    // A greenfield bugfix workflow starts at requirements-analysis; user-stories
+    // is off its plan and ahead of the cursor.
+    const proj = createdProject("bugfix");
+    const directive = (args: string[]): { kind?: string; message?: string } => {
+      const out = run(proj, "aidlc-orchestrate.ts", ["next", ...args]).out;
+      return JSON.parse(out.split("\n").find((line) => line.startsWith("{")) ?? "{}");
+    };
+    const d = directive(["--stage", "user-stories"]);
+    expect(d.kind, JSON.stringify(d)).toBe("print");
+    const message = d.message ?? "";
+    const add = message.indexOf("engine recompose --add user-stories --reason 'jump to user-stories'");
+    const jump = message.indexOf("execute --target user-stories --direction forward --scope bugfix");
+    expect(add, message).toBeGreaterThan(-1);
+    expect(jump).toBeGreaterThan(add);
+    expect(message).toContain("To go back, type `/aidlc --stage requirements-analysis`.");
+    expect(message).not.toContain("change scope");
+
+    // The commands it names, in order, land the workflow on the stage.
+    const added = run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories", "--reason", "jump to user-stories"]);
+    expect(added.status, added.out).toBe(0);
+    const jumped = run(proj, "aidlc-jump.ts", [
+      "execute", "--target", "user-stories", "--direction", "forward", "--scope", "bugfix",
+    ]);
+    expect(jumped.status, jumped.out).toBe(0);
+    const landed = directive([]) as { kind?: string; stage?: string };
+    expect(landed.kind).toBe("run-stage");
+    expect(landed.stage).toBe("user-stories");
+    expect(auditText(proj)).toContain("**Reason**: jump to user-stories");
+
+    // Behind the cursor, going back would rerun what follows: the refusal
+    // names the isolated run, which runs it without touching the plan.
+    const behind = directive(["--stage", "intent-capture"]);
+    expect(behind.kind).toBe("error");
+    expect(behind.message).toContain('comes before the current stage "user-stories"');
+    expect(behind.message).toContain("`/aidlc --stage intent-capture --single`");
+    const before = readState(proj);
+    const alone = directive(["--stage", "intent-capture", "--single"]) as { kind?: string; stage?: string; change_notices?: string[] };
+    expect(alone.kind).toBe("run-stage");
+    expect(alone.stage).toBe("intent-capture");
+    expect(alone.change_notices).toContain(
+      "\"intent-capture\" is not part of the bugfix plan. It runs on its own because you asked for it; the plan and your workflow stay as they are.",
+    );
+    expect(readState(proj)).toBe(before);
   });
 });

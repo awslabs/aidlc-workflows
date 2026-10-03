@@ -917,7 +917,7 @@ describe("t299 first-run setup wizard", () => {
   }
 
   // The setup-complete screen, the setup-check list a rerun shows in a set up
-  // project, and the `config --harness kiro-ide --yes` path (its completion
+  // project, and the `config --harness <name> --yes` path (its completion
   // line and the section wizards the walk launches) wrap the same way. Kiro
   // IDE's terminal is 79 columns by default and 62 with its tab list open.
   // Expectations come from what was rendered with no known width and from the
@@ -927,19 +927,21 @@ describe("t299 first-run setup wizard", () => {
     AIDLC_INSTALL_ROOT: join(setupMachineRoot, "share", "aidlc"),
     AIDLC_BIN_DIR: join(setupMachineRoot, "bin"),
   };
-  const kiroIdeProjection = (): {
+  const kiroProjection = (harness: "kiro" | "kiro-ide"): {
     productName: string;
     configNextStep: string;
     firstRunSteps: string[];
   } => JSON.parse(readFileSync(
-    join(RUNTIME, "kiro-ide", ".kiro", "tools", "data", "aidlc-projection.json"),
+    join(RUNTIME, harness, ".kiro", "tools", "data", "aidlc-projection.json"),
     "utf-8",
   ));
+  const kiroIdeProjection = () => kiroProjection("kiro-ide");
   const kiroIdeSteps = () => kiroIdeProjection().firstRunSteps;
   let installed: { unchanged: string; shell: string } | undefined;
   const installedProjects = () => {
     if (!installed) {
-      // No preset recorded, so the rerun's Models row needs you and the walk asks.
+      // No preset recorded. The rerun's Models row names the Kiro IDE session,
+      // which sets every agent's model, so the walk asks only for the PATH fix.
       const unchanged = runWizard("2\n\n4\n\n\n\n", kiroIdeTerminal(setupMachine));
       const shell = runWizard("\n", kiroIdeTerminal(setupMachine));
       expect(unchanged.status, unchanged.stdout + unchanged.stderr).toBe(0);
@@ -953,19 +955,27 @@ describe("t299 first-run setup wizard", () => {
     }
     return installed;
   };
-  // `config --harness kiro-ide --yes`, then the walk: Fix the sections? yes,
+  // `config --harness <name> --yes`, then the walk: Fix the sections? yes,
   // record in the project, and the models wizard's preset, group, or
-  // per-agent branch. Answers come through the scripted seam, not stdin.
+  // per-agent branch. Kiro IDE's walk offers only the PATH fix, so the models
+  // branches run on Kiro CLI, whose walk still offers them, in the same
+  // terminal. Answers come through the scripted seam, not stdin.
   const harnessWalks = {
-    preset: ["", "", "1", "balanced"],
-    groups: ["", "", "2", "", "", ""],
-    agents: ["", "", "3", ...Array(14).fill("")],
+    "kiro-ide": { harness: "kiro-ide", answers: [""] },
+    preset: { harness: "kiro", answers: ["", "", "1", "balanced"] },
+    groups: { harness: "kiro", answers: ["", "", "2", "", "", ""] },
+    agents: { harness: "kiro", answers: ["", "", "3", ...Array(14).fill("")] },
   } as const;
-  const harnessPath = (answers: readonly string[], env: NodeJS.ProcessEnv, project?: string) =>
+  const harnessPath = (
+    harness: "kiro" | "kiro-ide",
+    answers: readonly string[],
+    env: NodeJS.ProcessEnv,
+    project?: string,
+  ) =>
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      configArgs: ["--from", join(RUNTIME, "kiro-ide"), "--harness", "kiro-ide", "--mcp", "none", "--yes"],
+      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none", "--yes"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {
@@ -977,9 +987,9 @@ describe("t299 first-run setup wizard", () => {
       complete: runWizard("\n", options),
       check: runWizard("n\n", { ...options, project: projects.unchanged }),
       shell: runWizard("\n", { ...options, project: projects.shell }),
-      ...Object.fromEntries(Object.entries(harnessWalks).map(([name, answers]) => [
+      ...Object.fromEntries(Object.entries(harnessWalks).map(([name, walk]) => [
         `harness-${name}`,
-        harnessPath(answers, env),
+        harnessPath(walk.harness, walk.answers, env),
       ])) as Record<`harness-${keyof typeof harnessWalks}`, ReturnType<typeof runWizard>>,
     };
   };
@@ -1108,9 +1118,12 @@ describe("t299 first-run setup wizard", () => {
     expect(check.stdout).toContain(
       "\n  Found kiro-ide in .kiro/; using the existing copied projection.\n",
     );
+    // Kiro IDE cannot pin an agent's model or effort, so the Models row names
+    // the session instead of asking for a policy, and the walk never offers it.
     expect(check.stdout).toContain([
       "    [ok]     Harnesses   kiro-ide recorded",
-      "    [needs]  Models      no recorded policy; agents inherit your session model and effort",
+      "    [ok]     Models      every agent uses your Kiro IDE session's model and effort",
+      "    [needs]  Runtime     aidlc is absent from the non-interactive hook PATH",
     ].join("\n"));
     expect(check.stdout).toContain([
       "    [ok]     Flags       defaults",
@@ -1120,19 +1133,25 @@ describe("t299 first-run setup wizard", () => {
       "    [ok]     Workspace   workspace shell present",
       "",
     ].join("\n"));
-    expect(check.stdout).toContain("    models       bun .kiro/tools/aidlc.ts config models\n");
+    expect(check.stdout).toContain("    runtime      bun .kiro/tools/aidlc.ts config runtime\n");
+    expect(check.stdout).not.toContain("config models");
     expect(shell.stdout).toContain(
       "\n  The workspace shell is incomplete, so no section is walked until it is rebuilt; run the workspace command first.\n",
     );
     expect(shell.stdout).toContain(
       "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download\n",
     );
-    const walk = walks["harness-preset"].stdout;
     // The completion line stays one line, as scripts and tests read it.
-    const { productName, configNextStep } = kiroIdeProjection();
-    expect(walk.split("\n")[0]).toBe(
-      `configured ${walks["harness-preset"].project} for ${productName} ${AIDLC_VERSION}; next: ${configNextStep}`,
-    );
+    for (const [screen, harness] of [["harness-kiro-ide", "kiro-ide"], ["harness-preset", "kiro"]] as const) {
+      const { productName, configNextStep } = kiroProjection(harness);
+      expect(walks[screen].stdout.split("\n")[0]).toBe(
+        `configured ${walks[screen].project} for ${productName} ${AIDLC_VERSION}; next: ${configNextStep}`,
+      );
+    }
+    const ideWalk = walks["harness-kiro-ide"].stdout;
+    expect(ideWalk).toContain("\n  Full diagnostics: bun .kiro/tools/aidlc.ts config runtime --show\n");
+    expect(ideWalk).not.toContain("Models [Enter keep everything");
+    const walk = walks["harness-preset"].stdout;
     expect(walk).toContain([
       "Recorded in: nothing yet - run 'bun .kiro/tools/aidlc.ts config models --preset balanced --project --yes'",
       "Full per-agent list: bun .kiro/tools/aidlc.ts config models --show --json",
@@ -1179,7 +1198,7 @@ describe("t299 first-run setup wizard", () => {
     const plain = runWizard("n\n", { ...options, project: unchanged });
     const colored = runWizard("n\n", { ...options, project: unchanged, color: true });
     expect(colored.status, colored.stdout + colored.stderr).toBe(0);
-    expect(colored.stdout).toContain("\u001b[33m[needs]\u001b[0m  Models      no recorded policy; agents inherit\n");
+    expect(colored.stdout).toContain("\u001b[33m[needs]\u001b[0m  Runtime     aidlc is absent from the\n");
     expect(colored.stdout.replaceAll("\u001b[33m", "").replaceAll("\u001b[0m", ""))
       .toBe(plain.stdout);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1190,7 +1209,7 @@ describe("t299 first-run setup wizard", () => {
     const project = join(temp("aidlc-t299-cjk-"), "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u8a2d\u5b9a\u30d5\u30a9\u30eb\u30c0");
     mkdirSync(join(project, ".git"), { recursive: true });
     const width = project.length + 17;
-    const result = harnessPath(["n"], { AIDLC_TEST_CONFIG_COLUMNS: String(width) }, project);
+    const result = harnessPath("kiro-ide", ["n"], { AIDLC_TEST_CONFIG_COLUMNS: String(width) }, project);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(project);
     expect(tooWide(screenLines(result.stdout), width, commandsIn(result.stdout))).toEqual([]);

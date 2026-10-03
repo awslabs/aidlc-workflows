@@ -907,4 +907,62 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     }
     expect(missing).toEqual([]);
   });
+
+  // The person's reply is read for what they meant: a change request that says
+  // what to change is the feedback, an answer in their own words is the answer,
+  // a choice they leave to the agent is decided, and a choice already made is
+  // not asked again. Pin every copy so an old wording cannot come back.
+  test("questions take what the person already said", () => {
+    const stale: string[] = [];
+    const files = [
+      ...harnessQuestionAnnexes(),
+      "harness/cursor/skills/aidlc/SKILL.md",
+      "core/aidlc-common/protocols/stage-protocol.md",
+      "core/aidlc-common/protocols/stage-protocol-reviewer.md",
+      "core/aidlc-common/stages/inception/requirements-analysis.md",
+      "core/hooks/aidlc-review-freeze.ts",
+      "core/tools/aidlc-lib.ts",
+      "docs/reference/17-skill-system.md",
+    ];
+    for (const rel of files) {
+      const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      for (const old of [
+        'On Request changes, ask **"What should change?"**',
+        'If the user requests changes, ask **"What should change?"**',
+        'withdraws active summary authorization; ask "What should change?"',
+        "Ask the human what should change, then record",
+        'Ask "What should change?" for stage',
+        "then re-ask for a final pick",
+        "treat it as a request to discuss that question further",
+        "ask what outcome they care about most",
+        "When a user defers to AI judgment, reframe",
+        'Request Changes needs a separate answer to "What should change?"',
+      ]) {
+        if (text.includes(old)) stale.push(`${rel}  still says: ${old}`);
+      }
+    }
+    for (const rel of harnessQuestionAnnexes()) {
+      const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (!text.includes("already says what should change, those words are the feedback")) {
+        stale.push(`${rel}  missing: a change request that says what to change is the feedback`);
+      }
+    }
+    // A guard-recovery ask is not put to a person who already asked for changes.
+    for (const rel of harnessSkills()) {
+      const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (!text.includes("that is their choice of the `request-changes` remedy: follow it with their words instead of presenting the ask")) {
+        stale.push(`${rel}  missing: a change request already made selects the request-changes remedy`);
+      }
+    }
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    for (const rule of [
+      'When a user leaves a choice to you ("up to you", "whatever you think is best"), decide',
+      "When the person's request already chose",
+      "answers in their own words, those words are their answer",
+    ]) {
+      if (!protocol.includes(rule)) stale.push(`stage-protocol.md  missing: ${rule}`);
+    }
+    expect(stale).toEqual([]);
+  });
 });

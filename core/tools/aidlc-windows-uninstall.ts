@@ -117,12 +117,10 @@ const ELEVATED_UNINSTALL_WARNING =
   "and cleaning up as administrator is less safe: another program running as you could interfere with it.";
 
 // The worker inherits this window's token, so under UAC it would run elevated
-// from the account's writable temp directory. Warn; the user may proceed.
-export function elevatedUninstallWarning(elevationType: number, prompting: boolean): string | null {
+// from the account's writable temp directory. Warn; the person asked, so it proceeds.
+export function elevatedUninstallWarning(elevationType: number): string | null {
   if (elevationType !== 2) return null;
-  return prompting
-    ? `${ELEVATED_UNINSTALL_WARNING} For the safest uninstall, answer N and run the command from a normal PowerShell window.`
-    : `${ELEVATED_UNINSTALL_WARNING} For the safest uninstall, run it from a normal PowerShell window.`;
+  return `${ELEVATED_UNINSTALL_WARNING} For the safest uninstall, run it from a normal PowerShell window.`;
 }
 
 export type WindowsUninstallContinuationState = "resume" | "running" | "failed";
