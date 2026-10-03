@@ -937,6 +937,22 @@ describe("t293 config models CLI", () => {
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8")))
       .toEqual({ "chat.defaultAgent": "aidlc" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Kiro CLI --preset --dry-run previews the personal Kiro settings change and writes nothing", () => {
+    const project = install("kiro");
+    const seam = kiroSeam({ "chat.defaultModel": "claude-sonnet-4.6" });
+    const args = ["config", "models", "--project-dir", project, "--project", "--preset", "thorough", "--dry-run"];
+    const result = run(args, project, { ...runtimeEnv(), ...seam.env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("Would save in your personal Kiro settings");
+    expect(result.stdout).toContain("  effort   xhigh, for claude-sonnet-4.6");
+    const json = run([...args, "--json"], project, { ...runtimeEnv(), ...seam.env });
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    const payload = JSON.parse(json.stdout) as { data: { kiroSession?: { effort: string; saved: object } } };
+    expect(payload.data.kiroSession).toEqual(expect.objectContaining({ effort: "xhigh", saved: {} }));
+    expect(kiroWrites(seam.writes)).toEqual([]);
+    expect(existsSync(projectSettingsPath(project))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   test("global settings roll back when the coordinated project refresh cannot lock", () => {
     const project = install("claude");
     const machine = temp("aidlc-t293-global-rollback-");

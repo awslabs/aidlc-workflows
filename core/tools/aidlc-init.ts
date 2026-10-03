@@ -9096,6 +9096,11 @@ export async function main(
         for (const line of modelsContext.summaryLines) process.stdout.write(`${line}\n`);
         for (const note of modelsContext.notes) process.stdout.write(`  Note: ${note}\n`);
       }
+      // A dry run shows the personal Kiro settings change too, writing nothing.
+      const kiroSessionPreview = pendingKiroSession
+        ? await applyKiroSessionPlan({ ...pendingKiroSession, dryRun: true })
+        : null;
+      if (kiroSessionPreview && options.mode === "human") writeKiroSessionLines(kiroSessionPreview.lines);
       if (diagnosticsContext && options.mode === "human") {
         for (const line of diagnosticsContext.summaryLines) process.stdout.write(`${line}\n`);
         for (const note of diagnosticsContext.notes) process.stdout.write(`  Note: ${note}\n`);
@@ -9131,6 +9136,7 @@ export async function main(
                 },
               }
             : {}),
+          ...(kiroSessionPreview ? kiroSessionData(kiroSessionPreview) : {}),
           ...(diagnosticsContext
             ? {
                 diagnostics: {
