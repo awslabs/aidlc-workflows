@@ -701,7 +701,8 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   // A change request that says what to change keeps what they asked for, so
   // nobody asks "What should change?" again. The command renderer quotes it for
   // the shell; line breaks become spaces. A summary asked in the plain form is
-  // asked again, so its answer is the choice the person makes then.
+  // recorded with its checkpoint, and the person's reply to it as first asked
+  // answers it (plainSummaryAnsweredBefore): the agent passes the choice it read.
   const details = asked === "plain" || (verb === "answer" && summaryReply === null)
     ? "<their choice>"
     : verb === "answer" && summaryReply === "Request changes"
@@ -730,9 +731,12 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
             ? " with \"Looks correct\" or 'Request changes: <what they asked to change>' (single-quoted) in place of " +
               "<their choice>."
             : ".")
+      // The summary was asked in the plain form and the person answered it:
+      // record it with the flags, and their reply answers it, without asking again.
       : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
-          "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
-          `reply run \`${commands.answer}\` with the choice they made in place of <their choice>.`,
+          "(exactly one blank `[Answer]:` line in the summary section), write the choice they made in that " +
+          `line, and run \`${commands.answer}\` with it in place of <their choice>, without asking them again: ` +
+          "their reply to the summary as first asked answers it.",
   );
 }
 
@@ -1266,7 +1270,47 @@ function pendingSummaryDecision(
       ambiguity: latestActionTimestamp,
     };
   }
-  return { pending: true, humanAfterDecision: false };
+  return {
+    pending: true,
+    humanAfterDecision: plainSummaryAnsweredBefore(pd, stage, unit, workflow, latestActions),
+  };
+}
+
+// The summary was first asked as a plain question (its two choices, no
+// checkpoint), the person answered it, and the conductor then recorded the
+// question with its checkpoint. Their reply to the question as first asked
+// answers it, so they are not asked again. Holds only within one shard, with
+// that reply between the two records and nothing else asked or answered for
+// this stage and work item in between.
+function plainSummaryAnsweredBefore(
+  pd: string,
+  stage: string,
+  unit: string | undefined,
+  workflow: string | undefined,
+  recorded: Array<{ shard: string; pos: number }>,
+): boolean {
+  if (recorded.length !== 1) return false;
+  const [decision] = recorded;
+  const rows = readAuditShardEvents(pd)
+    .filter((row) => row.shard === decision.shard && row.pos < decision.pos)
+    .sort((a, b) => b.pos - a.pos);
+  let replied = false;
+  for (const row of rows) {
+    if (row.event === "HUMAN_TURN") {
+      replied = true;
+      continue;
+    }
+    const sameItem = auditBlockField(row.block, "Stage") === stage &&
+      (auditBlockField(row.block, "Unit") ?? undefined) === unit &&
+      (auditBlockField(row.block, "Workflow") ?? undefined) === workflow;
+    if (!sameItem) continue;
+    if (row.event === "DECISION_RECORDED") {
+      return replied && auditBlockField(row.block, "Checkpoint") === null &&
+        isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined);
+    }
+    if (["QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "STAGE_COMPLETED"].includes(row.event)) return false;
+  }
+  return false;
 }
 
 function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {

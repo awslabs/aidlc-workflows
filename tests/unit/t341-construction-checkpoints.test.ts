@@ -827,7 +827,8 @@ describe("t341 verification command consent", () => {
     expect(mismatch.out).toContain("Command SHA-256");
     const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(absent.code).not.toBe(0);
-    expect(absent.out).toContain("a reply the human-turn hook recorded");
+    // The question is open and the reply came before it: none is on record yet.
+    expect(absent.out).toContain("none is on record yet");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
     submitCommandChoice(dir, "t341-command", "Approve", env);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
@@ -1105,6 +1106,29 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     pass(dir, "skeleton");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow("--action ask");
     expect(approvals(dir)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's reply to this question is their presence: a decision the
+  // agent recorded after it never makes them answer the question again.
+  test("a reply on record for the question records the agent's reading without a second reply", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    human(dir, "skeleton", "looks right, ship it");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: "code-generation", Details: "an unrelated answer" }, dir);
+    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
+    expect(approved.approved).toBe(true);
+    expect(auditBlockField(approvals(dir).at(-1)!.block, "Person Reply")).toBe("looks right, ship it");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a question with no reply yet waits for one, and none open names the ask", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
+      .toThrow("no such question is open");
+    const asked = cli(dir, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "skeleton", "--session", "t341-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
+      .toThrow("none is on record yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("ordinary checkpoints autoapprove only under a recorded autonomous grant", () => {

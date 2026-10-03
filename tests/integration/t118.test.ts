@@ -522,7 +522,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const invalid = report(p, guardedEnv, ["--result", "approved"]);
     expect(invalid.kind).toBe("error");
     expect(invalid.message).toContain("names no choice");
-    expect(invalid.message).toContain("original held gate with every offered choice");
+    // Their reply is on record: the agent reports the choice it read, and the
+    // person is not asked again.
+    expect(invalid.message).toContain("The person has replied since the gate was shown");
+    expect(invalid.message).toContain("without asking them again");
+    expect(invalid.message).not.toContain("show the gate");
     expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
     expect(eventCount(p, "GATE_APPROVED")).toBe(0);
 

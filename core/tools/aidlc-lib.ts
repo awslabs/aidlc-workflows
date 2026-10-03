@@ -9,7 +9,9 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
+  aidlcDispatcherInvocation,
   aidlcInvocation,
+  aidlcToolInvocation,
   entrySkillInvocation,
   type DirectiveLimit,
   directiveLimitFor,
@@ -4555,20 +4557,42 @@ export function requireProtectedResponse(
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
     : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>" --session "<session ID>", then wait for Approve or Request Changes.';
   // The person replied to this exact question (the hook's record); the choice
-  // is the one the conductor read from their words.
-  if (!question || question.kind !== expected.kind || question.targetDigest !== expected.targetDigest ||
-    existsSync(planApprovalChallengePath(projectDir, session)) || !response ||
-    response.challengeId !== question.challengeId) {
-    throw new Error(`${expected.kind} requires the person's reply to this question: a matching protected question, current target digest, and a reply the human-turn hook recorded for this session. ${recovery}`);
+  // is the one the conductor read from their words. That reply is the
+  // person's presence: with it on record, a misrecord is corrected by
+  // recording the choice they made, never by asking them again.
+  const replied = question !== null && response !== null && response.challengeId === question.challengeId;
+  if (!question || existsSync(planApprovalChallengePath(projectDir, session))) {
+    throw new Error(`${expected.kind} requires the person's reply to this question, and no such question is open for this session. ${recovery}`);
+  }
+  if (question.kind !== expected.kind) {
+    throw new Error(
+      `${expected.kind} requires the person's reply to this question, and the open question is a ` +
+        `${question.kind} question${replied ? " the person has answered" : ""}. ` +
+        (replied
+          ? "Record the choice they made for that question, as it was asked."
+          : "Show that question if you have not, end the turn, and record the choice they make for it."),
+    );
+  }
+  // Their answer covers what they were shown. Content that changed since is
+  // new to them, so it is asked about as it is now.
+  if (question.targetDigest !== expected.targetDigest) {
+    throw new Error(
+      `${expected.kind} requires the person's reply to this question, and the question on record was asked ` +
+        "about other content (it changed since, or this record names another target). If this record's target " +
+        `is right, ask about it as it is now. ${recovery}`,
+    );
+  }
+  if (!replied || response === null) {
+    throw new Error(
+      `${expected.kind} requires the person's reply to this question, and none is on record yet. Show it if ` +
+        "you have not, end the turn, and record the choice they make.",
+    );
   }
   if (response.choice !== undefined && response.choice !== expected.choice) {
     throw new Error(
       `The person picked "${response.choice}" for this question. Record that choice, or ask them if you read ` +
         "their words differently.",
     );
-  }
-  if (expected.kind === "checkpoint-approval" && !humanPresenceGuardDisabled() && !humanActedSinceGate(projectDir)) {
-    throw new Error(`checkpoint-approval requires a fresh human turn. ${recovery}`);
   }
 }
 
@@ -10847,9 +10871,8 @@ export function personSpokeSinceGate(projectDir: string): boolean {
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
 // decorator the question-rendering guide asks the conductor to add. The words
 // themselves must be present; a paraphrase ("please change it") is not this
-// label. Gates read a paraphrase through the shared reply reader
-// (aidlc-reply-reader.ts), which infers the person's meaning from their own
-// words and never lets the conductor do it.
+// label. A paraphrase is the conductor's to read; the shared reply reader
+// (aidlc-reply-reader.ts) matches only exact picks and judges no meaning.
 // Shape of an accepted reply: optional option prefix, then the words
 // "request changes", then wrapper noise (whitespace, quotes, . or !), then at
 // most ONE "(recommended)" decorator, then wrapper noise again. Because the
@@ -35872,13 +35895,19 @@ export function guardSwitchRefusal(
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
   // Before the work exists, the person's own words at the compose gate or
-  // scope confirmation are what turn a check off for it.
+  // scope confirmation are what turn a check off for it. Otherwise the agent
+  // creates the work and then runs the setter itself for what they asked.
   if (context === "intent-create") {
     if (wanted.key === "plan-approval") {
-      return `Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type \`${entry} config set plan-approval off\` themselves, or to say so in their own words; this command does not turn it off on its own.${hint}`;
+      const setter = renderGuardOperation({ kind: "lower-fence", fence: "plan-approval" }, { harnessDir: harnessDir() });
+      return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. Create the piece of work without it; when they ask for it in their own words, run \`${setter}\` yourself and say in one line that it is off for this piece of work.${hint}`;
     }
     if (wanted.key === "guard-policy") {
-      return `Creating this intent with Guard Policy ${wanted.value} would lower fences. Create it, then have the person type \`${entry} --guard-policy ${wanted.value}\`; the harness applies it as they say it. A scope default applies without asking.${hint}`;
+      // The source install runs the utility directly, as the lower-fence setter does.
+      const setter = aidlcInvocation().startsWith("bun ")
+        ? `${aidlcToolInvocation("utility")} config-change --guard-policy ${wanted.value}`
+        : aidlcDispatcherInvocation(`config set guard-policy ${wanted.value}`);
+      return `Creating this intent with Guard Policy ${wanted.value} would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run \`${setter}\` yourself and say in one line what changed. A scope default applies without asking.${hint}`;
     }
   }
   // Lowering a check is the person's call: the setter carries it out when a
