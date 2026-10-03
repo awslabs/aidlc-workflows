@@ -10,6 +10,7 @@ import {
 	readProjectDescriptionAuthority,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
+import { knownActiveSpace } from "./aidlc-runtime-paths.ts";
 
 interface Flags {
 	stage?: string;
@@ -164,7 +165,7 @@ function activeSpaceFor(projectRoot: string, recordRoot: string): string {
 	const cursorPath = join(projectRoot, "aidlc", "active-space");
 	if (existsSync(cursorPath)) {
 		try {
-			return readFileSync(cursorPath, "utf-8").trim();
+			return knownActiveSpace(join(projectRoot, "aidlc"), readFileSync(cursorPath, "utf-8"));
 		} catch {
 			return "";
 		}

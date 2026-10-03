@@ -201,16 +201,17 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
       originals.set(name, config);
       writeFileSync(join(root, ".kiro", "agents", `${name}.json`), raw);
     }
-    writeFileSync(join(root, "aidlc", "active-space"), "teamB\n");
+    mkdirSync(join(root, "aidlc", "spaces", "team-b", "memory"), { recursive: true });
+    writeFileSync(join(root, "aidlc", "active-space"), "team-b\n");
     repointHarnessIncludes(root);
     for (const [name, original] of originals) {
       const after = JSON.parse(readFileSync(join(root, ".kiro", "agents", `${name}.json`), "utf8"));
       expect(after).toEqual({
         ...original,
         resources: original.resources.map(entry => entry === "file://aidlc/spaces/default/memory/**/*.md"
-          ? "file://aidlc/spaces/teamB/memory/**/*.md" : entry),
+          ? "file://aidlc/spaces/team-b/memory/**/*.md" : entry),
       });
-      expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+      expect(after.resources).toContain("file://aidlc/spaces/team-b/memory/**/*.md");
       expect(after.resources).not.toContain("file://aidlc/spaces/default/memory/**/*.md");
     }
   });
