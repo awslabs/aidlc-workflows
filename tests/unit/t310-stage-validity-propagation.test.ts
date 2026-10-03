@@ -4,8 +4,10 @@
 // covers: function:effectivePlanAction function:usesStageLevelPerUnitArtifacts
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  cpSync,
   mkdirSync,
   mkdtempSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,7 +19,7 @@ import {
 } from "../../core/tools/aidlc-artifact-resolution.ts";
 import { artifactFilename } from "../../core/tools/aidlc-artifact-vocabulary.ts";
 import { loadGraph } from "../../core/tools/aidlc-graph.ts";
-import { producesArtifactFile } from "../../core/tools/aidlc-lib.ts";
+import { codekbRepoName, producesArtifactFile } from "../../core/tools/aidlc-lib.ts";
 import {
   captureStageValidationBasis,
   diffStageValidationBasis,
@@ -1171,6 +1173,76 @@ describe("read-only inspection", () => {
     expect(result.issues.map((issue) => [issue.stage, issue.reasons])).toEqual([
       ["requirements-analysis", ["project-type"]],
       ["code-generation", ["project-type"]],
+    ]);
+  });
+});
+
+// The code knowledge base store is named after the folder it was first written
+// in. Moving, renaming or copying the project folder changes nothing the person
+// made, so no finished stage reads as drifted and Reverse Engineering is not
+// suggested again; a real change to the knowledge base still is.
+describe("a moved or copied project folder", () => {
+  const codekbGraph: StageValidityNode[] = [
+    {
+      slug: "reverse-engineering",
+      phase: "inception",
+      produces: ["architecture"],
+      consumes: [],
+    },
+    {
+      slug: "requirements-analysis",
+      phase: "inception",
+      produces: ["requirements"],
+      consumes: [{ artifact: "architecture", required: true }],
+    },
+  ];
+  const state = `# AI-DLC State Tracking
+
+## Runtime State
+- **Project Type**: brownfield
+- **Scope**: classic
+
+## Stage Progress
+${codekbGraph.map((stage) => `- [x] ${stage.slug} ${SEP} EXECUTE`).join("\n")}
+`;
+
+  function finishedProject(): { parent: string; audit: string } {
+    const parent = tempProject();
+    const projectDir = join(parent, "shop");
+    const record = initializeProject(projectDir, state);
+    const store = join(projectDir, "aidlc", "spaces", "default", "codekb", "shop");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "architecture.md"), "architecture-v1\n");
+    writeArtifact(record, "inception", "requirements-analysis", "requirements.md", "requirements-v1\n");
+    return { parent, audit: completionAudit(projectDir, state, codekbGraph) };
+  }
+
+  test("moving or copying the folder reports no drift", () => {
+    const { parent, audit } = finishedProject();
+    cpSync(join(parent, "shop"), join(parent, "shop-copy"), { recursive: true });
+    renameSync(join(parent, "shop"), join(parent, "shop-moved"));
+    for (const name of ["shop-copy", "shop-moved"]) {
+      const projectDir = join(parent, name);
+      expect(codekbRepoName(projectDir)).toBe("shop");
+      const result = inspectStageValidity(projectDir, state, { stages: codekbGraph, audit });
+      expect(result.issues).toEqual([]);
+      expect(result.untracked).toEqual([]);
+      expect(result.warnings).toEqual([]);
+    }
+  });
+
+  test("a changed knowledge base in the moved folder still reads as drifted", () => {
+    const { parent, audit } = finishedProject();
+    renameSync(join(parent, "shop"), join(parent, "shop-moved"));
+    const projectDir = join(parent, "shop-moved");
+    writeFileSync(
+      join(projectDir, "aidlc", "spaces", "default", "codekb", "shop", "architecture.md"),
+      "architecture-v2\n",
+    );
+    const result = inspectStageValidity(projectDir, state, { stages: codekbGraph, audit });
+    expect(result.issues.map((issue) => [issue.stage, issue.reasons])).toEqual([
+      ["reverse-engineering", ["output:architecture"]],
+      ["requirements-analysis", ["input:architecture"]],
     ]);
   });
 });

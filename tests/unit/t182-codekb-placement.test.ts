@@ -8,7 +8,8 @@
 //   1. The PURE lib helpers (imported in-process from the shipped dist tree):
 //      relativeCodekbDir / codekbDir compose the space-level per-repo dir, and
 //      codekbRepoName picks the deterministic repo NAME (0 recorded → basename,
-//      1 → that name, >1 → basename fallback).
+//      or the lone store a moved folder was written under; 1 → that name,
+//      >1 → basename fallback).
 //   2. The `codekb-path` UTILITY VERB (spawned as the real CLI surface): it prints
 //      exactly what relativeCodekbDir composes, honouring --repo and --json.
 //   3. The isCodekb RESOLVER BRANCH (observed on the run-stage directive the
@@ -151,6 +152,36 @@ describe("t182 codekb lib helpers — space-level per-repo placement", () => {
     rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
   });
+
+  // A moved, renamed or copied folder: the store was written under the folder's
+  // earlier name, and nothing in the space carries the current one.
+  test("codekbRepoName: a moved folder keeps the store it was written in", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "earlier-name");
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe("earlier-name");
+  });
+
+  test("codekbRepoName: a store under the current name wins over an older one", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "earlier-name");
+    seedStore(proj, basename(proj));
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+  });
+
+  test("codekbRepoName: a store another intent recorded as its repo is not taken", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "svc");
+    seedStore(proj, "earlier-name");
+    appendIntentRow(proj, ["svc"]);
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe("earlier-name");
+  });
+
+  test("codekbRepoName: two unclaimed stores are ambiguous and keep the current name", () => {
+    const proj = seedRecordedIntent();
+    seedStore(proj, "name-a");
+    seedStore(proj, "name-b");
+    expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+  });
 });
 
 // ============================================================================
@@ -286,6 +317,30 @@ describe("t182 isCodekb resolver — reverse-engineering artifacts land under sp
       ),
     ).toBe(false);
   });
+
+  // The folder was moved after Reverse Engineering wrote its store under the
+  // folder's earlier name: the next stage still reads that store, and
+  // `codekb-path` names it.
+  test("after a folder move, the next stage reads the store Reverse Engineering wrote", () => {
+    const proj = freshProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, join(FIXTURES_DIR, "state-brownfield-feature.md"));
+    seedStore(proj, "shop-app");
+    const res = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    const dir = JSON.parse(res.stdout.trim()) as RunStageDirective;
+    expect(dir.kind).toBe("run-stage");
+    expect(dir.stage).toBe("requirements-analysis");
+    const store = `aidlc/spaces/${DEFAULT_SPACE}/codekb/shop-app/`;
+    expect(dir.consumes).toContain(`${store}architecture.md`);
+    expect(dir.consumes.some((path) => path.includes(`/codekb/${basename(proj)}/`))).toBe(false);
+    const path = spawnSync(BUN, [UTILITY, "codekb-path", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    expect(path.status).toBe(0);
+    expect(path.stdout.trim()).toBe(store);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -299,6 +354,21 @@ function rewriteIntentRepos(proj: string, repos: string[]): void {
   const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
   rows[0].repos = repos;
   writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+}
+
+// A second, inactive intent row that recorded its own repos.
+function appendIntentRow(proj: string, repos: string[]): void {
+  const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+  const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
+  rows.push({ uuid: "other-uuid", slug: "other", dirName: "other", status: "in-flight", repos });
+  writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+}
+
+// A code knowledge base store with one artifact in it.
+function seedStore(proj: string, repo: string): void {
+  const dir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", repo);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "architecture.md"), `# ${repo}\n`, "utf-8");
 }
 
 // ============================================================================
