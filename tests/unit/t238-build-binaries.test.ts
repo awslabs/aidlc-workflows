@@ -465,6 +465,41 @@ describe("t238 build-binaries release builder", () => {
       /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
+    const pluginDoctorProject = createTestProject();
+    tempDirs.push(pluginDoctorProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(pluginDoctorProject, ".claude"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(pluginDoctorProject, ".claude", "scopes", "doctor-probe-scope.md"),
+      [
+        "---",
+        "name: doctor-probe-scope",
+        "plugin: doctor-probe",
+        "depth: Standard",
+        "description: Doctor probe plugin scope",
+        "keywords:",
+        "  - doctor-probe-scope",
+        "---",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(pluginDoctorProject, ".claude", "tools", "doctor-probe-doctor.ts"),
+      'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"native plugin check ran"}]}));\n',
+    );
+    const pluginDoctor = spawnSync(native.artifact, ["doctor", "--verbose", "--project-dir", pluginDoctorProject], {
+      cwd: pluginDoctorProject,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "plugin-doctor-install") },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const pluginDoctorOutput = `${pluginDoctor.stdout ?? ""}${pluginDoctor.stderr ?? ""}`;
+    expect(pluginDoctorOutput).toContain("ok    Plugin check (doctor-probe): native plugin check ran");
+    expect(pluginDoctorOutput).not.toContain("returned exit code 2");
+
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
