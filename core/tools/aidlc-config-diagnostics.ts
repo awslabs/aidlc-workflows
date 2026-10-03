@@ -535,7 +535,9 @@ function pathEntries(value: string, platform: NodeJS.Platform): string[] {
 
 function executableCandidates(command: string, platform: NodeJS.Platform): string[] {
   if (platform !== "win32" || extname(command)) return [command];
-  return [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`];
+  // Windows runs only a file with an executable extension; npm puts an
+  // extensionless shell script beside its copilot.cmd, so it comes last.
+  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command];
 }
 
 export function resolveExecutableOnPath(

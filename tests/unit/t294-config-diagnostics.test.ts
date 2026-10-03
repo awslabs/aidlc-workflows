@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, join, posix } from "node:path";
+import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
@@ -786,8 +786,10 @@ describe("t294 runtime diagnostics", () => {
     );
     expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${windows ? "\\" : "/"}` }).status)
       .toBe("missing");
-    // The real CLI after it on PATH is the one probed.
+    // The real CLI after it on PATH is the one probed. npm on Windows writes
+    // an extensionless shell script beside copilot.cmd; the .cmd is the one run.
     writeFileSync(join(real, command), script(["echo 1.0.80"]), { mode: 0o755 });
+    if (windows) writeFileSync(join(real, "copilot"), "#!/bin/sh\necho 9.9.9\n");
     expect(probeHarnessCli("copilot", { ...host, interactivePath: `${standIn}${separator}${real}` })).toEqual(
       expect.objectContaining({ status: "found", version: "1.0.80", path: join(real, command) }),
     );
@@ -801,6 +803,14 @@ describe("t294 runtime diagnostics", () => {
       expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding }).status).toBe("missing");
       expect(existsSync(expandingRan)).toBe(false);
     }
+
+    // npm's Windows layout: the extensionless shell script, copilot.cmd and
+    // copilot.ps1 side by side. The resolver picks what Windows can run.
+    const npmLayout = join(root, "npm-layout");
+    mkdirSync(npmLayout, { recursive: true });
+    for (const name of ["copilot", "copilot.cmd", "copilot.ps1"]) writeFileSync(join(npmLayout, name), "");
+    expect(resolveExecutableOnPath("copilot", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+    expect(resolveExecutableOnPath("copilot.cmd", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
 
     // Windows spelling: any case, backslashes, a trailing separator. The
     // search skips the folder, and a resolver that names it anyway is ignored.
