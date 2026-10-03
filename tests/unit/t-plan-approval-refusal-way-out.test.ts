@@ -12,9 +12,16 @@
 //     That exact command passes the guard, a `cd` in front of it does not,
 //     and running it hands over the approved build (strict and off alike);
 //   - the person approved and the agent writes before running `next`: the
-//     refusal says they approved, not to show them the question again;
-//   - a developer handoff that names two targets with Guard Policy off: the
-//     refusal names both and the `brief` command that names one;
+//     refusal says they approved, not to show them the question again; a
+//     malformed handoff then is not called unapproved;
+//   - while the recovery question is open, `next` with a `cd` in front is
+//     refused and named on its own;
+//   - the plan was edited after approval: with Guard Policy off the refusal
+//     says an earlier version was approved and the build may go on; under
+//     strict it claims no approval and `next` asks again;
+//   - a developer handoff that names two targets: the refusal names both and
+//     the exact `brief` command for the current step, which passes the guard,
+//     runs as printed, and whose output is a handoff the guard lets through;
 //   - no plan yet with Guard Policy off: the refusal names the plan files and
 //     the command, as it does with the fence on (it used to say only
 //     "code-generation-plan.md is missing or empty");
@@ -22,7 +29,7 @@
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -36,7 +43,11 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
-import { invalidateActiveDirectiveContext } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  invalidateActiveDirectiveContext,
+  stateDigest,
+  writeActiveDirectiveMarker,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(120_000);
 
@@ -48,6 +59,7 @@ const SESSION = "01995000-7a11-7000-8000-0000000000a1";
 const SOURCE_NEXT = "bun .claude/tools/aidlc-orchestrate.ts next";
 const ON_ITS_OWN = "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
 const ALREADY_APPROVED = "is already approved: do not ask the person to approve it again yourself";
+const SOURCE_BRIEF = "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level";
 
 interface Emitted {
   kind: string;
@@ -205,15 +217,46 @@ function namedCommand(words: string): string {
   return command as string;
 }
 
+// The `brief` a refusal tells the agent to hand over.
+function namedBrief(words: string): string {
+  const command = /output of `([^`]+ brief [^`]+)` first/.exec(words)?.[1];
+  expect(command, words).toBeDefined();
+  return command as string;
+}
+
+// Runs a command a refusal named, the way the conductor would, from the
+// project's own copy of the tools.
+function runInstalled(proj: string, command: string): string {
+  expect(command).toMatch(/^bun \.claude\/tools\/[\w.-]+\.ts( [\w-]+)+$/);
+  const [, ...args] = command.split(" ");
+  const result = spawnSync(BUN, args, {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, `${command}\n${result.stderr}`).toBe(0);
+  return result.stdout ?? "";
+}
+
+const twoTargetHandoff = (proj: string) =>
+  guard(proj, "Task", {
+    subagent_type: "aidlc-developer-agent",
+    prompt: "AIDLC-UNIT: backend-lookup\nAIDLC-STAGE: code-generation\n" +
+      `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\nBuild it.`,
+  });
+
 // After approval the build step was delivered, then the chat compacted: the
-// step the agent held is set aside until it runs `next` again.
-function approveBuildAndCompact(proj: string, unit: string | null): void {
+// step the agent held is set aside until it runs `next` again. `meanwhile`
+// runs after the build step arrives, before the compaction.
+function approveBuildAndCompact(proj: string, unit: string | null, meanwhile: () => void = () => {}): void {
   writePlan(proj, unit);
   const ask = next(proj);
   expect(ask, JSON.stringify(ask)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   reply(proj, "approve");
   const build = next(proj);
   expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+  meanwhile();
   const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
   const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { owner_session: string };
   expect(invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session)).toBe(true);
@@ -288,28 +331,82 @@ describe("the person already answered: the refusal does not send the agent back 
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     const write = said(writeSource(proj));
     expect(write).toContain("The plan is waiting for the person to approve it.");
-    expect(write).toContain(`run \`${SOURCE_NEXT}\` after they answer`);
+    expect(write).toContain(`after they answer, run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}`);
+  });
+
+  test("approved while the question is open, then a handoff naming two targets: no claim it is unapproved", () => {
+    const proj = project("strict");
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "approve");
+    const refused = said(twoTargetHandoff(proj));
+    expect(refused).toContain("the developer handoff names several targets (backend-lookup, stage:code-generation)");
+    expect(refused).not.toContain("not approved");
+    expect(namedBrief(refused)).toBe(SOURCE_BRIEF);
   });
 });
 
-describe("a handoff that names two targets, Guard Policy off", () => {
-  test("the refusal names both and the brief command that names one", () => {
+describe("the recovery question is open", () => {
+  test("`next` with a `cd` in front is refused and named on its own", () => {
     const proj = project("off");
+    approveBuildAndCompact(proj, null);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: "guard-recovery", stage: "code-generation", remedies: [], state_sha256: stateDigest(state),
+    });
+    const prefixed = said(shell(proj, `cd ..; ${SOURCE_NEXT}`));
+    expect(prefixed).toContain("recovery question is open");
+    expect(namedCommand(prefixed)).toBe(SOURCE_NEXT);
+    const admitted = shell(proj, SOURCE_NEXT);
+    expect(admitted.code, admitted.stderr).toBe(0);
+  });
+});
+
+describe("the plan was edited after approval", () => {
+  test("Guard Policy off: the refusal says an earlier version was approved and the build may go on", () => {
+    const proj = project("off");
+    approveBuildAndCompact(proj, null, () => appendFileSync(join(stageDir(proj, null), "code-generation-plan.md"), "- [ ] Step 2: also trim\n"));
+    const write = said(writeSource(proj));
+    expect(write).toContain(
+      "The person approved an earlier version of the plan for the zero-Unit stage-level implementation, " +
+        "and the Guard Policy lets the build go on with the changes: do not ask them to approve it again yourself.",
+    );
+    expect(write).not.toContain(ALREADY_APPROVED);
+    expect(namedCommand(write)).toBe(SOURCE_NEXT);
+  });
+
+  test("strict: no approval is claimed, and `next` asks the person again", () => {
+    const proj = project("strict");
+    approveBuildAndCompact(proj, null, () => appendFileSync(join(stageDir(proj, null), "code-generation-plan.md"), "- [ ] Step 2: also trim\n"));
+    const write = said(writeSource(proj));
+    expect(write).not.toContain("approved an earlier version");
+    expect(write).not.toContain(ALREADY_APPROVED);
+    expect(namedCommand(write)).toBe(SOURCE_NEXT);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+});
+
+describe("a handoff that names two targets", () => {
+  test.each(["strict", "off"] as const)("Guard Policy %s: the refusal names both and the brief that names one, which works as printed", (policy) => {
+    const proj = project(policy);
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "approve");
     expect(next(proj).kind).toBe("run-stage");
-    const refused = said(guard(proj, "Task", {
-      subagent_type: "aidlc-developer-agent",
-      prompt: `AIDLC-UNIT: backend-lookup\nAIDLC-STAGE: code-generation\n` +
-        `AIDLC-TESTING-CONTRACT: ${resolveTestingPosture(proj).contract_sha256}\nBuild it.`,
-    }));
-    expect(refused).toContain("the brief names several (backend-lookup, stage:code-generation)");
-    expect(refused).toContain(
-      "Then hand the developer the output of `bun .claude/tools/aidlc-testing-posture.ts brief --unit <unit>` " +
-        "(`--stage-level` for zero-Unit work) first, as printed",
-    );
-    expect(refused).toContain("The plan-approval setting is unchanged.");
+    const refused = said(twoTargetHandoff(proj));
+    expect(refused).toContain("the developer handoff names several targets (backend-lookup, stage:code-generation)");
+    expect(refused).not.toContain("not approved");
+    if (policy === "off") expect(refused).toContain("The plan-approval setting is unchanged.");
+    // The brief it names passes the guard, runs as printed, and its output is a
+    // handoff the guard lets through.
+    const brief = namedBrief(refused);
+    expect(brief).toBe(SOURCE_BRIEF);
+    const admitted = shell(proj, brief);
+    expect(admitted.code, admitted.stderr).toBe(0);
+    const output = runInstalled(proj, brief);
+    expect(output.split("\n")[0]).toBe("AIDLC-STAGE: code-generation");
+    const handedOver = guard(proj, "Task", { subagent_type: "aidlc-developer-agent", prompt: `${output}\nBuild it.` });
+    expect(handedOver.code, handedOver.stderr).toBe(0);
   });
 });
 

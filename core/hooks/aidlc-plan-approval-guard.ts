@@ -284,7 +284,16 @@ export interface PlanApprovalVerdict {
   mentioned: string[];
   /** The handoff carried the plan's review appendix, bytes the approval excludes. */
   appendixInBrief?: boolean;
+  /** What is wrong with the handoff itself, when that (not the approval) refuses it. */
+  handoff?: HandoffDefect;
 }
+
+/**
+ * A developer handoff that names no target or several, names one this
+ * workflow does not build, or carries the wrong contract line for an
+ * approved plan.
+ */
+export type HandoffDefect = "targets" | "unknown-target" | "contract";
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
   return (
@@ -362,7 +371,7 @@ export function evaluatePlanApprovalDispatch(
     ...markedStages.map((stage) => `stage:${stage}`),
   ];
   if (markedUnits.length + markedStages.length !== 1) {
-    return { block: true, mentioned };
+    return { block: true, mentioned, handoff: "targets" };
   }
   const target =
     markedUnits.length === 1
@@ -377,15 +386,16 @@ export function evaluatePlanApprovalDispatch(
   // appendix is refused whether the approval is otherwise current or not.
   const appendixInBrief =
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
+  const approved = approvalEvidenceIsCurrent(target);
+  const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  const handoff: HandoffDefect | undefined = target === undefined
+    ? "unknown-target"
+    : approved && !contractMatches ? "contract" : undefined;
   return {
-    block:
-      target === undefined ||
-      !approvalEvidenceIsCurrent(target) ||
-      contractMarkers.length !== 1 ||
-      contractMarkers[0] !== target.contractHash ||
-      appendixInBrief,
+    block: target === undefined || !approved || !contractMatches || appendixInBrief,
     mentioned,
     ...(appendixInBrief ? { appendixInBrief: true } : {}),
+    ...(handoff ? { handoff } : {}),
   };
 }
 
@@ -406,25 +416,35 @@ function promptCarriesReviewAppendix(
 // Every command a refusal names is spelled the way this install runs it, so
 // the agent can run it as printed (the native `aidlc engine ...`, or the
 // source tree's `bun <harness-dir>/tools/...`).
-function freshNext(): string {
-  return `\`${aidlcToolInvocation("orchestrate")} next\``;
+//
+// `next` is always named with how to run it so this guard reads it as that
+// command: a `cd`, a pipe, or a second command around it makes the whole line
+// a shell it cannot read, which is refused again.
+function nextOnItsOwn(): string {
+  return `\`${aidlcToolInvocation("orchestrate")} next\` exactly as written, as a command of its own ` +
+    "(no `cd` before it, no pipe or second command after it)";
 }
 
-// How to run a command this guard admits so it reads it as that command: a
-// `cd`, a pipe, or a second command around it makes the whole line a shell
-// it cannot read.
-const ON_ITS_OWN =
-  "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
+/** The Code Generation targets the current step builds (null: the zero-Unit stage-level work). */
+export type BriefTargets = Array<string | null>;
 
-// The `brief` that hands the developer one target and its contract.
-function briefCommand(mentioned: string[]): string {
+// The `brief` that hands the developer one target and its contract, for the
+// targets the current step builds, else for the one target the handoff names.
+// Never a placeholder: a refusal names only commands that run as printed.
+function briefCommand(mentioned: string[], targets: BriefTargets | null = null): string {
   const tool = aidlcToolInvocation("testing-posture");
-  if (mentioned.length !== 1) {
-    return `\`${tool} brief --unit <unit>\` (\`--stage-level\` for zero-Unit work)`;
+  const named = targets && targets.length > 0
+    ? targets
+    : mentioned.length === 1
+      ? [mentioned[0] === `stage:${GUARDED_STAGE}` ? null : mentioned[0]]
+      : null;
+  if (named === null) {
+    return `\`${tool} brief\` for the target the current step names (\`--unit\` and its Unit, or ` +
+      "`--stage-level` for zero-Unit work)";
   }
-  return mentioned[0] === `stage:${GUARDED_STAGE}`
-    ? `\`${tool} brief --stage-level\``
-    : `\`${tool} brief --unit ${quoteCommandArgument(mentioned[0])}\``;
+  return named
+    .map((unit) => `\`${tool} brief ${unit === null ? "--stage-level" : `--unit ${quoteCommandArgument(unit)}`}\``)
+    .join(" or ");
 }
 
 export function appendixBlockReason(mentioned: string[]): string {
@@ -445,7 +465,11 @@ export function appendixBlockReason(mentioned: string[]): string {
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
 // conductor self-corrects instead of retrying the same call.
-export function blockReason(mentioned: string[], detail: string | null = null): string {
+export function blockReason(
+  mentioned: string[],
+  detail: string | null = null,
+  targets: BriefTargets | null = null,
+): string {
   const scope =
     mentioned.length === 1
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -457,10 +481,31 @@ export function blockReason(mentioned: string[], detail: string | null = null): 
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not approved yet.${detail ? ` Reason: ${detail}.` : ""} Finish code-generation-plan.md and ` +
-    `unit-test-instructions.md, then run ${freshNext()} ${ON_ITS_OWN}: the engine asks the person to ` +
+    `unit-test-instructions.md, then run ${nextOnItsOwn()}: the engine asks the person to ` +
     `approve the plan, and the \`next\` after their answer hands over the build. Then hand the ` +
-    `developer the output of ${briefCommand(mentioned)} first, as printed: it names the one target ` +
-    "and its Testing Contract."
+    `developer the output of ${briefCommand(mentioned, targets)} first, as printed: it names the one ` +
+    "target and its Testing Contract."
+  );
+}
+
+// A developer handoff refused for what is wrong with the handoff itself, so
+// it never says the plan is unapproved when it is approved.
+export function handoffBlockReason(
+  mentioned: string[],
+  cause: HandoffDefect,
+  targets: BriefTargets | null = null,
+): string {
+  const what = cause === "targets"
+    ? mentioned.length > 1
+      ? `names several targets (${mentioned.join(", ")})`
+      : "names no target"
+    : cause === "unknown-target"
+      ? `names ${mentioned[0]}, which is not a Code Generation target of this workflow`
+      : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
+  return (
+    `Code generation cannot start: the developer handoff ${what}. Hand the developer the output of ` +
+    `${briefCommand(mentioned, targets)} first, exactly as printed: it names the one target and its ` +
+    "Testing Contract. Do not write AIDLC-UNIT, AIDLC-STAGE, or AIDLC-TESTING-CONTRACT lines yourself."
   );
 }
 
@@ -494,7 +539,7 @@ export function mutationBlockReason(
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
-    `available for planning. When the plan is ready, run ${freshNext()} ${ON_ITS_OWN}: the engine asks ` +
+    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: the engine asks ` +
     `the person to approve it before any code is written.`
   );
 }
@@ -505,68 +550,89 @@ export function mutationBlockReason(
 function engineQuestionOpenReason(): string {
   return (
     "Code changes wait while AI-DLC's recovery question is open. Answer it first: " +
-    `run ${freshNext()} to show the question again, then carry out the choice the person makes. ` +
+    `run ${nextOnItsOwn()} to show the question again, then carry out the choice the person makes. ` +
     "Reading, `next`, and the commands that carry out the choice they picked still work, " +
     "as do the record-folder edits a picked fix needs."
   );
 }
 
+/**
+ * Where the person's approval stands for the target a stale or waiting
+ * directive was building. `earlier`: they approved an earlier version of the
+ * plan and a lowered fence lets the build go on with the changes.
+ */
+interface PlanStanding {
+  scope: string;
+  earlier: boolean;
+}
+
 // What ends an authority refusal, said the same way under every Guard Policy:
-// what is stale, that the plan still stands when it does, and the fresh `next`
-// that issues the current step again. `approved` names the target whose plan is
-// approved, so the agent does not ask the person a second time.
-function authorityRemedy(reason: string, approved: string | null): string {
+// what is stale, where the person's approval stands when it does, and the fresh
+// `next` that issues the current step again. The agent never asks the person
+// again for a judgement they already gave.
+function authorityRemedy(reason: string, standing: PlanStanding | null): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
-    if (approved !== null) {
-      return `The person has approved the plan for ${approved}. Run ${freshNext()} ${ON_ITS_OWN}, ` +
+    // The question is still open, so only an approval of these exact files is
+    // the person's answer to it.
+    if (standing !== null && !standing.earlier) {
+      return `The person has approved the plan for ${standing.scope}. Run ${nextOnItsOwn()}, ` +
         "and follow the step it prints.";
     }
     return (
       "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
-      `the turn, and run ${freshNext()} after they answer. Nothing is built or changed until then, and the plan ` +
-      "files stay as the person sees them."
+      `the turn, and after they answer, run ${nextOnItsOwn()}. Nothing is built or changed until then, and ` +
+      "the plan files stay as the person sees them."
     );
   }
-  return `${reason}. ${
-    approved === null
-      ? ""
-      : `The plan for ${approved} is already approved: do not ask the person to approve it again yourself. `
-  }Run ${freshNext()} ${ON_ITS_OWN}, and follow the step it prints.`;
+  const stands = standing === null
+    ? ""
+    : standing.earlier
+      ? `The person approved an earlier version of the plan for ${standing.scope}, and the Guard Policy ` +
+        "lets the build go on with the changes: do not ask them to approve it again yourself. "
+      : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
+  return `${reason}. ${stands}Run ${nextOnItsOwn()}, and follow the step it prints.`;
 }
 
-function authorityBlockReason(reason: string, approved: string | null = null): string {
+function authorityBlockReason(reason: string, standing: PlanStanding | null = null): string {
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
-    return authorityRemedy(reason, approved);
+    return authorityRemedy(reason, standing);
   }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
-    authorityRemedy(reason, approved)
+    authorityRemedy(reason, standing)
   );
 }
 
-// The target a stale or waiting directive was building, worded for a refusal,
-// when its plan is approved. Judged the way `next` judges it when it issues
-// that directive again, so a refusal never says "approved" where `next` would
-// ask. Null when it is not approved, or when that cannot be told.
-function approvedTargetWords(projectDir: string, marker: ActiveDirectiveMarker | null): string | null {
+// Where the person's approval stands for the target a stale or waiting
+// directive was building, judged the way `next` judges it when it issues that
+// directive again: receipt-backed approval of these exact files, or (with the
+// fence lowered) an earlier approval the build may go on from. Null when
+// neither holds, or when that cannot be told, so nothing is claimed.
+function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null): PlanStanding | null {
   if (marker?.version !== 2 || normalizeStageName(marker.stage) !== GUARDED_STAGE) return null;
   const group = (marker.units ?? []).map((unit) => unit.trim()).filter((unit) => unit.length > 0);
   const single = marker.unit?.trim() || null;
   const issued: CodeGenerationIssuance = group.length > 0
     ? { kind: "invoke-swarm", units: group }
     : single === null ? { kind: "run-stage" } : { kind: "run-stage", unit: single };
-  const targets = group.length > 0 ? group : [single];
+  let earlier = false;
   try {
-    if (!targets.every((unit) => codeGenerationExecutionAllowed(projectDir, { unit }, undefined, issued))) {
-      return null;
+    for (const unit of group.length > 0 ? group : [single]) {
+      const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
+      if (approval.ok) continue;
+      if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) return null;
+      earlier = true;
     }
   } catch {
     return null;
   }
-  return group.length > 0
-    ? `Units ${group.join(", ")}`
-    : single === null ? "the zero-Unit stage-level implementation" : `unit ${single}`;
+  return {
+    scope: group.length > 0
+      ? `Units ${group.join(", ")}`
+      : single === null ? "the zero-Unit stage-level implementation" : `unit ${single}`,
+    earlier,
+  };
 }
 
 // --- Evidence gathering ---------------------------------------------------------
@@ -1736,9 +1802,11 @@ async function evaluate(
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
-  // The target whose plan is approved while the directive naming it is stale
-  // or still the question: the refusal says so (see authorityRemedy).
-  let approvedTarget: string | null = null;
+  // Where the person's approval stands while the directive naming its target
+  // is stale or still the question: the refusal says so (see authorityRemedy).
+  let standing: PlanStanding | null = null;
+  // The targets the current step builds, so a refusal names their exact brief.
+  let briefTargets: BriefTargets | null = null;
   let rulesArriving: string | null = null;
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
@@ -1770,6 +1838,12 @@ async function evaluate(
     const activeDirective = readActiveDirectiveMarker(projectDir, state);
     const durableStage = normalizeStageName(currentStage);
     const directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+    if (
+      activeDirective?.version === 2 && directiveStage === GUARDED_STAGE &&
+      codeGenerationDirectiveSelectsTarget(activeDirective)
+    ) {
+      briefTargets = activeDirective.units?.length ? activeDirective.units : [activeDirective.unit?.trim() || null];
+    }
     const dispatchPrompt = [toolInput.prompt, toolInput.description]
       .filter((value): value is string => typeof value === "string")
       .join("\n");
@@ -1838,7 +1912,7 @@ async function evaluate(
         if (verdict.block && !codeGenerationDirectiveSelectsTarget(activeDirective)) {
           authorityFailure =
             `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"`;
-          approvedTarget = approvedTargetWords(projectDir, activeDirective);
+          standing = planStanding(projectDir, activeDirective);
         }
       } else if (mutation.swarmUnits) {
         const selected = mutation.swarmUnits;
@@ -1885,7 +1959,7 @@ async function evaluate(
         // built or changed until they answer, including the plan files, so an
         // answer the agent wrote can never stand in for theirs.
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
-        approvedTarget = approvedTargetWords(projectDir, activeDirective);
+        standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else if (
         activeDirective.kind === "invoke-swarm" &&
@@ -1901,7 +1975,7 @@ async function evaluate(
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
           `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
-        approvedTarget = approvedTargetWords(projectDir, activeDirective);
+        standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
         const unit = activeDirective.unit?.trim() || null;
@@ -1953,7 +2027,7 @@ async function evaluate(
   // off; `detail` is then the evaluator's reason for the target it could not start.
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, approvedTarget)
+      ? authorityBlockReason(authorityFailure, standing)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.target,
@@ -1963,7 +2037,9 @@ async function evaluate(
         )
       : verdict.appendixInBrief
       ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned));
+      : verdict.handoff
+      ? handoffBlockReason(verdict.mentioned, verdict.handoff, briefTargets)
+      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets);
 
   // The rules still arriving is about the delivery, not the plan, so it holds
   // under every Guard Policy and is said on its own: a lowered fence has
@@ -2024,7 +2100,7 @@ async function evaluate(
       // supplies a missing directive, target, or approval. Those refusals say
       // what they say with the fence on, so each names the step that ends it.
       if (authorityFailure) {
-        return refuseExecutionIneligible(authorityRemedy(authorityFailure, approvedTarget));
+        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing));
       }
       if (verdict.mentioned.length === 0) {
         return refuseExecutionIneligible(refusalProse(null), false);
