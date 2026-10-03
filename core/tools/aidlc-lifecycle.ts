@@ -1759,7 +1759,7 @@ function uninstallCommand(argv: string[]): CommandResult {
   const { versions } = retainedVersions();
   const plan = buildUninstallPlan(purge);
   const settings = purge
-    ? "Machine configuration and cache are selected for removal."
+    ? "Machine settings, update cache, pins, harness default, and release channel will be removed."
     : "Machine configuration, update cache, pins, and harness default will be kept.";
   announceRemoval(
     argv,

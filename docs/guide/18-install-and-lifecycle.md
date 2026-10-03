@@ -1454,8 +1454,9 @@ unrelated changes made afterward are preserved. An install without an
 ownership record leaves User PATH alone. `-NoModifyPath` on a later installer
 run preserves an earlier record, so that entry is still removed on uninstall.
 
-Uninstall requires confirmation and refuses filesystem, home, shared-system,
-and project roots, as well as root-owned, package-manager-owned, or
+At a terminal, uninstall says what it removes and keeps, then proceeds; without
+a terminal it needs `--yes`. It refuses filesystem, home, shared-system, and
+project roots, as well as root-owned, package-manager-owned, or
 mixed-ownership commands. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command

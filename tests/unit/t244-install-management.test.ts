@@ -1537,7 +1537,7 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     expect(purged.status, purged.output).toBe(0);
     const purgeNotice = purged.output.indexOf(
       "Uninstalling AI-DLC (1 retained version(s)). Project trees will not be changed. " +
-        "Machine configuration and cache are selected for removal.\n",
+        "Machine settings, update cache, pins, harness default, and release channel will be removed.\n",
     );
     expect(purgeNotice, purged.output).toBeGreaterThan(-1);
     expect(purged.output.indexOf("Removed aidlc, all retained releases, machine settings"))
