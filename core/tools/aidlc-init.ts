@@ -1025,6 +1025,8 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
+      : sessionSetsAgentModels(harness)
+      ? `nothing; ${sessionModelsDetail(harness, null)}`
       : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
   }\n`;
   writeMenuText(output);
@@ -6136,7 +6138,10 @@ function renderFirstRunEnding(
     `  Writing project files ... ${successText("done", process.stdout)}  `,
     `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
   );
-  if (choices.preset === "unchanged") {
+  const harness = modelHarness(choices.candidate.stamp.distribution);
+  if (choices.preset === "unchanged" && sessionSetsAgentModels(harness)) {
+    writeMenuRow("  Model preset ... not needed  ", `(${sessionModelsDetail(harness, null)})`);
+  } else if (choices.preset === "unchanged") {
     process.stdout.write("  Model preset ... left unchanged\n");
   } else {
     writeMenuRow(
@@ -6353,6 +6358,12 @@ function writeKiroPresetRows(model: string | null): void {
   writeMenuRow("    4. unchanged   ", "records no preset; the model keeps Kiro's own effort");
 }
 
+// A preset changes nothing where agents always run on the session's model and
+// effort, so setup records none there unless the person picks one.
+function firstRunDefaultPreset(distribution: string): FirstRunChoices["preset"] {
+  return sessionSetsAgentModels(modelHarness(distribution)) ? "unchanged" : "balanced";
+}
+
 function providerForHarness(
   current: FirstRunChoices["provider"],
   distribution: string,
@@ -6372,7 +6383,7 @@ function customizeFirstRun(
     provider: providerForHarness("current", initial.stamp.distribution),
     region: aws.region,
     profile: "",
-    preset: "balanced",
+    preset: firstRunDefaultPreset(initial.stamp.distribution),
     plugins: "all",
     pluginLabel: "all installed",
     mcp: initial.stamp.distribution === "claude" ? "defaults" : "none",
@@ -6401,6 +6412,10 @@ function customizeFirstRun(
       );
       if (choices.candidate.stamp.distribution !== previousDistribution) {
         choices.kiro = undefined;
+        // The default preset follows the harness; a preset the person chose stays.
+        if (choices.preset === firstRunDefaultPreset(previousDistribution)) {
+          choices.preset = firstRunDefaultPreset(choices.candidate.stamp.distribution);
+        }
       }
       choices.mcp = choices.candidate.stamp.distribution === "claude"
         ? "defaults"
@@ -6495,6 +6510,15 @@ function customizeFirstRun(
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
       if (choices.candidate.stamp.distribution === "kiro") {
         writeKiroPresetRows(choices.kiro ? choices.kiro.setModel?.id ?? choices.kiro.session.model : null);
+      } else if (sessionSetsAgentModels(modelHarness(choices.candidate.stamp.distribution))) {
+        writeMenuRow(
+          "  ",
+          `A preset changes nothing here: ${sessionModelsDetail(modelHarness(choices.candidate.stamp.distribution), null)}.`,
+        );
+        writeMenuRow("    1. balanced    ", "medium effort for deciding, reviewing, and writing up");
+        writeMenuRow("    2. thorough    ", "session effort for deciding and writing up, extra-high reviewing");
+        writeMenuRow("    3. minimal     ", "medium deciding and reviewing, low writing up");
+        writeMenuRow("    4. unchanged   ", "records no preset (recommended, default)");
       } else {
         writeMenuRow("    1. balanced    ", "medium effort for deciding, reviewing, and writing up (recommended, default)");
         writeMenuRow("    2. thorough    ", "session effort for deciding and writing up, extra-high reviewing");
@@ -6728,6 +6752,11 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       recommendedDetail,
       "Records balanced (default): medium effort for the whole Kiro session.",
     );
+  } else if (sessionSetsAgentModels(modelHarness(candidate.stamp.distribution))) {
+    writeMenuRow(
+      recommendedDetail,
+      `Records no model preset: ${sessionModelsDetail(modelHarness(candidate.stamp.distribution), null)}.`,
+    );
   } else {
     writeMenuRow(recommendedDetail, "Records balanced (default).");
     writeMenuRow(
@@ -6754,7 +6783,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         : "current",
       region: aws.region,
       profile: "",
-      preset: "balanced",
+      preset: firstRunDefaultPreset(candidate.stamp.distribution),
       plugins: "all",
       pluginLabel: "all installed",
       mcp: candidate.stamp.distribution === "claude" ? "defaults" : "none",

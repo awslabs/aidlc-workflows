@@ -972,8 +972,7 @@ describe("t299 first-run setup wizard", () => {
       "  Set up AI-DLC for Kiro IDE with recommended defaults?",
       "",
       "    1. Yes, use recommended defaults   all plugins, no provider settings; model access comes with Kiro IDE",
-      underRecommended("Records balanced (default)."),
-      underRecommended("In Kiro IDE, effort dials do not apply, so agents keep your session's effort."),
+      underRecommended("Records no model preset: every agent uses your Kiro IDE session's model and effort."),
       "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer",
       "    3. Exit, nothing written",
       "",
@@ -993,10 +992,9 @@ describe("t299 first-run setup wizard", () => {
       "    1. Yes, use recommended defaults   all plugins, no provider",
       underRecommended("settings; model access comes"),
       underRecommended("with Kiro IDE"),
-      underRecommended("Records balanced (default)."),
-      underRecommended("In Kiro IDE, effort dials do"),
-      underRecommended("not apply, so agents keep your"),
-      underRecommended("session's effort."),
+      underRecommended("Records no model preset: every"),
+      underRecommended("agent uses your Kiro IDE"),
+      underRecommended("session's model and effort."),
       "    2. No, customize step by step      harness, provider, preset,",
       underRecommended("plugins, MCP, record layer"),
       "    3. Exit, nothing written",
@@ -1009,7 +1007,8 @@ describe("t299 first-run setup wizard", () => {
   // output says exactly what the one-line output says.
   for (
     const [name, input, options] of [
-      ["Kiro IDE", ["2", "", "", "", "", "", "n"], kiroIdeTerminal()],
+      // No preset by default on Kiro IDE, so step 6 asks nothing.
+      ["Kiro IDE", ["2", "", "", "", "", "n"], kiroIdeTerminal()],
       ["Claude Code with Bedrock", ["2", "", "2", "", "my-team-profile", "", "", "", "", "n"], {}],
       ["Codex CLI keeping its provider", ["2", "", "", "", "", "", "", "n"], {
         harnesses: { codex: { found: true, version: "codex-cli 0.145.0" } },
@@ -1076,16 +1075,21 @@ describe("t299 first-run setup wizard", () => {
     }
     return installed;
   };
-  // `config --harness <name> --yes`, then the walk: Fix the sections? yes,
-  // record in the project, and the models wizard's preset, group, or
-  // per-agent branch. Kiro IDE's walk offers only the PATH fix, so the models
-  // branches run on Kiro CLI, whose walk still offers them, in the same
-  // terminal. Answers come through the scripted seam, not stdin.
+  // `config --harness <name> --yes`, then the walk: Fix the sections? yes.
+  // Kiro IDE's walk offers only the PATH fix; Kiro CLI's opens its session
+  // model and preset menu, kept as it is. Answers come through the scripted
+  // seam, not stdin.
   const harnessWalks = {
     "kiro-ide": { harness: "kiro-ide", answers: [""] },
-    preset: { harness: "kiro", answers: ["", "", "1", "balanced"] },
-    groups: { harness: "kiro", answers: ["", "", "2", "", "", ""] },
-    agents: { harness: "kiro", answers: ["", "", "3", ...Array(14).fill("")] },
+    kiro: { harness: "kiro", answers: ["", ""] },
+  } as const;
+  // `config models` in a Kiro IDE project of its own: record in the project,
+  // then the models wizard's preset (applied), group, or per-agent branch, in
+  // that order. No walk opens this wizard on Kiro IDE, so it is asked for here.
+  const modelsWalks = {
+    preset: ["", "1", "balanced", "y"],
+    groups: ["", "2", "", "", ""],
+    agents: ["", "3", ...Array(14).fill("")],
   } as const;
   const harnessPath = (
     harness: "kiro" | "kiro-ide",
@@ -1104,6 +1108,7 @@ describe("t299 first-run setup wizard", () => {
     // aidlc stays off the hook PATH, so the PATH fix shows and the Runtime row
     // names no per-run directory.
     const options = { ...kiroIdeTerminal({ ...setupMachine, ...env }), aidlc: false };
+    const modelsProject = runWizard("\n", kiroIdeTerminal({ ...setupMachine, ...env })).project;
     return {
       complete: runWizard("\n", options),
       check: runWizard("n\n", { ...options, project: projects.unchanged }),
@@ -1112,6 +1117,14 @@ describe("t299 first-run setup wizard", () => {
         `harness-${name}`,
         harnessPath(walk.harness, walk.answers, env),
       ])) as Record<`harness-${keyof typeof harnessWalks}`, ReturnType<typeof runWizard>>,
+      ...Object.fromEntries(Object.entries(modelsWalks).map(([name, answers]) => [
+        `models-${name}`,
+        runWizard(`${answers.join("\n")}\n`, {
+          ...options,
+          project: modelsProject,
+          configArgs: ["models"],
+        }),
+      ])) as Record<`models-${keyof typeof modelsWalks}`, ReturnType<typeof runWizard>>,
     };
   };
   let unknownWidth: ReturnType<typeof setupScreens> | undefined;
@@ -1222,7 +1235,7 @@ describe("t299 first-run setup wizard", () => {
       expect(run.status, run.stdout + run.stderr).toBe(0);
     }
     expect(complete.stdout).toMatch(
-      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Recording model preset \.\.\. done {2}\(aidlc\.settings\.json in this project\)\n/,
+      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Model preset \.\.\. not needed {2}\(every agent uses your Kiro IDE session's model and effort\)\n/,
     );
     expect(complete.stdout).toContain([
       "    Hooks run outside your interactive shell PATH, and aidlc is not available there.",
@@ -1263,7 +1276,7 @@ describe("t299 first-run setup wizard", () => {
       "    workspace    bun .kiro/tools/aidlc.ts config --harness kiro-ide --download\n",
     );
     // The completion line stays one line, as scripts and tests read it.
-    for (const [screen, harness] of [["harness-kiro-ide", "kiro-ide"], ["harness-preset", "kiro"]] as const) {
+    for (const [screen, harness] of [["harness-kiro-ide", "kiro-ide"], ["harness-kiro", "kiro"]] as const) {
       const { productName, configNextStep } = kiroProjection(harness);
       expect(walks[screen].stdout.split("\n")[0]).toBe(
         `configured ${walks[screen].project} for ${productName} ${AIDLC_VERSION}; next: ${configNextStep}`,
@@ -1272,14 +1285,14 @@ describe("t299 first-run setup wizard", () => {
     const ideWalk = walks["harness-kiro-ide"].stdout;
     expect(ideWalk).toContain("\n  Full diagnostics: bun .kiro/tools/aidlc.ts config runtime --show\n");
     expect(ideWalk).not.toContain("Models [Enter keep everything");
-    const walk = walks["harness-preset"].stdout;
-    expect(walk).toContain([
-      "Recorded in: nothing yet - run 'bun .kiro/tools/aidlc.ts config models --preset balanced --project --yes'",
+    // Kiro CLI's walk opens its session model and preset menu.
+    expect(walks["harness-kiro"].stdout).toContain("Models [Enter keep everything, 1 session model, 2 preset]:");
+    expect(walks["models-preset"].stdout).toContain([
+      "Recorded in: nothing; every agent uses your Kiro IDE session's model and effort",
       "Full per-agent list: bun .kiro/tools/aidlc.ts config models --show --json",
       "Pins bind in both directions, and shipped tiers never raise an agent above the session.",
       "Models [Enter keep everything, 1 preset, 2 group efforts, 3 set each one myself]: Presets:",
     ].join("\n"));
-    expect(walk).toContain("\n  Full diagnostics: bun .kiro/tools/aidlc.ts config runtime --show\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const width of [62, 79]) {
@@ -1295,7 +1308,7 @@ describe("t299 first-run setup wizard", () => {
         const lines = screenLines(stdout);
         const wideLines = screenLines(wide[screen].stdout);
         for (const [index, line] of lines.entries()) {
-          const head = /^ {4}\[(?:ok|needs)\] +\S+ +|^ {2}(?:Writing project files|Recording model preset) \.\.\. done {2}|^ {4}\d+\. (?:\S(?:.*\S)? {2,}(?=\S))?/.exec(line);
+          const head = /^ {4}\[(?:ok|needs)\] +\S+ +|^ {2}(?:(?:Writing project files|Recording model preset) \.\.\. done|Model preset \.\.\. not needed) {2}|^ {4}\d+\. (?:\S(?:.*\S)? {2,}(?=\S))?/.exec(line);
           const next = lines[index + 1] ?? "";
           if (!head || !wideLines.every((wideLine) => wideLine !== line)) continue;
           if (!/^ +\S/.test(next) || /^ {4}(?:\[|\d+\. )/.test(next)) continue;
@@ -1456,6 +1469,18 @@ describe("t299 first-run setup wizard", () => {
       );
       for (const kiroIdeWord of ["Reload Window", "Restricted Mode", "agent picker", "Kiro IDE"]) {
         expect(result.stdout).not.toContain(kiroIdeWord);
+      }
+      // Agents on Cursor and Copilot keep the session's model and effort, so
+      // the recommended defaults record no preset there.
+      const settings = join(result.project, "aidlc.settings.json");
+      const models = existsSync(settings) ? JSON.parse(readFileSync(settings, "utf-8")).models : undefined;
+      if (harness === "copilot" || harness === "cursor") {
+        expect(result.stdout).toContain("Records no model preset: every agent uses your ");
+        expect(result.stdout).toContain("  Model preset ... not needed  (every agent uses your ");
+        expect(models).toBeUndefined();
+      } else {
+        expect(result.stdout).not.toContain("Records no model preset");
+        expect(models).toBeDefined();
       }
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }

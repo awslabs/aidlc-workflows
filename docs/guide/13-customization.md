@@ -43,7 +43,9 @@ This file is listed in `.gitignore` so your personal changes are never committed
 Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys. With no recorded model policy, judgment and templated agents inherit the session model and effort. Balanced reviewers use Sonnet at medium effort on Claude Code, while Codex and opencode inherit the session model and apply their medium reasoning setting. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
 The first-run wizard defaults to the `balanced` **preset**, which is distinct
-from the reviewer **tier**: it records medium effort for all three groups.
+from the reviewer **tier**: it records medium effort for all three groups. On
+Kiro IDE, Cursor, and Copilot it records no preset, because agents there keep
+your session's model and effort.
 Select a preset with `aidlc config models --preset balanced --project --yes`:
 
 | Preset | Deciding | Reviewing | Writing up |
@@ -54,8 +56,8 @@ Select a preset with `aidlc config models --preset balanced --project --yes`:
 
 Presets set effort only, never model IDs. Per-agent exceptions override group
 dials, which override shipped tier defaults. Kiro IDE, Cursor, and Copilot
-cannot express these group effort dials; the policy is recorded and reported
-as unexpressed rather than written as inert keys. Kiro CLI runs each session
+cannot express these group effort dials; a policy you record there anyway is
+kept and reported as unexpressed rather than written as inert keys. Kiro CLI runs each session
 on one model, so there a preset sets ONE effort for the whole session
 (`minimal` low, `balanced` medium, `thorough` extra-high), saved with the
 session model in your personal Kiro settings; see

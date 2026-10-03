@@ -355,7 +355,10 @@ launch and first workflow command.
 
 Step 3 also offers a fourth option, `unchanged`, which records no preset and
 preserves existing model settings; projects without model policy use shipped
-defaults. `balanced` remains the recommended default.
+defaults. `balanced` remains the recommended default, except on Kiro IDE,
+Cursor, and GitHub Copilot: every agent there uses your session's model and
+effort, so setup recommends and defaults to `unchanged`, and the rerun map
+shows Models as `[ok]`, naming the host session.
 
 An existing-project rerun keeps the eight-row map for Harnesses, Models,
 Runtime, Flags, Project, Providers, Trust, and Workspace. Rows are lowercase
@@ -431,7 +434,7 @@ moves to a larger model. The framework never raises an agent above the session
 on its own. With no recorded policy, Deciding and Writing up inherit; only the
 measured reviewing tier baseline ships a step-down. The first-run wizard's
 default choice records the `balanced` preset, which sets all three groups to
-medium effort.
+medium effort; on Kiro IDE, Cursor, and GitHub Copilot it records no preset.
 
 ```bash
 aidlc config models --show
@@ -510,11 +513,12 @@ Kiro settings
 explicit group dials have no Kiro surface, and a per-agent model exception
 carries its effort through the project's `chat.modelDefaults`, which then
 replaces your personal effort map in that project. Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
-agent models or effort, so the command records the policy and reports the
-unsupported fields instead of writing inert keys. On those three, every agent
-uses the session's model and effort: the setup check and `aidlc doctor` say so
-instead of asking for a policy, and doctor warns only about an agent model
-recorded for that harness by name.
+agent models or effort, so setup records no preset there; a policy you record
+anyway is kept, and the command reports the unsupported fields instead of
+writing inert keys. On those three, every agent uses the session's model and
+effort: the setup check and `aidlc doctor` say so instead of asking for a
+policy, and doctor warns only about an agent model recorded for that harness
+by name.
 
 Model policy is agent-scoped. Stage files never carry model or effort keys;
 scopes continue to own stage criticality.

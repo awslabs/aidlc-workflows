@@ -106,8 +106,9 @@ session model and applies medium reasoning effort. `judgment` and `templated`
 inherit session model and effort. The wizard-default
 `balanced` preset is separate from the reviewer tier: it explicitly sets medium
 effort for Deciding, Reviewing, and Writing up without changing their models.
-Kiro IDE, Cursor, and Copilot inherit the session and report group effort
-dials as unexpressed; Kiro CLI agents inherit the session model and the
+Kiro IDE, Cursor, and Copilot inherit the session, so the wizard records no
+preset there, and a recorded preset reports its group effort dials as
+unexpressed; Kiro CLI agents inherit the session model and the
 preset's one session effort. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently

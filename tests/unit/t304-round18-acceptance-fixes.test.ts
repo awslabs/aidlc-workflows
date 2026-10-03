@@ -1211,6 +1211,32 @@ describe("t304 first-run prompt and detection safety", () => {
     expect(claude.providers.provider).toBe("current");
     expect(claude.providers.pendingActions).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The default preset follows the harness the same way: a preset changes
+  // nothing on Cursor, so setup records none there.
+  test("changing the harness at the summary re-derives the default preset", () => {
+    const recordedModels = (project: string) => {
+      const path = join(project, "aidlc.settings.json");
+      return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")).models : undefined;
+    };
+    // Claude Code first (1), customize (2), accept every step, then edit step 1
+    // to Cursor (4) and apply.
+    const toCursor = runWizard("1\n2\n\n\n\n\n\n\n1\n4\n\n");
+    expect(toCursor.status, toCursor.stdout + toCursor.stderr).toBe(0);
+    expect(toCursor.stdout).toContain("1. Harness      Cursor");
+    expect(toCursor.stdout).toContain("3. Preset       none (unchanged)");
+    expect(toCursor.stdout).toContain("6. Preset in    n/a (no preset recorded)");
+    expect(recordedModels(toCursor.project)).toBeUndefined();
+
+    // Cursor first (4), customize (2), accept every step (step 3 defaults to
+    // unchanged there, so step 6 asks nothing), then edit step 1 to Claude Code
+    // (1) and apply.
+    const toClaude = runWizard("4\n2\n\n\n\n\n\n1\n1\n\n");
+    expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
+    expect(toClaude.stdout).toContain("4. unchanged   records no preset (recommended, default)");
+    expect(toClaude.stdout).toContain("3. Preset       balanced");
+    expect(recordedModels(toClaude.project)?.preset).toBe("balanced");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t304 diagnostics and release truthfulness", () => {
