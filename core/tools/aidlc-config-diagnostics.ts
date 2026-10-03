@@ -813,6 +813,8 @@ const HARNESS_CLI: Record<
     required: boolean;
     minimumVersion?: string;
     install: string;
+    // A PATH folder whose `command` is a stand-in that must never be run.
+    standIn?: (directory: string) => boolean;
   }
 > = {
   claude: {
@@ -831,6 +833,7 @@ const HARNESS_CLI: Record<
     required: false,
     minimumVersion: "1.0.74",
     install: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    standIn: isVsCodeCopilotStandInFolder,
   },
   cursor: {
     command: "cursor",
@@ -855,6 +858,18 @@ const HARNESS_CLI: Record<
     install: "Install opencode and ensure `opencode --version` works.",
   },
 };
+
+// VS Code's Copilot Chat writes a stand-in `copilot` to
+// <user data>/User/globalStorage/github.copilot-chat/copilotCli and puts that
+// folder on its terminals' PATH. With no real CLI the stand-in asks "Install
+// GitHub Copilot CLI? (y/N)" on the console, past any pipe, and with an old
+// one it offers an update. So the probe never runs it: like the stand-in
+// itself, it looks past that folder for the real CLI.
+function isVsCodeCopilotStandInFolder(directory: string): boolean {
+  const parts = directory.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1)?.toLowerCase() === "copilotcli" &&
+    parts.at(-2)?.toLowerCase() === "github.copilot-chat";
+}
 
 function versionTuple(value: string): [number, number, number] | null {
   const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -892,7 +907,16 @@ export function probeHarnessCli(
   const interactivePath = options.interactivePath ?? env.PATH ?? "";
   const which = options.which ?? ((command: string, pathValue: string) =>
     resolveExecutableOnPath(command, pathValue, platform));
-  const path = which(spec.command, interactivePath);
+  const standIn = spec.standIn;
+  const searchPath = standIn
+    ? pathEntries(interactivePath, platform)
+      .filter((directory) => !standIn(directory))
+      .join(platform === "win32" ? ";" : delimiter)
+    : interactivePath;
+  const resolved = which(spec.command, searchPath);
+  const path = resolved && standIn?.(resolved.replace(/[\\/][^\\/]*$/, ""))
+    ? null
+    : resolved;
   if (!path) {
     return {
       harness,

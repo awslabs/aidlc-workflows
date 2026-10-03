@@ -403,9 +403,10 @@ The doctor checks the engine tree and every adapter dependency, root
 `AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, folder
 trust, and reminds about the headless env var. The Copilot CLI is optional: a
 VS Code-only install reports `Harness CLI: optional copilot is not installed`
-and passes. VS Code puts its own `copilot` command on its terminals' PATH that
-only prints "Cannot find GitHub Copilot CLI" when the CLI is absent; the doctor
-reads that as not installed, not as an old version. An installed CLI below the
+and passes. VS Code puts its own stand-in `copilot` on its terminals' PATH
+that asks "Install GitHub Copilot CLI? (y/N)" when the CLI is absent, so the
+doctor and first-run setup never run it: they look past that folder for a real
+CLI and report it as not installed when there is none. An installed CLI below the
 floor is a warning, never a failure. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
 `t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and
