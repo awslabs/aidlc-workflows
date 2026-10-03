@@ -6385,14 +6385,18 @@ export function registerIntentRecord(
     minted.space,
   );
   if (selectIntentForSession(projectDir, minted.dirName, minted.space, sessionId)) return;
-  // A one-shot receipt, machine-local like the rest of the engine dir, for a
-  // host that learns which session created the record only from the command's
-  // output afterwards (see consumeCreationReceipt). A creation that already
-  // bound its session leaves none to pick up.
+  leaveCreationReceipt(minted.recordDir, minted.uuid);
+}
+
+// A one-shot receipt, machine-local like the rest of the engine dir, for a
+// host that learns which session created the record only from the command's
+// output afterwards (see consumeCreationReceipt). A creation that already
+// bound its session leaves none to pick up.
+export function leaveCreationReceipt(recordDir: string, uuid: string): void {
   try {
-    const receiptDir = engineDirFor(minted.recordDir);
+    const receiptDir = engineDirFor(recordDir);
     mkdirSync(receiptDir, { recursive: true });
-    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${minted.uuid}\n`, { encoding: "utf-8", flag: "wx" });
+    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
   } catch {
     // Best-effort: without a receipt the observed creation stays unproven.
   }

@@ -5510,6 +5510,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:leaveCreationReceipt",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:LEGACY_BOLT_NAME_REGEX",
       "minMechanism": "none",
       "coveredBy": [],
