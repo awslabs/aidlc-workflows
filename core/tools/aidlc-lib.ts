@@ -26369,8 +26369,10 @@ function stateWritesBetween(
   const writes = readStateWrites(statePath);
   const chain: StateWrite[] = [];
   let cursor = to;
+  // Newest first and without gaps: a record that does not lead to the next
+  // one means a write in between went unrecorded, so nothing is named.
   for (let index = writes.length - 1; index >= 0 && cursor !== from; index--) {
-    if (writes[index].after !== cursor) continue;
+    if (writes[index].after !== cursor) return {};
     chain.unshift(writes[index]);
     cursor = writes[index].before;
   }

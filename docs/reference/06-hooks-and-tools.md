@@ -1135,7 +1135,7 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
    - `## Stage Progress` -- the checklist of all stages with completion status
    - `## Current Status` -- current phase, stage, and scope
    Outputs a WARNING if either section is missing (informational only -- cannot block compaction).
-3. **Directive invalidation:** Marks the active directive out of date for the compacting chat (`kind: "error"`, `context_epoch` + 1), so the conductor runs `next` before it acts again; the engine's Plan Approval question stays open. The marker records when and why (`out_of_date`, below), and a recorded approval is kept.
+3. **Directive invalidation:** When the compacting chat owns the active directive (each Copilot chat does: the Copilot adapter records which chat ran each engine command), marks it out of date (`kind: "error"`, `context_epoch` + 1), so the conductor runs `next` before it acts again; the engine's Plan Approval question stays open. A directive no chat owns is left as it is. The marker records when and why (`out_of_date`, below), and a recorded approval is kept.
 4. **Recovery breadcrumb:** Writes `.aidlc-engine/recovery.md` containing the current stage and a validation timestamp. On session resume, the framework compares this with `aidlc-state.md` to detect compaction-related state corruption.
 
 **Why this matters:** Context compaction discards conversation history. If compaction happens mid-stage, the model loses awareness of what it was doing. The recovery breadcrumb provides an external checkpoint that survives compaction.

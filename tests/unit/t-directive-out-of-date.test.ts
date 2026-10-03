@@ -324,6 +324,22 @@ describe("the record names only what it knows", () => {
     expect(activeDirectiveOutOfDateReason(read)).toMatch(/after the workflow state had changed$/);
   });
 
+  test("an unrecorded write between recorded ones leaves the change unnamed", () => {
+    const proj = project();
+    const a = issued(proj);
+    const b = a.replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal");
+    const c = b.replace(/^- \*\*Test Strategy\*\*:.*$/m, "- **Test Strategy**: Minimal");
+    // Recorded A to B and B to C, then a hand edit back to B.
+    writeState(proj, b);
+    writeState(proj, c);
+    writeFileSync(seededStateFile(proj), b);
+    expect(recordCopilotHumanSequence(proj, b, "chat-g")).toBe(true);
+    const read = readActiveDirectiveMarker(proj, b);
+    expect(read?.out_of_date).toMatchObject({ by: "copilot-human-turn", kind: "run-stage" });
+    expect(read?.out_of_date?.writers).toBeUndefined();
+    expect(read?.out_of_date?.changed).toBeUndefined();
+  });
+
   test("a write from before the step was issued is never named for it", () => {
     const proj = project();
     const state = issued(proj);
