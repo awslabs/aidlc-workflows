@@ -61,6 +61,7 @@ import {
 	artifactFilename,
 	auditLockDir,
 	codekbDir,
+	consumeAppliesToKind,
 	errorMessage,
 	getField,
 	holdsAuditLock,
@@ -70,6 +71,7 @@ import {
 	readRegularFileNoFollowOrThrow,
 	readStateFile,
 	recordDir,
+	resolveBoltDag,
 	resolveProjectDir,
 	sensorsDir,
 	usesStageLevelPerUnitArtifacts,
@@ -471,6 +473,24 @@ function artifactDirsForProducer(
 	return [join(rec, producer.phase, producer.slug)];
 }
 
+function unitKindForOutput(
+	pd: string,
+	stage: { slug: string; for_each?: string },
+	outputPath: string,
+): string | null {
+	if (stage.for_each !== "unit-of-work") return null;
+	const rec = recordDir(pd);
+	if (rec === null) return null;
+	const norm = outputPath.replace(/\\/g, "/");
+	const marker = `${rec.replace(/\\/g, "/")}/construction/`;
+	if (!norm.startsWith(marker)) return null;
+	const rest = norm.slice(marker.length).split("/");
+	if (rest.length < 3 || rest[1] !== stage.slug) return null;
+	const dag = resolveBoltDag(pd);
+	if (dag.state !== "ok") return null;
+	return dag.unitKinds?.get(rest[0]) ?? null;
+}
+
 function presentConsumes(pd: string, slugs: string[]): string[] {
 	if (recordDir(pd) === null) return slugs;
 	return slugs.filter((name) => {
@@ -588,7 +608,9 @@ function handleFire(args: string[]): void {
 		scriptArgs.push("--output-path", outputPath);
 	}
 	if (id === "upstream-coverage") {
+		const unitKind = unitKindForOutput(projectDir, stageNode, outputPath);
 		const consumeSlugs = (stageNode.consumes ?? [])
+			.filter((c) => consumeAppliesToKind(c, unitKind))
 			.map((c) => c.artifact)
 			.filter((a) => typeof a === "string" && a.length > 0);
 		scriptArgs.push(
