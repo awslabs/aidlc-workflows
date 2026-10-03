@@ -6803,6 +6803,24 @@ interface ActiveDirectiveResume {
   issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
 }
 
+// What put a live step out of date: the write that turned the directive the
+// agent was working from into kind "error", so `next` must hand the step out
+// again. Diagnostic only. It is kept while the step stays out of date, shown by
+// doctor and in the Code Generation refusal, and decides nothing.
+export type ActiveDirectiveOutOfDateBy =
+  | "compaction" | "status-sync" | "copilot-next" | "copilot-result" | "copilot-turn-end" | "copilot-human-turn";
+
+export interface ActiveDirectiveOutOfDate {
+  by: ActiveDirectiveOutOfDateBy;
+  at: string;
+  kind: ActiveDirectiveKind; stage: string; unit?: string;
+  // The state lines that moved after the step was issued, and the AI-DLC
+  // commands that wrote them, when the state-write record accounts for every
+  // write in between. Absent otherwise: nothing is guessed.
+  changed?: string[];
+  writers?: string[];
+}
+
 export interface ActiveDirectiveGuardRemedy {
   op: GuardRemedyOp;
   action: string;
@@ -6848,6 +6866,7 @@ export interface ActiveDirectiveMarker {
   steering_payload?: Record<string, unknown>;
   steering_payload_receipt?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
+  out_of_date?: ActiveDirectiveOutOfDate;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
   event_sequence?: number; human_sequence?: number; engine_sequence?: number; conversation_sequence?: number;
   stop_fingerprint?: string; stop_count?: number;
@@ -7721,7 +7740,48 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   if (parsed.kind === "load-steering" &&
     (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
       (parsed.part as number) > (parsed.parts as number) || parsed.continue_token === undefined)) return null;
-  return { ...(parsed as unknown as ActiveDirectiveMarker), stage, ...(unit ? { unit } : {}) };
+  const marker: ActiveDirectiveMarker = { ...(parsed as unknown as ActiveDirectiveMarker), stage, ...(unit ? { unit } : {}) };
+  // A diagnostic never decides whether the marker reads: one that is not in
+  // the shape the writers produce is dropped, and the step reads as before.
+  const outOfDate = parseActiveDirectiveOutOfDate(parsed.out_of_date, kinds);
+  if (outOfDate) marker.out_of_date = outOfDate;
+  else delete marker.out_of_date;
+  return marker;
+}
+
+const OUT_OF_DATE_BY: readonly ActiveDirectiveOutOfDateBy[] = [
+  "compaction", "status-sync", "copilot-next", "copilot-result", "copilot-turn-end", "copilot-human-turn",
+];
+// A state-line label or a command's words: what doctor and a refusal may print.
+const OUT_OF_DATE_TEXT = /^[A-Za-z0-9][A-Za-z0-9 ._/()-]{0,79}$/;
+const OUT_OF_DATE_MAX_CHANGED = 8;
+const OUT_OF_DATE_MAX_WRITERS = 4;
+
+function parseActiveDirectiveOutOfDate(
+  value: unknown,
+  kinds: readonly ActiveDirectiveKind[],
+): ActiveDirectiveOutOfDate | null {
+  if (!isPlainObject(value)) return null;
+  const { by, at, kind, stage, unit, changed, writers } = value;
+  const lines = (list: unknown, max: number): boolean =>
+    Array.isArray(list) && list.length > 0 && list.length <= max &&
+    list.every((line) => typeof line === "string" && OUT_OF_DATE_TEXT.test(line));
+  if (
+    Object.keys(value).some((key) => !["by", "at", "kind", "stage", "unit", "changed", "writers"].includes(key)) ||
+    !OUT_OF_DATE_BY.includes(by as ActiveDirectiveOutOfDateBy) ||
+    typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(at) ||
+    !kinds.includes(kind as ActiveDirectiveKind) || kind === "error" ||
+    typeof stage !== "string" || !/^[a-z][a-z0-9-]*$/.test(stage) ||
+    (unit !== undefined && (typeof unit !== "string" || validateUnitName(unit) !== null)) ||
+    (changed !== undefined && !lines(changed, OUT_OF_DATE_MAX_CHANGED)) ||
+    (writers !== undefined && !lines(writers, OUT_OF_DATE_MAX_WRITERS))
+  ) return null;
+  return {
+    by: by as ActiveDirectiveOutOfDateBy, at, kind: kind as ActiveDirectiveKind, stage,
+    ...(unit !== undefined ? { unit: unit as string } : {}),
+    ...(changed !== undefined ? { changed: changed as string[] } : {}),
+    ...(writers !== undefined ? { writers: writers as string[] } : {}),
+  };
 }
 
 function readActiveDirectiveMarkerRaw(path: string): ActiveDirectiveMarker | null {
@@ -7837,7 +7897,12 @@ function transactActiveDirectiveTarget<T>(
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !ownerReceiptMatches(receipt)) throw error;
       }
     } else if (!next.preserve) {
-      const serialized = `${JSON.stringify(next.marker, null, 2)}\n`;
+      // The out-of-date record describes a step that is still out of date.
+      // Any write that leaves the marker holding a real step again retires it.
+      const committed = next.marker?.kind !== "error" && next.marker?.out_of_date
+        ? { ...next.marker, out_of_date: undefined }
+        : next.marker;
+      const serialized = `${JSON.stringify(committed, null, 2)}\n`;
       if (Buffer.byteLength(serialized, "utf-8") > ACTIVE_DIRECTIVE_MAX_BYTES) {
         throw new Error("Active-directive marker exceeds its size limit");
       }
@@ -7907,16 +7972,78 @@ function invalidateActiveDirectiveDelivery(marker: ActiveDirectiveMarker): Activ
   return { ...marker, revision: (marker.revision ?? 0) + 1, delivery: "superseded", needs_rehydrate: true };
 }
 
+// The kinds that hand the agent work or a question. Turning one of them into
+// "error" puts a step out of date; a print, a notice or an end state has
+// nothing the agent was working from.
+const OUT_OF_DATE_KINDS = new Set<ActiveDirectiveKind>([
+  "load-steering", "run-stage", "ask", "invoke-swarm", "present-gate", "dispatch-subagent",
+]);
+
+// The record a writer leaves when it puts a live step out of date. A step
+// already out of date keeps the first record: that write is the one that lost it.
+function outOfDateRecord(
+  marker: ActiveDirectiveMarker,
+  by: ActiveDirectiveOutOfDateBy,
+  evidence: Pick<ActiveDirectiveOutOfDate, "changed" | "writers"> = {},
+): ActiveDirectiveOutOfDate | undefined {
+  if (marker.kind === "error") return marker.out_of_date;
+  if (marker.kind === undefined || !OUT_OF_DATE_KINDS.has(marker.kind)) return undefined;
+  return {
+    by, at: isoTimestamp(), kind: marker.kind, stage: marker.stage,
+    ...(marker.unit ? { unit: marker.unit } : {}),
+    ...evidence,
+  };
+}
+
+const OUT_OF_DATE_CAUSE: Record<ActiveDirectiveOutOfDateBy, string> = {
+  compaction: "when the chat was compacted",
+  "status-sync": "when the task-list sync changed the workflow state",
+  "copilot-next": "when `next` found the workflow state had changed",
+  "copilot-result": "because the workflow state changed while a command ran",
+  "copilot-turn-end": "at the end of a turn, because the workflow state had changed",
+  "copilot-human-turn": "when the person's message arrived after the workflow state had changed",
+};
+
+/**
+ * Why the current step went out of date, in the person's words: when, by which
+ * write, and what moved, as a clause ("the Code Generation step went out of
+ * date at ... when the chat was compacted") for the caller to place. Null when
+ * no writer recorded it. It names no next step; the caller says what ends the
+ * wait.
+ */
+export function activeDirectiveOutOfDateReason(marker: ActiveDirectiveMarker | null): string | null {
+  const record = marker?.version === 2 && marker.kind === "error" ? marker.out_of_date : undefined;
+  if (!record) return null;
+  let name = record.stage;
+  try {
+    name = findStageBySlug(record.stage)?.name ?? record.stage;
+  } catch {
+    // No stage graph here: the slug still names the step.
+  }
+  const step = record.unit ? `${name} step for unit ${record.unit}` : `${name} step`;
+  const when = record.at.replace(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}).*$/, "$1 $2 UTC");
+  const detail = [
+    record.changed ? `changed: ${record.changed.join(", ")}` : "",
+    record.writers ? `written by ${record.writers.map((writer) => `\`${writer}\``).join(", ")}` : "",
+  ].filter(Boolean).join("; ");
+  return `the ${step} went out of date at ${when} ${OUT_OF_DATE_CAUSE[record.by]}${detail ? ` (${detail})` : ""}`;
+}
+
 function crossActiveDirectiveBoundary(
   marker: ActiveDirectiveMarker, stateSha256: string, intentUuid: string | null, statePresent: boolean,
+  by: ActiveDirectiveOutOfDateBy, statePath: string,
 ): ActiveDirectiveMarker {
   const stateChanged = marker.state_sha256 !== stateSha256;
   const intentChanged = marker.intent_uuid !== intentUuid;
   const supersedeResume = (marker.resume?.status === "waiting" || marker.resume?.status === "selected") &&
     (stateChanged || intentChanged);
+  const outOfDate = outOfDateRecord(
+    marker, by, stateChanged ? stateWritesBetween(statePath, marker.state_sha256, stateSha256) : {},
+  );
   return { ...invalidateActiveDirectiveDelivery(marker), state_sha256: stateSha256,
     intent_uuid: intentUuid, state_present: statePresent,
     kind: "error",
+    ...(outOfDate ? { out_of_date: outOfDate } : {}),
     message: undefined,
     part: undefined, parts: undefined, continue_token: undefined, continue_token_sha256: undefined,
     ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
@@ -8281,6 +8408,8 @@ export function writeActiveDirectiveMarker(
       // re-issued for an unchanged state never reaches this write (the caller
       // retains the issued marker), so clearing here cannot discard a selection.
       guard_recovery_response: undefined,
+      // A published step is handed out, never out of date, whatever its kind.
+      out_of_date: undefined,
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       steering_payload: marker.steering_payload,
       steering_payload_receipt: marker.steering_payload_receipt,
@@ -8332,7 +8461,7 @@ export function refreshActiveDirectiveMarker(
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
-  return transactActiveDirective(projectDir, (marker) => {
+  return transactActiveDirective(projectDir, (marker, target) => {
     const previousDigest = stateDigest(previousStateContent);
     const nextDigest = stateDigest(nextStateContent);
     if (!marker || marker.stage !== stage || marker.state_sha256 !== previousDigest) {
@@ -8350,7 +8479,7 @@ export function refreshActiveDirectiveMarker(
     }
     return {
       marker: {
-        ...crossActiveDirectiveBoundary(marker, nextDigest, marker.intent_uuid ?? null, true),
+        ...crossActiveDirectiveBoundary(marker, nextDigest, marker.intent_uuid ?? null, true, "status-sync", target.statePath),
       },
       result: true,
     };
@@ -9287,11 +9416,13 @@ export function invalidateActiveDirectiveContext(
     // The engine's Plan Approval question stays the question: the person can
     // still answer it, and nothing else can answer it for them meanwhile.
     const planQuestion = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+    const outOfDate = planQuestion ? undefined : outOfDateRecord(marker, "compaction");
     return {
       marker: {
         ...invalidateActiveDirectiveDelivery(marker),
         context_epoch: (marker.context_epoch ?? 0) + 1,
         kind: planQuestion ? "ask" : "error",
+        ...(outOfDate ? { out_of_date: outOfDate } : {}),
         message: undefined,
         part: undefined,
         parts: undefined,
@@ -9324,6 +9455,17 @@ export function recordCopilotHumanSequence(
       marker.state_present !== context.statePresent) {
       const stage = getField(stateContent, "Current Stage")?.trim() || "coordination";
       const fresh = freshActiveDirectiveMarker(target, stateContent, stage);
+      // Only the state moved under this workflow's own step: that step is now
+      // out of date, and the fresh marker says so.
+      const outOfDate = marker?.version === 2 && marker.project_sha256 === context.projectSha256 &&
+        marker.intent_uuid === context.intentUuid
+        ? outOfDateRecord(
+          marker, "copilot-human-turn",
+          marker.state_sha256 !== context.stateSha256
+            ? stateWritesBetween(target.statePath, marker.state_sha256, context.stateSha256)
+            : {},
+        )
+        : undefined;
       marker = {
         ...fresh,
         owner_session: sessionId,
@@ -9334,6 +9476,7 @@ export function recordCopilotHumanSequence(
           session_id: sessionId,
           owner_epoch: 1,
         },
+        ...(outOfDate ? { out_of_date: outOfDate } : {}),
       };
     } else if (marker.owner_session !== sessionId) {
       return { marker: current, result: false, preserve: true };
@@ -9438,7 +9581,7 @@ export function claimCopilotCommand(
       if (input.commandKind !== "next") {
         return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "state" }, preserve: true };
       }
-      marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent);
+      marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent, "copilot-next", target.statePath);
     }
     const currentStage = stateContent ? (getField(stateContent, "Current Stage")?.trim() || "coordination") : "coordination";
     const liveResume = marker?.resume?.status === "waiting" || marker?.resume?.status === "selected";
@@ -9569,7 +9712,7 @@ export function settleCopilotCommand(
     if (attempt.status !== "pending") return { marker, result: "stale" as const, preserve: true };
     const stateChanged = attempt.issued_state_sha256 !== context.stateSha256 || marker.intent_uuid !== context.intentUuid;
     const base = stateChanged
-      ? crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent)
+      ? crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent, "copilot-result", target.statePath)
       : marker;
     if (!directive) {
       if (input.commandKind === "continue" && (attempt.shared_attempt || attempt.result_sha256))
@@ -9738,7 +9881,7 @@ export function copilotStopEvidence(
       }
       if (marker.owner_session !== sessionId) return { marker, result: { status: "foreign" }, preserve: true };
       if (marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid || marker.state_sha256 !== context.stateSha256) {
-        marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, true);
+        marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, true, "copilot-turn-end", target.statePath);
       }
       if (marker.resume?.issuing_session && marker.resume.issuing_session !== sessionId) {
         marker = {
@@ -26064,7 +26207,11 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   // TARGET (it only needs directory-write permission), so it would bypass that
   // barrier. Preserve the bare-writeFileSync EACCES semantics by refusing up
   // front when the target exists but is not writable.
-  if (existsSync(path)) accessSync(path, fsConstants.W_OK);
+  let previous: string | null = null;
+  if (existsSync(path)) {
+    accessSync(path, fsConstants.W_OK);
+    try { previous = readFileSync(path, "utf-8"); } catch { /* the write below still decides */ }
+  }
   // Ensure the record dir's parent chain exists before the atomic write — a
   // per-intent record dir's parents (aidlc/spaces/<sp>/intents/<slug>-<id8>/)
   // may not exist yet on first write; the flat fallback's aidlc-docs/ is created
@@ -26077,6 +26224,119 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   // separate, larger change tracked as a follow-up; this reroute is the
   // torn-write half and benefits every caller unconditionally.
   writeFileAtomic(path, content);
+  recordStateWrite(path, previous, content);
+}
+
+// --- State-write record -------------------------------------------------------
+//
+// The last few writes that moved the state digest, beside the state in the
+// engine dir (machine-local, gitignored): when, which AI-DLC command, and which
+// state lines moved. A step out of date because the state moved names those
+// writes, but only when the record accounts for every write between the step
+// and now. Best effort: it never fails or slows a state write's outcome.
+const STATE_WRITES_FILE = "state-writes.json";
+const STATE_WRITES_KEPT = 8;
+const STATE_WRITES_MAX_BYTES = 64 * 1024;
+
+interface StateWrite {
+  at: string; by: string; before: string; after: string; changed: string[];
+}
+
+function stateWritesPath(statePath: string): string {
+  return join(engineDirFor(dirname(statePath)), STATE_WRITES_FILE);
+}
+
+// The command's own words (the tool file and its lowercase verbs), never its
+// arguments: those can carry a person's text.
+function stateWriterWords(): string | null {
+  const words: string[] = [];
+  for (const [index, arg] of process.argv.slice(1).entries()) {
+    const word = index === 0 ? basename(arg) : arg;
+    if (!/^[a-z][a-z0-9._-]{0,39}$/.test(word)) break;
+    words.push(word);
+    if (words.length === 4) break;
+  }
+  return words.length > 0 ? words.join(" ").slice(0, 80).trim() : null;
+}
+
+function stateLineLabel(line: string): string {
+  const clean = (text: string) => text.replace(/[^A-Za-z0-9 ._/()-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  const field = /^- \*\*([^*]+)\*\*:/.exec(line);
+  const checkbox = /^\s*- \[[^\]]*\] ([a-z][a-z0-9-]*)/.exec(line);
+  const label = field
+    ? clean(field[1])
+    : checkbox
+      ? clean(`${checkbox[1]} checkbox`)
+      : line.startsWith("## ")
+        ? clean(`section ${line.slice(3)}`)
+        : "";
+  return /^[A-Za-z0-9]/.test(label) ? label : "other line";
+}
+
+function changedStateLines(before: string, after: string): string[] {
+  const was = new Set(projectStateForDigest(before).split("\n"));
+  const now = new Set(projectStateForDigest(after).split("\n"));
+  const labels = new Set<string>();
+  for (const line of now) if (!was.has(line)) labels.add(stateLineLabel(line));
+  for (const line of was) if (!now.has(line)) labels.add(stateLineLabel(line));
+  return [...labels].slice(0, OUT_OF_DATE_MAX_CHANGED);
+}
+
+function readStateWrites(statePath: string): StateWrite[] {
+  try {
+    const path = stateWritesPath(statePath);
+    if (statSync(path).size > STATE_WRITES_MAX_BYTES) return [];
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is StateWrite =>
+        isPlainObject(entry) && typeof entry.at === "string" && typeof entry.by === "string" &&
+        OUT_OF_DATE_TEXT.test(entry.by) && /^[0-9a-f]{64}$/.test(String(entry.before)) &&
+        /^[0-9a-f]{64}$/.test(String(entry.after)) && Array.isArray(entry.changed) &&
+        entry.changed.every((line) => typeof line === "string" && OUT_OF_DATE_TEXT.test(line)))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordStateWrite(statePath: string, previous: string | null, content: string): void {
+  try {
+    const before = stateDigest(previous ?? "");
+    const after = stateDigest(content);
+    const by = stateWriterWords();
+    // A write that moved only the cache layer leaves every issued step current.
+    if (before === after || by === null) return;
+    const writes = [
+      ...readStateWrites(statePath),
+      { at: isoTimestamp(), by, before, after, changed: changedStateLines(previous ?? "", content) },
+    ].slice(-STATE_WRITES_KEPT);
+    mkdirSync(dirname(stateWritesPath(statePath)), { recursive: true });
+    writeFileAtomic(stateWritesPath(statePath), `${JSON.stringify(writes, null, 2)}\n`);
+  } catch {
+    // A diagnostic record never fails the state write it describes.
+  }
+}
+
+// The recorded writes that took the state from one digest to another, newest
+// first back to the step's own state. Nothing when any write in between went
+// unrecorded (another tool, a hand edit, a lost record).
+function stateWritesBetween(
+  statePath: string,
+  from: string,
+  to: string,
+): Pick<ActiveDirectiveOutOfDate, "changed" | "writers"> {
+  const writes = readStateWrites(statePath);
+  const chain: StateWrite[] = [];
+  let cursor = to;
+  for (let index = writes.length - 1; index >= 0 && cursor !== from; index--) {
+    if (writes[index].after !== cursor) continue;
+    chain.unshift(writes[index]);
+    cursor = writes[index].before;
+  }
+  if (cursor !== from || chain.length === 0) return {};
+  const changed = [...new Set(chain.flatMap((write) => write.changed))].slice(0, OUT_OF_DATE_MAX_CHANGED);
+  const writers = [...new Set(chain.map((write) => write.by))].slice(-OUT_OF_DATE_MAX_WRITERS);
+  return { ...(changed.length > 0 ? { changed } : {}), writers };
 }
 
 // --- Field reading/writing ---

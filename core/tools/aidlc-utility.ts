@@ -241,6 +241,7 @@ import {
   readAuditShardEvents,
   recoveryRepoCandidates,
   readActiveDirectiveMarker,
+  activeDirectiveOutOfDateReason,
   readUnitClaimRegistryCache,
   readUnitScopeStamp,
   recordHookDrop,
@@ -4825,6 +4826,29 @@ export async function collectDoctorReport(
           "next. Last resort, human only: type " +
           "`Override Plan Approval: <reason>` in chat; the conductor records it with the " +
           "break-glass steps in code-generation.md.",
+      });
+    }
+  }
+
+  // 6d. A step out of date. When a write turned the step the agent was working
+  // from into "error" (a compaction, a state change after it was issued), the
+  // marker records which write and when. Say so while it lasts, with the one
+  // command that hands the step out again; nothing is shown otherwise.
+  if (existsSync(stateMdPath)) {
+    let outOfDate: string | null = null;
+    try {
+      outOfDate = activeDirectiveOutOfDateReason(
+        readActiveDirectiveMarker(projectDir, readFileSync(stateMdPath, "utf-8")),
+      );
+    } catch {
+      outOfDate = null;
+    }
+    if (outOfDate !== null) {
+      results.push({
+        pass: false,
+        severity: "warn",
+        label: `${outOfDate.charAt(0).toUpperCase()}${outOfDate.slice(1)}.`,
+        fix: `run \`${aidlcToolInvocation("orchestrate")} next\` as its own command; it hands the current step out again, and an approval that still matches is kept`,
       });
     }
   }
