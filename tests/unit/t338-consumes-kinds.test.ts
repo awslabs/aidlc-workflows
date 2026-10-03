@@ -1,18 +1,4 @@
 // covers: function:parseStageFrontmatter, function:emitStageFrontmatter, function:validateStageFrontmatter, function:consumeAppliesToKind, subcommand:aidlc-orchestrate:next, subcommand:aidlc-sensor:fire
-//
-// t338 - `consumes[].kinds`: the consumer-side twin of produces_kinds. A
-// per-unit stage may mark one consume as applying to some unit kinds only; the
-// directive builder drops it for a unit of another kind and the upstream-
-// coverage dispatcher stops threading it, so a backend unit is never asked to
-// cite a UI mockup it never read. Absent list, or an untagged unit, keeps the
-// consume - the same fail-open posture filterProducesByKind has.
-//
-// Four surfaces, one file: the frontmatter parse/emit round-trip and the schema
-// validator (in-process, shipped bytes), then the engine `next` directive and
-// the sensor `fire` dispatcher (cli, spawned). Both spawned cases point
-// AIDLC_STAGE_GRAPH at a copy of the shipped graph with ONE consume added to
-// functional-design - `wireframes` gated to [ui] - since no core stage declares
-// `kinds` yet; the stage file is not edited.
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -62,9 +48,6 @@ afterEach(() => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// parse / emit / validate
-// ---------------------------------------------------------------------------
 
 const STAGE = [
   "---",
@@ -165,10 +148,6 @@ describe("t338 consumes[].kinds - parse, emit, validate", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// engine + sensor, against a graph where functional-design consumes
-// `wireframes` for ui units only
-// ---------------------------------------------------------------------------
 
 function constructionState(): string {
   return `# AI-DLC State Tracking
@@ -275,10 +254,6 @@ describe("t338 consumes[].kinds - directive resolution", () => {
   }, 30000);
 });
 
-// The dispatcher threads `--consumes` to upstream-coverage from the stage's
-// consumes filtered to files on disk. With only wireframes on disk, a ui
-// unit's fire must demand a citation of it (FAILED when absent) and a service
-// unit's fire must not (PASSED with the same uncited deliverable).
 function fireUpstreamCoverage(
   proj: string,
   graph: string,

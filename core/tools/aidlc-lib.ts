@@ -36297,9 +36297,6 @@ export function filterProducesByKind(
   });
 }
 
-// The consumer-side twin of filterProducesByKind: a consume with a `kinds`
-// list applies only to a unit of one of those kinds. No list, or an untagged
-// unit (`unitKind` null), keeps the consume.
 export function consumeAppliesToKind(
   consume: { kinds?: string[] },
   unitKind: string | null

@@ -473,8 +473,6 @@ function artifactDirsForProducer(
 	return [join(rec, producer.phase, producer.slug)];
 }
 
-// Unit kind for a per-unit output, from its `<record>/construction/<unit>/<slug>/`
-// path and the unit DAG; null (keep every consume) when either is absent.
 function unitKindForOutput(
 	pd: string,
 	stage: { slug: string; for_each?: string },

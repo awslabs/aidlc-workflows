@@ -64,10 +64,6 @@ export interface StageFrontmatter {
     artifact: string;
     required: boolean;
     conditional_on?: "brownfield" | "greenfield";
-    // kinds - optional per-kind applicability of ONE consume on a per-unit
-    // stage: the unit kinds (UNIT_KINDS) this input applies to. Absent = every
-    // kind. Mirrors produces_kinds on the consumer side, so a once-per-workflow
-    // artifact (a UI mockup) can be an input of `ui` units only.
     kinds?: string[];
   }>;
   requires_stage: string[];
@@ -583,8 +579,6 @@ export function validateStageFrontmatter(
           }
         }
 
-        // kinds - only a per-unit stage has a unit kind to filter on; anywhere
-        // else the list would be silently inert, so it is rejected outright.
         if ("kinds" in e && e.kinds !== undefined) {
           if (o.for_each !== "unit-of-work") {
             errors.push(`consumes[${i}].kinds requires for_each: unit-of-work`);
