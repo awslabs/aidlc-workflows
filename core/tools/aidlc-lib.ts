@@ -2880,8 +2880,8 @@ export function codekbRepoName(
 // to no intent's recorded repos, that store is this folder's. Nothing is
 // renamed on disk (the store is committed and shared). Two or more such stores
 // are ambiguous and keep the current name, and so does a registry without the
-// active intent's row (missing or damaged), since it cannot say which stores
-// other intents' repos own.
+// active intent's row or with a malformed entry, since it cannot say which
+// stores other intents' repos own.
 function movedFolderStoreName(
   projectDir: string,
   space: string,
@@ -2891,7 +2891,10 @@ function movedFolderStoreName(
   const root = join(workspaceRoot(projectDir), "spaces", space, "codekb");
   if (intent === null || existsSync(join(root, name))) return null;
   const rows = readIntentRegistry(projectDir, space);
-  if (!rows.some((entry) => recordDirMatches(entry, intent))) return null;
+  const wellFormed = rows.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    (entry.repos === undefined || Array.isArray(entry.repos)));
+  if (!wellFormed || !rows.some((entry) => recordDirMatches(entry, intent))) return null;
   let entries: Dirent[];
   try {
     entries = readdirSync(root, { withFileTypes: true });

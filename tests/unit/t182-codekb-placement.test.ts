@@ -187,6 +187,16 @@ describe("t182 codekb lib helpers — space-level per-repo placement", () => {
       else writeFileSync(regPath, registry, "utf-8");
       expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
     }
+    // The active row is fine, but a later entry is not.
+    for (const bad of [null, "row", { slug: "other", repos: "svc" }]) {
+      const proj = seedRecordedIntent();
+      seedStore(proj, "other-repo");
+      const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+      const rows = JSON.parse(readFileSync(regPath, "utf-8")) as unknown[];
+      rows.push(bad);
+      writeFileSync(regPath, `${JSON.stringify(rows)}\n`, "utf-8");
+      expect(codekbRepoName(proj, DEFAULT_SPACE)).toBe(basename(proj));
+    }
   });
 
   test("codekbRepoName: two unclaimed stores are ambiguous and keep the current name", () => {
