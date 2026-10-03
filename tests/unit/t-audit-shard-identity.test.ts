@@ -9,7 +9,7 @@
 //    process computed the host from hostname(), so one clone grew a new shard
 //    per name and same-second rows across those shards read as unordered.
 //    A token-only file from an earlier version is upgraded once, keeping its
-//    token.
+//    token and the host its existing shard already carries.
 // 2. COPIED ROWS READ ONCE. A shard copied by a sync tool ("<shard> 2.md") or by
 //    hand repeats rows another shard holds. Every copied boundary then tied with
 //    itself across two files, so every finished Unit stopped counting and the
@@ -31,7 +31,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   artifactFilename,
@@ -199,6 +199,35 @@ describe("t-audit-shard-identity: one shard per clone", () => {
     expect(readFileSync(cloneFile(), "utf-8")).toBe(cloneIdFileContent(FIXTURE_CLONE_ID, auditShardHostSegment()));
   });
 
+  test("a token-only file upgraded after the machine was renamed continues the existing shard", () => {
+    proj = project();
+    expect(auditShardHostSegment()).not.toBe("laptop-a");
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(join(seededAuditDir(proj), `laptop-a-${FIXTURE_CLONE_ID}.md`), shard(block("HEALTH_CHECKED", T0)), "utf-8");
+    expect(auditShardName(proj)).toBe(`laptop-a-${FIXTURE_CLONE_ID}.md`);
+    expect(readFileSync(cloneFile(), "utf-8")).toBe(cloneIdFileContent(FIXTURE_CLONE_ID, "laptop-a"));
+  });
+
+  test("on upgrade a shard under this machine's name wins, else the most recently written one", () => {
+    proj = project();
+    const dir = seededAuditDir(proj);
+    mkdirSync(dir, { recursive: true });
+    const older = join(dir, `laptop-a-${FIXTURE_CLONE_ID}.md`);
+    const newer = join(dir, `laptop-b-${FIXTURE_CLONE_ID}.md`);
+    writeFileSync(older, shard(block("HEALTH_CHECKED", T0)), "utf-8");
+    writeFileSync(newer, shard(block("HEALTH_CHECKED", T1)), "utf-8");
+    utimesSync(older, new Date("2026-09-01T09:00:00Z"), new Date("2026-09-01T09:00:00Z"));
+    utimesSync(newer, new Date("2026-09-02T09:00:00Z"), new Date("2026-09-02T09:00:00Z"));
+    expect(auditShardName(proj)).toBe(`laptop-b-${FIXTURE_CLONE_ID}.md`);
+
+    cleanupTestProject(proj);
+    proj = project();
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(join(seededAuditDir(proj), `laptop-b-${FIXTURE_CLONE_ID}.md`), shard(block("HEALTH_CHECKED", T1)), "utf-8");
+    writeFileSync(seededAuditShard(proj), shard(block("HEALTH_CHECKED", T0)), "utf-8");
+    expect(auditShardName(proj)).toBe(basename(seededAuditShard(proj)));
+  });
+
   test("an unusable host line is replaced and the token kept", () => {
     proj = project();
     writeFileSync(cloneFile(), `${FIXTURE_CLONE_ID}\nBad Host!\n`, "utf-8");
@@ -306,6 +335,17 @@ describe("t-audit-shard-identity: copied rows are read once", () => {
     readAllAuditShards(proj);
     humanTurnState(proj);
     expect(readFileSync(cloneFile(), "utf-8")).toBe(`${FIXTURE_CLONE_ID}\n`);
+  });
+
+  test("a shard keeps the shared rows ahead of its conflict copy, so the copy lends no name to a receipt", () => {
+    const shared = block("REVIEW_COMPLETED", T1, { Stage: "code-generation", Unit: "alpha" });
+    const texts = [
+      { shard: "audit/laptop-a-111111111111 2.md", content: shard(shared) },
+      { shard: "audit/laptop-a-111111111111.md", content: shard(shared) },
+    ];
+    const copied = copiedAuditBlocks(texts, () => null);
+    expect([...copied[0]]).toEqual([0]);
+    expect(copied[1].size).toBe(0);
   });
 
   test("the rule takes positions in the parser's block sequence", () => {

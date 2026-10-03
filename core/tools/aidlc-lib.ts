@@ -9858,6 +9858,47 @@ interface CloneIdentity {
   host: string;
 }
 
+// The host an earlier version already named this clone's shards with, read from
+// the shard files (`<host>-<token>.md` in any intent's or space's audit dir), so
+// a token-only clone file upgraded after the machine's name changed continues
+// that shard instead of starting another. A shard under this machine's current
+// name wins; otherwise the most recently written one; null when there is none.
+function existingShardHost(projectDir: string, token: string): string | null {
+  const suffix = `-${token}.md`;
+  const current = auditShardHostSegment();
+  const list = (dir: string): string[] => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+  let newest: { host: string; mtime: number } | null = null;
+  const root = spacesRoot(projectDir);
+  for (const space of list(root)) {
+    const intents = join(root, space, "intents");
+    const auditDirs = [join(intents, "audit"), ...list(intents).map((entry) => join(intents, entry, "audit"))];
+    for (const audit of auditDirs) {
+      for (const file of list(audit)) {
+        if (!file.endsWith(suffix)) continue;
+        const host = file.slice(0, -suffix.length);
+        if (!CLONE_HOST_RE.test(host)) continue;
+        if (host === current) return current;
+        let mtime: number;
+        try {
+          mtime = lstatSync(join(audit, file)).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (newest === null || mtime > newest.mtime || (mtime === newest.mtime && host < newest.host)) {
+          newest = { host, mtime };
+        }
+      }
+    }
+  }
+  return newest?.host ?? null;
+}
+
 function parseCloneIdFile(raw: string): { token: string | null; host: string | null } {
   const [token = "", host = ""] = raw.split(/\r?\n/).map((line) => line.trim());
   return {
@@ -9878,9 +9919,10 @@ function parseCloneIdFile(raw: string): { token: string | null; host: string | n
 // time the machine's name changed (a laptop on another network, a VPN) or the
 // folder was copied to another machine, and same-second rows across those
 // shards read as unordered, so finished work stopped counting. A file from
-// before this format (token only) is upgraded in place with the current host,
-// by atomic replace so a concurrent reader never sees a partial file and mints
-// a new token.
+// before this format (token only) is upgraded in place, keeping the host its
+// existing shard already carries (see existingShardHost) or else the current
+// one, by atomic replace so a concurrent reader never sees a partial file and
+// mints a new token.
 //
 // A read/mint race between two first-run processes converges on whichever
 // write lands last; both re-read that file, so the clone settles on ONE
@@ -9907,7 +9949,7 @@ function cloneIdentity(projectDir: string): CloneIdentity {
   }
   let identity: CloneIdentity = {
     token: recorded.token ?? randomUUID().replace(/-/g, "").slice(0, 12),
-    host: auditShardHostSegment(),
+    host: (recorded.token && existingShardHost(projectDir, recorded.token)) || auditShardHostSegment(),
   };
   try {
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
@@ -12504,7 +12546,10 @@ function knownAuditShardName(projectDir: string): string | null {
   if (cached) return cached;
   try {
     const recorded = parseCloneIdFile(readFileSync(cloneIdPath(projectDir), "utf-8"));
-    if (recorded.token) return `${recorded.host ?? auditShardHostSegment()}-${recorded.token}.md`;
+    if (recorded.token) {
+      const host = recorded.host ?? existingShardHost(projectDir, recorded.token) ?? auditShardHostSegment();
+      return `${host}-${recorded.token}.md`;
+    }
   } catch {
     // no clone identity yet
   }
@@ -12634,9 +12679,13 @@ function auditShardBlocks(content: string): string[] {
 // start alike are compared, and a row two independent clones happen to write
 // alike is never taken for a copy. Within such a group, a timestamped block
 // found in two or more files is read ONCE, from the best of them: this clone's
-// own shard, then the file with more timestamped blocks, then filename order.
+// own shard, then a file with a shard name (`<host>-<token>.md`, so a conflict
+// copy never lends its name or commit to a receipt), then the file with more
+// timestamped blocks, then filename order.
 // Repeats inside one file are not copies and stay. Returns, per shard, the
 // block positions to skip. `ownShard` is only asked when a copy exists.
+const AUDIT_SHARD_FILE_RE = /^[a-z0-9][a-z0-9-]*-[a-z0-9]{1,32}\.md$/;
+
 export function copiedAuditBlocks(
   shards: readonly AuditShardText[],
   ownShard: () => string | null,
@@ -12672,10 +12721,12 @@ export function copiedAuditBlocks(
     });
     const counts = blocks.map((memberBlocks) => memberBlocks.filter((block) => block !== null).length);
     const isOwn = (member: number) => own !== null && basename(shards[members[member]].shard) === own;
+    const isShardName = (member: number) => AUDIT_SHARD_FILE_RE.test(basename(shards[members[member]].shard));
     const order = members
       .map((_, member) => member)
       .sort((a, b) => {
         if (isOwn(a) !== isOwn(b)) return isOwn(a) ? -1 : 1;
+        if (isShardName(a) !== isShardName(b)) return isShardName(a) ? -1 : 1;
         if (counts[a] !== counts[b]) return counts[b] - counts[a];
         return a - b;
       });

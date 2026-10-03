@@ -719,22 +719,19 @@ If the recovery breadcrumb warns about a mismatch, choose **Redo current stage**
 
 **Symptom**: this clone's audit shard has grown to thousands of lines over a long project.
 
-### How to archive
-
-```bash
-# from the intent's record dir; <host>-<clone>.md is this clone's shard
-mv audit/<host>-<clone>.md audit-archive/<host>-<clone>-2026-02.md
-```
-
-Run this from your own terminal, not through the agent: the PreToolUse guard refuses the agent's file and shell tools any write into `audit/`. The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive: the engine does not read the `audit/` shards for routing decisions.
+A long project's shard is large by design; leave it where it is. The engine reads every shard in `audit/` to know which stages you approved and which Units you finished, so moving one out of `audit/` makes that work count as not done and the engine hands it out again. (The PreToolUse guard refuses the agent's file and shell tools any write into `audit/`.)
 
 ### Git considerations
 
-The `audit/` shards are committed (not gitignored) — see [What to Commit vs. Gitignore](14-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict; consider archiving (see above) before commits to keep diffs manageable.
+The `audit/` shards are committed (not gitignored), see [What to Commit vs. Gitignore](14-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict.
 
 ### Moved, copied, or synced projects
 
 `aidlc/.aidlc-clone-id` records this clone's token and the host name it was first used on, so the shard name stays the same when the machine's name changes or the folder is copied or synced to another laptop: the work continues in one shard. A fresh `git clone` gets its own token and shard. Two copies of one folder are one clone, so if two people (or two laptops) work at the same time, give each its own `git clone`. If a sync tool leaves a conflict copy such as `<host>-<clone> 2.md`, AI-DLC reads the rows it shares with the original once, so finished work keeps counting and the copy can stay.
+
+If such a copy was already in your project on an earlier release and you kept working, Units you finished while the copy sat there may be handed out once more after you upgrade (the Units you finished before the copy count again). Nothing is deleted: the Unit's files are still there, so for most stages finishing it again only records it; a Code Generation Unit may ask you to approve its plan once more and build again from the code already in your branch. It happens once and never repeats, and a planned follow-up removes even that.
+
+One narrow case: a Code Generation Unit built in its own worktree that had finished but was not yet merged when you upgraded. Building it again stops with `Worktree directory already exists`, or `resume requires the completed, merged prior Bolt`. Run `aidlc engine worktree discard --slug <unit>`: it sets the earlier attempt's files aside before it removes that worktree, then the next `/aidlc` builds the Unit again, and `aidlc engine worktree restore --slug <unit>` brings the earlier files back into a separate checkout whenever you want them.
 
 ---
 
