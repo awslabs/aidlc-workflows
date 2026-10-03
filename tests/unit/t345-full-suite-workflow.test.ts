@@ -1178,12 +1178,15 @@ describe("t345 complete nightly coverage", () => {
     // Hooks enter the dispatcher both ways; an adapter runs its core hook as a child.
     expect(snapshot).toContain("Contains('engine hook ')");
     expect(snapshot).toContain("Contains('engine adapter ')");
-    // Every CIM query is time-bounded and a snapshot has an overall budget, so
-    // a slow provider cannot hold the wait loop.
+    // Every CIM query is capped at what is left of the snapshot's budget (at
+    // most 15 seconds), so a slow provider cannot hold the wait loop; ownership
+    // is checked for the stalled processes and their parents, not every process.
     expect(snapshot).toContain("[int]$BudgetSeconds = 60");
+    expect(snapshot).toContain("$remaining = { [int][Math]::Min(15, [Math]::Floor(($budget - [DateTime]::UtcNow).TotalSeconds)) }");
     const cimCalls = snapshot.match(/(?:Get-CimInstance|Invoke-CimMethod)[^\n]*/g) ?? [];
     expect(cimCalls.length).toBeGreaterThanOrEqual(3);
-    for (const call of cimCalls) expect(call).toContain("-OperationTimeoutSec 15");
+    for (const call of cimCalls) expect(call).toMatch(/-OperationTimeoutSec (?:\$seconds|\(\[Math\]::Max\(1, \(& \$remaining\)\)\))/);
+    expect(snapshot).not.toMatch(/foreach \(\$process in \$processes\) \{[^}]*GetOwnerSid/);
     // Reading files the isolated run uses could add a handle to the stall.
     expect(snapshot).not.toMatch(/Get-Content|ReadAll|OpenRead|::Open\(|Get-ChildItem/);
     // One call site, gated to the live run's scheduled-task wait and evidence-only.

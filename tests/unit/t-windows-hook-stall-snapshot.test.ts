@@ -5,8 +5,9 @@
 // process with a child (an adapter runs its core hook as a child): it writes
 // one JSON snapshot that lists both, with the thread states of each stalled
 // process and of the adapter's child, never repeats a process it already
-// recorded, ignores matching processes another account owns, and returns
-// promptly without writing when its time budget is spent.
+// recorded, ignores matching processes another account owns, and with its
+// time budget spent still writes promptly, marked truncated, keeping the
+// stalled processes whose owner it could not check under ownerUnknown.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -70,7 +71,9 @@ try {
     $budgetStarted = [DateTime]::UtcNow
     Write-HookStallSnapshot (Join-Path $directory 'no-budget') @{} @($sid) 0 0
     $noBudgetSeconds = ([DateTime]::UtcNow - $budgetStarted).TotalSeconds
-    $noBudgetFiles = @(Get-ChildItem -LiteralPath (Join-Path $directory 'no-budget') -ErrorAction SilentlyContinue).Count
+    $noBudget = @(Get-ChildItem -LiteralPath (Join-Path $directory 'no-budget') -Filter 'hook-stall-*.json' -ErrorAction SilentlyContinue)
+    $noBudgetFiles = $noBudget.Count
+    $noBudgetSnapshot = if ($noBudget.Count -gt 0) { $noBudget[0].FullName } else { $null }
     Write-HookStallSnapshot $directory $seen @('S-1-5-18') 0
     $otherOwner = @(Get-ChildItem -LiteralPath $directory -ErrorAction SilentlyContinue).Count
     Write-HookStallSnapshot $directory $seen @($sid) 0
@@ -80,7 +83,7 @@ try {
     [Console]::WriteLine((@{
         fake = $fake.Id; adapter = $adapter.Id; child = if ($null -ne $child) { [int]$child.ProcessId } else { 0 }
         otherOwner = $otherOwner; first = $first.Count; second = $second.Count
-        noBudgetSeconds = $noBudgetSeconds; noBudgetFiles = $noBudgetFiles
+        noBudgetSeconds = $noBudgetSeconds; noBudgetFiles = $noBudgetFiles; noBudgetSnapshot = $noBudgetSnapshot
         snapshot = if ($first.Count -gt 0) { $first[0].FullName } else { $null }
     } | ConvertTo-Json -Compress))
 } finally {
@@ -96,9 +99,14 @@ try {
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     const outcome = JSON.parse(result.stdout.trim().split(/\r?\n/).at(-1)!);
-    expect(outcome).toMatchObject({ otherOwner: 0, first: 1, second: 1, noBudgetFiles: 0 });
-    // Out of budget: no owner lookups, so it returns after one bounded process query.
+    expect(outcome).toMatchObject({ otherOwner: 0, first: 1, second: 1, noBudgetFiles: 1 });
+    // A spent budget still leaves evidence, promptly, marked incomplete: the
+    // stalled processes whose owner could not be checked in time are kept.
     expect(outcome.noBudgetSeconds).toBeLessThan(20);
+    const partial = JSON.parse(readFileSync(outcome.noBudgetSnapshot, "utf8"));
+    expect(partial.truncated).toBe(true);
+    expect(partial.ownerUnknown).toContain(outcome.fake);
+    expect(partial.stalled).toContain(outcome.adapter);
     const snapshot = JSON.parse(readFileSync(outcome.snapshot, "utf8"));
     expect(snapshot.afterMinutes).toBe(0);
     expect(snapshot.truncated).toBe(false);

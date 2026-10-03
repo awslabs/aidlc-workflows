@@ -452,7 +452,7 @@ or prints. `core/tools/aidlc-hook-trace.ts` owns the switch and the
 line format; the dispatcher and `aidlc-usage.ts` load it only when the
 variable is set, so a runtime tree without that file behaves as before. The
 Full Suite's Windows live legs turn it on per test file and add a
-process-table snapshot when a hook runs 10 minutes; see
+process-tree snapshot when a hook runs 10 minutes; see
 [Testing](09-testing.md).
 
 ### Observers never write authority

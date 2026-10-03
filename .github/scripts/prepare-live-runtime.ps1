@@ -902,18 +902,22 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
 
 # A hook process that never returns leaves its live test waiting until the
 # ceiling. Once an isolated `engine hook` or `engine adapter` process (the two
-# ways hooks enter the dispatcher) has run $AfterMinutes, record the isolated
-# account's process table and the thread states of that process, its parents,
-# and its children (an adapter's core hook runs as a child), once per process.
-# Process metadata only: it never opens a file the isolated run uses, so it
-# cannot add a handle to the stall it records. Each CIM query has a 15-second
-# timeout and a snapshot stops collecting after $BudgetSeconds (marked
-# truncated), so a slow provider cannot hold the caller's wait loop for long.
+# ways hooks enter the dispatcher) has run $AfterMinutes, record its process
+# tree (its isolated-account parents and all its children; an adapter's core
+# hook runs as a child) with those processes' thread states, once per process.
+# Ownership is checked only for the stalled processes and their parents, so a
+# degraded CIM provider costs a handful of queries. Every query is capped at
+# what is left of $BudgetSeconds; a query that is skipped, fails, or times out
+# marks the snapshot truncated, and a stalled process whose owner cannot be
+# told is still recorded, under ownerUnknown. Process metadata only: it never
+# opens a file the isolated run uses, so it cannot add a handle to the stall
+# it records.
 function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10, [int]$BudgetSeconds = 60) {
     $now = [DateTime]::UtcNow
     $budget = $now.AddSeconds($BudgetSeconds)
+    $remaining = { [int][Math]::Min(15, [Math]::Floor(($budget - [DateTime]::UtcNow).TotalSeconds)) }
     $truncated = $false
-    $processes = @(Get-CimInstance Win32_Process -OperationTimeoutSec 15)
+    $processes = @(Get-CimInstance Win32_Process -OperationTimeoutSec ([Math]::Max(1, (& $remaining))))
     $candidates = @($processes | Where-Object {
         $null -ne $_.CommandLine -and ($_.CommandLine.Contains('engine hook ') -or $_.CommandLine.Contains('engine adapter ')) -and
         $null -ne $_.CreationDate -and
@@ -921,30 +925,52 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
         -not $Seen.ContainsKey(('{0}@{1}' -f $_.ProcessId, $_.CreationDate.Ticks))
     })
     if ($candidates.Count -eq 0) { return }
-    $owned = [Collections.Generic.List[object]]::new()
-    foreach ($process in $processes) {
-        if ([DateTime]::UtcNow -ge $budget) { $truncated = $true; break }
-        try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec 15 -ErrorAction Stop }
-        catch { continue }
-        if ($owner.ReturnValue -eq 0 -and $owner.Sid -in $OwnerSids) { $owned.Add($process) }
-    }
     $byId = @{}
-    foreach ($process in $owned) { $byId[[string]$process.ProcessId] = $process }
-    $stalled = @($candidates | Where-Object { $byId.ContainsKey([string]$_.ProcessId) })
+    foreach ($process in $processes) { $byId[[string]$process.ProcessId] = $process }
+    # $true or $false once known; $null when the budget is spent or the query fails.
+    $ownerOf = @{}
+    $isOwned = {
+        param($process)
+        $key = [string]$process.ProcessId
+        if (-not $ownerOf.ContainsKey($key)) {
+            $seconds = & $remaining
+            if ($seconds -lt 1) { return $null }
+            try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -OperationTimeoutSec $seconds -ErrorAction Stop }
+            catch { return $null }
+            $ownerOf[$key] = ($owner.ReturnValue -eq 0 -and $owner.Sid -in $OwnerSids)
+        }
+        return $ownerOf[$key]
+    }
+    $stalled = [Collections.Generic.List[object]]::new()
+    $ownerUnknown = [Collections.Generic.List[int]]::new()
+    foreach ($candidate in $candidates) {
+        $owned = & $isOwned $candidate
+        if ($null -eq $owned) { $truncated = $true; $ownerUnknown.Add([int]$candidate.ProcessId); $stalled.Add($candidate) }
+        elseif ($owned) { $stalled.Add($candidate) }
+    }
     if ($stalled.Count -eq 0) { return }
     $traced = [Collections.Generic.List[string]]::new()
     foreach ($process in $stalled) {
-        $cursor = $process
+        if (-not $traced.Contains([string]$process.ProcessId)) { $traced.Add([string]$process.ProcessId) }
+        $cursor = $byId[[string]$process.ParentProcessId]
         while ($null -ne $cursor -and -not $traced.Contains([string]$cursor.ProcessId)) {
+            $owned = & $isOwned $cursor
+            if ($null -eq $owned) { $truncated = $true; break }
+            if (-not $owned) { break }
             $traced.Add([string]$cursor.ProcessId)
             $cursor = $byId[[string]$cursor.ParentProcessId]
         }
     }
+    # Children of a recorded process run as its account; a reused parent id is
+    # told apart by creation time.
     $pending = [Collections.Generic.Queue[string]]::new()
     foreach ($process in $stalled) { $pending.Enqueue([string]$process.ProcessId) }
     while ($pending.Count -gt 0) {
-        $parent = $pending.Dequeue()
-        foreach ($child in @($owned | Where-Object { [string]$_.ParentProcessId -eq $parent })) {
+        $parent = $byId[$pending.Dequeue()]
+        if ($null -eq $parent -or $null -eq $parent.CreationDate) { continue }
+        foreach ($child in @($processes | Where-Object {
+            [string]$_.ParentProcessId -eq [string]$parent.ProcessId -and $null -ne $_.CreationDate -and $_.CreationDate -ge $parent.CreationDate
+        })) {
             if (-not $traced.Contains([string]$child.ProcessId)) {
                 $traced.Add([string]$child.ProcessId)
                 $pending.Enqueue([string]$child.ProcessId)
@@ -953,10 +979,11 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
     }
     $threads = [Collections.Generic.List[object]]::new()
     foreach ($id in $traced) {
-        if ([DateTime]::UtcNow -ge $budget) { $truncated = $true; break }
+        $seconds = & $remaining
+        if ($seconds -lt 1) { $truncated = $true; break }
         $processThreads = @()
-        try { $processThreads = @(Get-CimInstance Win32_Thread -Filter ("ProcessHandle = '{0}'" -f $id) -OperationTimeoutSec 15 -ErrorAction Stop) }
-        catch { continue }
+        try { $processThreads = @(Get-CimInstance Win32_Thread -Filter ("ProcessHandle = '{0}'" -f $id) -OperationTimeoutSec $seconds -ErrorAction Stop) }
+        catch { $truncated = $true; continue }
         foreach ($thread in $processThreads) {
             $threads.Add([ordered]@{
                 processId = [int]$id; threadId = [int]$thread.Handle
@@ -970,7 +997,8 @@ function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]
         afterMinutes = $AfterMinutes
         truncated = $truncated
         stalled = @($stalled | ForEach-Object { [int]$_.ProcessId })
-        processes = @($owned | ForEach-Object {
+        ownerUnknown = @($ownerUnknown)
+        processes = @($traced | ForEach-Object { $byId[$_] } | Where-Object { $null -ne $_ } | ForEach-Object {
             [ordered]@{
                 processId = [int]$_.ProcessId; parentProcessId = [int]$_.ParentProcessId
                 name = $_.Name; commandLine = $_.CommandLine

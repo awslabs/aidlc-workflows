@@ -1755,11 +1755,14 @@ scheduled task runs, the runner-side wait loop in
 minute. When a process owned by the isolated account with `engine hook ` or
 `engine adapter ` in its command line has run 10 minutes, it writes one
 `hook-stall-<time>.json` to
-`tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with that account's
-process table and the thread states of the stalled process, its parents and
-its children, once per process. It reads process metadata only, gives each
-query 15 seconds and each snapshot 60 seconds (a cut-short snapshot says
-`truncated`), and never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
+`tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with the stalled
+process's tree (its isolated-account parents and all its children) and their
+thread states, once per process. It reads process metadata only and checks
+ownership only for the stalled process and its parents. Every query is capped
+at what is left of a 60-second snapshot budget (15 seconds at most); a query
+that is skipped, fails or times out marks the snapshot `truncated`, and a
+stalled process whose owner could not be checked is still recorded, under
+`ownerUnknown`. It never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
 Linux and macOS legs turn neither on.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
