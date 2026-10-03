@@ -143,7 +143,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `nativeReplacements` (optional) — exact `{ from, to }` text the release
   channel swaps in before its generic invocation rewrite, for projected content
   whose copy-channel spelling has no mechanical native form (kiro-ide's persona
-  shell deny). The packager errors when a `from` is absent from the projection.
+  shell deny). The packager errors when a `from` is absent from the projection,
+  and its projected-invocation check skips the `to` text, which is generated
+  from the route table.
 - `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
   The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
   references AND to the compiled stage-graph rule paths (it sets

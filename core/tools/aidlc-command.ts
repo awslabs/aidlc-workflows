@@ -365,7 +365,7 @@ export function namespaceInvocationResolves(
   }
   const grouped = namespaceRoutes.filter((route) => route.group === noun);
   if (grouped.length === 0) return false;
-  if (!verb || verb === "*") return true;
+  if (!verb) return true;
   if (verb.startsWith("<") || verb.startsWith("$")) return true;
   if (verb.startsWith("--")) {
     return grouped.some((route) => route.kind === "routing-only");

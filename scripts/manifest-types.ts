@@ -203,7 +203,9 @@ export type HarnessManifest = {
   /**
    * Exact text the native release swaps in before its generic invocation
    * rewrite, for projected content whose copy-channel spelling has no
-   * mechanical native form. Each `from` must occur in the native projection.
+   * mechanical native form. Each `from` must occur in the native projection;
+   * the `to` text is skipped by the projected-invocation check, so it must be
+   * generated from the route table rather than written as prose.
    * Example: kiro-ide's persona shell deny, whose copy-channel rule is keyed on
    * `bun .kiro/tools/…` and whose native rule on the `aidlc engine` routes.
    */

@@ -447,6 +447,7 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-state.ts unit complete --stage code-generation --unit u1",
         ],
         foreign: "bun .kiro/tools/aidlc-log.ts link --stage x && rm -rf docs",
+        hostOnly: ["bun .kiro/tools/aidlc-sensor-linter.ts --stage code-generation"],
         allowed: [
           "bun .kiro/tools/aidlc-utility.ts project-description",
           "bun .kiro/tools/aidlc-utility.ts codekb-snapshot --unit u1",
@@ -457,6 +458,9 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-state.ts lookup phase-of code-generation",
           "bun .kiro/tools/aidlc-jump.ts resolve --to code-generation",
           "bun .kiro/tools/aidlc-utility.ts intent list --json",
+          "bun .kiro/tools/aidlc-utility.ts intent",
+          "bun .kiro/tools/aidlc-utility.ts intent --json",
+          "bun .kiro/tools/aidlc-utility.ts space help",
         ],
       },
       {
@@ -483,16 +487,25 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine state unit pause --stage code-generation --unit u1",
         ],
         foreign: "aidlc engine log link --stage x && rm -rf docs",
+        hostOnly: [
+          "aidlc engine hook record-human-turn",
+          "aidlc engine adapter kiro-ide record-human-turn",
+          "aidlc engine statusline",
+          "aidlc engine sensor-linter --stage code-generation",
+        ],
         allowed: [
           "aidlc engine workspace project-description",
           "aidlc engine config get depth",
           "aidlc engine worktree merge u1",
           "aidlc engine state lookup phase-of code-generation",
           "aidlc engine intent list",
+          "aidlc engine intent",
+          "aidlc engine intent --json",
+          "aidlc engine space -h",
         ],
       },
     ];
-    for (const { tree, allow, refused, foreign, allowed } of channels) {
+    for (const { tree, allow, refused, foreign, hostOnly, allowed } of channels) {
       for (const command of refused) expect(delegatedLifecycleCommand(command), command).not.toBeNull();
       for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
       const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
@@ -501,6 +514,9 @@ describe("t148 dist/kiro file structure", () => {
         const rule = ruleOf(join(agents, file));
         expect(rule.match, `${tree} ${file}`).toEqual([allow]);
         for (const command of refused) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
+        // Host-only routing surfaces (hooks, the adapter, sensors) stay denied
+        // though no lifecycle rule names them.
+        for (const command of hostOnly) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
         // An allowed command with a foreign command appended still asks.
         expect(runsUnprompted(rule, allow, foreign), `${tree} ${file}: ${foreign}`).toBe(false);
         for (const command of allowed) {

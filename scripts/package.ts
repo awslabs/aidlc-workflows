@@ -1333,6 +1333,14 @@ function rewriteNativeInvocations(
   }
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 
+  // A manifest's nativeReplacements text is generated from the route table
+  // (permission globs, not invocations), so the prose check skips it; its
+  // lines stay as blank lines so reported line numbers still match the file.
+  const withoutNativeReplacements = (value: string): string =>
+    (m.nativeReplacements ?? []).reduce(
+      (text, { to }) => text.replaceAll(to, to.replace(/[^\n]/g, "")),
+      value,
+    );
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
@@ -1352,7 +1360,7 @@ function rewriteNativeInvocations(
       leftovers.push(`${relative(outRoot, file)}: retired engine alias survived native projection`);
     }
     leftovers.push(
-      ...projectedNamespaceInvocationViolations(relative(outRoot, file), value),
+      ...projectedNamespaceInvocationViolations(relative(outRoot, file), withoutNativeReplacements(value)),
     );
     if (
       relative(outRoot, file).split(sep).join("/").includes("/agents/") &&
