@@ -9031,10 +9031,12 @@ const OTHER_UNITS_KEPT =
 // The Redo answer to the resume menu while a solo unit-major walk is on a
 // Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
 // starts a new attempt for every Unit's finished steps, so once any Unit has
-// finished work Redo stays with the Unit the walk is on (#1411). On a work or
-// pause stop it resets nothing: that Unit's step is still open (a paused one is
-// resumed), so next routes it again. On a summary or checkpoint stop it
-// reopens that Unit's step.
+// finished work Redo stays with the Unit the walk is on (#1411): it reopens
+// that Unit's step, as a jump back to it does, so the Unit does the step again
+// from a new attempt instead of continuing where it stopped (its build progress
+// and Plan Approval do not carry over). The step is the one the Unit is on or
+// paused at, the summary's step, or at a checkpoint the last step the Unit did.
+// A step the Unit has not started has nothing to reset, so next routes it.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
@@ -9053,33 +9055,34 @@ function unitMajorRedo(
   const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
     ? `\`${aidlcToolInvocation("state")} unpark\`, then `
     : "";
-  // At a summary or checkpoint stop the Unit's step is done, so the redo
-  // reopens it for that Unit, as a jump back to it does: the summary's step,
-  // or at the checkpoint the last step the Unit did.
-  if (step.kind === "checkpoint" || step.kind === "summary") {
-    const blockSlugs = walk.block.map((stage) => stage.slug);
-    const redone = step.kind === "summary"
-      ? step.stage.slug
-      : [...walk.block].reverse()
-        .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(step.unit))?.slug ??
-        blockSlugs[blockSlugs.length - 1];
-    const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
-      `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${step.unit} --via redo --scope ${scope}`;
-    return `Redo accepted at "${redone}" for unit "${step.unit}". ${only} step is redone: run ` +
-      `${unpark}\`${reopen}\`, then re-run \`next\` and do "${redone}" for unit "${step.unit}" again from the start. ` +
+  const blockSlugs = walk.block.map((stage) => stage.slug);
+  const unit = step.kind === "paused" ? step.checkpoint.unit : step.unit;
+  const redone = step.kind === "paused"
+    ? step.stage
+    : step.kind === "checkpoint"
+      ? [...walk.block].reverse()
+        .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(unit))?.slug ??
+        blockSlugs[blockSlugs.length - 1]
+      : step.stage.slug;
+  if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
+    return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
+      `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
       OTHER_UNITS_KEPT;
   }
-  const [stage, unit] = step.kind === "paused"
-    ? [step.stage, step.checkpoint.unit]
-    : [step.stage.slug, step.unit];
-  // Redo is the person's go-ahead for a paused step too, so it is resumed
-  // here instead of asking them again.
-  const resume = step.kind === "paused"
-    ? `\`${aidlcToolInvocation("state")} unit resume --stage ${stage} --unit ${unit}\`, then `
-    : "";
-  return `Redo accepted at "${stage}" for unit "${unit}". ${only} step is redone: ` +
-    `${unpark || resume ? `run ${unpark}${resume}` : ""}re-run \`next\` and do "${stage}" for unit "${unit}" again from the start. ` +
-    OTHER_UNITS_KEPT;
+  const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
+    `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${unit} --via redo --scope ${scope}`;
+  // Code Generation is redone plan included, so a new plan is approved again
+  // unless plan approval is off.
+  const name = walk.block.find((stage) => stage.slug === redone)?.name || redone;
+  const line = redone !== "code-generation"
+    ? `Redoing ${name} for unit ${unit} from the start.`
+    : `Redoing ${name} for unit ${unit} from the start, plan included.` +
+      (resolvePlanApprovalSetting(projectDir, stateContent).value === "off"
+        ? ""
+        : " Its new plan comes back to you for approval.");
+  return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: run ` +
+    `${unpark}\`${reopen}\`, then tell the person in one line: "${line}" Then re-run \`next\` and do "${redone}" ` +
+    `for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
 }
 
 // Whether the person's Redo on the resume menu answered the re-use question for
@@ -9220,7 +9223,8 @@ function unitMajorReopen(
     }
     reopened = [named];
   } else if (flags.everyUnit) {
-    reopened = units.filter(reached);
+    // Every unit includes one that is on the target step now: it starts it again.
+    reopened = units.filter((unit) => reached(unit) || open.get(unit)?.stage === targetSlug);
     if (reopened.length === 0) {
       return {
         kind: "print",

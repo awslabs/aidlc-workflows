@@ -19,6 +19,9 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  codeGenerationRecordDir, renderTestingContract, resolveTestingPosture,
+} from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts,
@@ -120,6 +123,7 @@ function next(p: string) {
     construction_checkpoint?: { kind: string; unit: string; human_required: boolean; verification_command: string | null; command_authorized: boolean };
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
     artifact_reuse?: { decision: string; unit: string };
+    ask_type?: string; narration?: string; plan_approval?: { status?: string; feedback?: string };
   };
 }
 
@@ -1668,31 +1672,126 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(approved(p, "alpha")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unit-major Redo on a live or paused step in a parked workflow unparks first, and resumes a paused step", () => {
-    for (const paused of [false, true]) {
-      const p = betaBuilding();
-      expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
-      if (paused) {
-        expect(tool(p, "state", [
-          "unit", "pause", "--stage", "code-generation", "--unit", "beta",
-          "--reason", "waiting for the API key", "--next-action", "Wire the client.",
-        ]).status).toBe(0);
-      }
-      expect(tool(p, "orchestrate", ["park"]).status).toBe(0);
-      expect(next(p).kind).toBe("parked");
-      const message = redo(p);
-      expect(message).toMatch(/step is redone: run `[^`]*aidlc-state\.ts unpark`, then /);
-      // Redo is the person's go-ahead for a paused step too: it is resumed
-      // with no second question.
-      if (paused) expect(message).toContain("aidlc-state.ts unit resume --stage code-generation --unit beta`");
-      expect(message).not.toContain("when it asks");
-      for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
-        const ran = tool(p, name, rest.split(" "));
-        expect(ran.status, ran.out).toBe(0);
-      }
-      expect(next(p), String(paused)).toMatchObject({ stage: "code-generation", unit: "beta" });
-      expect(jumped(p)).toBe(0);
+  // A person-driven hook call: the human-turn hook, or the plan-approval guard.
+  function hookCall(p: string, args: string[], payload: object) {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const result = spawnSync(process.execPath, args, {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: p, env,
+      input: JSON.stringify({ session_id: "t342-plan", cwd: p, ...payload }),
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    return result.stdout ?? "";
+  }
+
+  // beta's Code Generation as #1586 resumes it: beta started the step, the
+  // person approved its plan, the build started (the approval receipt is in
+  // generation), and steps 1 and 2 were built and ticked before it stopped.
+  function startedBuild(p: string) {
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const dir = codeGenerationRecordDir(p, "beta");
+    const planFile = join(dir, "code-generation-plan.md");
+    mkdirSync(dir, { recursive: true });
+    const steps = [1, 2, 3, 4].map((n) => `Step ${n}: build part ${n} in \`src/part${n}.ts\``);
+    writeFileSync(planFile,
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: four parts\n- Touches: src/\n- Tests: 4 unit tests\n\n" +
+      `## Steps\n\n${steps.map((step) => `- [ ] ${step}`).join("\n")}\n\n${renderTestingContract(resolveTestingPosture(p))}`);
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n");
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+    expect(hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      hook_event_name: "UserPromptSubmit", prompt: "approve",
+    })).toContain("Approve Plan");
+    expect(next(p).plan_approval).toEqual({ status: "approved" });
+    const brief = tool(p, "testing-posture", ["brief", "--unit", "beta"]);
+    expect(brief.status, brief.out).toBe(0);
+    hookCall(p, [join(AIDLC_SRC, "hooks/aidlc-plan-approval-guard.ts")], {
+      hook_event_name: "PreToolUse", tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief.stdout },
+    });
+    let plan = readFileSync(planFile, "utf-8");
+    for (const n of [1, 2]) {
+      writeFileSync(join(p, "src", `part${n}.ts`), `export const part${n} = ${n};\n`);
+      plan = plan.replace(`- [ ] Step ${n}: `, `- [x] Step ${n}: `);
     }
+    writeFileSync(planFile, plan);
+    const resumed = next(p);
+    expect(resumed.plan_approval).toEqual({ status: "approved" });
+    expect(resumed.narration).toBe("Picking up beta's code at step 3 of 4 (1-2 done).");
+  }
+
+  // beta does its Code Generation again from the start: its plan is redone and
+  // comes back for approval, and the old build is not picked up.
+  function redoneFromStart(p: string, label: string) {
+    const beat = next(p);
+    expect(beat, label).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "beta" });
+    expect(beat.plan_approval?.status, label).not.toBe("approved");
+    expect(beat.narration ?? "", label).not.toContain("Picking up");
+    return beat;
+  }
+
+  // Redo on a step beta started (live or paused) starts it again from a new
+  // attempt, so its build progress and Plan Approval do not carry over.
+  test("unit-major Redo on a started or paused step redoes it for that unit, plan included, unparking first", () => {
+    for (const parked of [false, true]) {
+      for (const paused of [false, true]) {
+        const label = `parked=${parked} paused=${paused}`;
+        const p = betaBuilding();
+        startedBuild(p);
+        if (paused) {
+          expect(tool(p, "state", [
+            "unit", "pause", "--stage", "code-generation", "--unit", "beta",
+            "--reason", "waiting for the API key", "--next-action", "Wire the client.",
+          ]).status).toBe(0);
+        }
+        if (parked) {
+          expect(tool(p, "orchestrate", ["park"]).status).toBe(0);
+          expect(next(p).kind).toBe("parked");
+        }
+        const alphaFloor = latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha");
+        const message = redo(p);
+        expect(message, label).toMatch(new RegExp(
+          `step is redone: run ${parked ? "`[^`]*aidlc-state\\.ts unpark`, then " : ""}` +
+            "`[^`]*aidlc-jump\\.ts reopen --target code-generation --stages code-generation --units beta --via redo --scope feature`",
+        ));
+        expect(message).toContain(
+          'tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included. ' +
+            'Its new plan comes back to you for approval."',
+        );
+        expect(message).not.toContain("unit resume");
+        for (const [, name, rest] of message.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+          const ran = tool(p, name, rest.split(" "));
+          expect(ran.status, ran.out).toBe(0);
+        }
+        expect(redoneFromStart(p, label).artifact_reuse).toEqual({ decision: "redo", unit: "beta" });
+        expect(latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha")).toBe(alphaFloor);
+        expect(jumped(p)).toBe(0);
+        expect(approved(p, "alpha")).toBe(true);
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("with plan approval off, Redo of Code Generation names no plan approval", () => {
+    const p = betaBuilding();
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Change Control**: strict\n", "- **Change Control**: strict\n- **Plan Approval**: off (set by you)\n"));
+    const message = redo(p);
+    expect(message).toContain('tell the person in one line: "Redoing Code Generation for unit beta from the start, plan included."');
+    expect(message).not.toContain("comes back to you for approval");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("'for every unit' at the step beta is on reopens it for beta too, and beta does it from the start", () => {
+    const p = betaBuilding();
+    startedBuild(p);
+    const said = reopenFor(p, ["--stage", "code-generation", "--every-unit"]);
+    expect(said).toContain("reopen --target code-generation --stages code-generation --units alpha,beta ");
+    expect(said).toContain('"Reopened Code Generation for units alpha and beta."');
+    expect(unitCompletedReceipts(p, "code-generation").has("alpha")).toBe(false);
+    expect(jumped(p)).toBe(0);
+    // alpha redoes its step and its checkpoint first, then beta starts its own over.
+    cover(p, "alpha", ["code-generation"]);
+    approve(p, "alpha");
+    redoneFromStart(p, "every unit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major Redo before any Unit has finished work keeps the stage redo", () => {
