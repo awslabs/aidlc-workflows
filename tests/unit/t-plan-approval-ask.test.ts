@@ -385,6 +385,31 @@ describe("the engine asks for Plan Approval", () => {
 
   // Under autonomous Construction the person's stop still wins: nothing starts
   // building until they resume (#1411). t121 pins that Stop ends the turn.
+  // The person's stop is theirs only while someone is there: an unattended
+  // run's answer with --park still approves, and the run keeps moving.
+  test("an unattended run's Approve Plan with --park approves but never parks an autonomous run", () => {
+    const proj = project();
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "## Current Status", "## Current Status\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    askFor(proj);
+    reply(proj, "approve, and let's stop there for today");
+    const result = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Approve Plan", "--park", "--project-dir", proj,
+    ], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "1" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain('Recorded \\"Approve Plan\\"');
+    expect(result.stdout).toContain("could not be parked");
+    expect(readFileSync(file, "utf-8")).not.toContain("- **Parked**:");
+  });
+
   test("an approval that asks to stop parks an autonomous run too", () => {
     const proj = project();
     const file = seededStateFile(proj);
@@ -476,6 +501,35 @@ describe("the engine asks for Plan Approval", () => {
     const again = next(proj);
     expect(again.kind).toBe("ask");
     expect(again.plan_approval.note).toBeUndefined();
+  });
+
+  // The agent may word the picker its own way: the pick counts by the choices
+  // it offers, not by the question's wording. Several picks, or a picker that
+  // offers none of the plan's choices, answer some other question.
+  test("a picker the agent worded differently still answers the plan question by its choices", () => {
+    const proj = project();
+    askFor(proj);
+    const pick = (question: string, options: string[], chosen: string, multiSelect = false) => {
+      const asked = [{ question, header: "Plan", multiSelect, options: options.map((label) => ({ label, description: "" })) }];
+      const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+          tool_input: { questions: asked },
+          tool_response: { questions: asked, answers: { [question]: chosen } },
+        }),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(result.status, result.stderr).toBe(0);
+    };
+    pick("Ready to build?", ["Yes", "No"], "Yes");
+    pick("Which of these?", ["Approve Plan", "Request Changes"], "Approve Plan, Request Changes", true);
+    expect(answer(proj, "Approve Plan").message).toContain("has not replied to the plan question");
+    pick("Shall I build this plan for slugify?", ["Approve Plan (Recommended)", "Request Changes", "I'll edit the files"],
+      "Approve Plan (Recommended)");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
   // Codex answers through its request_user_input picker, which adds a

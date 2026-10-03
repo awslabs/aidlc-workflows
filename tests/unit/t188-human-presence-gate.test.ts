@@ -505,6 +505,42 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
   });
 
+  // One owner for every caller: with AIDLC_UNATTENDED=1 an autonomous run
+  // never parks itself, whatever the caller passes, so nobody is left to
+  // resume it.
+  test("an unattended autonomous run never parks through park, report --park, or the Plan Approval answer's park", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    recordHumanTurn(proj);
+    // 1. `state park`.
+    const park = guarded(proj, ["park"], true);
+    expect(park.rc).not.toBe(0);
+    expect(park.out).toContain("AIDLC_UNATTENDED=1 is set");
+    // 2. `orchestrate report --park` at a gate the person answered.
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const env = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const report = spawnSync(BUN, [
+      ORCHESTRATE, "report", "--stage", slug, "--result", "approved", "--user-input", "Approve", "--park",
+      "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(`${report.stdout}`).not.toContain('"kind":"parked"');
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // 3. The Plan Approval answer's park passes attended: true; the owner still refuses.
+    const inProcess = spawnSync(BUN, ["-e", `
+      const { parkWorkflow } = await import(${JSON.stringify(STATE)});
+      try { parkWorkflow(${JSON.stringify(proj)}, { attended: true }); console.log("parked"); }
+      catch (e) { console.log("refused: " + (e instanceof Error ? e.message : String(e))); }
+    `], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(`${inProcess.stdout}${inProcess.stderr}`).not.toContain("parked\n");
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+  });
+
   test("an approval that names no choice records nothing, even after the person replied", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);

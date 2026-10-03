@@ -69,7 +69,7 @@ import {
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
-import { exactOptionPick, isNonAnswer } from "./aidlc-reply-reader.ts";
+import { exactOptionPick, isNonAnswer, stripRecommendedDecorator } from "./aidlc-reply-reader.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
@@ -1124,6 +1124,17 @@ function requestChangesFor(
 const ASK_REPLIES_MAX = 8;
 const ASK_REPLY_MAX_CHARS = 8000;
 
+// A picker answers this question when it offers at least one of the
+// question's own choices ("(Recommended)" stripped), however the agent worded
+// the question; several picks, or a picker offering none of them, answer some
+// other question. A picker that names no options is matched by its question.
+function pickerAsksThisQuestion(picker: PlanApprovalPickerQuestion, record: PlanApprovalAskRecord): boolean {
+  if (picker.severalPicks) return false;
+  if (!picker.options?.length) return picker.question?.trim() === record.question;
+  const own = record.choices.map((choice) => choice.toLowerCase());
+  return picker.options.some((label) => own.includes(stripRecommendedDecorator(label).trim().toLowerCase()));
+}
+
 /**
  * The human-turn hook's part while the engine's Plan Approval question is
  * open: keep the person's message. True when the question owns the reply; false
@@ -1145,7 +1156,7 @@ export function notePlanApprovalAskReply(
     const answeredAll = record.mode === "ask" &&
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
-    if (picker && (picker.severalPicks || picker.question?.trim() !== record.question)) return false;
+    if (picker && !pickerAsksThisQuestion(picker, record)) return false;
     const reply = text.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [

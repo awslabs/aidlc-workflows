@@ -2074,11 +2074,16 @@ function handlePark(_args: string[]): void {
 
 export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
   const initialContent = readStateFile(pd);
-  if (
-    opts.attended !== true &&
-    getField(initialContent, "Construction Autonomy Mode")?.trim() ===
-      "autonomous"
-  ) {
+  const autonomous = getField(initialContent, "Construction Autonomy Mode")?.trim() === "autonomous";
+  // One owner for every caller: an unattended run has nobody to resume it, so
+  // it never parks itself under the autonomous grant, whatever the caller says.
+  if (autonomous && !humanTurnMintAllowed()) {
+    error(
+      "Refusing to park: AIDLC_UNATTENDED=1 is set and Construction Autonomy Mode is autonomous, so nobody is " +
+        "here to resume the run; it keeps moving.",
+    );
+  }
+  if (opts.attended !== true && autonomous) {
     error(
       "Refusing to park: Construction Autonomy Mode is autonomous and no reply from the person is on record " +
         "since the last decision, so the run keeps moving. When the person asks to stop, park then: their " +

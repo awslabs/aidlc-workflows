@@ -500,6 +500,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       /does not run the lowering setter/,
       /exact command for you to type/,
       /until you type the lowering switch/,
+      /does not lower from chat on its own/,
+      /a person must type the exact policy switch/,
+      /a plain-chat request for strict/,
     ];
     const roots = ["core/aidlc-common", "core/tools", "core/hooks", "core/agents", "core/knowledge", "core/templates", "docs", "harness"];
     const found: string[] = [];
