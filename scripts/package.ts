@@ -67,7 +67,7 @@ import {
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
-import { forgetPackagedSources, recordPackagedSources } from "./package-sources.ts";
+import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
@@ -1837,6 +1837,7 @@ if (check) {
       `for ${targets.join(", ")}.`,
   );
 } else {
+  const builtFrom = packageInputsFingerprint(REPO_ROOT);
   forgetPackagedSources(REPO_ROOT, targets);
   cleanWriteOutputs(targets, named === undefined);
   for (const n of targets) {
@@ -1847,6 +1848,10 @@ if (check) {
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
-  // Last, so only a finished build is recorded as current.
-  recordPackagedSources(REPO_ROOT, targets);
+  // Last, so only a finished build from unchanged sources is recorded as current.
+  if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {
+    console.error(
+      "[sources] core/, harness/ or plugins/ changed while packaging: run `bun scripts/package.ts` again before the coverage generator.",
+    );
+  }
 }

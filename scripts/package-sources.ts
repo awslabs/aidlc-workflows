@@ -8,9 +8,10 @@ import { join, relative } from "node:path";
 /** Written by `bun scripts/package.ts` after each build, beside the harness trees. */
 export const PACKAGE_SOURCES_FILE = join("dist", ".package-sources.json");
 
-// Everything the packager reads: the authored trees and its own modules.
-// Plugin tests are never packaged, so editing one leaves dist/ current.
-const INPUT_DIRS = ["core", "harness", "plugins"];
+// Everything the packager reads: the authored trees, the plugin hook template
+// it ships, and its own modules. Plugin tests are never packaged, so editing
+// one leaves dist/ current.
+const INPUT_DIRS = ["core", "harness", "plugins", "scripts/plugin-hooks-template"];
 const INPUT_FILES = [
   "scripts/package.ts",
   "scripts/manifest-types.ts",
@@ -74,12 +75,18 @@ export function forgetPackagedSources(repoRoot: string, harnesses: string[]): vo
   writeRecord(repoRoot, record);
 }
 
-/** After a build: these harness trees now hold the current sources; other harnesses keep their entries. */
-export function recordPackagedSources(repoRoot: string, harnesses: string[]): void {
-  const fingerprint = packageInputsFingerprint(repoRoot);
+/**
+ * After a build from `builtFrom` (the fingerprint taken before it started):
+ * these harness trees hold those sources; other harnesses keep their entries.
+ * If an input changed while the build ran, the trees may hold a mix, so they
+ * stay unrecorded and this returns false.
+ */
+export function recordPackagedSources(repoRoot: string, harnesses: string[], builtFrom: string): boolean {
+  if (packageInputsFingerprint(repoRoot) !== builtFrom) return false;
   const record = readRecord(repoRoot);
-  for (const harness of harnesses) record[harness] = fingerprint;
+  for (const harness of harnesses) record[harness] = builtFrom;
   writeRecord(repoRoot, record);
+  return true;
 }
 
 /** Null when dist/<harness> was packaged from the working tree's sources; otherwise the one line to show. */

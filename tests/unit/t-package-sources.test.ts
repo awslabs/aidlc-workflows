@@ -30,6 +30,7 @@ function checkout(): string {
     ["plugins/demo/stages/s.md", "# s\n"],
     ["plugins/demo/tests/t.test.ts", "// a plugin test\n"],
     ["scripts/package.ts", "// packager\n"],
+    ["scripts/plugin-hooks-template/compose.ts", "// compose\n"],
   ] as const) {
     mkdirSync(join(root, path, ".."), { recursive: true });
     writeFileSync(join(root, path), body);
@@ -53,6 +54,7 @@ describe("the packaged-sources fingerprint", () => {
     ["harness/claude/manifest.ts"],
     ["plugins/demo/stages/s.md"],
     ["scripts/package.ts"],
+    ["scripts/plugin-hooks-template/compose.ts"],
   ])("covers %s", (path) => {
     const root = checkout();
     const before = packageInputsFingerprint(root);
@@ -84,7 +86,7 @@ describe("the packaged-sources record", () => {
 
   test("a recorded tree is current until a packaged input changes", () => {
     const root = checkout();
-    recordPackagedSources(root, ["claude", "kiro"]);
+    recordPackagedSources(root, ["claude", "kiro"], packageInputsFingerprint(root));
     expect(stalePackageMessage(root, "claude")).toBeNull();
     writeFileSync(join(root, "core/tools/example.ts"), "export const x = 2;\n");
     expect(stalePackageMessage(root, "claude")).toBe(
@@ -94,17 +96,27 @@ describe("the packaged-sources record", () => {
 
   test("a one-harness build updates its own entry and keeps the others", () => {
     const root = checkout();
-    recordPackagedSources(root, ["claude", "kiro"]);
+    recordPackagedSources(root, ["claude", "kiro"], packageInputsFingerprint(root));
     writeFileSync(join(root, "core/tools/example.ts"), "export const x = 2;\n");
-    recordPackagedSources(root, ["kiro"]);
+    recordPackagedSources(root, ["kiro"], packageInputsFingerprint(root));
     expect(stalePackageMessage(root, "kiro")).toBeNull();
     expect(stalePackageMessage(root, "claude")).toContain("was packaged from other");
     expect(Object.keys(JSON.parse(readFileSync(join(root, PACKAGE_SOURCES_FILE), "utf8")).harnesses)).toEqual(["claude", "kiro"]);
   });
 
+  test("a source edited while the build runs leaves its trees unrecorded, and says so to the caller", () => {
+    const root = checkout();
+    recordPackagedSources(root, ["claude"], packageInputsFingerprint(root));
+    const builtFrom = packageInputsFingerprint(root);
+    forgetPackagedSources(root, ["claude"]);
+    writeFileSync(join(root, "core/tools/example.ts"), "export const x = 2;\n");
+    expect(recordPackagedSources(root, ["claude"], builtFrom)).toBe(false);
+    expect(stalePackageMessage(root, "claude")).toContain("has no record");
+  });
+
   test("a build that stops halfway leaves its trees unrecorded, never current", () => {
     const root = checkout();
-    recordPackagedSources(root, ["claude", "kiro"]);
+    recordPackagedSources(root, ["claude", "kiro"], packageInputsFingerprint(root));
     forgetPackagedSources(root, ["claude"]);
     expect(stalePackageMessage(root, "claude")).toContain("has no record");
     expect(stalePackageMessage(root, "kiro")).toBeNull();
@@ -117,7 +129,7 @@ describe("the packaged-sources record", () => {
 describe("the coverage generator on a stale dist/", () => {
   test("refuses in one line naming the command, before it reads or writes anything", () => {
     const root = checkout();
-    recordPackagedSources(root, ["claude"]);
+    recordPackagedSources(root, ["claude"], packageInputsFingerprint(root));
     writeFileSync(join(root, "core/tools/example.ts"), "export const x = 2;\n");
     const registry = join(root, "registry.json");
     writeFileSync(registry, "committed\n");
