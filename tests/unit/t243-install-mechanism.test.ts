@@ -1246,6 +1246,11 @@ describe("t243 project initialization", () => {
       ["wrong shape", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), files: "none" }, null, 2)}\n`);
       }, "files is not a map of hashes"],
+      ["schema missing", (path) => {
+        const value = JSON.parse(readFileSync(path, "utf-8"));
+        delete value.schemaVersion;
+        writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+      }, "unsupported schema undefined"],
       ["contribution missing its entries", (path) => {
         const value = JSON.parse(readFileSync(path, "utf-8"));
         value.rootContributions["AGENTS.md"] = { policy: "json-map" };
@@ -1376,6 +1381,12 @@ describe("t243 project initialization", () => {
     expect(refused.stdout).toContain(
       "installed kiro has an ownership baseline from a newer AI-DLC release (.kiro/tools/data/aidlc-manifest.json: unsupported schema 2); run the switch with that release",
     );
+    expect(transactionSourceHash(project)).toBe(before);
+    const quiet = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--quiet",
+    ], project);
+    expect(quiet.status).toBe(4);
+    expect(quiet.stdout.trim()).toBe("update AI-DLC to the release that wrote this baseline, then run the switch again");
     expect(transactionSourceHash(project)).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

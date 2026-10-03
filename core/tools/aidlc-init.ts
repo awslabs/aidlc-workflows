@@ -3574,13 +3574,15 @@ function unownedHookFiles(
 }
 
 // A switch refusal names the config run that gets past it: a refresh of the
-// installed row, the switch with --harness, or this run without --dry-run. The
+// installed row, the switch with --harness, this run without --dry-run, or
+// (for a newer release's baseline) the update that comes first. The
 // handler renders it with this invocation's command form and project target,
 // so every output mode prints it.
 type SwitchRemedy =
   | { kind: "refresh"; harness: string }
   | { kind: "switch"; harness: string }
-  | { kind: "apply" };
+  | { kind: "apply" }
+  | { kind: "update" };
 
 class SwitchRefusal extends Error {
   constructor(message: string, readonly remedy: SwitchRemedy) {
@@ -3685,11 +3687,14 @@ function assertSwitchBaseline(
     problem = (error instanceof Error ? error.message : String(error)).replace(`cannot refresh from ${path}: `, "");
   }
   if (problem === null) return;
-  // A schema this release does not know is a newer release's record, not
-  // damage: it is kept, and the switch is left to that release.
-  if (/^unsupported schema /.test(problem)) {
-    throw new Error(
+  // A whole schema number above this release's is a newer release's record,
+  // not damage: it is kept, and the switch is left to that release. Any other
+  // schema value is damage like the rest.
+  const newer = /^unsupported schema (\d+)$/.exec(problem);
+  if (newer && Number(newer[1]) > 1) {
+    throw new SwitchRefusal(
       `${lead} has an ownership baseline from a newer AI-DLC release (${rel}: ${problem}); run the switch with that release`,
+      { kind: "update" },
     );
   }
   if (dryRun) {
@@ -9292,6 +9297,8 @@ export async function main(
         : error instanceof SwitchRefusal
         ? error.remedy.kind === "apply"
           ? configRerunWith(input.filter((arg) => arg !== "--dry-run"), projectDir, [])
+          : error.remedy.kind === "update"
+          ? "update AI-DLC to the release that wrote this baseline, then run the switch again"
           : `${configInvocationFor(projectDir)} config ${
             error.remedy.kind === "switch" && from ? `--from ${quoteCommandArgument(from)} ` : ""
           }--harness ${error.remedy.harness}${projectTarget(projectDir)}`
