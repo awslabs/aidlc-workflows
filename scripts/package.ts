@@ -1851,7 +1851,8 @@ if (check) {
   // Last, so only a finished build from unchanged sources is recorded as current.
   if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {
     console.error(
-      "[sources] core/, harness/ or plugins/ changed while packaging: run `bun scripts/package.ts` again before the coverage generator.",
+      "[sources] core/, harness/ or plugins/ changed while packaging, so dist/ may mix old and new files: run `bun scripts/package.ts` again.",
     );
+    process.exit(1);
   }
 }

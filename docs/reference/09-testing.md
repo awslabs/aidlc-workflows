@@ -568,8 +568,8 @@ tree was packaged from other `core/`, `harness/` or `plugins/` content than the
 checkout, both commands refuse with one line: run `bun scripts/package.ts`
 first. `package.ts` records a content fingerprint of its inputs per harness in
 `dist/.package-sources.json` (`scripts/package-sources.ts`), so undoing an edit
-needs no rebuild. A build during which an input changed is not recorded, and
-says so. Temp trees from the generator's `AIDLC_COVERAGE_*` seams have
+needs no rebuild. A build during which an input changed is not recorded and
+fails, saying to run it again. Temp trees from the generator's `AIDLC_COVERAGE_*` seams have
 no `core/` and are not checked.
 
 `tests/.coverage-registry.json` is the authoritative, machine-checked index —
