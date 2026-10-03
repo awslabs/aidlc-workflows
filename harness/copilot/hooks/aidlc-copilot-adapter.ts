@@ -517,8 +517,9 @@ export async function run(
   // "terminal": a simple AI-DLC command that is not claimed as coordination
   // (a read-only `next` form or another AI-DLC project command). "attempt": a
   // new call that already carries the attempt flag AI-DLC adds itself.
+  // "unsupported" may carry the refusal that names what was not accepted.
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" | "attempt" }
+    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" | "attempt"; reason?: string }
     | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
 
   // Doctor also checks the machine and may refresh the update cache over the
@@ -787,6 +788,15 @@ export async function run(
     return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
   }
 
+  // Each refusal says what was not accepted and the form to run instead; the
+  // agent's own words are repeated only when they are plain text.
+  const PROJECT_DIR_EMPTY = "`--project-dir` needs this project's folder after it, so this did not run. Name the folder, or run the command without `--project-dir`.";
+  const PROJECT_DIR_MISSING = "The folder after `--project-dir` does not exist, so this did not run. Name this project's folder, or run the command without `--project-dir`.";
+  function noScript(direct: boolean): string {
+    const script = direct ? ".aidlc/tools/aidlc-orchestrate.ts" : ".aidlc/tools/aidlc.ts";
+    return `This project has no \`${script}\`, so this did not run. Run the same command with \`${direct ? "aidlc engine orchestrate" : "aidlc"}\` in place of \`bun ${script}\`.`;
+  }
+
   function orchestrationCommand(command: unknown = nativeToolInput?.command, lead = ""): ParsedOrchestration {
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
     // After a cd to the project, only a command claimed or vouched for alone
@@ -813,8 +823,9 @@ export async function run(
         directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
         toolPrefix = !directPrefix && ownToolScript(resolved) !== null;
       } catch {
-        if (resolve(projectDir, terminalPath(script)) === resolve(directPath) || resolve(projectDir, terminalPath(script)) === resolve(dispatcherPath)) {
-          return { status: "unsupported" };
+        const typed = resolve(projectDir, terminalPath(script));
+        if (typed === resolve(directPath) || typed === resolve(dispatcherPath)) {
+          return existsSync(typed) ? { status: "unsupported" } : { status: "unsupported", reason: noScript(typed === resolve(directPath)) };
         }
       }
     } else if (prefixFirst === "aidlc") {
@@ -859,6 +870,10 @@ export async function run(
     // classification works on the bare verb either way, and the route table
     // reads the orchestrator's other verbs under that prefix.
     const routedOrchestrate = !viaDispatcher || (args[0] === "engine" && args[1] === "orchestrate");
+    // The form a refusal names, started the way the agent started the command.
+    const start = !(first === "bun" || first === process.execPath) ? "aidlc"
+      : viaDispatcher ? "bun .aidlc/tools/aidlc.ts" : "bun .aidlc/tools/aidlc-orchestrate.ts";
+    const form = (verb: string) => `${start}${viaDispatcher && routedOrchestrate ? " engine orchestrate" : ""} ${verb}`;
     if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
@@ -873,11 +888,11 @@ export async function run(
       }
       if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
       const routed = args[++i];
-      if (!routed) return { status: "unsupported" };
+      if (!routed) return { status: "unsupported", reason: PROJECT_DIR_EMPTY };
       // Either drive spelling names this project: VS Code hooks see `c:\`,
       // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
-      catch { return { status: "unsupported" }; }
+      catch { return { status: "unsupported", reason: PROJECT_DIR_MISSING }; }
     }
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) {
@@ -898,7 +913,13 @@ export async function run(
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
-    if ((commandKind === "continue" && subArgs.length > 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
+    if (commandKind === "continue" && subArgs.length > 1) {
+      return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("continue <receipt>")}\` with that receipt.` };
+    }
+    if (commandKind === "park" && subArgs.length !== 0) {
+      const extra = /^[A-Za-z0-9_.:=+-]+$/.test(subArgs[0]) ? `, and this one has \`${subArgs[0]}\`` : "";
+      return { status: "unsupported", reason: `\`park\` takes no options${extra}, so it did not run. Run \`${form("park")}\`.` };
+    }
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
@@ -1788,7 +1809,7 @@ export async function run(
           return 0;
         }
         if (command.status === "unsupported") {
-          process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
+          process.stdout.write(denyJson(command.reason ?? "Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
           return 0;
         }
         if (command.status === "attempt") {
