@@ -94,6 +94,7 @@ import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -2245,7 +2246,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(f2) solo unit-major keeps Current Stage authority and the legacy drop message", () => {
+  test("(f2) solo unit-major keeps Current Stage authority and the legacy trace message", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
       currentSlug: "requirements-analysis",
@@ -2265,18 +2266,14 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     );
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
-    const drops = readFileSync(
-      join(
-        seededRecordDir(proj),
-        ".aidlc-engine/hooks-health",
-        "continue-workflow.drops",
-      ),
-      "utf-8",
-    );
-    expect(drops).toContain(
+    // A normal decision is trace, never a drop doctor would count.
+    const healthDir = join(seededRecordDir(proj), ".aidlc-engine/hooks-health");
+    const trace = readFileSync(join(healthDir, "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain(
       "current stage requirements-analysis has an unanswered logged decision; allowing the stop (pending-decision carve-out)",
     );
-    expect(drops).not.toContain("active stage code-generation");
+    expect(trace).not.toContain("active stage code-generation");
+    expect(existsSync(join(healthDir, "continue-workflow.drops"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(f2) solo cross-shard ties retain legacy filename/position ordering", () => {

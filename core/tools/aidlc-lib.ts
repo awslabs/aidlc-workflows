@@ -32929,6 +32929,36 @@ export function recordHookDrop(
   }
 }
 
+// A hook's normal decision worth keeping for a later look (the Stop hook
+// letting a turn end because the person has to answer first, or clearing a
+// stale marker) is not a failure, so it goes to `<hook>.trace` beside the drops,
+// in the same line format, and doctor does not count it. Kept to its newer half
+// once it passes HOOK_TRACE_MAX_BYTES, because nothing tells anyone to delete it.
+const HOOK_TRACE_MAX_BYTES = 64 * 1024;
+
+export function recordHookTrace(
+  projectDir: string,
+  hookName: string,
+  reason: string,
+  intent?: string,
+  space?: string,
+): void {
+  try {
+    const healthDir = hooksHealthDir(projectDir, intent, space);
+    mkdirSync(healthDir, { recursive: true });
+    const traceFile = join(healthDir, `${hookName}.trace`);
+    const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
+    if (existsSync(traceFile) && statSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
+      const lines = readFileSync(traceFile, "utf-8").split("\n").filter((entry) => entry.length > 0);
+      writeFileSync(traceFile, `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n${line}`, "utf-8");
+      return;
+    }
+    appendFileSync(traceFile, line, "utf-8");
+  } catch {
+    // Trace is a convenience; a hook never fails over it.
+  }
+}
+
 // --- Hook debug log ---
 //
 // Append a structured debug line to `<health>/hook-debug.log` so a hook's
