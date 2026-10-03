@@ -38,15 +38,20 @@ export interface StoredQuestion {
   text: string;
   proposedScope: string;
   origin: QuestionOrigin;
-  /** For a routing question: the items its continue and reshape routes may act on. */
-  askedAbout?: { space: string; targets: QuestionTarget[] };
+  /**
+   * For a routing question: the items its continue and reshape routes may act
+   * on. `pick` marks one asked while no work was selected, whose continue and
+   * reshape need the person to pick one of `targets`.
+   */
+  askedAbout?: QuestionAskedAbout;
   /** The person asked for new work (`next --new-intent`), so its answer starts it. */
   newWork?: true;
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
   /**
    * For a routing question shown about an active workflow: that workflow's
-   * state digest when it was asked. A reply that only names one of its options
+   * state digest when it was asked; asked while none was selected, the digest
+   * of the records it offered. A reply that only names one of its options
    * answers it while that work has not moved.
    */
   stateSha256?: string;
@@ -63,6 +68,12 @@ export interface StoredQuestion {
    */
   approvedRequest?: string;
   createdAt: string;
+}
+
+export interface QuestionAskedAbout {
+  space: string;
+  targets: QuestionTarget[];
+  pick?: true;
 }
 
 export interface QuestionSettings {
@@ -123,7 +134,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.askedAbout === undefined ||
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
-        isTargetList(question.askedAbout.targets))) &&
+        isTargetList(question.askedAbout.targets) &&
+        (question.askedAbout.pick === undefined || question.askedAbout.pick === true))) &&
     (question.newWork === undefined || question.newWork === true) &&
     (question.stateSha256 === undefined ||
       (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256))) &&
@@ -330,7 +342,7 @@ export function saveQuestion(
   text: string,
   proposedScope: string,
   origin: QuestionOrigin = "front",
-  askedAbout?: { space: string; targets: QuestionTarget[] },
+  askedAbout?: QuestionAskedAbout,
   newWork = false,
   composedFrom?: string,
   stateSha256?: string,
