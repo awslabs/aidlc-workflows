@@ -134,6 +134,7 @@ import {
   unitOpenCheckpoints,
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
+  attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
   boltSlugForUnit,
@@ -8730,29 +8731,30 @@ function unitMajorRedo(
 
 // Whether the person's Redo on the resume menu answered the re-use question for
 // this Unit's step (`jump reopen --via redo` records it). The answer is spent
-// once the Unit starts the step, and a later reopen or jump asks again.
+// once the Unit starts the step, and a later reopen or jump asks again. Rows are
+// read in the audit's time order across shards, and an answer whose order
+// against another shard's row in the same second is not known is not used.
 function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): boolean {
-  let chosen = false;
-  for (const row of readAuditShardEvents(projectDir)) {
-    const rowUnit = auditBlockField(row.block, "Unit");
-    if (row.event === "ARTIFACT_REUSED") {
-      if (
-        auditBlockField(row.block, "Stage") === slug && rowUnit === unit &&
-        auditBlockField(row.block, "Decision") === "redo" &&
-        auditBlockField(row.block, "Source") === "Redo on the resume menu"
-      ) chosen = true;
-      continue;
-    }
-    if (!chosen) continue;
-    if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") chosen = false;
-    else if (row.event === "UNIT_STARTED" && rowUnit === unit && auditBlockField(row.block, "Stage") === slug) chosen = false;
-    else if (row.event === "GATE_REJECTED" && rowUnit === unit) {
-      const gated = (auditBlockField(row.block, "Gate Stages") ?? auditBlockField(row.block, "Stage") ?? "")
-        .split(",").map((entry) => entry.trim());
-      if (gated.includes(slug)) chosen = false;
-    }
+  const isAnswer = (row: AuditShardEvent): boolean =>
+    row.event === "ARTIFACT_REUSED" &&
+    auditBlockField(row.block, "Stage") === slug && auditBlockField(row.block, "Unit") === unit &&
+    auditBlockField(row.block, "Decision") === "redo" &&
+    auditBlockField(row.block, "Source") === "Redo on the resume menu";
+  const spends = (row: AuditShardEvent): boolean => {
+    if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") return true;
+    if (auditBlockField(row.block, "Unit") !== unit) return false;
+    if (row.event === "UNIT_STARTED") return auditBlockField(row.block, "Stage") === slug;
+    if (row.event !== "GATE_REJECTED") return false;
+    return (auditBlockField(row.block, "Gate Stages") ?? auditBlockField(row.block, "Stage") ?? "")
+      .split(",").map((entry) => entry.trim()).includes(slug);
+  };
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) => isAnswer(row) || spends(row)));
+  let chosen = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (isAnswer(rows[i])) chosen = i;
+    else if (chosen !== -1) chosen = -1;
   }
-  return chosen;
+  return chosen !== -1 && !attemptEventIsCrossShardTied(rows, chosen);
 }
 
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
@@ -8963,9 +8965,12 @@ function unitMajorForwardJump(
     );
   }
   if (said.length === 0) return "";
+  // The jump back that reopens what was skipped starts at the earliest skipped step.
+  const earliestSkipped = walk.block
+    .find((stage) => [...skipped.values()].some((steps) => steps.includes(stage.slug)))?.slug ?? currentSlug;
   return ` ${said.join(" ")} After the jump, tell the person in one line what was ` +
     (skipped.size > 0
-      ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${currentSlug}\` reopens it.`
+      ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${earliestSkipped}\` reopens it.`
       : "started over.");
 }
 

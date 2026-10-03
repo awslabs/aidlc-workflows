@@ -1070,7 +1070,9 @@ When a stage detects existing output artifacts in its artifact directory:
 
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
 fields, optional `Repo`, and isolated `Workflow` when `--single` is used —
-never hand-write `**Event**:` markdown blocks.
+never hand-write `**Event**:` markdown blocks. (`aidlc-jump.ts reopen --via redo`
+also emits it, with `Unit` and `Source`, when the person chose Redo on the
+resume menu; that is the `artifact_reuse` answer above.)
 For a reviewer-backed stage, Keep and Modify retain the engine-owned findings
 list and every human decision. Redo from scratch starts a fresh list for that
 stage scope, resets numbering to `R-01`, and inherits no earlier decision.
