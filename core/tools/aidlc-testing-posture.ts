@@ -64,6 +64,7 @@ import {
   recordGuardStoodAside,
   renderChangedPaths,
   governedChangeControl,
+  intentRepos,
   resolveBoltDag,
   resolveBoltIdentity,
   resolveAuditWorktreePath,
@@ -95,6 +96,7 @@ import {
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
   writeBufferAtomic,
+  writeRecordFileNoFollow,
   writePlanApprovalChallenge,
   writePlanApprovalLegacyRecoveryResponse,
   writePlanApprovalOverrideRequest,
@@ -193,11 +195,25 @@ export interface CodeGenerationApproval {
   executionFailure?: string;
   /** The current receipt is a human break-glass override (content and attempt only). */
   override?: true;
+  /**
+   * The receipt recorded for this plan question was written by plan approval
+   * off (built without asking), not by a person's answer.
+   */
+  skipped?: true;
 }
 
 export interface CodeGenerationTarget {
   unit: string | null;
 }
+
+/**
+ * The Code Generation directive `next` is about to issue: a run-stage for one
+ * Unit (or none), or an invoke-swarm for a group. While `next` routes it, this
+ * directive, not the one it replaces, names the plan(s) being asked about.
+ */
+export type CodeGenerationIssuance =
+  | { kind: "run-stage"; unit?: string }
+  | { kind: "invoke-swarm"; units: string[] };
 
 export interface CodeGenerationAuthority extends CodeGenerationTarget {
   targetId: string;
@@ -1354,7 +1370,9 @@ export function approvalFingerprint(
 // permits the current content, labelled as current and recorded as a stand-aside.
 // The brief is produced here, so no conductor reads the plan
 // file into a prompt itself. The worker's own progress marks live in the plan
-// file it ticks as it works, not in the brief.
+// file it ticks as it works, not in the approved plan the brief carries; a
+// build picked up after an interruption gets them in a separate progress
+// section (see "Picking up an interrupted build" below).
 
 export interface WorkerBrief {
   unit: string | null;
@@ -1377,6 +1395,7 @@ export function workerBrief(
   projectDir: string,
   target: CodeGenerationTarget,
 ): WorkerBrief {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
   if ((!approval.ok && !continuation) ||
@@ -1413,9 +1432,11 @@ export function workerBrief(
   const marker = target.unit
     ? `AIDLC-UNIT: ${target.unit}`
     : "AIDLC-STAGE: code-generation";
+  const resume = continuation ? null : codeGenerationResume(projectDir, target, { plan, approval });
   const brief =
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
+    (resume ? progressSection(resume) : "") +
     (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
     `${projectedPlan}\n` +
     (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +
@@ -1429,6 +1450,271 @@ export function workerBrief(
       changeNotices: [recordCodeGenerationContinuation(projectDir, continuation, "brief")],
     } : {}),
   };
+}
+
+// --- Picking up an interrupted build ----------------------------------------------
+//
+// The worker ticks the plan file as it finishes each step, but the brief hands
+// it the approved plan, where every step reads unticked. So a build cut off part
+// way (a provider error, the editor closed, a crash before the report) was run
+// again from step 1 by the next worker. When the brief is for a build that
+// already started under the approval that is current now, the plan file's ticks
+// are that build's progress, and the brief says so: which steps are ticked,
+// which of those name files that are no longer there (those are redone), and
+// the step to continue at. The person hears one line saying the same.
+//
+// "Started under the approval that is current now" is the receipt the approval
+// check validates, at status `generation`. Its key binds the target, the stage
+// attempt (the run floor, which a Redo or a rejected gate moves) and the
+// fingerprint of the approved content (which an edit changes), and every new
+// approval writes a fresh receipt at status `approved`. So a new attempt, a
+// re-approval, and an edited plan (a lowered-fence continuation is not a current
+// approval) all start the steps fresh. And when a build starts fresh (generation
+// start moves a receipt from `approved` to `generation`), the engine clears the
+// plan file's ticks, so ticks left from before a Redo, a rejected gate, or a
+// re-approval never count as this build's progress. A resume finds the receipt
+// already at `generation` and clears nothing. A swarm keeps its own
+// continuation rule: its batches run under an invoke-swarm directive and its
+// worktrees hold delegated receipts, and neither is read or cleared here.
+//
+// This is a hint for the worker and a line for the person, never evidence: no
+// gate, review, or receipt reads it, and ticks stay outside the fingerprint.
+//
+// The engine checks only the files a step names in code spans that read as
+// paths (`src/auth/login.ts`, `src/generated/`, `package.json`). An identifier,
+// a command, a route, or a glob is not a file it can check, so the brief also
+// asks the worker to check the files of every ticked step it skips.
+
+export interface PlanStep {
+  /** The step's own line, without its list marker and task box. */
+  text: string;
+  ticked: boolean;
+  /** Paths the step (its line and the lines indented under it) names in code spans. */
+  paths: string[];
+}
+
+export interface CodeGenerationResume {
+  steps: PlanStep[];
+  /** 1-based numbers of the ticked steps. */
+  ticked: number[];
+  /** Ticked steps with named files missing on disk, which are redone. */
+  redo: Array<{ step: number; missing: string[] }>;
+  /** The first unticked step, or null when every step is ticked. */
+  next: number | null;
+}
+
+const PLAN_TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX-])\](?=[ \t]|$)/;
+// A bare file name the engine treats as a path: a common source or configuration
+// extension. With a directory in it, any extension (or a trailing slash) will do.
+const NAMED_FILE_RE =
+  /^[\w.-]+\.(?:[cm]?[jt]sx?|json|ya?ml|toml|md|py|java|kts?|go|rs|rb|cs|php|swift|sql|sh|ps1|html|css|scss|vue|svelte|tf|xml|gradle|lock)$/i;
+
+function namedPaths(text: string): string[] {
+  const paths: string[] = [];
+  for (const [, span] of text.matchAll(/`([^`\n]+)`/g)) {
+    const path = span.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!/^[\w.@/-]+$/.test(path) || path.startsWith("/") || path.split("/").includes("..")) continue;
+    const named = path.includes("/")
+      ? path.endsWith("/") || /\.[A-Za-z]\w*$/.test(path.slice(path.lastIndexOf("/") + 1))
+      : NAMED_FILE_RE.test(path);
+    if (named) paths.push(path);
+  }
+  return paths;
+}
+
+/**
+ * The plan's steps in order: each task line outside fences and comments that is
+ * not indented under another step. A nested task, and any other line indented
+ * under a step, belongs to that step.
+ */
+export function planSteps(plan: string): PlanStep[] {
+  const body = contentBeforeTerminalReviewAppendix(plan.replace(/^\uFEFF/, ""));
+  const steps: PlanStep[] = [];
+  let open = -1;
+  for (const line of visibleMarkdownLines(body, { preserveIndentedCode: true })) {
+    if (line.trim().length === 0) continue;
+    const indent = (/^[ \t]*/.exec(line)?.[0] ?? "").replace(/\t/g, "    ").length;
+    if (open >= 0 && indent > open) {
+      steps[steps.length - 1].paths.push(...namedPaths(line));
+      continue;
+    }
+    const task = PLAN_TASK_LINE_RE.exec(line);
+    open = task ? indent : -1;
+    if (!task) continue;
+    const text = line.slice(task[0].length).trim();
+    steps.push({ text, ticked: task[1] === "x" || task[1] === "X", paths: namedPaths(text) });
+  }
+  return steps;
+}
+
+/**
+ * Where an interrupted build of this target stands, or null when there is
+ * nothing to pick up: the build has not started under the current approval, the
+ * active directive is a swarm batch, or nothing is ticked.
+ */
+export function codeGenerationResume(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  known: { plan?: string; approval?: CodeGenerationApproval } = {},
+): CodeGenerationResume | null {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    if (readActiveDirectiveMarker(projectDir, state)?.kind === "invoke-swarm") return null;
+    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    const questionsPath = join(authority.stageDir, "code-generation-questions.md");
+    const fingerprint = existsSync(questionsPath)
+      ? questionsFileApprovalFingerprint(readFileSync(questionsPath, "utf-8")) : null;
+    const receipt = fingerprint
+      ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint })
+      : null;
+    if (receipt?.status !== "generation" || receipt.delegation !== undefined) return null;
+    const approval = known.approval ?? evaluateCodeGenerationApproval(projectDir, target);
+    if (!approval.ok || approval.approvalFingerprint !== fingerprint) return null;
+    const steps = planSteps(known.plan ?? readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"));
+    const ticked = steps.flatMap((step, index) => step.ticked ? [index + 1] : []);
+    if (ticked.length === 0) return null;
+    // A multi-repo intent's plan may name paths inside a repository, and a step
+    // may name one of this stage's own record files.
+    const roots = [projectDir, ...intentRepos(projectDir).map((repo) => join(projectDir, repo)), authority.stageDir];
+    const redo = ticked.flatMap((step) => {
+      const missing = steps[step - 1].paths.filter((path) => !roots.some((root) => existsSync(join(root, path))));
+      return missing.length > 0 ? [{ step, missing }] : [];
+    });
+    const next = steps.findIndex((step) => !step.ticked);
+    return { steps, ticked, redo, next: next < 0 ? null : next + 1 };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The plan with every task marker the approval projection resets (`[x]`, `[X]`,
+ * `[-]` on a step outside fences and comments, before a terminal review
+ * appendix) set back to `[ ]`, and every other byte as it was. Returns the plan
+ * unchanged unless its approval projection is provably the same afterwards, so
+ * clearing ticks can never change what was approved.
+ */
+export function resetPlanTaskMarkers(plan: string): string {
+  const bom = plan.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const text = plan.slice(bom.length);
+  const body = contentBeforeTerminalReviewAppendix(text);
+  const visible = visibleMarkdownLines(body, { preserveIndentedCode: true });
+  // Lines at even indices, their own line endings between them.
+  const parts = body.split(/(\r\n|\r|\n)/);
+  visible.forEach((line, index) => {
+    if (PLAN_TASK_MARKER_RE.test(line) && PLAN_TASK_MARKER_RE.test(parts[index * 2] ?? "")) {
+      parts[index * 2] = parts[index * 2].replace(PLAN_TASK_MARKER_RE, "$1[ ]");
+    }
+  });
+  const reset = `${bom}${parts.join("")}${text.slice(body.length)}`;
+  return projectPlanApprovalContent(reset) === projectPlanApprovalContent(plan) ? reset : plan;
+}
+
+function underSwarmDirective(projectDir: string): boolean {
+  try {
+    const state = readFileSync(stateFilePath(projectDir), "utf-8");
+    return readActiveDirectiveMarker(projectDir, state)?.kind === "invoke-swarm";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clear a plan file's old ticks before a fresh build is marked started, so a
+ * crash at any point leaves either no start or no stale ticks. Throws when the
+ * plan has ticks and they cannot be cleared: the start then fails and is
+ * retried, instead of resuming steps the person asked to redo. The write goes
+ * through no symlinked folder under the project. A plan with no ticks is left
+ * alone and never fails the start.
+ */
+export function clearPlanFileTicks(projectDir: string, stageDir: string): void {
+  const path = join(stageDir, "code-generation-plan.md");
+  if (!existsSync(path)) return;
+  const raw = readRegularFileNoFollowOrThrow(path, "code-generation-plan.md");
+  const plan = raw.toString("utf-8");
+  const roundTrips = Buffer.from(plan, "utf-8").equals(raw);
+  const reset = roundTrips ? resetPlanTaskMarkers(plan) : plan;
+  if (reset !== plan) {
+    writeRecordFileNoFollow(projectDir, relative(projectDir, path), reset);
+    return;
+  }
+  if (planSteps(plan).some((step) => step.ticked)) {
+    throw new Error(
+      "The old step ticks in code-generation-plan.md could not be cleared for this fresh build. " +
+        "Untick its steps, or retry the step.",
+    );
+  }
+}
+
+/** Step numbers as the person reads them: "1-4", "1-2, 4". */
+function stepRanges(numbers: number[]): string {
+  const ranges: string[] = [];
+  for (let start = 0; start < numbers.length;) {
+    let end = start;
+    while (end + 1 < numbers.length && numbers[end + 1] === numbers[end] + 1) end++;
+    ranges.push(end > start ? `${numbers[start]}-${numbers[end]}` : `${numbers[start]}`);
+    start = end + 1;
+  }
+  return ranges.join(", ");
+}
+
+// Before the approved plan, so the worker reads where it stands first. The
+// approved plan below it is unchanged.
+function progressSection(resume: CodeGenerationResume): string {
+  const total = resume.steps.length;
+  const lines = ["", "## Progress before the interruption", ""];
+  const unticked = "the approved plan below shows none ticked, because ticks are not part of the approval";
+  if (resume.next === null) {
+    lines.push(`This plan's build stopped part way. All ${total} steps are ticked in the plan file (${unticked}).`, "");
+  } else {
+    lines.push(
+      `This plan's build stopped part way. The plan file ticks ${resume.ticked.length} of its ${total} steps (${unticked}):`,
+      "",
+      ...resume.ticked.map((step) => `${step}. ${resume.steps[step - 1].text}`),
+      "",
+    );
+  }
+  // The plan runs in order: a ticked step before the resume point is redone
+  // first, one after it when the worker reaches it.
+  const files = (missing: string[]): string =>
+    `${missing.map((path) => `\`${path}\``).join(", ")} ${missing.length === 1 ? "is" : "are"} missing`;
+  const before = resume.redo.filter(({ step }) => resume.next === null || step < resume.next);
+  const after = resume.redo.filter(({ step }) => resume.next !== null && step > resume.next);
+  for (const { step, missing } of before) lines.push(`Redo step ${step}: ${files(missing)}.`);
+  if (resume.next !== null) {
+    lines.push(
+      `${before.length > 0 ? "Then continue" : "Continue"} at step ${resume.next} of ${total}: ` +
+        `"${resume.steps[resume.next - 1].text}".`,
+    );
+  }
+  for (const { step, missing } of after) {
+    lines.push(`Step ${step} is ticked, but ${files(missing)}: redo it when you reach it.`);
+  }
+  lines.push(
+    "Before you skip any other ticked step, check that the files it names exist; redo any ticked step whose files are missing." +
+      (resume.next === null ? " Nothing else in the plan is left to build." : ""),
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * The one line the person hears when an interrupted build is picked up, or null
+ * when there is nothing to pick up. Says where it picks up, what is done, and
+ * which steps are redone because their files are missing.
+ */
+export function codeGenerationResumeNarration(projectDir: string, unit: string | null): string | null {
+  const resume = codeGenerationResume(projectDir, { unit });
+  if (resume === null) return null;
+  const whose = unit === null ? "the code" : `${unit}'s code`;
+  const redone = resume.redo.map(({ step }) => step);
+  const redo = redone.length === 0
+    ? ""
+    : `redoing ${stepRanges(redone)}, ${redone.length === 1 ? "its" : "their"} files were missing`;
+  const total = resume.steps.length;
+  if (resume.next === null) {
+    return `Picking up ${whose}: all ${total} steps are done${redo ? `; ${redo}` : ", checking their files"}.`;
+  }
+  return `Picking up ${whose} at step ${resume.next} of ${total} (${stepRanges(resume.ticked)} done${redo ? `; ${redo}` : ""}).`;
 }
 
 function isPlanApprovalLabel(value: string): boolean {
@@ -1640,14 +1926,112 @@ export function codeGenerationTargetId(target: CodeGenerationTarget): string {
 export function resolveCodeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
-  return codeGenerationAuthority(projectDir, requestedTarget);
+  return codeGenerationAuthority(projectDir, requestedTarget, undefined, issued);
+}
+
+// The Code Generation directive the active one is, or stands in for.
+function activeCodeGenerationDirective(marker: ActiveDirectiveMarker): CodeGenerationIssuance {
+  if (marker.stage !== "code-generation") {
+    throw new Error(
+      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
+    );
+  }
+  // While the engine is asking for Plan Approval, the question is the active
+  // directive. It names the same targets the run-stage (one Unit, or none) or
+  // invoke-swarm (a group) it stands in for, so it carries the same authority.
+  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+  // A run-stage whose rules do not fit one message is issued as load-steering
+  // parts first, on a marker naming the same stage and Unit. Each part is that
+  // run-stage on its way, so an approval never depends on how many parts the
+  // rules needed.
+  const runStage = marker.kind === "run-stage" || marker.kind === "load-steering";
+  if (!runStage && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
+    throw new Error(
+      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
+    );
+  }
+  return runStage || (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length))
+    ? { kind: "run-stage", ...(marker.unit !== undefined ? { unit: marker.unit } : {}) }
+    : { kind: "invoke-swarm", units: marker.units ?? [] };
+}
+
+/**
+ * The Code Generation directive this marker is, or stands in for; null when it
+ * names no target an approval binds to. With `setAside`, a marker that no
+ * longer names one (a step set aside since it was issued keeps its stage and
+ * the Unit or Units it named) is read the same way a Plan Approval question
+ * is: its Unit, else its group, else the zero-Unit stage-level work.
+ */
+export function codeGenerationIssuance(
+  marker: ActiveDirectiveMarker,
+  setAside = false,
+): CodeGenerationIssuance | null {
+  try {
+    return activeCodeGenerationDirective(marker);
+  } catch {
+    if (!setAside || marker.stage !== CODE_GENERATION_STAGE) return null;
+    if (marker.unit !== undefined) return { kind: "run-stage", unit: marker.unit };
+    return marker.units?.length ? { kind: "invoke-swarm", units: marker.units } : { kind: "run-stage" };
+  }
+}
+
+/**
+ * How every command a Code Generation refusal names is to be run: as printed
+ * and alone. A `cd`, a pipe, or a second command around an admitted command
+ * makes the whole line a shell the plan-approval guard cannot read.
+ */
+export const AS_ITS_OWN_COMMAND =
+  "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
+
+// A rules part's receipt as the engine mints it: 8 base64url characters
+// (`steeringReceipt` in aidlc-orchestrate.ts).
+const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
+
+/**
+ * Why nothing is built yet while Code Generation's rules are still arriving.
+ * A rules part carries the approval of the run-stage it delivers, but that
+ * run-stage, which says how to build, has not reached the agent: the worker
+ * brief, generation start, and a worker dispatch wait for it. Names the exact
+ * command that fetches the next part, and the fresh `next` that starts the
+ * parts over for a caller (another chat, a worker) that never held the earlier
+ * ones. The run-stage may plan, build, or close a gate, so the line names the
+ * step only as the stage's own. Null when no rules part is in flight.
+ */
+export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker | null): string | null {
+  if (marker?.version !== 2 || marker.stage !== CODE_GENERATION_STAGE || marker.kind !== "load-steering") {
+    return null;
+  }
+  const engine = aidlcToolInvocation("orchestrate");
+  const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded). ` +
+    `Run each command named here ${AS_ITS_OWN_COMMAND}.`;
+  const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
+  // Only a receipt in the engine's own shape is put in a command; anything
+  // else on the marker gets the fresh `next`, which is always safe to run.
+  const receipt = marker.continue_token;
+  return receipt !== undefined && PART_RECEIPT_RE.test(receipt)
+    ? `${loaded} Run \`${engine} continue ${receipt}\` and ${after} ` +
+      `If you do not have the earlier parts, run \`${engine} next\` instead.`
+    : `${loaded} Run \`${engine} next\` and ${after}`;
+}
+
+function refuseWhileRulesArrive(projectDir: string): void {
+  let marker: ActiveDirectiveMarker | null;
+  try {
+    marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+  } catch {
+    return;
+  }
+  const reason = codeGenerationRulesArrivingReason(marker);
+  if (reason !== null) throw new Error(reason);
 }
 
 function codeGenerationAuthority(
   projectDir: string,
   requestedTarget: CodeGenerationTarget,
   batchPeers?: { units: string[]; markerSha256: string },
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationAuthority {
   const target = normalizeCodeGenerationTarget(requestedTarget);
   const statePath = stateFilePath(projectDir);
@@ -1668,31 +2052,21 @@ function codeGenerationAuthority(
     target.unit === null || !batchPeers.units.includes(target.unit))) {
     throw new Error("Plan Approval batch directive changed while checking its members");
   }
-  if (marker.stage !== "code-generation") {
-    throw new Error(
-      `Code Generation approval authority does not match active directive stage "${marker.stage}"`,
-    );
-  }
-  // While the engine is asking for Plan Approval, the question is the active
-  // directive. It names the same targets the run-stage (one Unit, or none) or
-  // invoke-swarm (a group) it stands in for, so it carries the same authority.
-  const planApprovalAsk = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
-  if (marker.kind !== "run-stage" && marker.kind !== "invoke-swarm" && !planApprovalAsk) {
-    throw new Error(
-      `Code Generation approval authority requires a run-stage or invoke-swarm directive, got "${marker.kind}"`,
-    );
-  }
-  const singleTarget = marker.kind === "run-stage" ||
-    (planApprovalAsk && (marker.unit !== undefined || !marker.units?.length));
+  // `next` asks whether a plan is approved while it routes the directive it is
+  // about to issue, before publishing it. The active directive is then whatever
+  // the engine said last (the question itself, a pause, a guard-recovery
+  // question, or one a compacted chat must re-read), and none of those decides
+  // which plan is current: the directive being issued does.
+  const scope = issued ?? activeCodeGenerationDirective(marker);
 
   if (target.unit === null) {
-    if (!singleTarget || marker.unit !== undefined) {
+    if (scope.kind !== "run-stage" || scope.unit !== undefined) {
       throw new Error(
         "Stage-level Code Generation approval requires a zero-Unit run-stage directive",
       );
     }
-  } else if (singleTarget) {
-    if (marker.unit !== target.unit && !batchPeers) {
+  } else if (scope.kind === "run-stage") {
+    if (scope.unit !== target.unit && !batchPeers) {
       // A settled swarm emits one run-stage target for the whole batch. Its
       // other members still need their parent authority during delegation and
       // checkpoint review; only a committed, current group can select them.
@@ -1710,7 +2084,7 @@ function codeGenerationAuthority(
       }) : null;
       if (!receipt?.batch?.members.some((member) => member.unit === target.unit)) {
         throw new Error(
-          `Code Generation approval target unit "${target.unit}" does not match active directive unit "${marker.unit ?? "(none)"}"`,
+          `Code Generation approval target unit "${target.unit}" does not match active directive unit "${scope.unit ?? "(none)"}"`,
         );
       }
       assertPlanApprovalBatchLifecycle(projectDir, receipt);
@@ -1720,7 +2094,7 @@ function codeGenerationAuthority(
     if (
       dag.state !== "ok" ||
       !dag.units.includes(target.unit) ||
-      (!marker.units?.includes(target.unit) && !batchPeers)
+      (!scope.units.includes(target.unit) && !batchPeers)
     ) {
       throw new Error(
         `Code Generation approval target unit "${target.unit}" is not in the active swarm directive and authoritative Unit DAG`,
@@ -1873,8 +2247,9 @@ interface CodeGenerationContinuation {
 function earlierPlanApproval(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
-  const authority = resolveCodeGenerationAuthority(projectDir, target);
+  const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
   const questions = readFileSync(questionsPath, "utf-8");
   const fingerprint = questionsFileApprovalFingerprint(questions);
@@ -1936,9 +2311,10 @@ function continuationContractProject(
 function codeGenerationContinuation(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationContinuation | null {
   try {
-    const earlier = earlierPlanApproval(projectDir, target);
+    const earlier = earlierPlanApproval(projectDir, target, issued);
     if (earlier === null) return null;
     const { authority, receipt } = earlier;
     const contractProject = continuationContractProject(projectDir, earlier);
@@ -1982,10 +2358,12 @@ export function codeGenerationPlanApprovalFence(
 export function codeGenerationExecutionAllowed(
   projectDir: string,
   target: CodeGenerationTarget,
-  approval = evaluateCodeGenerationApproval(projectDir, target),
+  approval?: CodeGenerationApproval,
+  issued?: CodeGenerationIssuance,
 ): boolean {
-  return !approval.executionFailure &&
-    (approval.ok || codeGenerationContinuation(projectDir, target) !== null);
+  const current = approval ?? evaluateCodeGenerationApproval(projectDir, target, issued);
+  return !current.executionFailure &&
+    (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
 }
 
 function recordCodeGenerationContinuation(
@@ -2699,6 +3077,10 @@ export function planApprovalReplyNotice(reading: PlanApprovalReplyReading): stri
       return "AIDLC Plan Approval: the human's reply did not clearly approve the plan or ask for changes, so " +
         'nothing was recorded. Ask one short follow-up, such as "Approve the plan as is (1), or change ' +
         'something (2)?", and end the turn.';
+    case "mixed":
+      return "AIDLC Plan Approval: the human approved the plan and asked for a change in the same reply, so " +
+        'nothing was recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and ' +
+        "end the turn.";
     case "unbound":
       return "AIDLC Plan Approval: that picker was not the recorded Plan Approval question, asked alone as a " +
         "single choice with only its two options, so nothing was recorded. Ask Plan Approval on its own as a " +
@@ -2840,7 +3222,9 @@ export function recordProtectedHumanResponse(
     const reply = readApprovalGateReply(responseText, { bound: picked || question.replied !== true });
     if (reply.choice !== "Approve" && reply.choice !== "Request Changes") {
       markProtectedQuestionReplied(projectDir, question);
-      const reading = reply.reading === "confirm" || reply.reading === "question" ? reply.reading : "unclear";
+      const reading = reply.reading === "confirm" || reply.reading === "question" || reply.reading === "mixed"
+        ? reply.reading
+        : "unclear";
       return {
         recorded: false,
         notice: `AIDLC ${PROTECTED_QUESTION_NAMES[question.kind]}: ` +
@@ -3836,6 +4220,7 @@ export function readCodeGenerationWorktreeSourceBaseline(childDir: string, unit:
 export function evaluateCodeGenerationApproval(
   projectDir: string,
   target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): CodeGenerationApproval {
   let normalizedUnit: string | null = null;
   const empty: CodeGenerationApproval = {
@@ -3856,7 +4241,7 @@ export function evaluateCodeGenerationApproval(
     const normalizedTarget = normalizeCodeGenerationTarget(target);
     normalizedUnit = normalizedTarget.unit;
     empty.unit = normalizedUnit;
-    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget);
+    const authority = resolveCodeGenerationAuthority(projectDir, normalizedTarget, issued);
     empty.directiveEpoch = authority.directiveEpoch;
     const questionsPath = join(authority.stageDir, "code-generation-questions.md");
     const recordedFingerprint = existsSync(questionsPath)
@@ -3864,6 +4249,7 @@ export function evaluateCodeGenerationApproval(
     const candidate = recordedFingerprint
       ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint })
       : null;
+    if (candidate?.skipped !== undefined) empty.skipped = true;
     // A worker executes the parent's approved contract, including for a sibling
     // repository that does not carry the workspace's methodology files.
     const contractProject = candidate?.delegation
@@ -4013,6 +4399,7 @@ export function evaluateCodeGenerationApproval(
       ok: true,
       reason: "approved",
       ...(receipt?.override !== undefined ? { override: true as const } : {}),
+      ...(receipt?.skipped !== undefined ? { skipped: true as const } : {}),
     };
   } catch (error) {
     return {
@@ -4025,6 +4412,7 @@ export function evaluateCodeGenerationApproval(
 
 /** Validate a target while the caller holds both generation authority locks. */
 function prepareCodeGenerationStart(projectDir: string, target: CodeGenerationTarget) {
+  refuseWhileRulesArrive(projectDir);
   const approval = evaluateCodeGenerationApproval(projectDir, target);
   if (approval.executionFailure) throw new Error(approval.executionFailure);
   const continuation = approval.ok ? null : codeGenerationContinuation(projectDir, target);
@@ -4146,13 +4534,21 @@ export function beginCodeGenerationBatch(
       if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
       const originals: PlanApprovalRuntimeReceipt[] = [];
       const notices: string[] = [];
+      const swarm = underSwarmDirective(projectDir);
       try {
         for (const target of selected) {
           // Files can change independently of the engine locks. Recheck the
           // target immediately before its publication as well as at preflight.
-          notices.push(...publishCodeGenerationStart(
-            projectDir, prepareCodeGenerationStart(projectDir, target), options, originals,
-          ));
+          const started = prepareCodeGenerationStart(projectDir, target);
+          // A fresh build (receipt approved, not yet generation) starts with its
+          // steps unticked, so the ticks a later resume reads are this build's
+          // own (see "Picking up an interrupted build"). They are cleared before
+          // the start is published. A swarm batch and a worktree delegation keep
+          // their own continuation rule.
+          if (started.receipt.status !== "generation" && started.receipt.delegation === undefined && !swarm) {
+            clearPlanFileTicks(projectDir, started.authority.stageDir);
+          }
+          notices.push(...publishCodeGenerationStart(projectDir, started, options, originals));
         }
         if (needsSource && workspaceSourceFingerprint(projectDir) !== sourceBefore) {
           throw new Error("Source files changed while code generation was starting. Retry the step.");

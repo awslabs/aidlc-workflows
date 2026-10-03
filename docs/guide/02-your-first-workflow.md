@@ -98,7 +98,9 @@ artifact, so the record only ever lists work that produced something.
 
 ### Stage 0.2: Workspace Detection
 
-A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield.
+A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield. AI-DLC's own files, such as the harness directory, `aidlc/`, and Cursor's root `install.ts`, never count as your code, so an empty folder stays greenfield.
+
+Your word wins over the scan. Start with `/aidlc --project-type brownfield "<what to build>"` (or `greenfield`) to say which it is, or say it in plain words at any point ("this is existing code, the frontend is in ui-repo"). AI-DLC scans the folder again, records the type as yours, and for existing code runs Reverse Engineering, then returns to the stage you were on; finished stages stay finished, and the reply names any that were done before the code was known so you can redo one. If the work started as a new project in an empty folder and the folder gains code before Construction, AI-DLC asks you once which it is. The choice holds for that piece of work only; the next piece of work scans the folder again.
 
 ### Stage 0.3: State Initialization
 

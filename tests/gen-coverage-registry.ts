@@ -20,11 +20,20 @@
 // it against the committed tests/.coverage-registry.json, and exits 1 with the
 // diff on any mismatch. Same shape as the proven stage-graph drift guard.
 //
-// THE RATCHET (tests/.coverage-ratchet.json). A committed per-class baseline of
-// how many units are covered RIGHT NOW (honest: most are UNCOVERED). `--check`
-// also fails if any class's covered-count DECREASES below its baseline without
-// a reviewed deferred entry — monotonic anti-regression. You can only ever
-// cover MORE; you cannot quietly drop a claim and stay green.
+// THE RATCHET. The committed registry is its own baseline: `--check` also
+// fails, naming each unit, when a unit the committed registry records as
+// covered is no longer covered by a fresh build: monotonic anti-regression.
+// You can only ever cover MORE; you cannot quietly drop a claim and stay green.
+// Dropping one needs a regenerated registry, where the unit visibly flips to
+// UNCOVERED in review.
+//
+// NO DERIVED TOTALS ARE COMMITTED. Per-class counts in the file change in every
+// PR that adds or covers a unit, so two queued PRs either conflict on them or,
+// when both change a count by the same amount, merge cleanly into a stale
+// file. The file holds only per-unit entries, each spanning several lines
+// whose unchanged identity lines keep neighbouring edits apart, so two PRs
+// that add or cover different units merge into exactly the regenerated file.
+// Totals are computed when printed.
 //
 // TWO ANTI-ROT GUARDS (mandatory, run inside --check and in the test):
 //   (a) NON-EMPTY enumeration per unit class. A broken enumerator that returns
@@ -35,7 +44,7 @@
 //       block. Catches a parser that silently stops seeing a tool.
 //
 // Run:
-//   bun tests/gen-coverage-registry.ts            # regenerate + write the 3 files
+//   bun tests/gen-coverage-registry.ts            # regenerate + write the registry
 //   bun tests/gen-coverage-registry.ts --check     # CI drift guard (exit 1 on drift)
 //   bun tests/gen-coverage-registry.ts --print      # regenerate to stdout, write nothing
 
@@ -59,11 +68,10 @@ const TESTS_DIR = __FILE_DIR;
 // ENV-VAR SEAMS (mirrors aidlc-graph.ts's AIDLC_EXPORT_FIXTURE pattern, :1172).
 // Tests point these at a temp tree to PROVE the ratchet: copy the shipped
 // source, inject a fake new audit event / subcommand, and run `--check` against
-// the temp roots + temp committed baselines without mutating real source.
+// the temp roots + a temp committed registry without mutating real source.
 //   AIDLC_COVERAGE_SRC_ROOT  — repo root containing dist/claude/ (source)
 //   AIDLC_COVERAGE_TESTS_DIR — dir containing the test tiers to scan for claims
-//   AIDLC_COVERAGE_REGISTRY  — committed .coverage-registry.json to diff against
-//   AIDLC_COVERAGE_RATCHET   — committed .coverage-ratchet.json to ratchet against
+//   AIDLC_COVERAGE_REGISTRY  : committed .coverage-registry.json to diff and ratchet against
 const REPO_ROOT = process.env.AIDLC_COVERAGE_SRC_ROOT ?? join(TESTS_DIR, "..");
 const CLAIMS_TESTS_DIR = process.env.AIDLC_COVERAGE_TESTS_DIR ?? TESTS_DIR;
 const TOOLS_DIR = join(
@@ -111,8 +119,6 @@ const UTILITY_PATH = join(TOOLS_DIR, "aidlc-utility.ts");
 
 const REGISTRY_PATH =
   process.env.AIDLC_COVERAGE_REGISTRY ?? join(TESTS_DIR, ".coverage-registry.json");
-const RATCHET_PATH =
-  process.env.AIDLC_COVERAGE_RATCHET ?? join(TESTS_DIR, ".coverage-ratchet.json");
 // tests/coverage-exclusions.json is reviewer-facing documentation of legit
 // L-CODE exclusions (import.meta.main shims, process.exit terminals, external-
 // binary spawn sites). This UNIT-surface generator does not read it — units are
@@ -1177,13 +1183,16 @@ export function buildRegistry(): BuildResult {
     };
   });
 
-  rows.sort(
+  return { rows: sortRegistryRows(rows), claims };
+}
+
+/** The registry's one row order: by unit class, then unit id. */
+export function sortRegistryRows(rows: RegistryRow[]): RegistryRow[] {
+  return rows.sort(
     (a, b) =>
       a.unitClass.localeCompare(b.unitClass) ||
       a.unitId.localeCompare(b.unitId),
   );
-
-  return { rows, claims };
 }
 
 // ===========================================================================
@@ -1191,55 +1200,38 @@ export function buildRegistry(): BuildResult {
 // ===========================================================================
 
 export function registryJson(rows: RegistryRow[]): string {
-  const byClass: Record<string, number> = {};
-  const coveredByClass: Record<string, number> = {};
-  for (const c of UNIT_CLASSES) {
-    byClass[c] = 0;
-    coveredByClass[c] = 0;
-  }
-  for (const r of rows) {
-    byClass[r.unitClass]++;
-    if (r.status === "covered") coveredByClass[r.unitClass]++;
-  }
+  // Static header plus per-unit entries only: no totals (see the file header).
   const doc = {
     generator: "tests/gen-coverage-registry.ts",
     generatedFrom: "disk (units re-enumerated fresh)",
     unitClasses: UNIT_CLASSES,
     minMechanism: MIN_MECHANISM,
-    counts: {
-      total: rows.length,
-      enumeratedByClass: byClass,
-      coveredByClass,
-    },
     units: rows,
   };
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
-export interface RatchetDoc {
-  note: string;
-  coveredByClass: Record<UnitClass, number>;
-}
-
-export function ratchetFromRows(rows: RegistryRow[]): RatchetDoc {
-  const coveredByClass = Object.fromEntries(
-    UNIT_CLASSES.map((c) => [c, 0]),
-  ) as Record<UnitClass, number>;
+/** Enumerated and covered units per class, computed for display only. */
+export function classCounts(rows: RegistryRow[]): Record<UnitClass, { total: number; covered: number }> {
+  const counts = Object.fromEntries(
+    UNIT_CLASSES.map((c) => [c, { total: 0, covered: 0 }]),
+  ) as Record<UnitClass, { total: number; covered: number }>;
   for (const r of rows) {
-    if (r.status === "covered") coveredByClass[r.unitClass]++;
+    counts[r.unitClass].total++;
+    if (r.status === "covered") counts[r.unitClass].covered++;
   }
-  return {
-    note:
-      "Committed baseline: covered-unit count per class. The --check ratchet " +
-      "fails CI if any class's covered count DROPS below these numbers without " +
-      "a reviewed deferred entry. Monotonic anti-regression: you can cover " +
-      "more, never silently less. Regenerate with: bun tests/gen-coverage-registry.ts",
-    coveredByClass,
-  };
+  return counts;
 }
 
-export function ratchetJson(doc: RatchetDoc): string {
-  return `${JSON.stringify(doc, null, 2)}\n`;
+/** THE RATCHET: units the committed registry records as covered that a fresh
+ *  build still enumerates but no longer covers. A unit removed from the source
+ *  is not a coverage loss; the freshness diff reports it. */
+export function lostClaims(committed: RegistryRow[], fresh: RegistryRow[]): RegistryRow[] {
+  const now = new Map(fresh.map((r) => [`${r.unitClass}\u0000${r.unitId}`, r]));
+  return committed
+    .filter((r) => r.status === "covered")
+    .map((r) => now.get(`${r.unitClass}\u0000${r.unitId}`))
+    .filter((r): r is RegistryRow => r !== undefined && r.status !== "covered");
 }
 
 // ===========================================================================
@@ -1344,6 +1336,31 @@ export function runCheck(): CheckResult {
     );
   } else {
     const committed = readFileSync(REGISTRY_PATH, "utf-8");
+    // RATCHET: no unit the committed registry covers may lose its claim.
+    let committedRows: RegistryRow[] | undefined;
+    try {
+      committedRows = (JSON.parse(committed) as { units?: RegistryRow[] }).units;
+    } catch {
+      committedRows = undefined;
+    }
+    if (!Array.isArray(committedRows)) {
+      ok = false;
+      messages.push(
+        `RATCHET FAILED: ${REGISTRY_PATH} is not a readable registry. ` +
+          `Regenerate it with: bun tests/gen-coverage-registry.ts`,
+      );
+    } else {
+      for (const lost of lostClaims(committedRows, rows)) {
+        ok = false;
+        messages.push(
+          `RATCHET FAILED: ${lost.unitClass} unit "${lost.unitId}" is covered ` +
+            `in the committed registry but now ${lost.status}: its covers: ` +
+            `claim is gone or too weak. Restore the claim, or, if the loss is ` +
+            `intended, regenerate the registry in a reviewed commit: ` +
+            `bun tests/gen-coverage-registry.ts`,
+        );
+      }
+    }
     if (committed !== actual) {
       ok = false;
       messages.push(
@@ -1357,31 +1374,6 @@ export function runCheck(): CheckResult {
     }
   }
 
-  // RATCHET: covered count per class must not drop below the committed baseline.
-  if (!existsSync(RATCHET_PATH)) {
-    ok = false;
-    messages.push(
-      `RATCHET FAILED: ${RATCHET_PATH} does not exist. ` +
-        `Generate it with: bun tests/gen-coverage-registry.ts`,
-    );
-  } else {
-    const baseline = JSON.parse(readFileSync(RATCHET_PATH, "utf-8")) as RatchetDoc;
-    const current = ratchetFromRows(rows).coveredByClass;
-    for (const c of UNIT_CLASSES) {
-      const base = baseline.coveredByClass[c] ?? 0;
-      const now = current[c] ?? 0;
-      if (now < base) {
-        ok = false;
-        messages.push(
-          `RATCHET FAILED: class "${c}" covered count DROPPED from ${base} ` +
-            `(baseline) to ${now}. A covered unit lost its claim. Either ` +
-            `restore the claim, or — if the unit was legitimately removed — ` +
-            `regenerate the baseline with a reviewed commit: ` +
-            `bun tests/gen-coverage-registry.ts`,
-        );
-      }
-    }
-  }
 
   return { ok, messages };
 }
@@ -1392,7 +1384,6 @@ export function runCheck(): CheckResult {
 
 function writeAll(rows: RegistryRow[]): void {
   writeFileSync(REGISTRY_PATH, registryJson(rows));
-  writeFileSync(RATCHET_PATH, ratchetJson(ratchetFromRows(rows)));
 }
 
 function main(): void {
@@ -1436,14 +1427,9 @@ function main(): void {
 
   writeAll(rows);
 
-  // Report enumerated + covered counts per class to stdout.
-  const byClass: Record<string, { total: number; covered: number }> = {};
-  for (const c of UNIT_CLASSES) byClass[c] = { total: 0, covered: 0 };
-  for (const r of rows) {
-    byClass[r.unitClass].total++;
-    if (r.status === "covered") byClass[r.unitClass].covered++;
-  }
-  console.log("Wrote tests/.coverage-registry.json + tests/.coverage-ratchet.json");
+  // Report enumerated + covered counts per class to stdout (never committed).
+  const byClass = classCounts(rows);
+  console.log("Wrote tests/.coverage-registry.json");
   console.log("Enumerated units (covered / total) per class:");
   for (const c of UNIT_CLASSES) {
     console.log(

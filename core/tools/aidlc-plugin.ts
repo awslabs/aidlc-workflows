@@ -16,13 +16,14 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { createInterface } from "node:readline/promises";
 import {
   errorMessage,
   parseArgs,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
+import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
+  aidlcInvocation,
   compiledExecutable,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -290,7 +291,7 @@ function deduplicateInventory(
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
-    values.push(entry);
+    if (!values.some((value) => value.manifestPath === entry.manifestPath)) values.push(entry);
     byKey.set(entry.key, values);
   }
   const installed: InstalledPlugin[] = [];
@@ -345,7 +346,7 @@ function currentRootInventory(harness: PluginInventory["harness"]): PluginInvent
   };
 }
 
-function claudeInventory(): PluginInventory {
+function claudeInventory(projectDir: string): PluginInventory {
   const registryPath = absolute(
     process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY ??
       join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "plugins", "installed_plugins.json"),
@@ -369,25 +370,54 @@ function claudeInventory(): PluginInventory {
       invalid: [{ paths: [registryPath], message: `invalid Claude plugin registry: ${errorMessage(error)}` }],
     };
   }
+  // Unreadable enablement cannot prove which plugins are on, so it falls back
+  // to the current root, but it stays a named problem the person can fix.
+  const unreadableSettings = (reason: string): PluginInventory => {
+    const inventory = currentRootInventory("claude");
+    inventory.invalid.push({ paths: [settingsPath], message: `invalid Claude settings: ${reason}` });
+    return inventory;
+  };
   let enabledPlugins: Record<string, unknown> = {};
   if (existsSync(settingsPath)) {
     let settings: unknown;
     try {
       settings = readJson(settingsPath);
-    } catch {
-      return currentRootInventory("claude");
+    } catch (error) {
+      // Fixed wording only: a parser message can quote the file's content,
+      // and this settings file can hold credentials.
+      return unreadableSettings(
+        error instanceof SyntaxError ? "not valid JSON" : "cannot be read",
+      );
     }
     if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
-      return currentRootInventory("claude");
+      return unreadableSettings("expected a JSON object");
     }
     const rawEnabled = (settings as Record<string, unknown>).enabledPlugins;
     if (rawEnabled !== undefined) {
       if (!rawEnabled || typeof rawEnabled !== "object" || Array.isArray(rawEnabled)) {
-        return currentRootInventory("claude");
+        return unreadableSettings("enabledPlugins must be an object");
       }
       enabledPlugins = rawEnabled as Record<string, unknown>;
     }
   }
+  // Claude Code loads a project-scope plugin wherever the project's committed
+  // settings enable it, so a second clone or worktree with no record of its
+  // own uses the project-scope records.
+  let projectEnabled: Record<string, unknown> = {};
+  try {
+    const raw = (readJson(join(projectDir, ".claude", "settings.json")) as Record<string, unknown> | null)
+      ?.enabledPlugins;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) projectEnabled = raw as Record<string, unknown>;
+  } catch {
+    // A missing or unreadable project settings file enables nothing here.
+  }
+  const elsewhere = (raw: unknown): boolean => {
+    const entry = raw as Record<string, unknown>;
+    return !!raw && typeof raw === "object" && !Array.isArray(raw) &&
+      (entry.scope === "local" || entry.scope === "project") &&
+      typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
+      !policyPathWithin(entry.projectPath, projectDir);
+  };
   const plugins = registry && typeof registry === "object" &&
       !Array.isArray(registry) &&
       (registry as Record<string, unknown>).version === 2 &&
@@ -408,7 +438,11 @@ function claudeInventory(): PluginInventory {
         invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has no installed records` });
         continue;
       }
-      for (const rawEntry of rawEntries) {
+      const own = rawEntries.filter((raw) => !elsewhere(raw));
+      const records = own.length > 0 || projectEnabled[id] !== true
+        ? own
+        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project");
+      for (const rawEntry of records) {
         if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
           invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has an invalid installed record` });
           continue;
@@ -525,9 +559,12 @@ function codexInventory(): PluginInventory {
   };
 }
 
-export function discoverPluginInventory(harnessDir = runtimeHarnessDir()): PluginInventory {
+export function discoverPluginInventory(
+  harnessDir = runtimeHarnessDir(),
+  projectDir = resolveProjectDir(),
+): PluginInventory {
   const harness = harnessKind(harnessDir);
-  if (harness === "claude") return claudeInventory();
+  if (harness === "claude") return claudeInventory(projectDir);
   if (harness === "codex") return codexInventory();
   return currentRootInventory(harness);
 }
@@ -653,16 +690,6 @@ export function comparePluginState(
   evidence: ProjectEvidence,
   selection: Set<string> | null,
 ): PluginStatus[] {
-  if (inventory.capability !== "full-inventory") {
-    return [{
-      key: null,
-      installedVersion: null,
-      composedVersion: null,
-      state: "inventory-unavailable",
-      action: "attention",
-      message: "host inventory unavailable; run sync through the host SessionStart adapter",
-    }];
-  }
   const rows: PluginStatus[] = [];
   for (const invalid of inventory.invalid) {
     rows.push({
@@ -735,15 +762,21 @@ export function comparePluginState(
     ...evidence.legacy,
   ]);
   const invalidKeys = new Set(inventory.invalid.flatMap((item) => item.key ? [item.key] : []));
+  // Only a full host list proves a composed plugin is gone. Without one, a
+  // composed plugin the host does not show is reported as not compared:
+  // nothing for the person to do, so doctor does not warn about it.
+  const provedMissing = inventory.capability === "full-inventory";
   for (const key of [...composedKeys].sort()) {
     if (installedKeys.has(key) || invalidKeys.has(key)) continue;
     rows.push({
       key,
       installedVersion: null,
       composedVersion: evidence.stamps.get(key)?.version ?? null,
-      state: "installed-missing",
-      action: "attention",
-      message: "installed plugin missing; reinstall via host, or sync --prune-missing",
+      state: provedMissing ? "installed-missing" : "inventory-unavailable",
+      action: provedMissing ? "attention" : "current",
+      message: provedMissing
+        ? "installed plugin missing; reinstall via host, or sync --prune-missing"
+        : "not compared: no host plugin list",
     });
   }
   return rows.sort((left, right) =>
@@ -755,7 +788,7 @@ export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
 ): { inventory: PluginInventory; statuses: PluginStatus[] } {
-  const inventory = discoverPluginInventory(harnessDir);
+  const inventory = discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   return {
@@ -765,6 +798,7 @@ export function collectPluginStatus(
 }
 
 function humanAction(status: PluginStatus): string {
+  if (status.state === "inventory-unavailable") return status.message;
   if (status.action === "current") return "current";
   if (status.action === "sync") return "run: aidlc config";
   return `needs attention: ${status.message}`;
@@ -1280,27 +1314,23 @@ function compositionIsCurrent(
   });
 }
 
-export async function confirmPrune(
+// The person asked for --prune-missing, so at a terminal it says what goes and
+// how to get it back, then prunes. A script or an agent passes --yes.
+export function announcePrune(
   argv: string[],
   keys: string[],
-  input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
-  output: NodeJS.WritableStream = process.stdout,
-): Promise<void> {
+  input: { isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = argv.includes("--json") ? process.stderr : process.stdout,
+): void {
   if (keys.length === 0 || argv.includes("--yes")) return;
   if (!input.isTTY) {
     throw new Error("plugin sync --prune-missing requires --yes in non-interactive mode");
   }
-  const lines = createInterface({ input, output });
-  let response: string;
-  try {
-    response = await lines.question(
-      `Prune composed content for missing plugin(s) ${keys.join(", ")}? [y/N] `,
-    );
-  } finally {
-    lines.close();
-  }
-  response = response.trim().toLowerCase();
-  if (response !== "y" && response !== "yes") throw new Error("plugin prune cancelled");
+  output.write(
+    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project, ` +
+      "their additions to stage files, and their composition records. To get them back, reinstall " +
+      `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
+  );
 }
 
 export async function syncPlugins(
@@ -1312,7 +1342,7 @@ export async function syncPlugins(
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
-    : discoverPluginInventory(harnessDir);
+    : discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   const prune = argv.includes("--prune-missing");
@@ -1348,7 +1378,7 @@ export async function syncPlugins(
     }
   }
   const pruned = prune ? missing : [];
-  await confirmPrune(argv, pruned);
+  announcePrune(argv, pruned);
   if (
     pruned.length === 0 &&
     plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))

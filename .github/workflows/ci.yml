@@ -7,7 +7,7 @@ name: CI
 # the merge queue runs the deterministic smoke, unit, integration and E2E tiers
 # on macOS and Windows too, so a platform regression cannot reach main while
 # macOS/Windows runner queues stay off the per-push path. main is not
-# production: deterministic E2E and live tiers run in full-suite.yml, which
+# production: live harness shards run in full-suite.yml, which
 # preview-release.yml calls every night and release.yml requires for a stable
 # tag. By maintainer decision on 2026-09-26, reversing the 2026-09-21 decision,
 # a stable release publishes only after the Full Suite passed for the exact
@@ -72,16 +72,23 @@ jobs:
       fail-fast: false
       matrix:
         runner: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
+        # Twelve unit shards: each runs its files serially, so the slowest
+        # shard sets this gate's time. tests/unit-shard-weights.json balances
+        # them by each file's slowest OS.
         suite:
           - {name: smoke, tier: smoke}
-          - {name: unit-1, tier: unit, shard: "1/8"}
-          - {name: unit-2, tier: unit, shard: "2/8"}
-          - {name: unit-3, tier: unit, shard: "3/8"}
-          - {name: unit-4, tier: unit, shard: "4/8"}
-          - {name: unit-5, tier: unit, shard: "5/8"}
-          - {name: unit-6, tier: unit, shard: "6/8"}
-          - {name: unit-7, tier: unit, shard: "7/8"}
-          - {name: unit-8, tier: unit, shard: "8/8"}
+          - {name: unit-1, tier: unit, shard: "1/12"}
+          - {name: unit-2, tier: unit, shard: "2/12"}
+          - {name: unit-3, tier: unit, shard: "3/12"}
+          - {name: unit-4, tier: unit, shard: "4/12"}
+          - {name: unit-5, tier: unit, shard: "5/12"}
+          - {name: unit-6, tier: unit, shard: "6/12"}
+          - {name: unit-7, tier: unit, shard: "7/12"}
+          - {name: unit-8, tier: unit, shard: "8/12"}
+          - {name: unit-9, tier: unit, shard: "9/12"}
+          - {name: unit-10, tier: unit, shard: "10/12"}
+          - {name: unit-11, tier: unit, shard: "11/12"}
+          - {name: unit-12, tier: unit, shard: "12/12"}
           - {name: integration, tier: integration}
           - {name: e2e, tier: e2e}
         # PR pushes and calls run Linux only and stop at integration. The merge
@@ -95,6 +102,11 @@ jobs:
       tier: ${{ matrix.suite.tier }}
       unit-shard: ${{ matrix.suite.shard || '' }}
       artifact-label: ci-deterministic-${{ matrix.suite.name }}
+      # No workflow downloads CI evidence, so an upload timeout cannot drop a PR.
+      evidence-optional: true
+      # Only the merge queue reruns an assertion-failed file once (flagged as
+      # flaky); a PR push stays strict, so a flake still shows red there.
+      retry-once: ${{ github.event_name == 'merge_group' }}
 
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})
@@ -164,6 +176,8 @@ jobs:
           bun scripts/ci-sanitize-logs.ts tmp/ci-native
       - name: Preserve native terminal evidence
         if: always() && steps.sanitize_native.outcome == 'success'
+        # Nothing downloads this artifact; the contract step decides the job.
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ci-native-${{ runner.os }}
@@ -196,6 +210,8 @@ jobs:
 
       - name: Preserve guard evidence
         if: always()
+        # Nothing downloads this artifact; the guard step decides the job.
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: production-guard-evidence

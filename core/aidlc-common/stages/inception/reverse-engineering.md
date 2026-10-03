@@ -58,7 +58,10 @@ Read `<record>/aidlc-state.md` to confirm:
 
 If the project is not brownfield, run
 `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason "<reason>"`.
-The engine records the skip and advances to the next in-scope stage.
+The engine records the skip and advances to the next in-scope stage. The
+project type is the person's call, not the scan's: when they have said this is
+existing code, do not skip; run `{{INVOKE}} engine orchestrate next --project-type brownfield`
+and follow what it returns.
 
 #### Resolve the intent's repo set (multi-repo)
 
@@ -225,6 +228,31 @@ whole codebase) for:
 - Test directories, test frameworks, coverage configuration
 - Code quality indicators (linting, CI/CD, documentation)
 - Technical debt signals
+
+AI-DLC's own install is not the project's code. The brief tells the developer
+not to scan or document it:
+
+- the harness directories `.claude/`, `.kiro/`, `.codex/`, `.cursor/`,
+  `.opencode/`, and `.aidlc/`, and the `aidlc/` workspace;
+- the agents, hooks, and skills AI-DLC writes under `.github/` (Copilot) and
+  `.agents/` (Codex): the `aidlc`-named ones, and every skill whose `SKILL.md`
+  frontmatter says `generated-by: aidlc-runner-gen` (stage runners, plugin
+  stages included);
+- the root files AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`
+  and opencode's `opencode.json` beside `.opencode/`;
+- AI-DLC's marked sections of shared root files such as `AGENTS.md` and
+  `.gitignore`, and the MCP servers it adds to `.mcp.json` (named under
+  `rootContributions` in `<harness directory>/tools/data/aidlc-manifest.json`).
+
+The rest of `.github/`, `.agents/`, `AGENTS.md`, and `.gitignore` is the
+project's own and is scanned as usual.
+
+Tell the developer to scan only what people wrote: follow the repo's
+`.gitignore` files, and skip build outputs, dependency folders, and IDE and
+tool caches even where nothing ignores them (for example .NET `bin/` and
+`obj/` beside a project file). The "What to Skip" section of
+`{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md` lists
+them and says when a folder with one of those names holds hand-written code.
 
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
@@ -395,9 +423,21 @@ Do not report completion until every selected repo's chain has both receipts.
 
 ### Step 4: Completion Handoff
 
-After every selected repo scan has completed, hand completion to
-`stage-protocol.md` exactly once via
-`{{INVOKE}} engine orchestrate report --stage reverse-engineering --result <outcome>`.
+After every selected repo scan has completed, follow `stage-protocol.md`'s
+completion sequence in this order:
+
+1. Present Step 5's announcement and per-repo summary, including any NARROWER
+   warning.
+2. When `directive.protocol_modules` lists `learnings`, ask its question and
+   end the turn; continue once the answer is logged.
+3. Open the approval gate exactly once with
+   `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.
+4. Ask Step 5's approval question.
+
+The person's answer is reported afterwards as `approved` or `rejected`; an
+ordinary workflow run never reports this stage `completed`. On an isolated run (`directive.single === true`), return to the
+orchestrator's isolated stage-runner branch instead; it owns
+`report --single --stage "reverse-engineering" --result completed`.
 That `report` call owns every lifecycle transition and advancement; never perform one in prose, and never narrate this bookkeeping to the user.
 
 ### Step 5: Present Completion & Request Approval

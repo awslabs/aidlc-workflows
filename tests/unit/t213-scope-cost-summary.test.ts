@@ -127,9 +127,14 @@ describe("t213 validateGrid threads the same summary the helper computes", () =>
     expect(r.summary).toEqual(scopeCostSummary("feature") ?? undefined);
   });
 
-  test("validateGrid(bugfix grid).summary equals scopeCostSummary('bugfix')", () => {
+  test("validateGrid(bugfix grid).summary equals scopeCostSummary('bugfix') counts", () => {
     const r = validateGrid({ ...GRID.bugfix.stages });
-    expect(r.summary).toEqual(scopeCostSummary("bugfix") ?? undefined);
+    const scoped = scopeCostSummary("bugfix");
+    expect(scoped).not.toBeNull();
+    // A bare grid carries no settings, so it names nothing off; bugfix's own
+    // settings turn learnings and summary confirmation off.
+    expect(r.summary).toEqual({ ...(scoped as NonNullable<typeof scoped>), off: [] });
+    expect(scoped?.off).toEqual(["learnings ritual", "summary confirmation"]);
   });
 });
 

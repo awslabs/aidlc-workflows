@@ -350,8 +350,10 @@ Construction walk.
 
 When a fresh clone has several intents and no active-intent cursor, the picker
 annotates a mixed team workspace with statuses such as `team construction, 2
-units claimable`, `parked at code-generation`, and `complete`. Single-intent and
-non-team picker text is unchanged.
+units claimable` and `parked at code-generation`. Finished intents are left out
+of the picker in every workspace, because they have nothing left to carry on;
+`/aidlc intent list` still shows them. Single-intent and non-team picker text is
+otherwise unchanged.
 
 `/aidlc --doctor` adds local-only claim reconciliation:
 
@@ -437,6 +439,7 @@ claim-bound CAS publication; main serializes the reviewed pinned OIDs.
 
 ## Related reading
 
+- [Facilitator Guide](facilitator-guide.md) - readiness check, scopes for side tasks, recovery playbook, and how strongly each harness enforces the workflow
 - [CLI Commands](12-cli-commands.md) - claim, publish, pin, gate, and land
 - [State and Audit](10-state-and-audit.md) - per-clone shards and merged receipt floors
 - [Construction](../reference/04-stages/construction.md) - Unit-major routing and gate rhythm

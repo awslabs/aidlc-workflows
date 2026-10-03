@@ -83,3 +83,8 @@ adapter, `emit.ts`), see the Harness Engineer Guide's
 Whichever harness you run, the methodology is the same — start with
 [Your First Workflow](../02-your-first-workflow.md) and the
 [Phases and Stages](../04-phases-and-stages.md) tour.
+
+Running a workshop or supporting a team? The
+[Facilitator Guide](../facilitator-guide.md#how-strongly-each-harness-enforces-the-workflow)
+compares how strongly each harness enforces the workflow, and gives a
+readiness check and a recovery playbook.

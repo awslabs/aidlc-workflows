@@ -24,6 +24,8 @@ import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import {
+  hookStandsOutside,
+  enterHookWorkflow,
   auditFilePath,
   type ClaudeCodeHookInput,
   getField,
@@ -45,9 +47,26 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
-// Step 1 — Resolve project dir from import.meta.url. Mirrors
-// aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
-const projectDir = resolveProjectDirFromHook(import.meta.url);
+  // Step 1 — Resolve project dir from import.meta.url. Mirrors
+  // aidlc-write-audit-log.ts and aidlc-rebuild-stage-graph.ts precedent.
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+  let payloadSession: unknown;
+  try {
+    payloadSession = (JSON.parse(input) as { session_id?: unknown }).session_id;
+  } catch {
+    // Missing/malformed payload: resolve without a payload session.
+  }
+  // A write in a conversation that has not joined the selected workflow fires none of its sensors.
+  const workflow = enterHookWorkflow(projectDir, payloadSession);
+  try {
+    if (hookStandsOutside(workflow)) return 0;
+    return await fireSensors(input, projectDir);
+  } finally {
+    workflow.restore();
+  }
+}
+
+async function fireSensors(input: string, projectDir: string): Promise<number> {
 
 // Enclosing dispatcher backstop; explicit project/user limits still win,
 // including the deliberately short timeout-calibration fixtures.
@@ -264,20 +283,20 @@ for (const entry of applicableSensors) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: subprocess killed by SIGTERM (timeout)`
+        `sensor ${entry.id} timed out: subprocess killed by SIGTERM`
       );
     } else if (result.error) {
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: ${result.error.message}`
+        `sensor ${entry.id} could not start: ${result.error.message}`
       );
     } else if (result.status !== 0) {
       const stderr = result.stderr?.toString().trim() ?? "";
       recordHookDrop(
         projectDir,
         "run-sensors",
-        `${entry.id}: dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
+        `sensor ${entry.id} dispatcher exit ${result.status}${stderr ? `: ${stderr}` : ""}`
       );
     }
   } catch (e: unknown) {
@@ -285,7 +304,7 @@ for (const entry of applicableSensors) {
     recordHookDrop(
       projectDir,
       "run-sensors",
-      `${entry.id}: ${e instanceof Error ? e.message : String(e)}`
+      `sensor ${entry.id} could not run: ${e instanceof Error ? e.message : String(e)}`
     );
   }
 }

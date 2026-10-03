@@ -1,5 +1,5 @@
 // covers: tool:aidlc-init, tool:aidlc-lifecycle, file:core/tools/aidlc-archive.ts
-// covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts
+// covers: file:core/tools/aidlc-transaction.ts, file:scripts/package.ts, file:core/tools/aidlc-distribution.ts
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -30,7 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createTarGz,
   extractTarGz,
@@ -39,7 +39,14 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
-import { projectionFiles, sha256Bytes, walkFiles } from "../../core/tools/aidlc-distribution.ts";
+import {
+  insertJsoncSetting,
+  jsoncSettingValue,
+  projectionFiles,
+  removeJsoncSetting,
+  sha256Bytes,
+  walkFiles,
+} from "../../core/tools/aidlc-distribution.ts";
 import {
   activeExecutablePath,
   commandPath,
@@ -75,6 +82,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   recoverWindowsUninstallContinuations,
   scanWindowsUninstallJournals,
@@ -489,6 +497,18 @@ describe("t243 archive and transaction safety", () => {
         root,
         operations: [writeOperation("blocked.txt", "no\n", "absent")],
       })).toThrow("pending Windows uninstall blocks machine mutation");
+      // The refusal can reach doctor's own report (its update check runs a
+      // machine transaction), so it must not repeat the doctor command line
+      // that VS Code trims from the output (#1411).
+      let refusal = "";
+      try {
+        executePlan({ schemaVersion: 1, root, operations: [writeOperation("blocked.txt", "no\n", "absent")] });
+      } catch (error) {
+        refusal = `aidlc: ${(error as Error).message}`;
+      }
+      for (const commandLine of [...doctorCommandLines(), "aidlc update"]) {
+        expect(vscodeVisibleOutput(refusal, commandLine), commandLine).toBe(refusal);
+      }
       expect(existsSync(join(root, "blocked.txt"))).toBe(false);
 
       executePlan({
@@ -1634,6 +1654,212 @@ describe("t243 project initialization", () => {
     expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe(agents);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // VS Code pauses agent mode after chat.agent.maxRequests requests in one turn
+  // (default 50) to ask "Continue to iterate?", and the chat sits silent until
+  // someone answers. A Copilot config adds 200 when the project does not set it
+  // and never changes the team's value, other keys, or comments (#1411).
+  const VSCODE_SETTINGS = join(".vscode", "settings.json");
+  const configCopilot = (project: string, from = COPILOT_RELEASE) => run(INIT, [
+    "config", "--project-dir", project, "--from", from, "--harness", "copilot", "--mcp", "none", "--yes",
+  ], project);
+  const settingsContribution = (project: string) => (JSON.parse(readFileSync(
+    join(project, ".aidlc", "tools", "data", "aidlc-manifest.json"), "utf-8",
+  )) as { rootContributions: Record<string, unknown> }).rootContributions[".vscode/settings.json"];
+
+  test("copilot config adds the VS Code request cap when absent and records it as its own", () => {
+    const project = temp("aidlc-t243-vscode-absent-");
+    mkdirSync(join(project, ".git"));
+    const configured = configCopilot(project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(settingsContribution(project)).toEqual({
+      policy: "jsonc-settings",
+      entries: { "chat.agent.maxRequests": sha256Bytes("200") },
+      added: ["chat.agent.maxRequests"],
+      created: true,
+    });
+    // A refresh leaves it alone, and a project from before this release gets it.
+    const refreshed = configCopilot(project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    const baselinePath = join(project, ".aidlc", "tools", "data", "aidlc-manifest.json");
+    const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+    delete baseline.rootContributions[".vscode/settings.json"];
+    writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+    writeFileSync(join(project, VSCODE_SETTINGS), '{\n  "editor.tabSize": 2\n}\n');
+    const upgraded = configCopilot(project);
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"))
+      .toBe('{\n  "editor.tabSize": 2,\n  "chat.agent.maxRequests": 200\n}\n');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copilot config keeps the team's request cap, other keys, and comments", () => {
+    const teamValue = temp("aidlc-t243-vscode-team-");
+    mkdirSync(join(teamValue, ".git"));
+    mkdirSync(join(teamValue, ".vscode"));
+    const teamFile = '// team settings\n{\n  "chat.agent.maxRequests": 75, // we chose this\n  "editor.tabSize": 4\n}\n';
+    writeFileSync(join(teamValue, VSCODE_SETTINGS), teamFile);
+    for (let pass = 0; pass < 2; pass++) {
+      const configured = configCopilot(teamValue);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      expect(readFileSync(join(teamValue, VSCODE_SETTINGS), "utf-8")).toBe(teamFile);
+    }
+    // Not AI-DLC's value, so not recorded as AI-DLC's.
+    expect(settingsContribution(teamValue)).toEqual({ policy: "jsonc-settings", entries: {} });
+
+    const commented = temp("aidlc-t243-vscode-comments-");
+    mkdirSync(join(commented, ".git"));
+    mkdirSync(join(commented, ".vscode"));
+    const original = '{\r\n\t// formatting\r\n\t"editor.formatOnSave": true, /* keep */\r\n\t"files.eol": "\\n"\r\n}\r\n';
+    writeFileSync(join(commented, VSCODE_SETTINGS), original);
+    const configured = configCopilot(commented);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    expect(readFileSync(join(commented, VSCODE_SETTINGS), "utf-8")).toBe(
+      '{\r\n\t// formatting\r\n\t"editor.formatOnSave": true, /* keep */\r\n\t"files.eol": "\\n",\r\n\t"chat.agent.maxRequests": 200\r\n}\r\n',
+    );
+
+    // A settings file config cannot read is the team's to fix: config carries on.
+    const broken = temp("aidlc-t243-vscode-broken-");
+    mkdirSync(join(broken, ".git"));
+    mkdirSync(join(broken, ".vscode"));
+    writeFileSync(join(broken, VSCODE_SETTINGS), '{ "editor.tabSize": 4,, }\n');
+    const tolerated = configCopilot(broken);
+    expect(tolerated.status, tolerated.stdout + tolerated.stderr).toBe(0);
+    expect(readFileSync(join(broken, VSCODE_SETTINGS), "utf-8")).toBe('{ "editor.tabSize": 4,, }\n');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copilot config follows only its own request cap and retires only what it added", () => {
+    const project = temp("aidlc-t243-vscode-owned-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".vscode"));
+    writeFileSync(join(project, VSCODE_SETTINGS), '{\n  "editor.tabSize": 2\n}\n');
+    expect(configCopilot(project).status).toBe(0);
+    // A later release that ships a different value updates AI-DLC's own value...
+    const bumped = temp("aidlc-t243-vscode-release-");
+    cpSync(COPILOT_RELEASE, bumped, { recursive: true });
+    writeFileSync(join(bumped, VSCODE_SETTINGS), '{\n  "chat.agent.maxRequests": 300\n}\n');
+    expect(configCopilot(project, bumped).status).toBe(0);
+    expect(jsoncSettingValue(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"), "chat.agent.maxRequests")).toBe(300);
+    // ...but once the team changes it, the value is theirs.
+    const teamEdited = readFileSync(join(project, VSCODE_SETTINGS), "utf-8").replace("300", "150");
+    writeFileSync(join(project, VSCODE_SETTINGS), teamEdited);
+    expect(configCopilot(project, COPILOT_RELEASE).status).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
+    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] });
+
+    // A release that no longer ships the setting removes it only where AI-DLC
+    // added it and nobody changed it: the file AI-DLC created goes, the team's stays.
+    const retired = temp("aidlc-t243-vscode-retired-");
+    cpSync(COPILOT_RELEASE, retired, { recursive: true });
+    rmSync(join(retired, ".vscode"), { recursive: true, force: true });
+    const descriptorPath = join(retired, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.rootIntegrations = descriptor.rootIntegrations.filter((item: { path: string }) => item.path !== ".vscode/settings.json");
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const created = temp("aidlc-t243-vscode-created-");
+    mkdirSync(join(created, ".git"));
+    expect(configCopilot(created).status).toBe(0);
+    // The team deleted its file and config wrote a fresh one: AI-DLC's to remove.
+    const recreated = temp("aidlc-t243-vscode-recreated-");
+    mkdirSync(join(recreated, ".git"));
+    mkdirSync(join(recreated, ".vscode"));
+    writeFileSync(join(recreated, VSCODE_SETTINGS), '{\n  "editor.tabSize": 2\n}\n');
+    expect(configCopilot(recreated).status).toBe(0);
+    rmSync(join(recreated, VSCODE_SETTINGS));
+    expect(configCopilot(recreated).status).toBe(0);
+    expect(settingsContribution(recreated)).toMatchObject({ created: true });
+    const added = temp("aidlc-t243-vscode-added-");
+    mkdirSync(join(added, ".git"));
+    mkdirSync(join(added, ".vscode"));
+    writeFileSync(join(added, VSCODE_SETTINGS), '{\n  // ours\n  "editor.tabSize": 2\n}\n');
+    expect(configCopilot(added).status).toBe(0);
+    for (const target of [created, recreated, added, project]) {
+      const refreshed = configCopilot(target, retired);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    }
+    expect(existsSync(join(created, VSCODE_SETTINGS))).toBe(false);
+    expect(existsSync(join(recreated, VSCODE_SETTINGS))).toBe(false);
+    expect(readFileSync(join(added, VSCODE_SETTINGS), "utf-8")).toBe('{\n  // ours\n  "editor.tabSize": 2\n}\n');
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("copilot config does not add the request cap back after the team took it out", () => {
+    const project = temp("aidlc-t243-vscode-removed-");
+    mkdirSync(join(project, ".git"));
+    mkdirSync(join(project, ".vscode"));
+    const teamFile = '{\n  "editor.tabSize": 2\n}\n';
+    writeFileSync(join(project, VSCODE_SETTINGS), teamFile);
+    expect(configCopilot(project).status).toBe(0);
+    expect(jsoncSettingValue(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"), "chat.agent.maxRequests")).toBe(200);
+    // The team removes the key and keeps its file: every refresh leaves it out.
+    writeFileSync(join(project, VSCODE_SETTINGS), teamFile);
+    for (let pass = 0; pass < 2; pass++) {
+      const refreshed = configCopilot(project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamFile);
+    }
+    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] });
+    // An emptied file is still the team's choice.
+    writeFileSync(join(project, VSCODE_SETTINGS), "{}\n");
+    expect(configCopilot(project).status).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe("{}\n");
+    // A clone with no settings file (AI-DLC's .gitignore block leaves
+    // .vscode/ out of git) gets the value on its own config.
+    rmSync(join(project, ".vscode"), { recursive: true, force: true });
+    expect(configCopilot(project).status).toBe(0);
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied project's refresh leaves .vscode/settings.json alone when its runtime ships none", () => {
+    // The copy runtime carries no editor settings file, so a refresh from it
+    // keeps the team's file and AI-DLC's record exactly as they are.
+    const copyRuntime = temp("aidlc-t243-vscode-copy-runtime-");
+    cpSync(COPILOT_RELEASE, copyRuntime, { recursive: true });
+    rmSync(join(copyRuntime, ".vscode"), { recursive: true, force: true });
+    for (const start of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+      const project = temp("aidlc-t243-vscode-copy-");
+      mkdirSync(join(project, ".git"));
+      if (start !== null) {
+        mkdirSync(join(project, ".vscode"));
+        writeFileSync(join(project, VSCODE_SETTINGS), start);
+      }
+      const configured = configCopilot(project, copyRuntime);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      if (start === null) expect(existsSync(join(project, VSCODE_SETTINGS))).toBe(false);
+      else expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(start);
+    }
+    // A project that AI-DLC already gave the value keeps it and its record.
+    const owned = temp("aidlc-t243-vscode-copy-owned-");
+    mkdirSync(join(owned, ".git"));
+    expect(configCopilot(owned).status).toBe(0);
+    const before = settingsContribution(owned);
+    const refreshed = configCopilot(owned, copyRuntime);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(join(owned, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(settingsContribution(owned)).toEqual(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("JSONC settings edits keep every other byte", () => {
+    for (const [before, after] of [
+      ["", '{\n  "k": 1\n}\n'],
+      ["{}", '{\n  "k": 1\n}'],
+      ['{ "a": 1 }', '{ "a": 1,\n  "k": 1\n}'],
+      ['{\n    "a": [1, {"b": "}"}], // note\n    /* c */\n    "d": "x"\n}\n', '{\n    "a": [1, {"b": "}"}], // note\n    /* c */\n    "d": "x",\n    "k": 1\n}\n'],
+      ['{\n  "a": true,\n}\n', '{\n  "a": true,\n  "k": 1\n}\n'],
+    ] as const) {
+      const inserted = insertJsoncSetting(before, "k", "1");
+      expect(inserted, before).toBe(after);
+      expect(Bun.JSONC.parse(inserted as string), before).toMatchObject({ k: 1 });
+      expect(jsoncSettingValue(inserted as string, "k"), before).toBe(1);
+    }
+    const team = '{\n  // keep\n  "a": 1,\n  "k": 1,\n  "b": 2\n}\n';
+    expect(removeJsoncSetting(team, "k")).toBe('{\n  // keep\n  "a": 1,\n  "b": 2\n}\n');
+    expect(removeJsoncSetting('{\n  "a": 1,\n  "k": 1\n}\n', "k")).toBe('{\n  "a": 1\n}\n');
+    expect(removeJsoncSetting(team, "missing")).toBe(team);
+    expect(insertJsoncSetting("[1]", "k", "1")).toBeNull();
+    expect(insertJsoncSetting('{ "a": 1,, }', "k", "1")).toBeNull();
+  });
+
   test("copilot's AGENTS.md stays exclusive", () => {
     const project = temp("aidlc-t243-exclusive-agents-");
     mkdirSync(join(project, ".git"));
@@ -1938,6 +2164,10 @@ describe("t243 project initialization", () => {
     const scopeData = join(project, ".claude", "tools", "data", "scope-grid.json");
     const selected = JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>;
     selected.plugins = ["aidlc", "test-pro"];
+    // Identity the source owns: a refresh replaces a stale row name and drops a
+    // layout this row does not declare, while the person's plugin selection stays.
+    selected.name = "kiro-ide";
+    selected.kiroLayout = "kas";
     writeFileSync(harnessData, `${JSON.stringify(selected, null, 2)}\n`);
     writeFileSync(graphData, `${readFileSync(graphData, "utf-8").trimEnd()}\n `);
     const scopeGrid = JSON.parse(readFileSync(scopeData, "utf-8")) as Record<string, unknown>;
@@ -1981,6 +2211,8 @@ describe("t243 project initialization", () => {
     expect(readFileSync(memory, "utf-8")).toBe("# local method\n");
     expect(readFileSync(framework, "utf-8")).not.toContain("// local edit");
     expect(JSON.parse(readFileSync(harnessData, "utf-8")).plugins).toEqual(["aidlc", "test-pro"]);
+    expect(JSON.parse(readFileSync(harnessData, "utf-8")).name).toBe("claude");
+    expect(JSON.parse(readFileSync(harnessData, "utf-8")).kiroLayout).toBeUndefined();
     expect(() => JSON.parse(readFileSync(graphData, "utf-8"))).not.toThrow();
     expect(readFileSync(graphData, "utf-8")).not.toEndWith("\n ");
     expect(JSON.parse(readFileSync(scopeData, "utf-8"))["custom-composed"]).toEqual(scopeGrid.bugfix);
@@ -2136,6 +2368,163 @@ describe("t243 project initialization", () => {
       "Upstream overlay probe.",
     );
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  describe("project-owned files under the harness dir (#1516)", () => {
+    const skillRel = ".claude/skills/my-team-skill/SKILL.md";
+    const skillBody = "---\nname: my-team-skill\ndescription: A project-owned skill.\n---\n\n# My team skill\n";
+    const manifestRel = ".claude/tools/data/aidlc-manifest.json";
+
+    function manifestOf(
+      project: string,
+    ): { frameworkVersion: string; files: Record<string, string>; shippedOnly?: true } {
+      return JSON.parse(readFileSync(join(project, manifestRel), "utf-8"));
+    }
+
+    function put(project: string, rel: string, body: string): void {
+      mkdirSync(join(project, dirname(rel)), { recursive: true });
+      writeFileSync(join(project, rel), body);
+    }
+
+    function installedProject(): string {
+      const project = temp("aidlc-t243-owned-");
+      mkdirSync(join(project, ".git"));
+      const installed = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      return project;
+    }
+
+    function refresh(project: string, extra: string[] = []) {
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      return refreshed;
+    }
+
+    test("a project-owned skill survives repeated refreshes and is never recorded as framework-owned", () => {
+      const project = installedProject();
+      put(project, skillRel, skillBody);
+
+      for (let pass = 1; pass <= 3; pass++) {
+        const refreshed = refresh(project);
+        expect(existsSync(join(project, skillRel)), `refresh ${pass}`).toBe(true);
+        expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(skillRel);
+        expect(refreshed.stdout + refreshed.stderr).not.toMatch(/remove[^\n]*my-team-skill/);
+      }
+      const dry = refresh(project, ["--dry-run", "--json"]);
+      const actions = (JSON.parse(dry.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      }).data.actions;
+      expect(actions.find((action) => action.path === skillRel)).toEqual({
+        path: skillRel,
+        action: "preserve",
+        detail: "project-owned",
+      });
+      expect(actions.find((action) => action.path === manifestRel)?.detail).not.toBe("project-owned");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a project-owned stage the staged merge rewrites is never recorded either", () => {
+      const project = installedProject();
+      const stageRel = ".claude/aidlc-common/stages/construction/team-review.md";
+      const shipped = readFileSync(
+        join(CLAUDE_RELEASE, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"),
+        "utf-8",
+      );
+      const stage = shipped
+        .replace("slug: build-and-test", "slug: team-review")
+        .replace("name: Build and Test", "name: Team Review")
+        .replace(/produces:\n(?: {2}- .+\n)+/, "produces:\n  - team-review-notes\n");
+      expect(stage).toContain("slug: team-review");
+      put(project, stageRel, stage);
+      put(
+        project,
+        ".claude/tools/data/plugin-contrib-demo.json",
+        `${JSON.stringify({ "team-review": { produces: ["demo-extra"] } }, null, 2)}\n`,
+      );
+
+      for (let pass = 1; pass <= 3; pass++) {
+        refresh(project);
+        expect(existsSync(join(project, stageRel)), `refresh ${pass}`).toBe(true);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(stageRel);
+        expect(existsSync(join(project, ".claude/tools/data/plugin-contrib-demo.json")), `refresh ${pass}`).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a framework file the release no longer ships is still removed", () => {
+      const project = installedProject();
+      const retiredRel = ".claude/skills/aidlc-retired-probe/SKILL.md";
+      const retiredBody = "---\nname: aidlc-retired-probe\n---\n\nShipped by an earlier release.\n";
+      put(project, retiredRel, retiredBody);
+      const manifest = manifestOf(project);
+      expect(manifest.shippedOnly).toBe(true);
+      manifest.files[retiredRel] = sha256Bytes(retiredBody);
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const refreshed = refresh(project);
+      expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
+      expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("project files an older refresh recorded are kept and dropped from the record", () => {
+      const project = installedProject();
+      const notesRel = ".claude/knowledge/team-notes/notes.md";
+      put(project, skillRel, skillBody);
+      put(project, notesRel, "Team notes, edited after the older refresh.\n");
+      const manifest = manifestOf(project);
+      delete manifest.shippedOnly;
+      manifest.files[skillRel] = sha256Bytes(skillBody);
+      manifest.files[notesRel] = sha256Bytes("Team notes.\n");
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      for (let pass = 1; pass <= 2; pass++) {
+        refresh(project);
+        expect(readFileSync(join(project, skillRel), "utf-8"), `refresh ${pass}`).toBe(skillBody);
+        expect(readFileSync(join(project, notesRel), "utf-8"), `refresh ${pass}`)
+          .toBe("Team notes, edited after the older refresh.\n");
+        const after = manifestOf(project);
+        expect(after.files).not.toHaveProperty(skillRel);
+        expect(after.files).not.toHaveProperty(notesRel);
+        expect(after.shippedOnly).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a record-only adoption leaves the manifest unmarked, so the next refresh keeps project files", () => {
+      const project = temp("aidlc-t243-owned-copy-");
+      cpSync(CLAUDE_COPY, project, { recursive: true });
+      mkdirSync(join(project, ".git"));
+      put(project, skillRel, skillBody);
+      const machine = { AIDLC_INSTALL_ROOT: temp("aidlc-t243-owned-machine-") };
+      const recorded = run(INIT, [
+        "config", "models", "--project-dir", project, "--project", "--preset", "balanced", "--yes",
+      ], project, machine);
+      expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+      expect(manifestOf(project).shippedOnly).toBeUndefined();
+
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project, machine);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+      expect(manifestOf(project).files).not.toHaveProperty(skillRel);
+      expect(manifestOf(project).shippedOnly).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
+  test("a host subagent in .claude/agents does not stop a refresh", () => {
+    const project = temp("aidlc-t243-host-agent-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const hostAgent = join(project, ".claude", "agents", "foo-agent.md");
+    const body = "---\nname: foo-agent\ndescription: A subagent another tool installed.\ntools: Read\n---\n\nYou review pull requests.\n";
+    writeFileSync(hostAgent, body);
+
+    const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout + refreshed.stderr).not.toContain("missing required frontmatter");
+    expect(readFileSync(hostAgent, "utf-8")).toBe(body);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("pre-manifest adoption preserves all mutable harness policy keys", () => {
@@ -2338,7 +2727,121 @@ describe("t243 project initialization", () => {
     expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
 
-  test("exact legacy root signatures are adopted while modified lookalikes still refuse", () => {
+  // Copied harnesses each run their own engine and hooks against the project's
+  // workflows, so these cases drive the copy channel.
+  function kiroUnderRunningWorkflow(prefix: string): { project: string; stampPath: string; kiroStamp: Record<string, unknown> } {
+    const project = temp(prefix);
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, "260919-add-split");
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000003",
+      slug: "add-split",
+      dirName: "260919-add-split",
+      scope: "feature",
+      status: "in-flight",
+    }], null, 2)}\n`);
+    writeFileSync(join(intentDir, "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    return { project, stampPath, kiroStamp: JSON.parse(readFileSync(stampPath, "utf-8")) };
+  }
+
+  test("a copied harness added from another release while a workflow runs is refused with the fetch of the running release", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-split-");
+    const addClaude = (...extra: string[]) => run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
+    ], project);
+
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = addClaude("--yes");
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (default/260919-add-split) uses ${NEXT_VERSION}`,
+    );
+    expect(payload.message).toContain(`aidlc-copy-runtime-${NEXT_VERSION}.tar.gz`);
+    // The rerun fetches the running release instead of the files named.
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    const previewed = addClaude("--dry-run");
+    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    writeFileSync(stampPath, `${JSON.stringify(kiroStamp, null, 2)}\n`);
+    const added = addClaude("--yes");
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied harness added beside a release that predates sharing a project waits for the workflow", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-predates-");
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    // Before harnesses could share a project, no release shared .gitignore.
+    const descriptorPath = join(project, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<Record<string, unknown>>;
+    };
+    for (const integration of descriptor.rootIntegrations) delete integration.shared;
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
+    );
+    expect(payload.message).toContain("kiro 2.9.0");
+    expect(payload.remediation ?? "").toContain("Complete the workflow");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness|--download/);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned project's add from other files names the pinned release, not the running workflow", () => {
+    const { project } = kiroUnderRunningWorkflow("aidlc-t243-add-version-pinned-");
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const source = temp("aidlc-t243-add-version-source-");
+    cpSync(CLAUDE_RELEASE, source, { recursive: true });
+    const sourceStamp = join(source, ".claude", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(sourceStamp, "utf-8"));
+    writeFileSync(sourceStamp, `${JSON.stringify({ ...stamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", source, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${NEXT_VERSION}, but this project is pinned to ${AIDLC_VERSION}`,
+    );
+    expect(payload.message).not.toContain("refusing to add");
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("adding a harness on another version is allowed once no workflow runs", () => {
+    const project = temp("aidlc-t243-add-version-idle-");
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const kiroStamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    const added = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes",
+    ], project);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("exact legacy root signatures are adopted", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
     mkdirSync(join(project, ".git"));
     cpSync(join(CLAUDE_COPY, ".gitignore"), join(project, ".gitignore"));
@@ -2367,6 +2870,11 @@ describe("t243 project initialization", () => {
     const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
     expect(gitignore.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
     expect(gitignore.match(/END AI-DLC:gitignore/g)).toHaveLength(1);
+    expect(gitignore).toBe(
+      `# BEGIN AI-DLC:gitignore\n${
+        readFileSync(join(CLAUDE_RELEASE, ".gitignore"), "utf-8").trim()
+      }\n# END AI-DLC:gitignore\n`,
+    );
 
     const baseline = JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
@@ -2396,26 +2904,304 @@ describe("t243 project initialization", () => {
     expect(disabled.status, disabled.stdout + disabled.stderr).toBe(0);
     expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers)
       .toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    const ambiguous = temp("aidlc-t240-legacy-ambiguous-");
-    mkdirSync(join(ambiguous, ".git"));
-    writeFileSync(
-      join(ambiguous, ".gitignore"),
-      `${readFileSync(join(CLAUDE_COPY, ".gitignore"), "utf-8")}# local AI-DLC rule\n`,
-    );
+  test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {
+    const project = temp("aidlc-t243-hidden-records-");
+    expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+    const path = join(project, ".gitignore");
+    const original = "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n";
+    writeFileSync(path, original);
+    // The rule is the user's choice: config finishes, keeps it, and says what it hides.
+    for (const flags of [["--dry-run", "--verbose"], []]) {
+      const configured = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+        "--harness", "claude", "--mcp", "none", ...flags,
+      ], project);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+      expect(configured.stdout).toContain(
+        "Note: .gitignore:2 hides committed workflow records",
+      );
+      expect(configured.stdout).toContain("so new ones will not reach teammates");
+      for (const record of ["intents.json", "aidlc-state.md", "audit/*.md", "memory/**", "codekb/**"]) {
+        expect(configured.stdout).toContain(record);
+      }
+    }
+    const merged = readFileSync(path, "utf-8");
+    expect(merged.startsWith(original)).toBe(true);
+    expect(merged.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
+
+    // Quiet output is one message, and the finding is part of it.
+    const quietProject = temp("aidlc-t243-hidden-records-quiet-");
+    expect(spawnSync("git", ["init", "-q", quietProject]).status).toBe(0);
+    writeFileSync(join(quietProject, ".gitignore"), original);
+    for (const flags of [["--dry-run", "--quiet"], ["--quiet"]]) {
+      const quiet = run(INIT, [
+        "config", "--project-dir", quietProject, "--from", CLAUDE_RELEASE,
+        "--harness", "claude", "--mcp", "none", ...flags,
+      ], quietProject);
+      expect(quiet.status, quiet.stdout + quiet.stderr).toBe(0);
+      // The result line comes first; the one hiding rule adds one whole
+      // Warning line (an outstanding-actions line may follow it).
+      const lines = quiet.stdout.trim().split("\n");
+      expect(lines[0], flags.join(" ")).not.toContain("Warning:");
+      const warnings = lines.filter((line) => line.startsWith("Warning: "));
+      expect(warnings, flags.join(" ")).toHaveLength(1);
+      expect(warnings[0]).toContain(".gitignore:2 hides committed workflow records");
+      expect(warnings[0]).toContain("narrow the rule if that is not intended");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a hiding rule is named from the project, with control characters made visible", () => {
+    // A project nested in a repository whose root .gitignore holds the rule,
+    // and a pattern carrying an escape byte inside a redundant character class.
+    const repo = temp("aidlc-t243-hidden-nested-");
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    writeFileSync(join(repo, ".gitignore"), "a[i\u001b]dlc/\n");
+    const project = join(repo, "packages", "api");
+    mkdirSync(project, { recursive: true });
+    const planned = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none", "--dry-run",
+    ], project);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    expect(planned.stdout).toContain("../../.gitignore:1 hides committed workflow records");
+    expect(planned.stdout).not.toContain("a[i");
+    expect(planned.stdout).not.toContain("\u001b");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unmarked harmless AI-DLC rules remain user-owned in a real git repository", () => {
+    const project = temp("aidlc-t243-visible-records-");
+    expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+    const path = join(project, ".gitignore");
+    const original = "# AI-DLC notes\naidlc/**/*.log\n";
+    writeFileSync(path, original);
+    const applied = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none",
+    ], project);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const installed = readFileSync(path, "utf-8");
+    expect(installed).toStartWith(original);
+    expect(installed).toContain("# BEGIN AI-DLC:gitignore");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("unmarked blanket aidlc ignore is preserved outside a git repository", () => {
+    const project = temp("aidlc-t243-no-git-");
+    const path = join(project, ".gitignore");
+    const original = "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n";
+    writeFileSync(path, original);
+    const applied = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE,
+      "--harness", "claude", "--mcp", "none",
+    ], project);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const installed = readFileSync(path, "utf-8");
+    expect(installed).toStartWith(original);
+    expect(installed).toContain("# BEGIN AI-DLC:gitignore");
+    expect(existsSync(join(project, ".git"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const fixture of [
+    {
+      name: "ordinary ignore rules",
+      contents: () => "# Project build output\nnode_modules/\nbuild/\n\n",
+      newline: "\n",
+    },
+    {
+      name: "aidlc rules and an AI-DLC comment",
+      contents: () => "# AI-DLC output owned by this project\naidlc/\n!aidlc/README.md\n",
+      newline: "\n",
+    },
+    {
+      name: "CRLF rules without a final newline",
+      contents: () => "# AI-DLC output — project rules\r\naidlc/\r\nlocal-cache/",
+      newline: "\r\n",
+    },
+    {
+      name: "a locally edited shipped gitignore",
+      contents: () =>
+        `${readFileSync(join(CLAUDE_COPY, ".gitignore"), "utf-8")}# local AI-DLC rule\naidlc/custom/\n`,
+      newline: "\n",
+    },
+  ]) {
+    test(`unmarked gitignore preserves ${fixture.name} through dry-run, apply, and refresh`, () => {
+      const project = temp("aidlc-t243-user-gitignore-");
+      mkdirSync(join(project, ".git"));
+      const path = join(project, ".gitignore");
+      const original = Buffer.from(fixture.contents());
+      writeFileSync(path, original);
+      const args = [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        CLAUDE_RELEASE,
+        "--harness",
+        "claude",
+        "--json",
+      ];
+      type ConfigPlan = {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      };
+
+      const dry = run(INIT, [...args, "--dry-run", "--verbose"], project);
+      expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+      const dryPlan = JSON.parse(dry.stdout) as ConfigPlan;
+      expect(dryPlan.data.actions.find((action) => action.path === ".gitignore"))
+        .toEqual({ path: ".gitignore", action: "merge" });
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+
+      const applied = run(INIT, args, project);
+      expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+      const installed = readFileSync(path);
+      expect(installed.subarray(0, original.length)).toEqual(original);
+      const block = [
+        "# BEGIN AI-DLC:gitignore",
+        readFileSync(join(CLAUDE_RELEASE, ".gitignore"), "utf-8")
+          .trim().replace(/\r?\n/g, fixture.newline),
+        "# END AI-DLC:gitignore",
+      ].join(fixture.newline);
+      const appended = installed.subarray(original.length).toString();
+      expect(appended).toStartWith(fixture.newline);
+      expect(appended.trim()).toBe(block);
+      expect(appended).toEndWith(fixture.newline);
+      expect(installed.toString().match(/# BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
+      expect(installed.toString().match(/# END AI-DLC:gitignore/g)).toHaveLength(1);
+
+      const manifestPath = join(project, ".claude", "tools", "data", "aidlc-manifest.json");
+      const contribution = {
+        policy: "managed-block",
+        marker: "gitignore",
+        hash: sha256Bytes(block),
+      };
+      const baseline = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        files: Record<string, string>;
+        rootContributions: Record<string, unknown>;
+      };
+      expect(baseline.files[".gitignore"]).toBeUndefined();
+      expect(baseline.rootContributions[".gitignore"]).toEqual(contribution);
+
+      // An unchanged refresh is idempotent; subsequent user-prefix edits remain unowned.
+      for (const userEdit of ["", `# Later AI-DLC project rule${fixture.newline}`]) {
+        const beforeRefresh = Buffer.concat([Buffer.from(userEdit), installed]);
+        if (userEdit) writeFileSync(path, beforeRefresh);
+        const refreshed = run(INIT, args, project);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        const refreshPlan = JSON.parse(refreshed.stdout) as ConfigPlan;
+        expect(refreshPlan.data.actions.find((action) => action.path === ".gitignore"))
+          .toEqual({ path: ".gitignore", action: "preserve" });
+        expect(readFileSync(path)).toEqual(beforeRefresh);
+        const refreshedBaseline = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+          files: Record<string, string>;
+          rootContributions: Record<string, unknown>;
+        };
+        expect(refreshedBaseline.files[".gitignore"]).toBeUndefined();
+        expect(refreshedBaseline.rootContributions[".gitignore"]).toEqual(contribution);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("unmarked gitignore with invalid UTF-8 refuses without changing its bytes even with --force", () => {
+    const project = temp("aidlc-t243-gitignore-encoding-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, ".gitignore");
+    const original = Buffer.concat([
+      Buffer.from("# AI-DLC\n"),
+      Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x2f, 0x0a]),
+    ]);
+    writeFileSync(path, original);
+    for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+      const refused = run(INIT, [
+        "config",
+        "--project-dir",
+        project,
+        "--from",
+        CLAUDE_RELEASE,
+        "--harness",
+        "claude",
+        ...flags,
+      ], project);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(
+        "gitignore is not valid UTF-8; convert its encoding before config",
+      );
+      expect(readFileSync(path)).toEqual(original);
+      expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+      expect(readdirSync(join(project, ".git"))).toEqual([]);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const fixture of [
+    {
+      name: "missing end marker",
+      contents: "# BEGIN AI-DLC:gitignore\naidlc/\n",
+      error: "managed markers are missing, duplicated, or malformed",
+    },
+    {
+      name: "missing begin marker",
+      contents: "aidlc/\n# END AI-DLC:gitignore\n",
+      error: "managed markers are missing, duplicated, or malformed",
+    },
+    {
+      name: "duplicate blocks",
+      contents: "# BEGIN AI-DLC:gitignore\naidlc/\n# END AI-DLC:gitignore\n".repeat(2),
+      error: "managed markers are missing, duplicated, or malformed",
+    },
+    {
+      name: "reversed markers",
+      contents: "# END AI-DLC:gitignore\naidlc/\n# BEGIN AI-DLC:gitignore\n",
+      error: "managed end marker precedes its begin marker",
+    },
+  ]) {
+    test(`gitignore with ${fixture.name} still refuses even with --force`, () => {
+      const project = temp("aidlc-t243-gitignore-markers-");
+      mkdirSync(join(project, ".git"));
+      const path = join(project, ".gitignore");
+      writeFileSync(path, fixture.contents);
+      for (const flags of [["--dry-run", "--verbose"], ["--force"]]) {
+        const refused = run(INIT, [
+          "config",
+          "--project-dir",
+          project,
+          "--from",
+          CLAUDE_RELEASE,
+          "--harness",
+          "claude",
+          ...flags,
+        ], project);
+        expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+        expect(refused.stdout).toContain(fixture.error);
+        expect(readFileSync(path, "utf-8")).toBe(fixture.contents);
+        expect(readdirSync(project).sort()).toEqual([".git", ".gitignore"]);
+        expect(readdirSync(join(project, ".git"))).toEqual([]);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("modified unmarked AGENTS.md still refuses as ambiguous even with --force", () => {
+    const project = temp("aidlc-t243-agents-ambiguous-");
+    mkdirSync(join(project, ".git"));
+    const path = join(project, "AGENTS.md");
+    const original = `${readFileSync(join(KIRO_RELEASES[0], "AGENTS.md"), "utf-8")}\n# Local AI-DLC instructions\n`;
+    writeFileSync(path, original);
     const refused = run(INIT, [
       "config",
       "--project-dir",
-      ambiguous,
+      project,
       "--from",
-      CLAUDE_RELEASE,
+      KIRO_RELEASES[0],
       "--harness",
-      "claude",
+      "kiro",
       "--force",
-    ], ambiguous);
-    expect(refused.status).toBe(4);
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
     expect(refused.stdout).toContain("legacy root integration ambiguous");
-    expect(existsSync(join(ambiguous, ".claude"))).toBe(false);
+    expect(readFileSync(path, "utf-8")).toBe(original);
+    expect(readdirSync(project).sort()).toEqual([".git", "AGENTS.md"]);
+    expect(readdirSync(join(project, ".git"))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--force does not replace a pre-existing user-owned JSON entry", () => {
@@ -4685,6 +5471,7 @@ describe("t243 release lifecycle", () => {
     process.env.AIDLC_BIN_DIR = join(machine, "bin");
     const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
     try {
+      expect(releaseReservation).not.toBeNull();
       const protectedPrune = run(
         LIFECYCLE,
         ["versions", "prune", "--yes"],
@@ -4695,7 +5482,7 @@ describe("t243 release lifecycle", () => {
       expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
       expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
     } finally {
-      releaseReservation();
+      releaseReservation?.();
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
       if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
@@ -4705,7 +5492,169 @@ describe("t243 release lifecycle", () => {
     const pruned = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
     expect(pruned.status, pruned.stdout + pruned.stderr).toBe(0);
     expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(false);
-    expect(existsSync(join(machine, "reservations"))).toBe(false);
+    // Release keeps the directory; removing it outside the lock races other reservations.
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")(
+    "a dispatched-version reservation waits out a live transaction lock holder",
+    () => {
+      const activeRelease = fixtureRelease();
+      const retainedRelease = fixtureRelease(NEXT_VERSION);
+      const machine = temp("aidlc-t243-reservation-wait-machine-");
+      const project = temp("aidlc-t243-reservation-wait-project-");
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      expect(run(LIFECYCLE, [
+        "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+      ], project, env).status).toBe(0);
+      expect(run(LIFECYCLE, [
+        "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+      ], project, env).status).toBe(0);
+
+      const saved = {
+        root: process.env.AIDLC_INSTALL_ROOT,
+        bin: process.env.AIDLC_BIN_DIR,
+      };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const holder = spawnSync("sh", ["-c", "sleep 1 >/dev/null 2>&1 & echo $!"], {
+          encoding: "utf-8",
+        });
+        const pid = Number(holder.stdout.trim());
+        expect(Number.isSafeInteger(pid) && pid > 0, holder.stderr).toBe(true);
+        const lockPath = join(machineTransactionRoot(), ".aidlc-transaction.lock");
+        writeFileSync(lockPath, `${JSON.stringify({ pid, staging: ".aidlc-txn-held" })}\n`);
+
+        const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
+        try {
+          expect(releaseReservation).not.toBeNull();
+          expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
+          expect(existsSync(lockPath)).toBe(false);
+        } finally {
+          releaseReservation?.();
+        }
+        expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
+  test("parallel dispatched-version reservations all land, as parallel hooks make them", async () => {
+    const activeRelease = fixtureRelease();
+    const retainedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-parallel-machine-");
+    const project = temp("aidlc-t243-reservation-parallel-project-");
+    const barrier = temp("aidlc-t243-reservation-parallel-barrier-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+    ], project, env).status).toBe(0);
+
+    // Each child signals ready, then all reserve at once when `go` appears.
+    const child = join(barrier, "reserve.ts");
+    writeFileSync(child, [
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      `const { reserveDispatchedVersion } = await import(${
+        JSON.stringify(pathToFileURL(LIFECYCLE).href)
+      });`,
+      `const barrier = ${JSON.stringify(barrier)};`,
+      `writeFileSync(join(barrier, "ready-" + process.pid), "");`,
+      `while (!existsSync(join(barrier, "go"))) Bun.sleepSync(5);`,
+      `const release = reserveDispatchedVersion(${JSON.stringify(NEXT_VERSION)});`,
+      `if (!release) throw new Error("the reservation gave up on a busy lock");`,
+      `Bun.sleepSync(Math.random() * 50);`,
+      `release();`,
+      "",
+    ].join("\n"));
+    const children = Array.from({ length: 8 }, () =>
+      Bun.spawn([BUN, child], {
+        cwd: project,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+    );
+    const results = Promise.all(children.map(async (spawned) => {
+      const [status, stderr] = await Promise.all([
+        spawned.exited,
+        new Response(spawned.stderr).text(),
+      ]);
+      return { status, stderr };
+    }));
+    const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
+    while (
+      readdirSync(barrier).filter((name) => name.startsWith("ready-")).length < children.length &&
+      children.every((spawned) => spawned.exitCode === null) &&
+      Date.now() < deadline
+    ) {
+      await Bun.sleep(10);
+    }
+    writeFileSync(join(barrier, "go"), "");
+    for (const result of await results) {
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    expect(existsSync(join(machine, ".aidlc-transaction.lock"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned hook still runs, with a one-line note, when the machine lock stays busy", async () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-busy-machine-");
+    const project = temp("aidlc-t243-reservation-busy-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const hookEnv = { ...env, AIDLC_PROJECT_DIR: project, AIDLC_PIN_RESERVATION_TIMEOUT_MS: "200" };
+    const note = `so this ran on aidlc ${NEXT_VERSION} without waiting for it to finish`;
+
+    const free = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+    expect(free.status, free.stdout + free.stderr).toBe(0);
+    expect(free.stderr).not.toContain(note);
+
+    // A live process that never releases stands in for a stuck lock owner.
+    const holder = Bun.spawn([BUN, "-e", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const lockPath = join(machine, ".aidlc-transaction.lock");
+    try {
+      writeFileSync(lockPath, `${JSON.stringify({ pid: holder.pid, staging: ".aidlc-txn-held" })}\n`);
+      const busy = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+      expect(busy.status, busy.stdout + busy.stderr).toBe(0);
+      expect(busy.stderr).toContain(
+        `aidlc: another AI-DLC command is still changing this machine's install, ${note}.`,
+      );
+      expect(existsSync(lockPath)).toBe(true);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -5397,9 +6346,16 @@ describe("t243 projection channel", () => {
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
           "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
           "sha256:1d51ae4ca4f74f842336dce75bc66bb4bbf55ce2de7c802ab059504cca99fd7b",
+          "sha256:631688bc85683ea22c9415cb345c69169cff4ac45ec006c258217cd261a7793f",
         ],
       },
       codex: {
+        ".gitignore": [
+          "sha256:f919e4bac1790bd1a371d371af473ccbc644f3bb80e4569d190c9364fad771b3",
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+          "sha256:ced6459be00ce352fe298e1ff07759933fa2ebf07a9151ef2f1af995579f7afd",
+          "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
+        ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
           "sha256:47678f42e0233de9b0164eb4ec318a3ba3196074d6ec88f69aa7980bc1f2fd0d",
@@ -5424,6 +6380,12 @@ describe("t243 projection channel", () => {
         ],
       },
       kiro: {
+        ".gitignore": [
+          "sha256:83449fdda4644b319cbea5dcbde11919722b5dd6761f4edb4caf0e0e53dc9c6b",
+          "sha256:469dbf89f83865b58b2ae4c51dd2f2fe51fd80a9e2033bfb233688141d0cf632",
+          "sha256:af1b98a4b8c0e288aa8177655495b4a65220dbed2e149a67780aff1e8f379c9d",
+          "sha256:2f413414992c405c11a8bccb230574c2f58cec8fd2906cd37b7cd62bb33a97d8",
+        ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
           "sha256:992307cc3fac05d81958851b2ca51db3723fea604c8d2636814ef9b2e9f7a848",
@@ -5443,6 +6405,12 @@ describe("t243 projection channel", () => {
         ],
       },
       "kiro-ide": {
+        ".gitignore": [
+          "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
+          "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
+          "sha256:9dca2d16f38509dacc876574d67391f84476e9eea349c2f5250b0325895ce0b8",
+          "sha256:e0829e668399a331c6fda7c267e3983b56ee23029ce8d5520394e3e70cf7d21d",
+        ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
           "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
@@ -5462,6 +6430,11 @@ describe("t243 projection channel", () => {
         ],
       },
       cursor: {
+        ".gitignore": [
+          "sha256:b4bf7694361e76aae9feabc5d985d09afb7863cf8458b0c9aaa73f20a589582f",
+          "sha256:a87496436cb23f303dee533322bd0896e981e14be1a7abd18e76aa5e113be02c",
+          "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
+        ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
           "sha256:2907b5293bfd8bd9d5f8b7a8025bfe23edd0ffcd31f925761916088517880936",
@@ -5474,6 +6447,11 @@ describe("t243 projection channel", () => {
         ],
       },
       opencode: {
+        ".gitignore": [
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+          "sha256:ced6459be00ce352fe298e1ff07759933fa2ebf07a9151ef2f1af995579f7afd",
+          "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
+        ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
           "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
@@ -5487,6 +6465,11 @@ describe("t243 projection channel", () => {
         ],
       },
       copilot: {
+        ".gitignore": [
+          "sha256:f52e6097d36c2e5bc199a2529469a4c6e7c507f7960f94a0b2b46f9aeee60e56",
+          "sha256:1a25bf94915b9f1c67136cfb36f5c82c03c6f6540deddd2af9e760e0f93069df",
+          "sha256:a739ce7cf309c603b4c962313a53cb2a238888b73c204a86f928cd61dcb3e548",
+        ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
           "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
@@ -5495,6 +6478,8 @@ describe("t243 projection channel", () => {
           "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
           "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
           "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
+          "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
+          "sha256:1095316799b8630bcb498539cb82b9b0907fa7aa69cdfb3ee6a9b489c8ed42e3",
         ],
       },
     };

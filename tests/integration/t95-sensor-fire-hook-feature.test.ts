@@ -544,6 +544,8 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
     expect(existsSync(dropsPath(proj))).toBe(true);
     const drops = readFileSync(dropsPath(proj), "utf-8");
     expect(drops).toContain("subprocess killed by SIGTERM");
+    // The failure class comes before the first ": ", the part doctor shows.
+    expect(drops).toMatch(/\tsensor \S+ timed out: subprocess killed by SIGTERM/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C6a: hook exits 0 even when the subprocess exits non-zero (G5 advisory) [.sh test 14]", () => {
@@ -570,6 +572,7 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
     expect(existsSync(dropsPath(proj))).toBe(true);
     const drops = readFileSync(dropsPath(proj), "utf-8");
     expect(drops).toContain("dispatcher exit 1");
+    expect(drops).toMatch(/\tsensor \S+ dispatcher exit 1/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("C7: hook stdout never carries a {decision: block} payload (advisory contract) [.sh test 16]", () => {

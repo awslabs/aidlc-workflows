@@ -166,7 +166,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -186,10 +186,57 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       expect(d.available_intents).toHaveLength(2);
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
+
+    test("a cursor-less space whose every intent is complete routes to creation, not the picker", () => {
+      const records = seedTwoIntentsNoCursor();
+      // Mark every record complete: finished work is not offered as a pick.
+      const rows = readIntentRegistry(proj).map((row) =>
+        records.includes(row.dirName ?? "") ? { ...row, status: "complete" } : row,
+      );
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      // New prose over an all-complete, cursor-less space: no picker, no
+      // "pieces of work" prompt — it routes to a creation-side directive.
+      const d = JSON.parse(next(["a brand new standalone thing"]).stdout.trim());
+      expect(d.ask_type).not.toBe("intent-pick");
+      expect(d.ask_type).not.toBe("new-work-routing");
+      expect(JSON.stringify(d)).not.toContain("pieces of work");
+      expect(recordDirs(proj).length).toBe(2); // read-only: no third intent yet
+    });
+
+    // Finished either way: the registry row (complete-workflow) or only the
+    // state file (finalize).
+    for (const finishedBy of ["registry", "state"] as const) {
+      test(`beside live work, work finished in the ${finishedBy} is neither listed nor counted`, () => {
+        const [finished, live] = seedTwoIntentsNoCursor();
+        if (finishedBy === "registry") {
+          const rows = readIntentRegistry(proj).map((row) =>
+            row.dirName === finished ? { ...row, status: "complete" } : row,
+          );
+          writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+        } else {
+          const statePath = join(intentsDir(proj), finished, "aidlc-state.md");
+          const state = readFileSync(statePath, "utf-8");
+          expect(state).toMatch(/^- \*\*Status\*\*: /m);
+          writeFileSync(statePath, state.replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
+        }
+        const pick = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+        expect(pick.ask_type).toBe("intent-pick");
+        expect(pick.question).toContain("1 piece of work in progress");
+        expect(pick.question).toContain(live);
+        expect(pick.question).not.toContain(finished);
+        expect(pick.available_intents).toEqual([live]);
+        const routing = JSON.parse(next(["--scope", "poc", "a brand new standalone thing"]).stdout.trim());
+        expect(routing.ask_type).toBe("new-work-routing");
+        expect(routing.question).toContain("1 piece of work in progress");
+        expect(routing.question).not.toContain(finished);
+        expect(routing.available_intents).toEqual([live]);
+        expect(recordDirs(proj).length).toBe(2); // read-only
+      });
+    }
 
     for (const selector of ["customer work", "x; touch pwned"]) {
       test(`intent picker executes literal selector ${selector}`, () => {
@@ -232,6 +279,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.available_intents).toHaveLength(2);
         expect(d.new_work_description).toBe("Create a tiny TypeScript command-line program that prints Hello World.");
         expect(d.proposed_scope).toBe("poc");
+      });
+
+      test(`${harness.name}: the intent picker names the harness's own entry`, () => {
+        seedTwoIntentsNoCursor();
+        const orchestrator = join(harness.engineRoot, "tools", "aidlc-orchestrate.ts");
+        const d = JSON.parse(next(["--scope", "poc"], proj, orchestrator).stdout.trim());
+        expect(d.ask_type).toBe("intent-pick");
+        // A Codex user invokes the skill, not a slash command.
+        expect(d.question).toContain(`${harness.name === "codex" ? "$aidlc" : "/aidlc"} intent <record>`);
       });
     }
 
@@ -352,6 +408,50 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
       expect(again.new_work_description).toBe("rename the settings page");
       expect(again.continue_command).not.toBe(ask.continue_command);
+    });
+
+    test("a routing continue said in prose re-asks, like its command, when another workflow is selected", () => {
+      expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
+      const asked = readFileSync(cursorPath(proj), "utf-8").trim();
+      const other = recordDirs(proj).find((record) => record !== asked)!;
+      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
+      const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
+      const again = JSON.parse(next(["1"]).stdout.trim());
+      expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+      expect(again.new_work_description).toBe("rename the settings page");
+      expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8")).toBe(stateBefore);
+    });
+
+    test("a routing continue that re-asks is not taken as the answer to the now-selected stage's open question", () => {
+      expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
+      const asked = readFileSync(cursorPath(proj), "utf-8").trim();
+      const other = recordDirs(proj).find((record) => record !== asked)!;
+      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
+      // The selected workflow's current stage is [-] with a logged, unanswered
+      // question (dated after the rows intent creation wrote).
+      const state = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
+      const stage = (state.match(/\*\*Current Stage\*\*: (\S+)/) ?? [])[1]!;
+      expect(state).toContain(`- [-] ${stage} `);
+      mkdirSync(join(intentsDir(proj), other, "audit"), { recursive: true });
+      writeFileSync(
+        join(intentsDir(proj), other, "audit", "fixture-shard.md"),
+        `## Stage Started\n**Timestamp**: 2099-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: ${stage}\n\n---\n` +
+          `## Decision Recorded\n**Timestamp**: 2099-01-01T00:01:00Z\n**Event**: DECISION_RECORDED\n**Stage**: ${stage}\n` +
+          "**Decision**: Which option?\n**Options**: A,B\n\n---\n",
+        "utf-8",
+      );
+      // Without the stored question the same prose answers that open question...
+      expect(JSON.parse(next(["rename the settings page"]).stdout.trim()).message).toContain(`answer --stage ${stage}`);
+      // ...but the routing answer re-asks about the stored request, never re-reads it as an answer.
+      const again = JSON.parse(runEmittedCommand(ask.continue_command).stdout.trim());
+      expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+      expect(again.new_work_description).toBe("rename the settings page");
     });
 
     test("a routing question with a record to pick continues through its select command", () => {

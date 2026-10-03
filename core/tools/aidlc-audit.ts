@@ -20,12 +20,14 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
+  auditShardHostSegment,
   readActiveAuditShardEvents,
   UNTRUSTED_AUDIT_NOTICE,
   sortAttemptEvents,
   attemptEventIsCrossShardTied,
   BoltIdentityError,
   claimAttemptFields,
+  cloneIdFileContent,
   cloneIdPath,
   errorMessage,
   hasUnsafeSingleLineCharacter,
@@ -133,6 +135,9 @@ const VALID_EVENT_TYPES = new Set([
   "ARTIFACT_REUSED",
   // Subagent (hook-emitted)
   "SUBAGENT_COMPLETED",
+  // Advisory, never a HUMAN_TURN: a Copilot prompt arrived right after a
+  // subagent started in that chat and matched no recorded subagent brief.
+  "SUBAGENT_PROMPT_UNMATCHED",
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
@@ -188,6 +193,10 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // The person said the work is a new project or existing code: the folder
+  // rescanned and the type recorded as theirs. Emitted by aidlc-utility.ts
+  // handleReclassify.
+  "WORKSPACE_RECLASSIFIED",
   // A piece of work's plan kept as a reusable scope. Emitted by
   // aidlc-utility.ts handleScopeSave.
   "SCOPE_SAVED",
@@ -196,6 +205,10 @@ const VALID_EVENT_TYPES = new Set([
   // Error/Recovery
   "ERROR_LOGGED",
   "RECOVERY_COMPLETED",
+  // The Copilot adapter could not find or trust its coordination record for an
+  // AI-DLC command, so it let the command reach the engine, which answers from
+  // disk, instead of refusing it. Advisory; it never carries the command text.
+  "COORDINATION_STOOD_ASIDE",
   // Construction Bolt execution
   "BOLT_STARTED",
   "BOLT_COMPLETED",
@@ -203,6 +216,7 @@ const VALID_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
@@ -302,6 +316,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
+  SUBAGENT_PROMPT_UNMATCHED: "Subagent Prompt Unmatched",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
@@ -323,15 +338,18 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  WORKSPACE_RECLASSIFIED: "Workspace Reclassified",
   SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
+  COORDINATION_STOOD_ASIDE: "Coordination Stood Aside",
   BOLT_STARTED: "Bolt Started",
   BOLT_COMPLETED: "Bolt Completed",
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
@@ -458,6 +476,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  // The applied Construction policy decides which stage starts are attempt
+  // boundaries for Unit receipts, so only its typed setters may record it.
+  "CONSTRUCTION_POLICY_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
@@ -530,6 +551,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",
   "UNIT_PAUSED",
@@ -683,6 +705,61 @@ export function appendAuditEntry(
     return appendAuditEntryUnlocked(eventType, fields, projectDir, intent, space);
   } finally {
     releaseAuditLock(projectDir, intent, space);
+  }
+}
+
+// The Copilot adapter's advisory row (#1411). VS Code delivers a runSubagent
+// brief as a prompt right after the subagent starts; the adapter matches it to
+// the brief recorded at launch and never counts it as the person's turn. A
+// prompt that arrives within seconds of a subagent start in the same chat and
+// matches no record lands here, so a change in the text the host sends is
+// noticed. Such a prompt is almost certainly that subagent's brief, so it is
+// never counted as the person's turn (Counted: no); the Reason says whether
+// the record was read and matched nothing, or could not be read at all. The
+// prompt text is never written.
+export function appendSubagentPromptUnmatched(
+  projectDir: string,
+  row: { session: string; agent: string; recordRead: boolean },
+): void {
+  appendAuditEntry("SUBAGENT_PROMPT_UNMATCHED", {
+    ...(row.session ? { Session: row.session } : {}),
+    Agent: row.agent || "unknown",
+    Counted: "no",
+    Reason: row.recordRead
+      ? "no recorded subagent brief matched this prompt right after a subagent started, so it was not counted as the person's turn"
+      : "the subagent brief record could not be read right after a subagent started, so this prompt was not counted as the person's turn",
+  }, projectDir);
+}
+
+// The Copilot adapter's coordination check stood aside (#1411). When the claim
+// ledger cannot find or trust its own record for an AI-DLC command (no record
+// for this project and intent, a record it cannot read, or a workflow state that
+// moved since the record was written), refusing only sends the agent back to a
+// fresh `next`, which re-issues the same step. The adapter lets the command
+// through instead, and the engine answers from its own view of disk. This row is
+// the trace of that pass. It is written only into a shard that already exists,
+// takes the audit lock with a tight bound (a busy lock skips the row rather
+// than hold the person's command), and never throws: a missing trace must not
+// block the command either. The command text and receipt are never written.
+export function appendCoordinationStoodAside(
+  projectDir: string,
+  row: { session: string; command: string; reason: string },
+): boolean {
+  try {
+    if (!existsSync(auditFilePath(projectDir))) return false;
+    if (!acquireAuditLock(projectDir, 2, 25)) return false;
+    try {
+      appendAuditEntryUnlocked("COORDINATION_STOOD_ASIDE", {
+        ...(row.session ? { Session: row.session } : {}),
+        Command: row.command,
+        Reason: row.reason,
+      }, projectDir);
+    } finally {
+      releaseAuditLock(projectDir);
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -1358,7 +1435,10 @@ function handleAuditFork(args: string[], projectDir: string): void {
             ? fsConstants.O_NOFOLLOW
             : 0;
         const bytes = Buffer.from(
-          `${randomUUID().replace(/-/g, "").slice(0, 12)}\n`,
+          cloneIdFileContent(
+            randomUUID().replace(/-/g, "").slice(0, 12),
+            auditShardHostSegment(),
+          ),
         );
         let cloneFd: number | undefined;
         try {

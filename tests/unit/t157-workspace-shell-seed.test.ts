@@ -57,6 +57,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -240,8 +241,12 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         .map((entry) => entry.name)
         .sort();
       expect(actualRootFiles, `${harness.name}: project-root regular files`).toEqual(
-        [...harness.capabilities.rootFiles].sort(),
+        harness.capabilities.rootFiles.filter((file) => !file.includes("/")).sort(),
       );
+      // A root file in a project folder (Copilot's .vscode/settings.json).
+      for (const nested of harness.capabilities.rootFiles.filter((file) => file.includes("/"))) {
+        expect(statSync(join(harness.distRoot, nested)).isFile(), `${harness.name}: ${nested}`).toBe(true);
+      }
     }
   });
 

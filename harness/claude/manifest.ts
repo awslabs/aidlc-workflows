@@ -38,6 +38,8 @@ const manifest: HarnessManifest = {
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:1d51ae4ca4f74f842336dce75bc66bb4bbf55ce2de7c802ab059504cca99fd7b",
         ],
       },
     },
@@ -119,6 +121,8 @@ const manifest: HarnessManifest = {
 
   // Claude renames no core dir.
   rulesRename: null,
+
+  runnerFrontmatterAdditions: ["disable-model-invocation: true"],
 
   // No emit() plugin: Claude's runners come from the shared runner-gen
   // composition and its compiled data from graph compile, both driven by the

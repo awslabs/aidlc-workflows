@@ -83,17 +83,19 @@ approval question; the value also decides which fences stop undirected work,
 and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 - A matched stock scope carries its own default (`guard_policy:` in the
-  scope file; the core defaults are strict on enterprise, security-patch,
-  and infra, off on express, and relaxed on the other seven; a plugin scope
-  uses its own value, read in the order the scope loader reads it:
+  scope file; the core defaults are strict on enterprise and off on the
+  rest; a plugin scope uses its own value, read in the order the scope loader reads it:
   `guard_policy:`, then the retired `change_control:`, then strict when
-  neither line is present). Adopt it and say so.
-- For a custom grid, read the entropy profile the same way the grid was read:
-  high risk or verification entropy, regulated work, or several people sharing
-  the approvals point to strict; a spike, a fix, or a solo run where every
-  changed file would otherwise mean another approval points to relaxed.
+  neither line is present). Adopt it and say so, and keep a stricter value
+  the human asked for on every re-dispatch.
+- For a custom grid, copy the validator's `custom_start.guard_policy`, the
+  classic scope's default (`off` in core), and keep it: a custom plan runs
+  with the guards a person gets without composing, and the human raises it on
+  the gate row if they want more (keep their value on every re-dispatch).
+  Under a memory layer that declares strict, propose strict. Without a
+  `custom_start` echo, start from `nearest_stock[0]`'s default.
   `validate-grid --custom` picks a `base_scope` whose default is that value
-  (any stock scope serves strict), so creation carries it.
+  or lower (any stock scope serves strict), so creation carries it.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
@@ -105,10 +107,11 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   validator and the intent-create command both refuse a relaxed or off value
   under it.
 - Intent creation reads Guard Policy from the scope the plan runs on; the
-  conductor passes `--guard-policy` only for `strict`. A flip to `relaxed` or
-  `off` on a matched proposal is an edit: convert it to custom and revalidate,
-  and the base the validator picks carries the value at creation; no setter
-  runs afterwards.
+  conductor passes `--guard-policy` for `strict` or `relaxed`, raising a lower
+  base default, and never for `off`. A flip below a matched proposal's stock
+  default is an edit: convert it to custom and revalidate, and the base the
+  validator picks carries the value at creation; no setter runs afterwards. A
+  flip above it keeps the proposal matched, and creation applies it.
 
 ## Scope settings
 
@@ -137,7 +140,13 @@ ceremony runs inside them. Every front/report proposal names all five in its
   <scope>` or `--custom`); either flag makes the five settings and the Guard
   Policy required, and the validator checks each against the words the scope
   loader accepts.
-- For a custom grid, start from the validator's nearest stock scope. Either
+- For a custom grid, start from the validator's `custom_start.scope_settings`:
+  the classic scope's values (in core, summary confirmation off, reviews
+  advisory, the rest on), whichever stock scope the plan runs on. The plan
+  picks its own stages; only the ceremony starts from classic. Without a
+  `custom_start` echo, start from the validator's nearest stock scope. A
+  matched proposal that the human's edit turns custom keeps the Guard Policy
+  and settings the gate showed, with their change applied. Either
   way, move a setting only when the entropy profile gives a reason, the same
   way a SKIP needs one:
   - `sensors`: keep on when verification entropy is MED or higher, the work
@@ -146,14 +155,15 @@ ceremony runs inside them. Every front/report proposal names all five in its
     against their sources.
   - `learnings`: keep on for work in a codebase the team will keep changing.
     Off fits a one-off change where the ritual costs more than it returns.
-  - `summary_confirmation`: keep on when intent ambiguity or unresolved
-    assumptions are MED or higher; reading the consolidated answers back is
-    how a misunderstanding gets caught before generation. Off fits work whose
+  - `summary_confirmation`: reading the consolidated answers back is how a
+    misunderstanding gets caught before generation. A matched plan keeps it on
+    when intent ambiguity or unresolved assumptions are MED or higher; a
+    custom plan turns it on only when either is HIGH. Off fits work whose
     answers are already unambiguous.
-  - `plan_approval`: keep the value of the scope the plan runs on (the
-    matched stock scope, or a custom plan's base scope). Never propose turning
-    it off: the validator rejects off where that scope asks, because only the
-    person turns plan approval off.
+  - `plan_approval`: keep the value you start from (the matched stock
+    scope's, or a custom plan's `custom_start`). Never propose turning it off:
+    the validator rejects off where the scope the plan runs on asks, because
+    only the person turns plan approval off.
   - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
     the work is regulated; `advisory` when both are MED or lower and the human
     will read the findings at the gate; `none` only when both are LOW and the
@@ -169,8 +179,8 @@ ceremony runs inside them. Every front/report proposal names all five in its
 - The human sees the five values as one gate row, and whatever they ask for
   there is done. A change keeps the route and applies to this piece of work;
   only lowering a matched proposal's Guard Policy makes it custom. Plan
-  approval keeps the value of the scope the plan runs on: only the person
-  turns it off. When they ask at the gate, in their own words, to skip plan
+  approval keeps the value the plan starts from: only the person turns it
+  off. When they ask at the gate, in their own words, to skip plan
   approval, the harness records it and creation turns it off, so the proposal
   stays as it is. A plan the person saves as a scope stores the
   values in its frontmatter as `sensors:`, `learnings:`,

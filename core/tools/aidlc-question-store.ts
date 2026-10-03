@@ -21,8 +21,11 @@ import { resolveAidlcSettings } from "./aidlc-settings.ts";
 // one is kept unless `question-retention-days` is set.
 
 // Which ask stored a question: a cold-start ask names new work; a
-// new-work-routing ask is about work that already exists.
-export type QuestionOrigin = "front" | "routing";
+// new-work-routing ask is about work that already exists. A `compose` entry is
+// a report-only or task-less composition, described only when its plan is
+// approved: it holds no text, and its approval saves the described request
+// with `composedFrom` naming it.
+export type QuestionOrigin = "front" | "routing" | "compose";
 
 /** An item a routing question named, by folder and immutable uuid. */
 export interface QuestionTarget {
@@ -37,6 +40,16 @@ export interface StoredQuestion {
   origin: QuestionOrigin;
   /** For a routing question: the items its continue and reshape routes may act on. */
   askedAbout?: { space: string; targets: QuestionTarget[] };
+  /** The person asked for new work (`next --new-intent`), so its answer starts it. */
+  newWork?: true;
+  /** For a request described when a composition was approved: that `compose` entry's id. */
+  composedFrom?: string;
+  /**
+   * For a routing question shown about an active workflow: that workflow's
+   * state digest when it was asked. A reply that only names one of its options
+   * answers it while that work has not moved.
+   */
+  stateSha256?: string;
   createdAt: string;
 }
 
@@ -75,14 +88,20 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
   const question = raw as Partial<StoredQuestion> | null;
   if (
     question?.id === id &&
-    typeof question.text === "string" && question.text.trim() !== "" &&
+    typeof question.text === "string" &&
+    (question.origin === "compose" ? question.text === "" : question.text.trim() !== "") &&
     typeof question.proposedScope === "string" &&
-    (question.origin === "front" || question.origin === "routing") &&
+    (question.origin === "front" || question.origin === "routing" || question.origin === "compose") &&
     typeof question.createdAt === "string" &&
+    (question.composedFrom === undefined ||
+      (typeof question.composedFrom === "string" && QUESTION_ID.test(question.composedFrom))) &&
     (question.askedAbout === undefined ||
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
-        isTargetList(question.askedAbout.targets)))
+        isTargetList(question.askedAbout.targets))) &&
+    (question.newWork === undefined || question.newWork === true) &&
+    (question.stateSha256 === undefined ||
+      (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256)))
   ) {
     return question as StoredQuestion;
   }
@@ -110,9 +129,19 @@ function readStoredQuestion(projectDir: string, id: string): StoredQuestion | nu
  */
 export function readQuestion(projectDir: string, id: string): StoredQuestion | null {
   const question = readStoredQuestion(projectDir, id);
+  if (question?.origin === "compose") return null;
   const days = question ? retentionDays(projectDir) : null;
   if (question && days !== null && Date.parse(question.createdAt) < Date.now() - days * DAY_MS) return null;
   return question;
+}
+
+/** The `compose` entry behind `id`, under the same expiry as any question. */
+export function readComposeEntry(projectDir: string, id: string): StoredQuestion | null {
+  const entry = readStoredQuestion(projectDir, id);
+  if (entry?.origin !== "compose") return null;
+  const days = retentionDays(projectDir);
+  if (days !== null && Date.parse(entry.createdAt) < Date.now() - days * DAY_MS) return null;
+  return entry;
 }
 
 // Unlimited unless `question-retention-days` is set for this project, or its
@@ -167,6 +196,7 @@ export function pruneExpiredQuestions(projectDir: string): void {
 /**
  * The new-work question asked most recently, when it was asked within `withinMs`:
  * the request a reply at the compose gate or the scope confirmation is about.
+ * A `compose` entry counts, so a reply at its gate answers that composition.
  */
 export function latestFrontQuestionId(projectDir: string, withinMs: number): string | null {
   let names: string[];
@@ -181,15 +211,41 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
     const at = Date.parse(question?.createdAt ?? "");
-    if (question?.origin !== "front" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
+    if (question === null || question.origin === "routing" || Number.isNaN(at) || Date.now() - at > withinMs) continue;
     if (latest === null || at > latest.at) latest = { id, at };
   }
   return latest?.id ?? null;
 }
 
 /**
+ * The question stored most recently, of any origin (a `compose` entry
+ * included), unexpired: the one a reply that only names an option is about.
+ */
+export function latestQuestion(projectDir: string): StoredQuestion | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let latest: { question: StoredQuestion; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question === null || Number.isNaN(at)) continue;
+    if (latest === null || at > latest.at) latest = { question, at };
+  }
+  if (latest === null) return null;
+  const { question } = latest;
+  return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/**
  * The first new-work question asked at or after `since` and within `withinMs`
- * of it: the request described right after words said before any was open.
+ * of it: the request described right after words said before any was open. A
+ * `compose` entry counts, so words said just before a composition answer it.
  */
 export function firstFrontQuestionSince(projectDir: string, since: string, withinMs: number): string | null {
   const from = Date.parse(since);
@@ -206,7 +262,7 @@ export function firstFrontQuestionSince(projectDir: string, since: string, withi
     if (!QUESTION_ID.test(id)) continue;
     const question = readStoredQuestion(projectDir, id);
     const at = Date.parse(question?.createdAt ?? "");
-    if (question?.origin !== "front" || Number.isNaN(at) || at < from || at - from > withinMs) continue;
+    if (question === null || question.origin === "routing" || Number.isNaN(at) || at < from || at - from > withinMs) continue;
     if (first === null || at < first.at) first = { id, at };
   }
   return first?.id ?? null;
@@ -246,6 +302,9 @@ export function saveQuestion(
   proposedScope: string,
   origin: QuestionOrigin = "front",
   askedAbout?: { space: string; targets: QuestionTarget[] },
+  newWork = false,
+  composedFrom?: string,
+  stateSha256?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -254,6 +313,9 @@ export function saveQuestion(
     proposedScope,
     origin,
     ...(askedAbout ? { askedAbout } : {}),
+    ...(newWork ? { newWork: true as const } : {}),
+    ...(composedFrom ? { composedFrom } : {}),
+    ...(stateSha256 ? { stateSha256 } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

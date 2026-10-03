@@ -305,7 +305,7 @@ describe("bounded guard-remedy liveness", () => {
       },
     });
     const rejection = refusal.remedies.find((remedy) =>
-      remedy.action.includes('Ask "What should change?"')
+      remedy.op === "request-changes"
     );
     expect(rejection).toBeDefined();
     expect(rejection?.action).toContain('stage "functional-design" for Unit "alpha"');
@@ -545,7 +545,7 @@ describe("bounded guard-remedy liveness", () => {
     });
     expect(pending.state).toBe("in-progress");
     const pendingRejection = pending.remedies.find((remedy) =>
-      remedy.action.includes('Ask "What should change?"')
+      remedy.op === "request-changes"
     );
     expect(pendingRejection?.action).toContain(
       'stage "functional-design" for Unit "alpha"',
@@ -867,7 +867,7 @@ describe("bounded guard-remedy liveness", () => {
     const refusal = evaluateGuardRefusal(input);
     expect(refusal.stage).toBe("functional-design");
     const rejection = refusal.remedies.find((remedy) =>
-      remedy.action.includes('Ask "What should change?"')
+      remedy.op === "request-changes"
     );
     expect(rejection?.action).toContain(
       'stage "code-generation" for Unit "alpha"',
@@ -1127,9 +1127,14 @@ describe("open-gate resume liveness", () => {
     expect(first.directive!.stage).toBe("requirements-analysis");
     expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
     const markerPath = join(seededRecordDir(dir), ".aidlc-engine/active-directive.json");
-    const marker = readFileSync(markerPath, "utf-8");
+    // The gate came after rules parts, so asking again re-sends the rules (a new
+    // chat would otherwise hold the gate without them) and lands on the same
+    // gate: the marker is republished for it and the state is not touched.
     expect(next(dir).directive).toEqual(first.directive);
-    expect(readFileSync(markerPath, "utf-8")).toBe(marker);
+    expect(JSON.parse(readFileSync(markerPath, "utf-8"))).toMatchObject({
+      kind: "run-stage",
+      stage: "requirements-analysis",
+    });
     expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(before);
   });
 

@@ -506,6 +506,18 @@ function extractStatus(stateContent: string): string {
   return m ? m[1] : UNKNOWN;
 }
 
+// The state field where `intent archive` keeps the Status it replaced.
+export const ARCHIVED_FROM_FIELD = "Archived From";
+
+// Whether the state agrees with a recorded WORKFLOW_COMPLETED: Completed, or a
+// completed workflow the person archived. Both doctor surfaces read it.
+export function stateShowsCompletion(stateContent: string): boolean {
+  const status = extractStatus(stateContent);
+  if (status === "Completed") return true;
+  const from = stateContent.match(new RegExp(`^- \\*\\*${ARCHIVED_FROM_FIELD}\\*\\*:\\s*(\\S+)`, "m"))?.[1];
+  return status === "Archived" && from === "Completed";
+}
+
 function extractCurrentStage(stateContent: string): string {
   const m = stateContent.match(/^- \*\*Current Stage\*\*:\s*(\S+)/m);
   return m ? m[1] : UNKNOWN;
@@ -582,6 +594,9 @@ function gateOutcome(
     if (e.event === "GATE_APPROVED") latest = "approved";
     else if (e.event === "GATE_REJECTED") latest = "rejected";
     else if (e.event === "STAGE_AWAITING_APPROVAL") latest = "awaiting";
+    // A stage skipped while its gate was open (a forward jump or a scope
+    // change) has no gate left to answer.
+    else if (e.event === "STAGE_SKIPPED" && latest === "awaiting") latest = null;
   }
   if (latest === "approved") return "approved";
   if (latest === "rejected") return "rejected";
@@ -747,7 +762,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   // reconstructTimeline's latest-run scoping guards against).
   if (timeline.workflowCompleted && stateContent) {
     const status = extractStatus(stateContent);
-    if (status !== "Completed" && status !== UNKNOWN) {
+    if (status !== UNKNOWN && !stateShowsCompletion(stateContent)) {
       findings.push({
         id: "state-audit-drift",
         severity: "error",

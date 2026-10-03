@@ -13,6 +13,7 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  markdownBlocks,
   attemptEventDefinitelyBefore,
   maximalAttemptEvents,
   verificationCommandDetails,
@@ -70,6 +71,8 @@ import {
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
+  humanTurnState,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
@@ -262,6 +265,115 @@ function parseFlags(
   }
   return { positional, flags };
 }
+
+// decision and answer read only their flags, so a word outside any flag used to
+// vanish and the record kept a value cut short. A value arrives split like this
+// when it was not quoted as one argument, or when Windows PowerShell 5.1 passed
+// it with a bare double quote inside: that shell removes those quotes and can
+// split the value at them, so `--details 'Chose "Option A" for auth'` arrives as
+// `--details "Chose Option"` plus a separate `A for auth`. Refuse before
+// anything is recorded. The refusal prints no rebuilt command: the split parts
+// have already lost their quotes, so only the caller still has the person's
+// exact words. It says how to pass them instead (in Windows PowerShell 5.1 a
+// double quote written as \" inside the value reaches the engine intact).
+// A split fragment can also start with `--`: `Run "todo --help" first` passed
+// with bare quotes arrives as `--details "Run todo"` plus `--help first`, which
+// parseFlags would take as one more flag and the handler would ignore. So a
+// `--` token is refused unless it is an option the subcommand reads (below).
+// Walks the raw arguments (the `--project-dir` pair included), mirroring
+// parseFlags, so the words are named with the flag they really followed.
+function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[]): void {
+  const what = subcommand === "decision" ? "this decision" : "this answer";
+  // The example uses this subcommand's own free-text flag, so copying it never
+  // passes an option the subcommand refuses. The single-quote clause matches
+  // the Kiro IDE skill: through aidlc.cmd, cmd.exe acts on & | < > ^ between a
+  // value's inner double quotes, and the Kiro IDE hook refuses that command.
+  const textFlag = subcommand === "decision" ? "--decision" : "--details";
+  const howToPass = (example: string): string =>
+    "Run the command again with each value as one argument, in the person's exact words; " +
+    `in Windows PowerShell write each double quote inside a value as \\" (for example ${textFlag} '${example}'), ` +
+    "or as a single quote ('') when the value also holds &, |, <, > or ^.";
+  const options = subcommand === "decision" ? DECISION_OPTIONS : ANSWER_OPTIONS;
+  let first: { flag: string; value: string; words: string[] } | null = null;
+  let open: { flag: string; value: string; words: string[] } | null = null;
+  const unattached: string[] = [];
+  let seenSubcommand = false;
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a.startsWith("--")) {
+      if (!options.has(a)) {
+        error(
+          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}, so it is probably ` +
+            `part of a value that a bare double quote split. ${howToPass('Run \\"todo --help\\" first')}`,
+        );
+      }
+      if (first === null && open !== null && open.words.length > 0) first = open;
+      open = null;
+      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level";
+      const next = rawArgs[i + 1];
+      if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
+      open = { flag: a, value: next, words: [] };
+      i++;
+    } else if (!seenSubcommand && a === subcommand) {
+      if (first === null && open !== null && open.words.length > 0) first = open;
+      open = null;
+      seenSubcommand = true;
+    } else if (open !== null) {
+      open.words.push(a);
+    } else {
+      unattached.push(a);
+    }
+  }
+  if (first === null && open !== null && open.words.length > 0) first = open;
+  if (unattached.length > 0) {
+    error(
+      `Cannot record ${what}: ${JSON.stringify(unattached.join(" "))} is not the value of any flag. ` +
+        "Remove it, or put it right after the flag it belongs to, as one argument.",
+    );
+  }
+  if (first === null) return;
+  error(
+    `Cannot record ${what}: ${JSON.stringify(first.words.join(" "))} arrived as a separate argument after ` +
+      `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
+      "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a bare " +
+      `double quote inside it (it removes those quotes). ${howToPass('Chose \\"Option A\\" for auth')}`,
+  );
+}
+
+// The options decision and answer read: their handlers, the helpers each one
+// passes its flags to (summaryQuestionEvidence, verificationCommandFromFlags,
+// resolvePlanApprovalSession, sessionWarning, planApprovalTarget,
+// handlePlanApprovalBatch, constructionPolicyFields), parseFlags' valueless
+// --single and --stage-level, and the --project-dir main extracts. A new
+// option either subcommand reads belongs here too, or refuseSplitValues
+// refuses it.
+const LOG_INTERACTION_OPTIONS = [
+  "--project-dir",
+  "--stage",
+  "--unit",
+  "--stage-level",
+  "--single",
+  "--checkpoint",
+  "--session",
+  "--questions-file",
+  "--batch-file",
+  "--command",
+  "--command-file",
+  "--field",
+  "--value",
+  "--override",
+  "--override-file",
+  "--options",
+  "--hash-option-labels",
+  "--legacy-directive-options",
+];
+const DECISION_OPTIONS: ReadonlySet<string> = new Set([
+  ...LOG_INTERACTION_OPTIONS,
+  "--decision",
+  "--rationale",
+  "--exact-option-labels",
+]);
+const ANSWER_OPTIONS: ReadonlySet<string> = new Set([...LOG_INTERACTION_OPTIONS, "--details"]);
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
@@ -605,6 +717,36 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
           `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
   );
+}
+
+// A review file's top-level `#` and `##` heading lines (outside code, quotes
+// and lists, other than an opening `## Review`) made `###`, with every other
+// byte kept, and a line naming each one changed; null when there is none.
+function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] } | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
+  } catch {
+    return null;
+  }
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  // Lines at even indexes, their own line endings at odd ones.
+  const parts = text.slice(bom.length).split(/(\r\n|\r|\n)/);
+  const source = parts.filter((_, index) => index % 2 === 0);
+  const { lines } = markdownBlocks(source.join("\n"));
+  if (lines.length !== source.length) return null;
+  const opening = source.findIndex((line) => line.trim() !== "");
+  const changed: string[] = [];
+  for (let index = 0; index < source.length; index++) {
+    if (lines[index].kind !== "heading" || lines[index].containers.length > 0) continue;
+    if (index === opening && /^## Review[ \t]*$/.test(source[index])) continue;
+    const demoted = source[index].replace(/^( {0,3})#{1,2}(?=[ \t]|$)/, "$1###");
+    if (demoted === source[index]) continue;
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: an audit value is one plain line
+    changed.push(`line ${index + 1}: ${source[index].trim().replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 120)}`);
+    parts[index * 2] = demoted;
+  }
+  return changed.length === 0 ? null : { bytes: Buffer.from(bom + parts.join(""), "utf-8"), changed };
 }
 
 // --- Subcommand: decision ---
@@ -1738,10 +1880,17 @@ function handleAnswer(args: string[]): void {
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
     } else if (!humanActedSinceLastAnswer(pd)) {
+      // One reply records one answer. When an earlier answer already used the
+      // latest reply, the person did reply: the answers from that reply belong
+      // in one entry, so say that instead of asking them to reply again.
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. "
-          + "Wait for the human to type an answer, then try again."
-          + unattendedHumanPresenceHint(),
+        humanTurnState(pd) === "answered" && humanTurnMintAllowed()
+          ? "Cannot record this answer because the person's latest reply is already recorded as an answer. "
+            + "Record every answer from one reply in a single answer entry, and wait for the next reply "
+            + "before recording another."
+          : "Cannot record this answer because no new human reply has arrived for the question. "
+            + "Wait for the human to type an answer, then try again."
+            + unattendedHumanPresenceHint(),
       );
     }
 
@@ -3053,15 +3202,34 @@ function handleReview(args: string[]): void {
             "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
-      const reviewBytes = body ?? snapshot.appendix;
+      let reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {
-        const validity = validateReviewAppendix(reviewBytes, {
+        const expectedReview = {
           verdict: verdict as ReviewVerdict,
           reviewer: flags.reviewer,
           iteration,
           reviewChallenge: embeddedLegacy ? legacy?.challenge ?? null : null,
           standalone: body !== null,
-        });
+        };
+        let validity = validateReviewAppendix(reviewBytes, expectedReview);
+        // A whole review whose reviewer wrote `## What I verified` is not a
+        // reason to run the review again: a review file's `#` and `##` heading
+        // lines are recorded as `###`, and the same check runs on those bytes.
+        // It runs whether or not the check saw the heading (one right after a
+        // table reads to it as a table row). Any other defect, or a heading
+        // form this cannot change, refuses as before.
+        const demoted = body === null ? null : demoteReviewHeadings(body);
+        if (demoted !== null) {
+          const again = validateReviewAppendix(demoted.bytes, expectedReview);
+          if (again.valid) {
+            reviewBytes = demoted.bytes;
+            validity = again;
+            // The record shows the reviewer's headings were changed, and which.
+            fields["Review Headings Made Level 3"] = demoted.changed.join("; ");
+          } else if (!validity.valid && validity.heading && !again.heading) {
+            validity = again;
+          }
+        }
         if (!validity.valid) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
@@ -3351,6 +3519,9 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   readOnlyCommand = subcommand === "answers";
+  if (subcommand === "decision" || subcommand === "answer") {
+    refuseSplitValues(subcommand, rawArgs);
+  }
 
   try {
     switch (subcommand) {

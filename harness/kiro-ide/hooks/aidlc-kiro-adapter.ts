@@ -54,6 +54,11 @@
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
 //     its output. Missing session_id uses the host-derived or retained identity.
+//     First, it refuses an execute_pwsh `aidlc` command that would put one of
+//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, that
+//     holds a %NAME% pair cmd.exe would expand, that passes a value through a
+//     PowerShell variable or expression, or that it cannot read far enough to
+//     check.
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -91,6 +96,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
@@ -100,17 +107,15 @@ import {
   getField,
   hookChildEnv,
   hookDebug,
-  hooksHealthDir,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
-  isoTimestamp,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
-  recordDir,
   recordHookDrop,
+  recordPreWorkflowHeartbeat,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -168,6 +173,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
+  // The approval gate reads the payload session: concurrent chats in one IDE
+  // process each have their own workflow and gate.
+  "enforce-approval-gate",
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
@@ -384,6 +392,21 @@ function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
   } catch {
     return LEGACY_SESSION_ID;
   }
+}
+
+// Whether this conversation stands outside the workflow the default resolution
+// selects: that workflow's gates and local Plan Approval latches do not hold it.
+let standsOutsideMemo: boolean | undefined;
+function ideStandsOutside(pd: string, sessionId: string): boolean {
+  if (standsOutsideMemo === undefined) {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      standsOutsideMemo = hookOutsideGate(workflow);
+    } finally {
+      workflow.restore();
+    }
+  }
+  return standsOutsideMemo;
 }
 
 function runLegacyRecoveryNext(
@@ -686,6 +709,424 @@ function processLegacyPlanApprovalWrite(
   return null;
 }
 
+// --- cmd.exe metacharacters in an execute_pwsh `aidlc` command ---
+//
+// Native Windows `aidlc` is aidlc.cmd, so cmd.exe reads the command line that
+// Windows PowerShell 5.1 builds for it. PowerShell 5.1 drops an empty
+// argument, wraps an argument that holds a space or tab in double quotes, and
+// leaves the argument's own double quotes as they are. cmd.exe then toggles
+// its quote state at every double quote and acts on & | < > ^ outside quotes.
+// So `--details 'Use "R & D" team'` (or the same with \") reaches cmd.exe as
+// `--details "Use "R & D" team"`, and cmd.exe runs `D" team"` as a separate
+// command; with > it would write a file. cmd.exe also replaces a %NAME% pair
+// with that environment variable's value, even inside its quotes. The engine
+// never sees the value as written, so this adapter refuses such a command
+// before it runs. It also refuses an aidlc argument PowerShell resolves first
+// (a variable or expression, whose result it cannot see) and an aidlc command
+// it cannot read far enough to check. `bun .kiro/tools/...` invocations never
+// pass through cmd.exe and are not checked.
+
+// What cmd.exe does with each character it acts on outside its quotes.
+const CMD_OPERATOR_EFFECTS: Record<string, string> = {
+  "&": "run the rest as a separate command",
+  "|": "send the output to the rest as another command",
+  "<": "read input from a file named by the rest",
+  ">": "write output to a file named by the rest",
+  "^": "drop the character as an escape",
+};
+
+interface PowerShellWord {
+  source: string; // the word as written in the command
+  value: string; // the argument PowerShell passes, when `opaque` is false
+  opaque: boolean; // PowerShell would expand or evaluate part of it
+  redirect: boolean; // a PowerShell redirection, not an argument
+}
+
+// Splits a PowerShell command line into statements of words, as far as this
+// check needs: single-quoted parts ('' is a literal '), double-quoted parts
+// ("" is a literal "; $ or a backtick makes the word opaque), barewords, the
+// statement ends ; | and newline, a leading & or . call operator,
+// redirections, comments (# at the start of a word runs to the end of the
+// line; <# ... #> is a block comment), and (...), $(...), @(...), @{...} and
+// {...} groupings, whose statements are read as well, nested too (a $(...)
+// inside a double-quoted string is not). A statement it cannot read to the end
+// goes to `unreadable` with the words read before that point: one that uses
+// the --% stop-parsing token (PowerShell passes the rest of that line as
+// written, and the next line is read as usual), or the one holding an
+// unterminated quote or block comment, where reading stops.
+interface PowerShellReading {
+  statements: PowerShellWord[][];
+  unreadable: PowerShellWord[][];
+}
+
+// The index of the quote that closes the quoted string opening at `open`:
+// '' and "" are literal quotes, and a backtick escapes the next character
+// inside double quotes. -1 when it is not closed.
+function quotedEnd(text: string, open: number): number {
+  const quote = text[open];
+  for (let j = open + 1; j < text.length; j++) {
+    if (quote === '"' && text[j] === "`") {
+      j++;
+      continue;
+    }
+    if (text[j] !== quote) continue;
+    if (text[j + 1] === quote) {
+      j++;
+      continue;
+    }
+    return j;
+  }
+  return -1;
+}
+
+// The index of the ) or } that closes the grouping opening at `open` (a ( or
+// {), past nested groupings, quoted strings, escapes and comments. -1 when it
+// is not closed.
+function groupEnd(text: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < text.length; j++) {
+    const c = text[j];
+    if (c === "'" || c === '"') {
+      const close = quotedEnd(text, j);
+      if (close < 0) return -1;
+      j = close;
+    } else if (c === "`") {
+      j++;
+    } else if (c === "#" && /[\s;({|]/.test(text[j - 1] ?? " ")) {
+      while (j < text.length && text[j] !== "\n" && text[j] !== "\r") j++;
+    } else if (c === "<" && text[j + 1] === "#") {
+      const close = text.indexOf("#>", j + 2);
+      if (close < 0) return -1;
+      j = close + 1;
+    } else if (c === "(" || c === "{") {
+      depth++;
+    } else if (c === ")" || c === "}") {
+      depth--;
+      if (depth === 0) return j;
+    }
+  }
+  return -1;
+}
+
+function powerShellStatements(command: string): PowerShellReading {
+  const statements: PowerShellWord[][] = [];
+  const unreadable: PowerShellWord[][] = [];
+  let words: PowerShellWord[] = [];
+  let i = 0;
+  let skipNextWord = false;
+  const endStatement = () => {
+    if (words.length > 0) statements.push(words);
+    words = [];
+    skipNextWord = false;
+  };
+  const stopReading = (): PowerShellReading => {
+    unreadable.push(words);
+    return { statements, unreadable };
+  };
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === " " || ch === "\t") {
+      i++;
+      continue;
+    }
+    // A backtick before a line break continues the statement on the next
+    // line; CRLF, LF and CR are each one line break.
+    if (ch === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) {
+      i += command[i + 1] === "\r" && command[i + 2] === "\n" ? 3 : 2;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
+      endStatement();
+      i++;
+      continue;
+    }
+    // A # that starts a word starts a comment, which runs to the end of the
+    // line; the statement before it is still read. <# ... #> is a block
+    // comment.
+    if (ch === "#") {
+      while (i < command.length && command[i] !== "\n" && command[i] !== "\r") i++;
+      continue;
+    }
+    if (ch === "<" && command[i + 1] === "#") {
+      const close = command.indexOf("#>", i + 2);
+      if (close < 0) return stopReading();
+      i = close + 2;
+      continue;
+    }
+    // A leading & or . is the call operator; anywhere else & ends the command
+    // and . is an argument.
+    if (
+      (ch === "&" || (ch === "." && words.length === 0)) &&
+      /[ \t'"]/.test(command[i + 1] ?? " ")
+    ) {
+      if (words.length > 0) endStatement();
+      i++;
+      continue;
+    }
+    const redirect = /^(?:[0-9*]?>>?(?:&[0-9])?|<)/.exec(command.slice(i));
+    if (redirect) {
+      i += redirect[0].length;
+      // `2>&1` merges streams and names no file; `2>$null` names its target
+      // in the same word, `> out.txt` in the next one.
+      if (!redirect[0].includes("&")) {
+        if (i >= command.length || command[i] === " " || command[i] === "\t") skipNextWord = true;
+        else {
+          while (i < command.length && !/[ \t;|\n\r]/.test(command[i])) i++;
+        }
+      }
+      words.push({ source: redirect[0], value: "", opaque: false, redirect: true });
+      continue;
+    }
+    const start = i;
+    let value = "";
+    let opaque = false;
+    while (i < command.length && !/[ \t;|\n\r>]/.test(command[i])) {
+      const c = command[i];
+      if (c === "'") {
+        const close = (() => {
+          for (let j = i + 1; j < command.length; j++) {
+            if (command[j] !== "'") continue;
+            if (command[j + 1] === "'") {
+              j++;
+              continue;
+            }
+            return j;
+          }
+          return -1;
+        })();
+        if (close < 0) return stopReading();
+        value += command.slice(i + 1, close).replaceAll("''", "'");
+        i = close + 1;
+      } else if (c === '"') {
+        let j = i + 1;
+        let closed = false;
+        while (j < command.length) {
+          const d = command[j];
+          if (d === "`") {
+            opaque = true;
+            j += 2;
+            continue;
+          }
+          if (d === "$") opaque = true;
+          if (d === '"') {
+            if (command[j + 1] === '"') {
+              value += '"';
+              j += 2;
+              continue;
+            }
+            closed = true;
+            break;
+          }
+          value += d;
+          j++;
+        }
+        if (!closed) return stopReading();
+        i = j + 1;
+      } else if (c === "$" && command[i + 1] === "{") {
+        // ${name} is a variable, not a script block.
+        const close = command.indexOf("}", i + 2);
+        if (close < 0) return stopReading();
+        opaque = true;
+        i = close + 1;
+      } else if (c === "(" || c === "{" || ((c === "$" || c === "@") && (command[i + 1] === "(" || command[i + 1] === "{"))) {
+        // A grouping, subexpression, array or script block: PowerShell runs
+        // the statements inside it (read here like any others, so an aidlc
+        // call there is checked too) and passes their result, which this
+        // check cannot see, so the word is opaque. Its text is not the word's.
+        const open = c === "(" || c === "{" ? i : i + 1;
+        const close = groupEnd(command, open);
+        if (close < 0) return stopReading();
+        const inner = powerShellStatements(command.slice(open + 1, close));
+        statements.push(...inner.statements);
+        unreadable.push(...inner.unreadable);
+        opaque = true;
+        i = close + 1;
+      } else {
+        // A backtick before a line break ends the word and continues the
+        // statement; the loop above consumes it.
+        if (c === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) break;
+        if (c === "`" || c === "$" || c === "@" || c === ")" || c === "}") opaque = true;
+        value += c;
+        i++;
+      }
+    }
+    const source = command.slice(start, i);
+    if (source === "--%") {
+      unreadable.push(words);
+      words = [];
+      skipNextWord = false;
+      while (i < command.length && command[i] !== "\n" && command[i] !== "\r") i++;
+      continue;
+    }
+    if (skipNextWord) {
+      skipNextWord = false;
+      continue;
+    }
+    words.push({ source, value, opaque, redirect: false });
+  }
+  endStatement();
+  return { statements, unreadable };
+}
+
+// The arguments of a statement whose program (its first word after a leading
+// `$x =` assignment) is `aidlc` or `aidlc.cmd`, bare or by path; a & or .
+// call operator is already dropped. Null for any other program.
+function aidlcCommandArgs(words: PowerShellWord[]): PowerShellWord[] | null {
+  const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+  const program = words[start];
+  if (program === undefined || program.opaque || !/(?:^|[\\/])aidlc(?:\.cmd)?$/i.test(program.value)) return null;
+  return words.slice(start + 1);
+}
+
+// A %NAME% pair: cmd.exe replaces it with that environment variable's value,
+// quoted or not, whenever NAME is defined, so the engine would record
+// something else (or a secret). The name runs to the next % or to a :modifier
+// (%NAME:~0,3%, %NAME:a=b%). A name that starts or ends with a space is not
+// counted, so prose such as "between 10% and 20%" passes; no variable is
+// named like that in practice.
+const CMD_VARIABLE_PAIR = /%[^%\s=:](?:[^%\r\n=:]*[^%\s=:])?(?::[^%\r\n]*)?%/;
+
+// The flag an `aidlc` argument is the value of: `--flag=value`, or the
+// `--flag` word before it. Only a plain flag name is ever returned, so the
+// refusal below never repeats text from the value itself.
+function valueFlag(args: PowerShellWord[], index: number): string | null {
+  const inline = /^(--[A-Za-z0-9][A-Za-z0-9-]*)=/.exec(args[index].source);
+  if (inline) return inline[1];
+  const previous = args[index - 1];
+  if (previous !== undefined && !previous.opaque && /^--[A-Za-z0-9][A-Za-z0-9-]*$/.test(previous.value)) {
+    return previous.value;
+  }
+  return null;
+}
+
+// The aidlc flags whose value carries a person's words, from the Kiro IDE
+// skill and the stage protocols: --details (log answer), --decision and
+// --rationale (log decision), --reason (report, bolt checkpoint),
+// --user-input (report, bolt and unit gates), --feedback (rejection feedback),
+// --override (the typed break-glass reason), and --arguments (intent create,
+// whose text is recorded as the request). --label is left out: intent create
+// slugifies it into a folder name, so it never reaches the record as written.
+// A value for one of these, or the request after `next`, must be written
+// literally; a variable or expression for any other flag, or for a positional
+// token (a receipt, slug or id the engine printed), is agent work and passes.
+const FREE_TEXT_FLAGS: ReadonlySet<string> = new Set([
+  "--details",
+  "--decision",
+  "--rationale",
+  "--reason",
+  "--user-input",
+  "--feedback",
+  "--override",
+  "--arguments",
+]);
+
+type CmdHazard =
+  | { kind: "metacharacter"; flag: string | null; char: string }
+  | { kind: "variable"; flag: string | null }
+  | { kind: "expression"; flag: string | null; request: boolean }
+  | { kind: "unchecked" };
+
+// Whether the opaque word at `index` carries a person's words: the value of a
+// free-text flag, or (after `orchestrate next`) a positional word, which is
+// the request. A word right after any other --flag is that flag's value.
+function freeTextOpaque(args: PowerShellWord[], index: number): CmdHazard | null {
+  const flag = valueFlag(args, index);
+  if (flag !== null) return FREE_TEXT_FLAGS.has(flag) ? { kind: "expression", flag, request: false } : null;
+  const next = args.findIndex(
+    (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
+  );
+  return next >= 0 && index > next ? { kind: "expression", flag: null, request: true } : null;
+}
+
+// The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that cmd.exe
+// would not pass on as written, in any statement, including one inside a
+// grouping: a person's words that PowerShell resolves from a variable or
+// expression before aidlc.cmd runs ($x, $env:X, $(...), or a double-quoted
+// string holding $ or a backtick), whose result this check cannot see; one
+// that puts a cmd.exe metacharacter outside cmd.exe's quotes (named by its
+// flag, with that character); or one that holds a %NAME% pair, quoted or not.
+// The literal text of any other opaque word is checked for the same two. A
+// statement this check cannot read to the end is "unchecked" when its program
+// is aidlc, so it fails closed; any other statement passes as before.
+function cmdMetacharacterHazard(command: string): CmdHazard | null {
+  const reading = powerShellStatements(command);
+  for (const words of reading.statements) {
+    const found = aidlcCommandArgs(words);
+    if (found === null) continue;
+    const args = found.filter((word) => !word.redirect);
+    for (let index = 0; index < args.length; index++) {
+      const word = args[index];
+      if (!word.opaque) continue;
+      const freeText = freeTextOpaque(args, index);
+      if (freeText !== null) return freeText;
+      // An opaque word's own text (not a grouping's) still counts: cmd.exe
+      // expands a %NAME% pair in it whatever PowerShell resolves, and a
+      // metacharacter in it may land outside cmd.exe's quotes.
+      if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index) };
+      if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index), request: false };
+    }
+    let line = "";
+    const owners: number[] = [];
+    args.forEach((word, index) => {
+      if (word.opaque || word.value === "") return;
+      const passed = /[ \t]/.test(word.value) ? `"${word.value}"` : word.value;
+      line += `${line === "" ? "" : " "}${passed}`;
+      while (owners.length < line.length) owners.push(index);
+    });
+    let quoted = false;
+    for (let at = 0; at < line.length; at++) {
+      const c = line[at];
+      if (c === '"') quoted = !quoted;
+      else if (!quoted && /[&|<>^]/.test(c)) {
+        return { kind: "metacharacter", flag: valueFlag(args, owners[at]), char: c };
+      }
+    }
+    const variable = CMD_VARIABLE_PAIR.exec(line);
+    if (variable !== null) return { kind: "variable", flag: valueFlag(args, owners[variable.index]) };
+  }
+  if (reading.unreadable.some((words) => aidlcCommandArgs(words) !== null)) return { kind: "unchecked" };
+  return null;
+}
+
+// A fixed template: only a plain flag name and one of & | < > ^ are filled
+// in, never the value, so text in the value cannot add lines to the reason.
+function cmdMetacharacterRefusal(hazard: CmdHazard): string {
+  if (hazard.kind === "unchecked") {
+    return (
+      "AIDLC stopped this command before it ran. Its aidlc arguments could not be checked for characters " +
+      "cmd.exe would act on (the aidlc command runs through aidlc.cmd). Run it again without the --% " +
+      "stop-parsing token or a block comment, with each value in quotes and every quote closed.\n"
+    );
+  }
+  const subject = hazard.kind === "expression" && hazard.request
+    ? "The request after next"
+    : hazard.flag === null
+    ? "A value"
+    : `The ${hazard.flag} value`;
+  if (hazard.kind === "expression") {
+    return (
+      `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
+      "so AIDLC cannot check what cmd.exe would do with it (the aidlc command runs through aidlc.cmd). " +
+      "Write the value itself in single quotes, then run the command again.\n"
+    );
+  }
+  if (hazard.kind === "variable") {
+    return (
+      `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +
+      "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
+      "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
+      "of %APPDATA%), then run the command again.\n"
+    );
+  }
+  return (
+    `AIDLC stopped this command before it ran. ${subject} would reach cmd.exe ` +
+    `(the aidlc command runs through aidlc.cmd) with ${hazard.char} outside its quotes, so cmd.exe would ` +
+    `${CMD_OPERATOR_EFFECTS[hazard.char]} instead of passing it as text. Write that value's inner double ` +
+    "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
+    "a label you wrote, then run the command again.\n"
+  );
+}
+
 export async function run(
   target: string,
   input: string,
@@ -829,23 +1270,6 @@ function rememberKiroIdeSessionId(sessionId: string): void {
     writeFileSync(join(dir, KIRO_IDE_SESSION_FILE), `${sessionId}\n`, "utf-8");
   } catch {
     // Per-user runtime state; lifecycle hooks retain the legacy fallback.
-  }
-}
-
-// Before the first workflow no core hook writes a heartbeat, so doctor could
-// not tell a folder nobody has chatted in from one whose hooks Kiro IDE is not
-// running (untrusted or not reloaded). A chat message leaves the heartbeat the
-// core hooks write, only while no intent record resolves: inside one,
-// heartbeats feed the Plan Approval staleness refusal (hookLiveness) and stay
-// the core hooks' own.
-function recordPromptHeartbeat(hook: string): void {
-  try {
-    if (recordDir(projectDir) !== null) return;
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
-  } catch {
-    // Advisory: without it doctor keeps its "not run yet" warning.
   }
 }
 
@@ -1107,21 +1531,23 @@ function notePromptCapability(sessionId: string): void {
   }
   process.stdout.write(
     "Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
-      `${summaryConfirmationWayOut()} ${PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
+      `${summaryConfirmationWayOut()} ${planApprovalWayOut()} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
   );
 }
 
-// An updated build carries the typed switch again. The recorded kill switch is
-// the person's own terminal command, but config refuses it while any workflow
-// is still active, so it is named only as the route once the work is complete.
+// The step that works now comes first: the recorded kill switch is the
+// person's own terminal command, and recording it refreshes no project files,
+// so it also covers the work running now. An updated build carries the typed
+// switch again.
 function summaryConfirmationWayOut(): string {
-  return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. Once every piece of work in this project is complete, you can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
+  return `To turn summary confirmation off now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal: it turns it off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set summary-confirmation off\` yourself.`;
 }
 
 // Plan approval off is read from what the person types or says, so this build
-// keeps asking about every plan; an update is what enables the switch.
-const PLAN_APPROVAL_WAY_OUT =
-  "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+// cannot carry the typed switch; the recorded one works now, as above.
+function planApprovalWayOut(): string {
+  return `To build code plans without being asked now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes\` in a terminal: it turns plan approval off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set plan-approval off\` yourself.`;
+}
 
 // "summary" when the only lowering is summary confirmation off, which skips
 // the person's `Looks correct` check; "plan" when it is plan approval off;
@@ -1265,7 +1691,7 @@ function terminalRefusal(result: TerminalResult): string {
 
 if (target === "verb-intercept") {
   // Before a doctor request below runs, so it sees this message.
-  recordPromptHeartbeat("terminal-command");
+  recordPreWorkflowHeartbeat(projectDir, "terminal-command");
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
@@ -1289,6 +1715,13 @@ if (target === "terminal-command-guard") {
   const rawCommand = typeof ide.toolArgs?.command === "string"
     ? ide.toolArgs.command
     : "";
+  // Before anything below runs a command: this call would not reach the
+  // engine as written (see cmdMetacharacterHazard).
+  const cmdHazard = tool === "execute_pwsh" ? cmdMetacharacterHazard(rawCommand) : null;
+  if (cmdHazard !== null) {
+    process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
+    return 2;
+  }
   const invocation = toolTerminalInvocation(rawCommand);
   const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
@@ -1298,7 +1731,7 @@ if (target === "terminal-command-guard") {
     process.stderr.write(refused === "summary"
       ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
       : refused === "plan"
-      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${PLAN_APPROVAL_WAY_OUT}\n`
+      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${planApprovalWayOut()}\n`
       : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
     return 2;
   }
@@ -1346,8 +1779,13 @@ if (target === "terminal-command-guard") {
 // off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
 // All read from disk. Fail-open on any read/parse error (advisory).
 function approvalGateAwaitsHuman(): boolean {
+  const pd = process.cwd();
+  // The payload session stays pinned for the whole check, so the gate state and
+  // the human-turn evidence come from the workflow this conversation selects,
+  // not the one the shared cursor or process ancestry names.
+  const workflow = enterHookWorkflow(pd, resolvedPlanApprovalSessionId(ide));
   try {
-    const pd = process.cwd();
+    if (hookOutsideGate(workflow)) return false;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
@@ -1358,6 +1796,8 @@ function approvalGateAwaitsHuman(): boolean {
     return !humanActedSinceGate(pd); // a human acted at this gate
   } catch {
     return false; // advisory - any read/parse failure fails open
+  } finally {
+    workflow.restore();
   }
 }
 
@@ -1365,14 +1805,15 @@ if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
-      "An approval gate is open and no human has acted since it opened. The gate " +
-        "requires a typed human turn before any tool call proceeds. Acknowledge the " +
-        "gate as a human, then continue. If you already replied, Kiro may not be " +
-        "running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
-        "banner shows at the top of the window (select Manage, then Trust), run " +
-        `"Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
-        "the aidlc agent in the chat panel's agent picker, then reply again. In Kiro " +
-        "CLI, exit and start `kiro-cli` again in this folder, then reply again.\n",
+      "An approval gate is open and no reply from the person is on record since it " +
+        "opened, so no tool call runs until they answer it. If they already replied, " +
+        "that reply was not recorded: Kiro may not have passed it to AI-DLC's hooks in " +
+        "this window. Tell them that, and that trusting the folder if the Restricted Mode " +
+        "banner shows at the top of the window (select Manage, then Trust), running " +
+        `"Developer: Reload Window" from the Command Palette (${palette}), and choosing ` +
+        "the aidlc agent in the chat panel's agent picker should let their next message be " +
+        "recorded; if it still is not, `/aidlc --doctor` shows why. In Kiro CLI, starting " +
+        "`kiro-cli` again in this folder does the same.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
@@ -1466,6 +1907,10 @@ function inputPaths(input: Record<string, unknown>): string[] {
   add(input.path);
   add(input.file_path);
   add(input.filePath);
+  // `delete_file` names its target `targetFile` and carries no other path field
+  // (every captured payload is {explanation, targetFile}). Without it a delete
+  // had no target, so Plan Approval treated it as an opaque mutation.
+  add(input.targetFile);
   if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
   if (Array.isArray(input.operations)) {
     for (const operation of input.operations) {
@@ -1511,7 +1956,7 @@ function buildForward(): Forward {
       "kiro-adapter",
       `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
     );
-    if (target === "plan-approval-guard") {
+    if (target === "plan-approval-guard" && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
       const malformedToolName = ide.toolName ?? "";
       if (
         readPlanApprovalLegacyWindows(projectDir).length > 0 &&
@@ -1573,7 +2018,7 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
-      recordPromptHeartbeat("record-human-turn");
+      recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
       const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
       // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a
@@ -1591,7 +2036,7 @@ function buildForward(): Forward {
       // never manufacture a current-session marker from the legacy fallback.
       if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
       recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
-      if (promptEmpty) {
+      if (promptEmpty && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         try {
           const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
           if (migration.normalized) {
@@ -1649,7 +2094,8 @@ function buildForward(): Forward {
       const activeWriteWindows = readPlanApprovalLegacyWindows(projectDir);
       if (
         activeWriteWindows.length > 0 &&
-        (toolName === "" || mutationCapableTool(toolName))
+        (toolName === "" || mutationCapableTool(toolName)) &&
+        !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))
       ) {
         let recoverySession = resolvedPlanApprovalSessionId(ide);
         try {
@@ -1693,7 +2139,7 @@ function buildForward(): Forward {
             )
           )
         );
-      if (opaqueMutation) {
+      if (opaqueMutation && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         const approvalSession = resolvedPlanApprovalSessionId(ide);
         const state = legacyPlanApprovalGuardState(projectDir);
         const writeWindows = readPlanApprovalLegacyWindows(projectDir);
@@ -1987,7 +2433,7 @@ function buildForward(): Forward {
         // during Code Generation, refuse it before any stage is decided. Outside
         // that stage the core guard allows every dispatch, so the pipeline goes
         // through as it would without AI-DLC.
-        if (developers.length > 1 && codeGenerationIsCurrent(projectDir)) {
+        if (developers.length > 1 && codeGenerationIsCurrent(projectDir) && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
           return {
             hook: "__legacy_plan_approval_block__",
             input: {
@@ -2137,6 +2583,7 @@ function buildForward(): Forward {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
         input: {
           hook_event_name: "PostToolUse",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_name: canon,
           tool_input: { file_path: filePath },
         },
@@ -2171,6 +2618,7 @@ function buildForward(): Forward {
         hook: "aidlc-sync-workflow-state.ts",
         input: {
           hook_event_name: "PostToolUse",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_name: "TaskUpdate",
           tool_input: { source: "ide-audit-sync" },
         },
@@ -2297,8 +2745,8 @@ function buildForward(): Forward {
       // what the human sees.
       // Modern Stop carries the exact chat identity. Prefer it over the
       // workspace-global SessionStart marker so concurrent chats cannot consume
-      // one another's post-create handoff receipt; retain the marker for legacy
-      // agentStop and broken modern channels.
+      // one another's post-create or post-switch handoff receipt; retain the
+      // marker for legacy agentStop and broken modern channels.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {
@@ -2390,7 +2838,8 @@ if (fwd.hook === "__audit_and_sensors__") {
     (fwd.input.tool_input as { file_path?: string } | undefined)?.file_path ?? "";
   if (
     filePath &&
-    Object.keys(ide.toolArgs ?? {}).length === 0
+    Object.keys(ide.toolArgs ?? {}).length === 0 &&
+    !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))
   ) {
     let mediationFailure: string | null = null;
     try {

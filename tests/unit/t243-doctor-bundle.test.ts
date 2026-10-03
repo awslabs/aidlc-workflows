@@ -578,6 +578,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(runDiagnosis(torn).some((f) => f.id === "state-audit-drift")).toBe(true);
   });
 
+  test("13b: Rule 3 (drift) accepts a completed workflow the person archived", () => {
+    const completed = (stateContent: string) =>
+      runDiagnosis(diagInput({
+        stateContent,
+        timeline: {
+          stages: [],
+          workflowStartedRaw: "2026-01-10T00:00:00Z",
+          workflowStatus: "Archived",
+          workflowCompleted: true,
+          notes: [],
+        },
+      })).some((f) => f.id === "state-audit-drift");
+    expect(completed("- **Status**: Archived\n- **Archived From**: Completed\n")).toBe(false);
+    expect(completed("- **Status**: Archived\n- **Archived From**: Running\n")).toBe(true);
+  });
+
   test("14: reconstructTimeline sets workflowCompleted from the latest run only (Arden r2 #2)", () => {
     const audit = [
       "## started 1",
@@ -824,6 +840,25 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(a!.durationMs).toBeNull();
     // The latest start (not the first) anchors the attempt.
     expect(a!.startedRaw).toBe("2026-01-05T00:00:00Z");
+  });
+
+  test("16b: a stage skipped while its gate was open has no unresolved gate", () => {
+    const audit = [
+      "## awaiting",
+      "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_AWAITING_APPROVAL",
+      "**Stage**: alpha",
+      "",
+      "## skipped by a scope change",
+      "**Timestamp**: 2026-01-01T01:00:00Z",
+      "**Event**: STAGE_SKIPPED",
+      "**Stage**: alpha",
+      "",
+    ].join("\n");
+    const alpha = reconstructTimeline(audit, "- [S] alpha \u2014 SKIP\n").stages.find((s) => s.slug === "alpha");
+    expect(alpha?.gate).toBe("none");
+    const open = reconstructTimeline(audit.split("## skipped")[0], "").stages.find((s) => s.slug === "alpha");
+    expect(open?.gate).toBe("unresolved");
   });
 
   test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {

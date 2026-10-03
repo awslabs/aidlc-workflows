@@ -1078,9 +1078,28 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
-    if (updated !== content) requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+    if (updated !== content) {
+      requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+      emitConstructionPolicySet(pd, content, updated, field, args[0]);
+    }
     writeStateFile(pd, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+  });
+}
+
+// Every applied Construction policy change is in the audit with the value it
+// found and the iteration and checkpoint values it leaves in force. The attempt
+// floor reads them so switching to unit-major iteration or turning checkpoints
+// on keeps the Units already finished: a stage start recorded while stage
+// starts were attempt boundaries stays the boundary it was.
+function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
+  const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
+  emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
+    Field: field,
+    Value: value,
+    "Previous Value": current(before, field),
+    "Construction Iteration": current(after, "Construction Iteration"),
+    "Construction Checkpoints": current(after, "Construction Checkpoints"),
   });
 }
 
@@ -1140,11 +1159,11 @@ function handleSetSkeletonStance(args: string[]): void {
 // `Construction Iteration` is runtime metadata
 // (like Skeleton Stance): it is NOT in the base state template, so we use
 // setOrInsertField to update-if-present / insert-under-`## Runtime State`-if-absent.
-// No audit row: the field is metadata the next `aidlc-orchestrate next` reads to
-// pick the (stage, unit) walk order, not a state-machine transition; it rides no
-// event, exactly like `set` and `set-skeleton-stance`. The classify round-trip is
-// initiated by the delivery-planning stage prose (or set directly by a human); the
-// engine writes nothing itself.
+// The field is metadata the next `aidlc-orchestrate next` reads to pick the
+// (stage, unit) walk order, not a state-machine transition; a change is recorded
+// as CONSTRUCTION_POLICY_SET so finished Units keep their receipts across it.
+// The classify round-trip is initiated by the delivery-planning stage prose (or
+// set directly by a human); the engine writes nothing itself.
 function handleSetConstructionIteration(args: string[]): void {
   // Declared inside the handler for the same TDZ reason as skeleton stance:
   // main() runs at module load before a module-level const would initialise.
@@ -1183,7 +1202,10 @@ function handleSetConstructionIteration(args: string[]): void {
     "Construction Iteration",
     value,
   );
-  if (updated !== content) requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+  if (updated !== content) {
+    requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value);
+  }
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });
@@ -1976,10 +1998,28 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // mechanism had no first-class tool verb a swarm could call, so it could guard
 // hook-side only; park's `aidlc-state.ts park` is directly invocable, so the
 // tool refusal closes a path #365 did not have.)
+//
+// `attended` is the one exception: the reply AIDLC just read asked to stop
+// there ("Approve, but let's stop for today"), so a person is present and their
+// stop wins over the autonomous grant (#1411). Only in-process callers that read
+// that reply pass it: the human-turn hook after Plan Approval and the engine's
+// `report` after a gate a person answered. The CLI never does.
+export interface ParkResult {
+  parked: true;
+  stage?: string;
+  timestamp?: string;
+  unit?: string;
+  checkout_local?: true;
+}
+
 function handlePark(_args: string[]): void {
-  const pd = resolveProjectDir(projectDir);
+  console.log(JSON.stringify(parkWorkflow(resolveProjectDir(projectDir))));
+}
+
+export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
   const initialContent = readStateFile(pd);
   if (
+    opts.attended !== true &&
     getField(initialContent, "Construction Autonomy Mode")?.trim() ===
       "autonomous"
   ) {
@@ -2003,14 +2043,9 @@ function handlePark(_args: string[]): void {
       `[aidlc] warning: parked Unit "${scopeStamp.unit}" locally from its checkout stamp; ` +
         "claim liveness was not required and will be rechecked at the next claim-sensitive boundary.\n",
     );
-    console.log(JSON.stringify({
-      parked: true,
-      unit: scopeStamp.unit,
-      checkout_local: true,
-    }));
-    return;
+    return { parked: true, unit: scopeStamp.unit, checkout_local: true };
   }
-  withAuditLock(pd, () => {
+  return withAuditLock(pd, (): ParkResult => {
     let content = readStateFile(pd);
     const status = getField(content, "Status");
     if (status === "Completed") {
@@ -2032,9 +2067,14 @@ function handlePark(_args: string[]): void {
     });
     content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
     content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);
+    // A person's park is theirs to resume, so the Stop hook lets it end an
+    // autonomous turn; it still keeps every other autonomous run moving.
+    content = opts.attended === true
+      ? setOrInsertField(content, "## Runtime State", "Parked By", "person")
+      : removeField(content, "Parked By");
     content = setField(content, "Last Updated", timestamp);
     writeStateFile(pd, content);
-    console.log(JSON.stringify({ parked: true, stage: currentSlug, timestamp }));
+    return { parked: true, stage: currentSlug, timestamp };
   });
 }
 
@@ -2061,9 +2101,10 @@ function handleUnpark(_args: string[]): void {
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
     const wasParked = (getField(content, "Parked") ?? "").trim().length > 0;
-    // Remove both runtime markers (no-op if absent - unpark is idempotent).
+    // Remove the runtime markers (no-op if absent - unpark is idempotent).
     content = removeField(content, "Parked");
     content = removeField(content, "Parked At Stage");
+    content = removeField(content, "Parked By");
     if (wasParked) {
       const ts = isoTimestamp();
       emitAudit(pd, "WORKFLOW_UNPARKED", {});
@@ -6618,10 +6659,15 @@ function handleSkip(args: string[]): void {
   if (!reason) {
     error("aidlc-state.ts skip --route requires a nonblank --reason <text>.");
   }
+  // A stage waiting at its approval gate may be skipped only once its plan
+  // row says SKIP: the person decided it no longer applies (they said the
+  // work is a new project), so the gate closes as skipped, not approved.
+  const planSkips = parseStateStageSuffixes(content).get(slug) === "SKIP";
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
     "skipped",
+    ...(planSkips ? ["awaiting-approval" as const] : []),
   ]);
   const currentStage = getField(content, "Current Stage");
   if (currentStage !== slug) {

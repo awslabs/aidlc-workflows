@@ -101,9 +101,9 @@ export function collectFailures(evidenceDir: string): RunFailures[] {
 export function failedJobs(pages: unknown): FailedJob[] {
   if (!Array.isArray(pages)) return [];
   return pages.flatMap((page) => Array.isArray(page?.jobs) ? page.jobs : [])
-    .filter((job) => typeof job?.name === "string" && job.name.startsWith("full_suite / ") &&
+    .filter((job) => typeof job?.name === "string" && /^(?:full_suite|Linux|macOS|Windows) \/ /.test(job.name) &&
       FAILED_CONCLUSIONS.has(job.conclusion))
-    .map((job) => ({ name: job.name.slice("full_suite / ".length), url: String(job.html_url ?? "") }))
+    .map((job) => ({ name: job.name.replace(/^full_suite \/ /, ""), url: String(job.html_url ?? "") }))
     .sort((a, b) => a.name.localeCompare(b.name, "en"));
 }
 
@@ -256,7 +256,7 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     { legs?: Record<string, string> } | undefined;
   const pages = readJson(jobsPath);
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  const runId = process.env.GITHUB_RUN_ID ?? "";
+  const runId = process.env.FULL_SUITE_RUN_ID || process.env.GITHUB_RUN_ID || "";
   const report = renderReport({
     fullSuiteResult: process.env.FULL_SUITE_RESULT ?? "",
     sourceSha: process.env.SOURCE_SHA ?? "",

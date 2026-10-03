@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   errorMessage,
@@ -36,6 +36,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
+import { installRoot } from "./aidlc-install-paths.ts";
 import {
   configureColor,
   dim,
@@ -47,13 +48,20 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  HARNESS_PRODUCT_NAMES,
   isModelHarness,
   modelPolicyDoctorIssues,
+  modelPolicyIsEmpty,
+  sessionModelsDetail,
+  sessionSetsAgentModels,
+  type ModelHarness,
 } from "./aidlc-model-policy.ts";
 import {
   flagsDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
+  vscodeRequestCapDoctorCheck,
+  vscodeWorkspaceRequestCapDoctorCheck,
   workspaceSiblingDoctorCheck,
 } from "./aidlc-config-diagnostics.ts";
 import {
@@ -90,6 +98,31 @@ function windowsRecoveryCheck(): DoctorCheck | null {
         ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
         : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
+}
+
+// An earlier release's launcher helper forwards @args, so Windows PowerShell
+// 5.1 splits a value with spaces on its way to aidlc.exe. Any command but
+// doctor and uninstall replaces it; this row says it is still there, and why
+// it cannot be replaced when that is so.
+async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
+  if (process.platform !== "win32") return null;
+  let helper: string;
+  try {
+    helper = readFileSync(join(installRoot(), "aidlc-shim.ps1"), "utf-8");
+  } catch {
+    return null;
+  }
+  if (!helper.includes("& $executable @args")) return null;
+  const { previousWindowsShimHelperState } = await import("./aidlc-lifecycle.ts");
+  const state = previousWindowsShimHelperState();
+  if (!state) return null;
+  const label =
+    "Windows launcher: aidlc-shim.ps1 passes arguments the old way, so a value with spaces reaches aidlc as separate words";
+  return state.kind === "install"
+    ? { pass: false, label: `Windows launcher: not checked, because ${state.reason}`, fix: state.fix }
+    : state.kind === "blocked"
+    ? { pass: false, label: `${label}; AI-DLC cannot replace it because ${state.reason}`, fix: state.fix }
+    : { pass: false, severity: "warn", label: `${label}; ${state.reason}`, fix: state.fix };
 }
 
 export async function doctorUpdateState(
@@ -137,7 +170,7 @@ function updateCheck(state: UpdateState): DoctorCheck {
 }
 
 function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
-  const { statuses } = collectPluginStatus(projectDir);
+  const { inventory, statuses } = collectPluginStatus(projectDir);
   const attention = statuses.filter((status) => status.action === "attention");
   const drift = statuses.filter((status) => status.action === "sync");
   const detail = verbose && statuses.length > 0
@@ -159,12 +192,29 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
       fix: "run `aidlc config`",
     };
   }
+  if (inventory.capability !== "full-inventory") {
+    // No host plugin list to compare against: report what this project has.
+    // A warning here could never be cleared by anything the person does.
+    const composed = statuses.map((status) =>
+      [status.key, status.composedVersion].filter(Boolean).join(" ")
+    );
+    return {
+      pass: true,
+      label: composed.length === 0
+        ? "Plugins: none in this project"
+        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${detail}`,
+    };
+  }
   return {
     pass: true,
     label: statuses.length === 0
       ? "Plugins: no AIDLC plugins installed"
       : `Plugins: composed state is current${detail}`,
   };
+}
+
+function productName(distribution: string): string {
+  return isModelHarness(distribution) ? HARNESS_PRODUCT_NAMES[distribution] : distribution;
 }
 
 export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorCheck {
@@ -208,6 +258,29 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
       fix: issues.join("; "),
     };
   }
+  // Where the session sets every agent, say where the lever is instead. A
+  // recorded policy is named as not applying only when no other installed
+  // harness can apply it.
+  const installed = harnesses
+    .map((harness) => harness.distribution)
+    .filter((distribution): distribution is ModelHarness => isModelHarness(distribution));
+  const sessionSet = installed.filter((distribution) => sessionSetsAgentModels(distribution));
+  if (sessionSet.length > 0) {
+    const others = installed.filter((distribution) => !sessionSet.includes(distribution));
+    const policyFor = (distribution: ModelHarness) =>
+      modelPolicyForHarness(resolved.models, distribution);
+    const named = (list: ModelHarness[]) => list.map(productName).join(", ");
+    const configured = others.filter((distribution) => !modelPolicyIsEmpty(policyFor(distribution)));
+    const unconfigured = others.filter((distribution) => !configured.includes(distribution));
+    const parts = [
+      ...(configured.length > 0 ? [`recorded policy is expressible on ${named(configured)}`] : []),
+      ...(unconfigured.length > 0 ? [`no recorded policy for ${named(unconfigured)}`] : []),
+      ...sessionSet.map((distribution) =>
+        sessionModelsDetail(distribution, others.length === 0 ? policyFor(distribution) : null)
+      ),
+    ];
+    return { pass: true, label: `Models: ${parts.join("; ")}` };
+  }
   return {
     pass: true,
     label: "Models: recorded policy is expressible",
@@ -221,19 +294,10 @@ function humanReport(
   verbose: boolean,
 ): string {
   const harness = discoverProjectHarnesses(projectDir)[0];
-  const productNames: Record<string, string> = {
-    claude: "Claude Code",
-    codex: "Codex CLI",
-    copilot: "GitHub Copilot",
-    cursor: "Cursor",
-    kiro: "Kiro CLI",
-    "kiro-ide": "Kiro IDE",
-    opencode: "opencode",
-  };
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
-    /^(?:Update:|Windows uninstall|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
+    /^(?:Update:|Windows uninstall|Windows launcher|Runtime hook PATH|Harness CLI|Installed runtime|Command pointer|Rollback target|Project pin registry|Transaction staging|Transaction recovery|Settings global)/i;
   const machine = report.checks.filter((check) => machinePattern.test(check.label));
   const framework = report.checks.filter((check) => frameworkPattern.test(check.label));
   const project = report.checks.filter((check) =>
@@ -250,9 +314,10 @@ function humanReport(
       ? failVerdict(padded, out)
       : okVerdict(padded, out);
   };
-  const invoke = aidlcInvocation();
+  // Never quote the doctor command itself: VS Code's terminal tool deletes a
+  // command's output up to the line that repeats it, so the agent got nothing (#1411).
   const fallbackFix =
-    `run \`${invoke} doctor --verbose\`, correct the named condition, then rerun \`${invoke} doctor\``;
+    "add --verbose to see the details, correct the named condition, then run doctor again";
   const renderCheck = (check: DoctorCheck): string => {
     const verdict = status(check);
     // Labels can carry project-derived text (file names); never relay control
@@ -292,7 +357,7 @@ function humanReport(
   output += renderSection(machine);
   output += `\n${heading(`Project${
     harness
-      ? ` (${harness.harnessDir}, ${productNames[harness.distribution] ?? harness.distribution})`
+      ? ` (${harness.harnessDir}, ${productName(harness.distribution)})`
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);
@@ -328,10 +393,7 @@ function humanReport(
     output += `${success("Your install is ready.", out)}\n`;
   }
   if (!verbose) {
-    output += `${dim(
-      `Run '${aidlcInvocation()} doctor --verbose' to see every check.`,
-      out,
-    )}\n`;
+    output += `${dim("Add --verbose to see every check.", out)}\n`;
   }
   return output;
 }
@@ -467,6 +529,8 @@ export async function main(argv: string[]): Promise<void> {
   const checks: DoctorCheck[] = [];
   const recovery = windowsRecoveryCheck();
   if (recovery) checks.push(recovery);
+  const launcher = await windowsLauncherHelperCheck();
+  if (launcher) checks.push(launcher);
   checks.push(updateCheck(update));
   checks.push(pluginCheck(projectDir, flags.verbose === "true"));
   checks.push(...settingsDoctorChecks(projectDir));
@@ -474,6 +538,10 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(flagsDoctorCheck(projectDir, harnessDir()));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
+  if (requestCap) checks.push(requestCap);
+  const workspaceRequestCap = vscodeWorkspaceRequestCapDoctorCheck(projectDir, harnessDir());
+  if (workspaceRequestCap) checks.push(workspaceRequestCap);
   const report = await collectDoctorReport(projectDir, checks);
   // One fresh analysis, shared by the live report AND the --export writer
   // (issue #575): the structured condition->remedy findings and the

@@ -65,6 +65,28 @@ const HARNESS_NAME = (() => {
   }
   return HARNESS_LEAF.replace(/^\./, "");
 })();
+// Whether the .kiro tree is the KAS layout (Markdown agents, standalone hook
+// JSON) rather than the agent-v1 JSON layout. Same reading as the runtime's
+// kiroTreeLayout (core/tools/aidlc-runtime-paths.ts), which this template ships
+// without: harness.json's kiroLayout, else the row name trees carried before it,
+// else the conductor file. `kiro-ide` names only the KAS adapter.
+const KIRO_KAS_LAYOUT = (() => {
+  if (HARNESS_LEAF !== ".kiro") return false;
+  if (process.env.AIDLC_HARNESS_NAME?.trim() === "kiro-ide") return true;
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8"),
+    ) as { kiroLayout?: unknown; name?: unknown; distribution?: unknown };
+    if (parsed.kiroLayout === "kas" || parsed.kiroLayout === "agent-v1") {
+      return parsed.kiroLayout === "kas";
+    }
+    const row = typeof parsed.name === "string" ? parsed.name : parsed.distribution;
+    if (row === "kiro-ide" || row === "kiro") return row === "kiro-ide";
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  return existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
+})();
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
@@ -1265,7 +1287,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  const isKiroIde = HARNESS_NAME === "kiro-ide";
+  const isKiroIde = KIRO_KAS_LAYOUT;
   const isKiroCli = HARNESS_LEAF === ".kiro" && !isKiroIde;
   const surfaceExt = isKiroIde
     ? ".md"

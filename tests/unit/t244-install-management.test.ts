@@ -27,6 +27,8 @@ import {
   activeVersionPath,
   commandPath,
   type InstalledRuntimeIntegrity,
+  installedExecutablePath,
+  installRoot,
   machineTransactionRoot,
   projectPinTargetPath,
   readActiveExecutable,
@@ -36,6 +38,8 @@ import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
 import { activate, previousWindowsShimHelpers } from "../../core/tools/aidlc-lifecycle.ts";
 import {
+  channelPath,
+  readMachineChannel,
   readMachineConfig,
   resolvedReleaseSettings,
 } from "../../core/tools/aidlc-machine-config.ts";
@@ -299,7 +303,7 @@ async function waitForPresent(paths: readonly string[]): Promise<void> {
 
 function fixture(
   version = AIDLC_VERSION,
-  options: Pick<ReleaseFixtureOptions, "binary"> = {},
+  options: Pick<ReleaseFixtureOptions, "binary" | "distributions"> = {},
 ): string {
   const root = temp("aidlc-t241-release-");
   writeReleaseFixture({
@@ -1225,6 +1229,10 @@ describe("t244 management lifecycle", () => {
     const project = temp("aidlc-t241-uninstall-project-");
     mkdirSync(join(project, ".git"));
     writeFileSync(join(project, "keep.txt"), "project-owned\n");
+    // The team's own VS Code request cap: uninstall never edits project files (#1411).
+    const teamSettings = '{\n  // ours\n  "chat.agent.maxRequests": 75\n}\n';
+    mkdirSync(join(project, ".vscode"));
+    writeFileSync(join(project, ".vscode", "settings.json"), teamSettings);
     const env = envFor(machine);
     const completionPaths = process.platform === "win32" ? [uninstallFenceFor(machine)] : [];
     const installed = run(LIFECYCLE, [
@@ -1289,6 +1297,7 @@ describe("t244 management lifecycle", () => {
     expect(existsSync(join(machine, "update-check.json"))).toBe(true);
     expect(existsSync(join(machine, "pins.json"))).toBe(true);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
+    expect(readFileSync(join(project, ".vscode", "settings.json"), "utf-8")).toBe(teamSettings);
 
     const reinstalled = run(LIFECYCLE, [
       "update", "--version", AIDLC_VERSION, "--from", release,
@@ -1321,6 +1330,7 @@ describe("t244 management lifecycle", () => {
     ) {
       expect(existsSync(join(machine, path))).toBe(false);
     }
+    expect(readFileSync(join(project, ".vscode", "settings.json"), "utf-8")).toBe(teamSettings);
     expect(readFileSync(join(project, "keep.txt"), "utf-8")).toBe("project-owned\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1441,6 +1451,126 @@ describe("t244 management lifecycle", () => {
       expect(result.status, `${root}: ${result.stdout}${result.stderr}`).toBe(4);
       expect(transactionState(workspace), root).toBe(before);
     }
+  });
+});
+
+// The person typed the command, so at a terminal it says what it removes and
+// keeps, then does it; a caller without a terminal still passes --yes. The
+// terminal runs use a real pty (util-linux `script`), so they are Linux only.
+const SCRIPT = process.platform === "linux" ? Bun.which("script") : null;
+
+function atTerminal(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): { status: number; output: string } {
+  const command = [process.execPath, LIFECYCLE, ...args]
+    .map((part) => `'${part.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const result = spawnSync(SCRIPT as string, ["-qfec", command, "/dev/null"], {
+    cwd,
+    env: { ...process.env, ...env, NO_COLOR: "1" },
+    input: "",
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  if (result.error) throw result.error;
+  return { status: result.status ?? -1, output: (result.stdout ?? "").replaceAll("\r\n", "\n") };
+}
+
+describe("t244 removal commands say what they remove and ask nothing", () => {
+  test("versions prune lists the versions before it removes them, and needs --yes without a terminal", () => {
+    const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const removableRelease = fixture(REMOVABLE_VERSION, { binary: "bytes" });
+    const machine = temp("aidlc-t244-prune-notice-");
+    const project = temp("aidlc-t244-prune-notice-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", REMOVABLE_VERSION, "--from", removableRelease,
+    ], project, env).status).toBe(0);
+    const removable = join(machine, "versions", REMOVABLE_VERSION);
+
+    const refused = run(LIFECYCLE, ["versions", "prune"], project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(2);
+    expect(refused.stdout).toContain(
+      `Pruning retained versions ${REMOVABLE_VERSION}; non-interactive use requires --yes`,
+    );
+    expect(existsSync(removable)).toBe(true);
+    if (!SCRIPT) return;
+
+    const pruned = atTerminal(["versions", "prune"], project, env);
+    expect(pruned.status, pruned.output).toBe(0);
+    const notice = pruned.output.indexOf(`Pruning retained versions ${REMOVABLE_VERSION}.\n`);
+    expect(notice, pruned.output).toBeGreaterThan(-1);
+    expect(pruned.output.indexOf(`pruned ${REMOVABLE_VERSION}`)).toBeGreaterThan(notice);
+    expect(pruned.output).not.toContain("[y/N]");
+    expect(existsSync(removable)).toBe(false);
+  });
+
+  test.skipIf(!SCRIPT)("uninstall at a terminal says what it removes and keeps first, then uninstalls", () => {
+    const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const machine = temp("aidlc-t244-uninstall-notice-");
+    const project = temp("aidlc-t244-uninstall-notice-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    const install = () => expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    install();
+    const kept = "Uninstalling AI-DLC (1 retained version(s)). Project trees will not be changed. " +
+      "Machine configuration, update cache, pins, and harness default will be kept.";
+    const refused = run(LIFECYCLE, ["uninstall"], project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(2);
+    expect(refused.stdout).toContain(`${kept.replace(/\.$/, "")}; non-interactive use requires --yes`);
+    expect(existsSync(join(machine, "versions"))).toBe(true);
+
+    const uninstalled = atTerminal(["uninstall"], project, env);
+    expect(uninstalled.status, uninstalled.output).toBe(0);
+    const notice = uninstalled.output.indexOf(`${kept}\n`);
+    expect(notice, uninstalled.output).toBeGreaterThan(-1);
+    expect(uninstalled.output.indexOf("Removed aidlc and all retained releases.")).toBeGreaterThan(notice);
+    expect(uninstalled.output).not.toContain("[y/N]");
+    expect(existsSync(join(machine, "versions"))).toBe(false);
+
+    install();
+    const purged = atTerminal(["uninstall", "--purge"], project, env);
+    expect(purged.status, purged.output).toBe(0);
+    const purgeNotice = purged.output.indexOf(
+      "Uninstalling AI-DLC (1 retained version(s)). Project trees will not be changed. " +
+        "Machine settings, update cache, pins, harness default, and release channel will be removed.\n",
+    );
+    expect(purgeNotice, purged.output).toBeGreaterThan(-1);
+    expect(purged.output.indexOf("Removed aidlc, all retained releases, machine settings"))
+      .toBeGreaterThan(purgeNotice);
+    expect(existsSync(join(machine, "versions"))).toBe(false);
+  });
+
+  test("a rollback to a release without some harnesses names --allow-harness-loss, which rolls back anyway", () => {
+    const fewer = fixture(AIDLC_VERSION, { binary: "executable", distributions: ["claude"] });
+    const next = fixture(NEXT_VERSION, { binary: "executable" });
+    const machine = temp("aidlc-t244-rollback-loss-");
+    const project = temp("aidlc-t244-rollback-loss-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    for (const [version, from] of [[AIDLC_VERSION, fewer], [NEXT_VERSION, next]]) {
+      const installed = run(LIFECYCLE, ["update", "--version", version, "--from", from], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    const lost = RELEASE_HARNESSES.filter((name) => name !== "claude").join(", ");
+    const refused = run(LIFECYCLE, ["rollback"], project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+    expect(refused.stdout).toContain(
+      `rollback target ${AIDLC_VERSION} lacks harnesses: ${lost}; ` +
+        "to roll back anyway, without them, run it again with --allow-harness-loss",
+    );
+    expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(NEXT_VERSION);
+    const allowed = run(LIFECYCLE, ["rollback", "--allow-harness-loss"], project, env);
+    expect(allowed.status, allowed.stdout + allowed.stderr).toBe(0);
+    expect(allowed.stdout).toContain(`rolled back to ${AIDLC_VERSION}`);
   });
 });
 
@@ -1788,13 +1918,32 @@ describe("t244 Windows and completion release surfaces", () => {
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
-  test.skipIf(process.platform !== "win32")(
-    "a fixed Windows binary replaces the previous launcher helper an update left",
-    () => {
+  test.skipIf(process.platform !== "win32").each([
+    [AIDLC_VERSION, "short"],
+    [`${NEXT_VERSION}-preview.20260930.1`, "long"],
+  ] as const)(
+    "a fixed Windows binary replaces the previous launcher helper an update left (%s, %s install path)",
+    (fixtureVersion, spelling) => {
       const machine = temp("aidlc-t244-windows-helper-");
-      const root = join(machine, "versions", AIDLC_VERSION);
+      const root = join(machine, "versions", fixtureVersion);
       const executable = join(root, "aidlc.exe");
       mkdirSync(root, { recursive: true });
+      const runtime = join(root, "runtime", "claude");
+      cpSync(join(REPO_ROOT, "dist-release", "claude"), runtime, { recursive: true });
+      const stampPath = join(runtime, ".claude", "tools", "data", "aidlc-stamp.json");
+      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as {
+        frameworkVersion: string;
+      };
+      writeFileSync(
+        stampPath,
+        `${JSON.stringify({ ...stamp, frameworkVersion: fixtureVersion }, null, 2)}\n`,
+      );
+      // Compile the same fixture version recorded by its runtime and manifest.
+      // The shared dist-release may have been packaged for a preview release.
+      writeFileSync(
+        join(runtime, ".claude", "tools", "aidlc-version.ts"),
+        `export const AIDLC_VERSION = ${JSON.stringify(fixtureVersion)};\n`,
+      );
       // The dispatcher build-binaries.ts ships, because the replacement runs
       // in its main before any route.
       const dispatcher = spawnSync(
@@ -1802,7 +1951,7 @@ describe("t244 Windows and completion release surfaces", () => {
         [
           "build",
           "--compile",
-          join(REPO_ROOT, "dist-release", "claude", ".claude", "tools", "aidlc.ts"),
+          join(runtime, ".claude", "tools", "aidlc.ts"),
           "--outfile",
           executable,
         ],
@@ -1821,21 +1970,11 @@ describe("t244 Windows and completion release surfaces", () => {
         { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
       );
       expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
-      const runtime = join(root, "runtime", "claude");
-      cpSync(join(REPO_ROOT, "dist-release", "claude"), runtime, { recursive: true });
-      const stampPath = join(runtime, ".claude", "tools", "data", "aidlc-stamp.json");
-      const stamp = JSON.parse(readFileSync(stampPath, "utf-8")) as {
-        frameworkVersion: string;
-      };
-      writeFileSync(
-        stampPath,
-        `${JSON.stringify({ ...stamp, frameworkVersion: AIDLC_VERSION }, null, 2)}\n`,
-      );
       writeFileSync(
         join(root, "version.json"),
         `${JSON.stringify({
           schemaVersion: 1,
-          version: AIDLC_VERSION,
+          version: fixtureVersion,
           date: "2026-09-28",
           distributions: [{ name: "claude", productName: "Claude Code" }],
           assets: [{
@@ -1852,8 +1991,34 @@ describe("t244 Windows and completion release surfaces", () => {
         root: process.env.AIDLC_INSTALL_ROOT,
         bin: process.env.AIDLC_BIN_DIR,
       };
-      process.env.AIDLC_INSTALL_ROOT = machine;
-      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      // GitHub's Windows TEMP is an 8.3 short name (RUNNER~1). The active
+      // pointer keeps that spelling while the running binary's path is the
+      // long one, so one case installs under the short spelling.
+      let spelledMachine = machine;
+      if (spelling === "short") {
+        const short = spawnSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:AIDLC_T244_MACHINE).ShortPath",
+          ],
+          {
+            env: { ...process.env, AIDLC_T244_MACHINE: machine },
+            encoding: "utf-8",
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          },
+        );
+        expect(short.status, `${short.stdout}${short.stderr}`).toBe(0);
+        spelledMachine = short.stdout.trim();
+        // A volume without 8.3 names cannot show the defect; say so, not pass.
+        expect(spelledMachine, `no 8.3 short name for ${machine}; see fsutil 8dot3name query`)
+          .not.toBe(machine);
+        expect(spelledMachine).toContain("~");
+      }
+      process.env.AIDLC_INSTALL_ROOT = spelledMachine;
+      process.env.AIDLC_BIN_DIR = join(spelledMachine, "bin");
       const launch = (...args: string[]) => {
         const result = Bun.spawnSync(
           [commandPath(), ...args],
@@ -1874,9 +2039,20 @@ describe("t244 Windows and completion release surfaces", () => {
         };
       };
       const helperPath = join(machine, "aidlc-shim.ps1");
-      const versionLine = `aidlc ${AIDLC_VERSION} (runtime ${AIDLC_VERSION})`;
+      const versionLine = `aidlc ${fixtureVersion} (runtime ${fixtureVersion})`;
+      // Doctor never replaces the helper; it says it is there and why. A
+      // project inside the install root is refused, so it gets its own.
+      const project = temp("aidlc-t244-windows-helper-project-");
+      const launcherRows = () => {
+        const doctor = launch("doctor", "--json", "--project-dir", project);
+        const report = JSON.parse(doctor.stdout) as {
+          data?: { checks: Array<{ pass: boolean; severity?: string; label: string; fix?: string }> };
+        };
+        expect(report.data, doctor.stdout).toBeDefined();
+        return (report.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:"));
+      };
       try {
-        activate(AIDLC_VERSION);
+        activate(fixtureVersion);
         const current = readFileSync(helperPath, "utf-8");
         const shim = readFileSync(commandPath(), "utf-8");
         // What `aidlc update` from a release without the reasoned helper leaves.
@@ -1884,15 +2060,113 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(previous).not.toBe(current);
         writeFileSync(helperPath, previous);
 
-        // A launcher or helper the installer did not write is left alone.
+        // A launcher or helper the installer did not write is left alone,
+        // and doctor's fix, run as written, gives the current launcher back
+        // without changing the version or the release channel.
+        const channel = fixtureVersion.includes("-preview.") ? "preview" : "stable";
+        writeFileSync(channelPath(), `${channel}\n`);
+        // Doctor names files in the install root's own spelling.
+        const reportedHelper = join(installRoot(), "aidlc-shim.ps1");
+        const reportedExecutable = installedExecutablePath(fixtureVersion);
+        const reactivate = `run \`& '${reportedExecutable}' use ${fixtureVersion}\``;
+        const direct = (...args: string[]) => {
+          const result = Bun.spawnSync([reportedExecutable, ...args], {
+            cwd: machine,
+            env: { ...process.env },
+            timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          return {
+            exitCode: result.exitCode,
+            stdout: Buffer.from(result.stdout).toString("utf-8").trim(),
+            stderr: Buffer.from(result.stderr).toString("utf-8").trim(),
+          };
+        };
+        const reactivated = () => {
+          const used = direct("use", fixtureVersion);
+          expect(used.exitCode, used.stderr).toBe(0);
+          expect(readFileSync(commandPath(), "utf-8")).toBe(shim);
+          expect(readFileSync(helperPath, "utf-8")).toBe(current);
+          expect(readFileSync(activeVersionPath(), "utf-8").trim()).toBe(fixtureVersion);
+          expect(readMachineChannel()).toBe(channel);
+          expect(launch("version").stdout).toBe(versionLine);
+          writeFileSync(helperPath, previous);
+        };
+        let asides = 0;
+        const followFix = (...paths: string[]) => {
+          for (const path of paths) renameSync(path, `${path}.aside-${++asides}`);
+          reactivated();
+        };
         writeFileSync(commandPath(), `${shim}rem local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
-        writeFileSync(commandPath(), shim);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining(
+            `cannot replace it because ${commandPath()} was changed after it was installed`,
+          ),
+          fix: `move ${commandPath()} aside, then ${reactivate}`,
+        })]);
+        expect(readFileSync(helperPath, "utf-8")).toBe(previous);
+        followFix(commandPath());
         writeFileSync(helperPath, `${previous}# local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(`${previous}# local change\r\n`);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining(
+            `cannot replace it because ${reportedHelper} was changed after it was installed`,
+          ),
+          fix: `move ${commandPath()} and ${reportedHelper} aside, then ${reactivate}`,
+        })]);
+        followFix(commandPath(), reportedHelper);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          severity: "warn",
+          label: expect.stringContaining("the next aidlc command replaces it"),
+          fix: `run \`aidlc version\`; if this row is still here, run \`aidlc use ${fixtureVersion}\`, ` +
+            "which rewrites the launcher for the version you have and says why if it cannot",
+        })]);
+        expect(readFileSync(helperPath, "utf-8")).toBe(previous);
+        // That second step works through the old helper too.
+        const reused = launch("use", fixtureVersion);
+        expect(reused.exitCode, reused.stderr).toBe(0);
+        expect(readFileSync(helperPath, "utf-8")).toBe(current);
+        expect(readMachineChannel()).toBe(channel);
         writeFileSync(helperPath, previous);
+
+        // A damaged marker stops the old helper before aidlc starts, so only
+        // aidlc.exe reaches doctor. No other row reports the marker, so this
+        // one does, and lets the person pick the version to keep.
+        writeFileSync(activeVersionPath(), "damaged\n");
+        expect(launch("version").exitCode).toBe(4);
+        const damaged = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
+          data?: { checks: Array<{ pass: boolean; label: string; fix?: string }> };
+        };
+        expect(
+          (damaged.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:")),
+        ).toEqual([{
+          pass: false,
+          label: `Windows launcher: not checked, because the active version marker ${activeVersionPath()} ` +
+            "is missing or damaged",
+          fix: `if you use ${fixtureVersion}, ${reactivate}; for another retained version, run that ` +
+            `version's aidlc.exe under ${join(installRoot(), "versions")} with \`use <version>\`; ` +
+            "or rerun the same verified AI-DLC installer (install.ps1)",
+        }]);
+        reactivated();
+        // A missing command target is the Command pointer row's to report.
+        renameSync(activeExecutablePath(), `${activeExecutablePath()}.aside`);
+        const pointerless = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
+          data?: { checks: Array<{ pass: boolean; label: string }> };
+        };
+        const pointerRows = (pointerless.data?.checks ?? []).filter((check) =>
+          check.label.startsWith("Windows launcher:") || check.label.startsWith("Command pointer")
+        );
+        expect(pointerRows).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining("Command pointer is missing"),
+        })]);
+        renameSync(`${activeExecutablePath()}.aside`, activeExecutablePath());
 
         // While another mutation holds the machine lock, as the update does
         // during its version probe, the command runs without waiting and
@@ -1911,6 +2185,7 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(replaced.stderr).toBe("");
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
         expect(existsSync(lock)).toBe(false);
+        expect(launcherRows()).toEqual([]);
 
         // The replaced helper forwards the engine's intent create command whole.
         cpSync(probe, executable);
@@ -2802,6 +3077,34 @@ describe("t244 Windows and completion release surfaces", () => {
       expect(windowsInstaller).toContain(variable);
     }
     expect(unixInstaller).toContain("AIDLC_GH_BIN");
+  });
+
+  test("release lifecycle jobs follow setup's git init advice for the Cursor project before doctor", () => {
+    // Doctor fails a Cursor project outside git, and setup says to run
+    // `git init`; the job runs it after config so setup still finishes outside git.
+    for (const path of [RELEASE_WORKFLOW, PREVIEW_RELEASE_WORKFLOW]) {
+      const workflow = readFileSync(path, "utf-8");
+      for (const [job, config, gitInit, doctor] of [
+        [
+          "windows-lifecycle",
+          "& $command config --project-dir $project --harness $harness --mcp none --quiet",
+          "if ($harness -eq 'cursor') {\n              git init --quiet $project\n" +
+            "              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n            }",
+          "& $command doctor --project-dir $project --quiet",
+        ],
+        [
+          "unix-lifecycle",
+          '--project-dir "$project" --harness "$harness" --mcp none --quiet',
+          'if [ "$harness" = cursor ]; then\n              git init --quiet "$project"\n            fi',
+          'env PATH="/usr/bin:/bin" "$command" doctor',
+        ],
+      ] as const) {
+        const text = workflowJob(workflow, job);
+        const at = [config, gitInit, doctor].map((line) => text.indexOf(line));
+        expect(at.every((index) => index >= 0), `${path} ${job}`).toBe(true);
+        expect(at[0] < at[1] && at[1] < at[2], `${path} ${job} order`).toBe(true);
+      }
+    }
   });
 
   test("release lifecycle verifier fixtures reject every missing binding", () => {

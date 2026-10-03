@@ -74,6 +74,17 @@ function report(runs: RunFailures[], overrides: Partial<Parameters<typeof render
 }
 
 describe("t-ci-preview-test-report", () => {
+  test("standalone Full Suite failures keep their OS job names and links", () => {
+    expect(failedJobs([{ jobs: [
+      { name: "Windows / codex 1/1", conclusion: "failure", html_url: "https://github.com/j/1" },
+      { name: "Linux / result", conclusion: "failure", html_url: "https://github.com/j/2" },
+      { name: "Linux / plan", conclusion: "success", html_url: "https://github.com/j/3" },
+    ] }])).toEqual([
+      { name: "Linux / result", url: "https://github.com/j/2" },
+      { name: "Windows / codex 1/1", url: "https://github.com/j/1" },
+    ]);
+  });
+
   test("failure files yield failing files, deduplicated cases and runner errors", () => {
     const run = parseFailures("deterministic-unit-7-Windows", [
       "error: --filter matched no test files",
@@ -304,7 +315,8 @@ describe("t-ci-preview-test-report", () => {
       SOURCE_SHA: SHA,
       GITHUB_SERVER_URL: "https://github.com",
       GITHUB_REPOSITORY: "owner/repo",
-      GITHUB_RUN_ID: "42",
+      GITHUB_RUN_ID: "99",
+      FULL_SUITE_RUN_ID: "42",
     };
     const output = join(root, "out", "report.md");
     fs.mkdirSync(dirname(output));

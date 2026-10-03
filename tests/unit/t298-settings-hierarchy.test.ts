@@ -213,6 +213,42 @@ describe("t298 aidlc.settings hierarchy", () => {
     });
   });
 
+  test("a bypass any layer records stays on when a nearer layer records another", () => {
+    const machine = temp("aidlc-t298-bypass-machine-");
+    const project = temp("aidlc-t298-bypass-chain-");
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    writeJson(machineSettingsPath(), {
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_LEARNINGS"] },
+    });
+    writeJson(projectSettingsPath(project), {
+      schemaVersion: 1,
+      flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] },
+    });
+    writeJson(localSettingsPath(project), {
+      schemaVersion: 1,
+      flags: {
+        schemaVersion: 1,
+        swarm: true,
+        bypasses: ["AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "AIDLC_DISABLE_SENSORS"],
+      },
+    });
+    const resolved = resolveAidlcSettings(project);
+    expect(resolved.flags).toEqual({
+      schemaVersion: 1,
+      swarm: true,
+      bypasses: [
+        "AIDLC_DISABLE_LEARNINGS",
+        "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+        "AIDLC_DISABLE_SENSORS",
+      ],
+    });
+    // Each switch names the nearest file that records it.
+    expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_LEARNINGS"]).toBe("machine");
+    expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_SENSORS"]).toBe("local");
+    expect(resolved.sources["flags.bypasses.AIDLC_DISABLE_PLAN_APPROVAL_GUARD"]).toBe("local");
+  });
+
   test("$schema is tolerated while unknown and machine-only project keys fail closed", () => {
     expect(
       AIDLC_SETTINGS_SCHEMA.properties.flags.properties.questionRetentionDays,

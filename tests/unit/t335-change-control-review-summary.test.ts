@@ -527,7 +527,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     });
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(
-      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, or approve again.`,
+      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, then run the same command again.`,
     );
     expect(printedNotices(refused.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(0);

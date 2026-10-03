@@ -148,7 +148,7 @@ describe("t337 scope ceremony metadata", () => {
       expect(loadScopeMetadataAll().classic).toMatchObject({
         skeleton: false,
         reviewCap: "advisory",
-        guardPolicy: "relaxed",
+        guardPolicy: "off",
         ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on" },
       });
       expect(scopeCeremonyDefault("sensors", "classic")).toBe("on");
@@ -158,7 +158,7 @@ describe("t337 scope ceremony metadata", () => {
     });
   });
 
-  test("express switches every ceremony off by default; every other scope keeps them on", () => {
+  test("express switches every ceremony off by default, poc and bugfix some; every other scope keeps them on", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
       const all = loadScopeMetadataAll();
       expect(all.express).toMatchObject({
@@ -175,8 +175,11 @@ describe("t337 scope ceremony metadata", () => {
       }
       // poc keeps the other ceremonies but, like express, builds its plans without asking.
       expect(all.poc.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "off" });
+      // bugfix asks no learnings question and no summary confirmation; its
+      // sensors and plan approval stay on.
+      expect(all.bugfix.ceremony).toEqual({ sensors: "on", learnings: "off", summary_confirmation: "off", plan_approval: "on" });
       for (const scope of Object.keys(all)) {
-        if (scope === "express" || scope === "classic" || scope === "poc") continue;
+        if (scope === "express" || scope === "classic" || scope === "poc" || scope === "bugfix") continue;
         expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" });
       }
     });

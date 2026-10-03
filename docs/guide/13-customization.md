@@ -83,11 +83,12 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
 **Precedence (highest to lowest):**
 
 1. Explicit CLI flag: `/aidlc feature` or `/aidlc --scope bugfix` wins.
-2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`. Users can override the detected scope at the existing confirmation prompt.
+2. Keyword detection in freeform text: `/aidlc fix the login bug` still maps to `bugfix`, and so does `/aidlc-init "fix the login bug"`. Users can override the detected scope at the existing confirmation prompt.
 3. The real `AWS_AIDLC_DEFAULT_SCOPE` environment variable, including the value supplied by `.claude/settings.json`.
 4. The recorded `aidlc config flags --default-scope` value (local settings override shared project settings).
-5. `classic` — the framework fallback used by unmatched-freeform resolution,
-   `/aidlc-init`, and direct `intent-create` calls without `--scope`.
+5. `classic` - the framework fallback used by unmatched-freeform resolution
+   and direct `intent-create` calls without `--scope`. `/aidlc-init` with a
+   description and no `--scope` shows the same plan offer as `/aidlc` instead.
 
 **Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `classic`, `workshop`, `express`. An invalid value errors at invocation time with a clear message. Teams can define additional scopes by dropping a `.claude/scopes/aidlc-<name>.md` file and tagging the member stages' `scopes:` lists — see [Contributing: Adding a Scope](../reference/11-contributing.md#adding-a-scope). Teams can also define additional agents in `.claude/agents/` — see [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
@@ -209,8 +210,9 @@ Scopes own four independent ceremony defaults. Each accepts `on` or `off`.
 Every shipped scope now declares all four explicitly rather than relying on a
 default; a scope file that omits one still falls back to `on`. Classic sets
 sensors, learnings, and plan approval to `on` and summary confirmation to `off`.
-Express is the only shipped scope with all four off; poc also turns plan
-approval off.
+Bugfix sets learnings and summary confirmation to `off` and keeps sensors and
+plan approval `on`. Express is the only shipped scope with all four off; poc
+also turns plan approval off.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|
@@ -369,13 +371,12 @@ you do not need to recreate workers to apply that setting.
 
 | Scope | Default |
 |-------|---------|
-| enterprise, security-patch, infra | strict |
-| poc, classic, bugfix, feature, mvp, refactor, workshop | relaxed |
-| express | off |
+| enterprise | strict |
+| poc, express, classic, bugfix, feature, mvp, refactor, workshop, security-patch, infra | off |
 
-`express` ships with `off`. On the other shipped scopes `off` is something you ask for. A composed plan writes no scope file: a matched plan carries its stock scope's default, and a custom plan runs on a stock scope whose default is the value you approved at its gate. A plan you save as a scope stores its value as `guard_policy: <value>`.
+`bugfix`, `classic`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, and `workshop` ship with `off`. Because `classic` is the implicit default scope, work that names no scope starts with `off` too. On `enterprise`, `off` is something you ask for. A composed plan writes no scope file: a matched plan carries its stock scope's default or a stricter value you asked for, and a custom plan runs on a stock scope whose default is the value you approved at its gate, or lower. A plan you save as a scope stores its value as `guard_policy: <value>`.
 
-Intent creation reads Guard Policy from the scope the plan runs on. The conductor passes `--guard-policy` only for `strict`. If you flip a matched plan's Guard Policy at the compose gate, it becomes a custom plan on a stock scope that carries that value, and the intent takes it at creation. The composer never changes an in-flight intent's value.
+Intent creation reads Guard Policy from the scope the plan runs on. The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a lower scope default, and never for `off`. If you lower a matched plan's Guard Policy at the compose gate, it becomes a custom plan on a stock scope that carries that value; if you raise it, the plan stays matched. Either way the intent takes the value at creation. The composer never changes an in-flight intent's value.
 
 #### The three places to set it
 
@@ -427,7 +428,7 @@ When a guard question offers "turn the check off for this piece of work", choosi
 
 What counts as typing the switch: a message that begins with `/aidlc` (or `$aidlc`, or `aidlc`) and carries the flags first, such as `/aidlc --guard-policy relaxed`, `/aidlc --guard-policy off --guard.state-transition off`, or `/aidlc --guard-policy relaxed build the auth service` (the description follows the flags and is not read); `config set guard-policy relaxed|off` or `config set guard.<fence> off` after the same command head, followed only by optional `--intent <name>` and `--space <name>` pairs, each at most once and in either order; or the confirmation words `guard policy relaxed|off` on their own. Any other extra token in the config form applies no switch. Case and a trailing period do not matter. A question or remark that mentions a switch is not a switch: `/aidlc why was config set guard.plan-approval off suggested?` changes nothing, and neither does a flag placed after the description.
 
-Direct `intent create --guard-policy relaxed|off` from chat is refused when the value differs from the selected scope's default: create the piece of work, then have the person type the switch. Direct `scope change --guard-policy relaxed|off` follows the same lowering rule as `config-change`; an implicit lower scope default preserves the running workflow's stricter value. `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering. After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a CLI setter lowers without the person's prompt through the fixture or harness-launch presence bypass, not an inline environment assignment. The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan Approval runtime directory for an attended harness launched with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
+Direct `intent create --guard-policy relaxed|off` from chat is refused when the value is below the selected scope's default (`relaxed` on an `off` scope is a raise and applies): create the piece of work, then have the person type the switch. Direct `scope change --guard-policy relaxed|off` follows the same lowering rule as `config-change`; an implicit lower scope default preserves the running workflow's stricter value. `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering. After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a CLI setter lowers without the person's prompt through the fixture or harness-launch presence bypass, not an inline environment assignment. The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan Approval runtime directory for an attended harness launched with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
 
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the [state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
 
@@ -455,7 +456,7 @@ Creation with an explicit `relaxed` flag says:
 
 > Creating this intent with Guard Policy relaxed would lower fences. Create it, then have the person type `/aidlc --guard-policy relaxed`; the harness applies it as they say it. A scope default applies without asking.
 
-Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch: `This needs a fresh human turn: wait for the person to reply, then record it again.`
+Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch; it says no reply from the person is on record and what happened to one they already sent (the harness's hook steps, or `/aidlc --doctor`), and never asks them to reply again.
 
 Human presence is the strictest of the five. It is what makes your approval yours, so neither Guard Policy nor a per-work setting lowers it: only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower the fence.
 
@@ -473,10 +474,10 @@ This classification never lowers a fence or substitutes for the person's typed s
 
 ### What you see when a guard decides
 
-- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy relaxed (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
+- **It stands aside.** One line names what lowered the fence, and the work continues: `Continuing past the plan-approval check because it is off for this piece of work (guard policy off (from scope classic)). Recorded in the audit trail: dispatch of aidlc-developer-agent`. One `GUARD_STOOD_ASIDE` row records the fence, the authority in force, how a grant was proven, and whether the actor was the main session or a dispatched agent. You are never asked "are you sure": the fence is already off.
 
   On Claude Code the hook emits one JSON `systemMessage`, which Claude Code shows to you as a hook message; the model does not see it, and the `GUARD_STOOD_ASIDE` row is the record. On Codex, opencode, and Kiro CLI you see the plain hook line. On Kiro IDE you do not: the IDE hands a hook's output to the agent only at session start and at prompt submit, so a stand-aside there is silent and the audit row is the only record of it. A refusal is different: when a hook blocks a tool call, the agent does see the reason. The row is written only when the intent already has an audit trail, so on Kiro IDE against a brand-new project with no ledger yet a stand-aside leaves neither the line nor the row. If you want to know what a lowered fence let through, read the `GUARD_STOOD_ASIDE` rows in the intent's `audit/` shards rather than relying on having seen the line.
-- **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.review-freeze off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead asks for a fresh human turn and never advertises a switch.
+- **It holds.** When memory does not hold Guard Policy strict, a switchable fence's main-session refusal says what is missing and adds one sentence naming the way through: `If you meant to do this now, turn the check off for this piece of work with /aidlc config set guard.review-freeze off. It is recorded, and it comes back on for the next piece of work.` When memory holds strict, the refusal names the memory file instead of offering a switch. Human presence instead says no reply from the person is on record, never asks them to repeat it, and never advertises a switch.
   Plan approval never names a switch: turning it off is only ever your idea. A plan you have not approved yet, or one edited after approval under `strict`, is asked about by running `next`.
   Dispatched agents never see the switch sentence; their refusals redirect them to the main session.
 - **It asks.** Under `strict`, an input that changed after you approved something is asked about once, naming what changed.

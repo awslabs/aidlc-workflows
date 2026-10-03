@@ -27,7 +27,7 @@ intentionally ignored. Historical shards are not rewritten: readers that parse
 whole files must split on `---` and use the first timestamp in each block, or
 deduplicate timestamp fields produced by older versions.
 
-## Event Registry (108 events, 25 categories)
+## Event Registry (112 events, 25 categories)
 
 ### Workflow Lifecycle (6 events)
 
@@ -37,8 +37,8 @@ deduplicate timestamp fields produced by older versions.
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
-| ✓ `WORKFLOW_ARCHIVED` | In-flight intent retired by a human (`Status: Archived`, registry `archived`); record and audit shards preserved | Timestamp, Stage; optional Reason | `tools/aidlc-utility.ts intent archive` |
-| ✓ `WORKFLOW_UNARCHIVED` | Archived intent returned to `Running` / `in-flight` | Timestamp, Stage | `tools/aidlc-utility.ts intent unarchive` |
+| ✓ `WORKFLOW_ARCHIVED` | In-flight or completed intent retired by a human (`Status: Archived`, registry `archived`); record and audit shards preserved | Timestamp, Stage; optional Reason | `tools/aidlc-utility.ts intent archive` |
+| ✓ `WORKFLOW_UNARCHIVED` | Archived intent returned to `Running` / `in-flight`, or `Completed` / `complete` when it was archived complete | Timestamp, Stage | `tools/aidlc-utility.ts intent unarchive` |
 
 ### Phase Lifecycle (4 events)
 
@@ -87,7 +87,7 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `WORKSPACE_SCANNED` | Workspace detection done | Timestamp, Project type, Details | `tools/aidlc-utility.ts` handleInit |
 | `WORKSPACE_INITIALISED` | State file created | Timestamp, Details | `tools/aidlc-utility.ts` handleInit |
 
-### Navigation Events (8 events)
+### Navigation Events (9 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -98,6 +98,7 @@ operational evidence, not a tamper-proof human-authorship boundary.
 | `REVIEW_CLASS_CHANGED` | `--review` changed the per-run review override | Timestamp, Old Override, New Override | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 | `RECOMPOSED` | The adaptive composer re-shaped a running workflow's pending stages (suffix flips via `recompose`) | Timestamp, Scope, Stages skipped, Stages added, Stages in Scope | `tools/aidlc-utility.ts recompose` |
+| `WORKSPACE_RECLASSIFIED` | The person said the work is a new project or existing code (`workspace reclassify --project-type`); the folder was scanned again | Timestamp, Old Project Type, New Project Type, Scanned As, Languages, Frameworks, Build System, Nested Root (optional), Repos Recorded (optional), Reverse Engineering | `tools/aidlc-utility.ts reclassify` |
 | `SCOPE_SAVED` | The person kept a piece of work's current plan as a reusable scope (`scope save`) | Timestamp, Scope, Saved as, Stages in Scope | `tools/aidlc-utility.ts scope-save` |
 
 ### Guard Policy Events (5 events)
@@ -133,10 +134,10 @@ Sensors, Learnings, and Summary Confirmation are independent per-intent `on`/`of
 | `CONSTRUCTION_POLICY_RECORDED` | Human approved a Construction policy change through the matching pending decision's one-shot field/value challenge and exact offered choice from the invoking session. During Construction, the latest current-workflow receipt for the field authorizes only its requested value and is spent when the setter applies it. Unrelated human turns and other gate answers cannot authorize a change. Reserved from public audit append and worktree audit merge | Timestamp, Stage, Checkpoint (`Construction Policy`), Field (`Construction Checkpoints`, `Construction Execution`, or `Construction Iteration`), Value, Session, User Input (`Approve`) | `tools/aidlc-log.ts answer --checkpoint construction-policy` |
 | `CHECKPOINT_VERIFICATION_RECORDED` | Construction checkpoint verifier finished the authorized command and wrote its proof under the audit lock. Verification requires the latest current-attempt receipt to match the proof id, evidence fingerprint, current command digest, and run floor with `Verified: true`; a proof JSON alone cannot authorize approval. Reserved from public audit append and worktree audit merge | Timestamp, Unit, Kind (`unit` or `skeleton`), Stage (last checkpoint stage), Stages, Verification Id, Fingerprint, Command SHA-256, Exit Code, Verified (`true` or `false`), Run floor; optional Attempt Generation | `tools/aidlc-construction-checkpoints.ts verifyConstructionCheckpoint` |
 | `PLAN_APPROVAL_RECORDED` | Provenance that Code Generation consumed a protected Plan Approval challenge/response receipt; this Markdown row is not authorization evidence. `Directive Epoch` is recorded for diagnosis and never compared: the approval binds to `Plan Target`, `Run floor` (the stage attempt), and `Approval Fingerprint` (the plan content) | Timestamp, Stage, Details, Checkpoint, Plan Target, Intent, Directive Epoch, Run floor, Approval Fingerprint, Questions File, Questions SHA-256, Prompt SHA-256, Session | `tools/aidlc-log.ts answer --checkpoint plan-approval` |
-| `PLAN_APPROVAL_SKIPPED` | Code Generation started from a plan nobody was asked to approve, because plan approval is off for this piece of work (the scope default, the person's own switch, or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`). It records the fingerprint of the plan that was built, so the trail shows what ran, and never claims a person approved it. The questions file reads `[Answer]: Plan approval off` and the protected receipt is marked skipped; reserved from the public audit CLI | Timestamp, Stage, Details (`Plan approval off`), Checkpoint, Plan Target, Intent, Directive Epoch, Run floor, Approval Fingerprint, Questions File, Questions SHA-256, Prompt SHA-256, Source (where the off setting came from), Unit (when Unit-scoped) | `tools/aidlc-plan-approval-ask.ts` (the engine, on `next`) |
+| `PLAN_APPROVAL_SKIPPED` | Code Generation started from a plan nobody was asked to approve, because plan approval is off for this piece of work (the scope default, the person's own switch, or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`). It records the fingerprint of the plan that was built, so the trail shows what ran, and never claims a person approved it. The questions file reads `[Answer]: Plan approval off` and the protected receipt is marked skipped; reserved from the public audit CLI | Timestamp, Stage, Details (`Plan approval off`), Checkpoint, Plan Target, Intent, Directive Epoch, Run floor, Approval Fingerprint, Questions File, Questions SHA-256, Prompt SHA-256, Source (where the off setting came from), Unit (when Unit-scoped) | `tools/aidlc-plan-approval-ask.ts` (the engine, when it hands over the build: on `next`, or on the `continue` that delivers the build's last rules part) |
 | `PLAN_APPROVAL_OVERRIDDEN` | The human broke the glass: they typed `Override Plan Approval: <reason>` as a prompt (recorded by the human-turn hook, never from a picked option) and the conductor ran `answer --override-file` with that reason after the normal receipt path refused. The receipt this row accompanies binds to plan content and stage attempt only; source certification is skipped for it. Always paired with a `PLAN_APPROVAL_RECORDED` row carrying `Override: yes`; reserved from the public audit CLI | Timestamp, Stage, Reason (verbatim), Failed Checks (the normal path's refusals, separated by a vertical bar), Session, Unit (or `stage-level`), Fingerprint | `tools/aidlc-log.ts answer --checkpoint plan-approval --override` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent; reserved from the public audit CLI. Structurally malformed rows are non-authoritative and do not consume an ordinal | Timestamp, Stage, Reviewer, Iteration, Artifact Fingerprint (`sha256:<hex>` from one stable snapshot of every declared artifact exactly as dispatched for review), Request Id (`review:<32 lowercase hex>`, minted per request; the completion row and the review record echo it), optional Unit + Attempt Generation (authoritative-DAG per-unit claims), Source Fingerprint on `workspace_requires` stages, Unit Source Fingerprint (manifest bytes + claimed source listing) on per-unit `workspace_requires` stages, optional Retry (`pending-request`, accepted once after a modern binding exists), optional Upgrade (`legacy-request`, one bounded modernization of a valid request recorded before request ids or source binding), optional Recovery (`stale-receipt`) plus Recovery Cause (`artifact`, `source`, or `artifact+source`). Rows written under the retired appendix protocol also carry Review Appendix Artifact, Review Appendix Offset, Review Appendix Prior Digest, Review Appendix Prior Length, and Review Challenge; they stay readable, and a completion of such a request echoes them unchanged so the pair still binds | `tools/aidlc-log.ts review` |
-| `REVIEW_COMPLETED` | Reviewer verdict recorded; gates approval and is reserved from the public audit CLI. Malformed rows are ignored without consuming their pending request | Timestamp, Stage, Reviewer, Iteration, Verdict, Request Fingerprint (must match the request), Artifact Fingerprint (the same stable snapshot: the reviewer writes no artifact, so the reviewed bytes are the requested bytes), Request Id (must match the request), Review Record (record-relative path `.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`) + Review Record Digest (`sha256:<hex>` over the record bytes; a record that no longer hashes to it is not the review), optional Unit + Attempt Generation (per-unit claims), Request Source Fingerprint + Source Fingerprint (identical request-time source identity on `workspace_requires` stages), Unit Source Fingerprint or Unit Source Binding Bypass on per-unit `workspace_requires` stages, Review Challenge only for the deprecated appendix migration path, Recovery only for the one stale-receipt recovery pass, optional Workflow for isolated runs | `tools/aidlc-log.ts review --verdict` |
+| `REVIEW_COMPLETED` | Reviewer verdict recorded; gates approval and is reserved from the public audit CLI. Malformed rows are ignored without consuming their pending request | Timestamp, Stage, Reviewer, Iteration, Verdict, Request Fingerprint (must match the request), Artifact Fingerprint (the same stable snapshot: the reviewer writes no artifact, so the reviewed bytes are the requested bytes), Request Id (must match the request), Review Record (record-relative path `.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` or `.aidlc-engine/reviews/<stage>/units/<unit>/<attempt>/<iteration>.json`) + Review Record Digest (`sha256:<hex>` over the record bytes; a record that no longer hashes to it is not the review), optional Unit + Attempt Generation (per-unit claims), Request Source Fingerprint + Source Fingerprint (identical request-time source identity on `workspace_requires` stages), Unit Source Fingerprint or Unit Source Binding Bypass on per-unit `workspace_requires` stages, Review Challenge only for the deprecated appendix migration path, Recovery only for the one stale-receipt recovery pass, optional Workflow for isolated runs, optional Review Headings Made Level 3 (each review-file heading line the logger recorded as `###`, as `line N: <a trimmed preview of that line, up to 120 characters>`; nothing else in the review changes, and the record keeps the full text) | `tools/aidlc-log.ts review --verdict` |
 | `PIPELINE_LINK_COMPLETED` | A declared pipeline link returned in order; current-attempt receipts gate pipeline approval and are reserved from the public audit CLI | Timestamp, Stage, Link, Position (`k/N`), optional Repo (required by the protocol for multi-repo chains), optional Workflow (`single-stage:<slug>` for isolated runs) | `tools/aidlc-log.ts link` |
 
 `Hash Scope: confirmed-content-v2` identifies the questions-file digest used by
@@ -195,7 +196,7 @@ timestamps are causally unordered. Completion fails closed when such a tie
 could change the current attempt, selected receipt, or whether an artifact was
 written after confirmation, and requires fresh evidence with a later timestamp.
 
-### Unit Configuration and Lifecycle Events (8 events, unit-major Construction)
+### Unit Configuration and Lifecycle Events (9 events, unit-major Construction)
 
 The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
 the completion receipt the engine's coverage walk prefers over bare artifact
@@ -206,7 +207,11 @@ same-second attempts within one shard cannot reuse receipts. Equal-time
 boundaries in different shards are causally unordered and use a deterministic
 `AMBIGUOUS:<timestamp>#<digest>` floor; prior receipts cannot match it.
 Unit-major stages key the floor to workflow/jump/rejection boundaries because
-their work can precede their own `STAGE_STARTED`. `UNIT_SKIPPED` settles one
+their work can precede their own `STAGE_STARTED`. A changed Construction policy
+is not a boundary: a `STAGE_STARTED` recorded while stage-major flooring was in
+force (the policy the next `CONSTRUCTION_POLICY_SET` found) stays one after a
+switch to unit-major iteration or checkpoints, so Units finished before the
+switch keep their receipts. `UNIT_SKIPPED` settles one
 unit's beat when the stage's condition does not apply to that unit: the unit
 owes the stage nothing in that attempt (like a unit whose kind prunes every
 output), while every other unit still does. The stage is marked skipped only
@@ -216,6 +221,7 @@ once no unit owes it.
 |-------|------|-----------------|---------|
 | `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts | Timestamp, Mode | `tools/aidlc-state.ts set-unit-ownership` |
 | `UNIT_GATE_RHYTHM_SET` | Team-owned gate rhythm is set before unit activity starts | Timestamp, Rhythm | `tools/aidlc-state.ts set-unit-gate-rhythm` |
+| `CONSTRUCTION_POLICY_SET` | A typed setter applied a changed Construction Iteration, Checkpoints, or Execution value; the attempt floor reads it so switching to unit-major iteration or turning checkpoints on keeps finished Units' receipts | Timestamp, Field, Value, Previous Value, Construction Iteration, Construction Checkpoints | `tools/aidlc-state.ts set-construction-iteration`, `set-construction-checkpoints`, `set-construction-execution` |
 | `UNIT_STARTED` | A unit's work begins on an inline per-unit stage; refused while another unit of the stage is open | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit start` |
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action; optional Attempt Generation | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit resume` |
@@ -234,11 +240,12 @@ the active space's shared `codekb/<repo>/` tree.
 | `ARTIFACT_UPDATED` | Existing artifact modified in either tree | Timestamp, Tool, File, Context, optional Summary Authorization Id (as for `ARTIFACT_CREATED`) | `hooks/aidlc-write-audit-log.ts` (PostToolUse; Edit, or Write overwriting existing) |
 | `ARTIFACT_REUSED` | Re-use decision on backward jump or per-repo pipeline reuse evidence; only `Decision=keep` grants the pipeline exemption; reserved from the public audit CLI | Timestamp, Stage, Decision, Artifacts, optional Repo, optional Workflow (`single-stage:<slug>` for isolated freshness-bound reuse) | `tools/aidlc-state.ts reuse-artifact` |
 
-### Subagent Events (1 event — hook-emitted)
+### Subagent Events (2 events - hook-emitted)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
+| `SUBAGENT_PROMPT_UNMATCHED` | Advisory, never a human turn: a Copilot prompt arrived within seconds of a subagent start in the same chat and matched no recorded subagent brief, so it was not counted | Timestamp, optional Session, Agent, Counted (always `no`), Reason (no brief matched, or the brief record could not be read) | `tools/aidlc-audit.ts appendSubagentPromptUnmatched` (Copilot adapter `record-human-turn`) |
 
 ### Reviewer Enforcement Events (2 events - hook-emitted)
 
@@ -277,12 +284,18 @@ would fill the ledger with non-changes and break reconstruction-from-the-ledger.
 |-------|------|-----------------|---------|
 | `HEALTH_CHECKED` | `--doctor` completed | Timestamp, Request, Details | `tools/aidlc-doctor.ts` via the shared utility collector |
 
-### Error/Recovery Events (2 events)
+### Error/Recovery Events (3 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `ERROR_LOGGED` | Tool CLI exited non-zero via `error()` | Timestamp, Tool, Command, Error | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) |
+| `ERROR_LOGGED` | Tool CLI exited non-zero via `error()`, or the Stop hook first delivered a distinct engine error directive | Timestamp, Tool, Command, Error; optional Source, Exit Code, Observed By, Error Fingerprint | `tools/aidlc-lib.ts emitError` (called by every tool's `error()` helper) and `hooks/aidlc-continue-workflow.ts` |
 | `RECOVERY_COMPLETED` | User answered the compaction-awareness prompt | Timestamp, Choice, Current Stage | `tools/aidlc-state.ts acknowledge-compaction` |
+| `COORDINATION_STOOD_ASIDE` | Advisory: the Copilot adapter could not find or trust its coordination record for an AI-DLC command (no record for this project and intent, a record it could not read, or a workflow state that moved after the record was written), so it let the command reach the engine, which answered from disk, instead of refusing it | Timestamp, optional Session, Command (`next`, `continue`, `report`, or `park`), Reason | `tools/aidlc-audit.ts appendCoordinationStoodAside` (Copilot adapter `guard-tool-call`) |
+
+Stop-hook delivery deduplicates the most recent 32 fingerprints in FIFO order,
+including intent, session, state, stage, and the diagnostic bounded to 2,000 UTF-8
+bytes. Repeats do not refresh retention; a diagnostic evicted by 32 newer errors
+can produce another `ERROR_LOGGED` on delivery.
 
 ### Construction Bolt Events (4 events)
 
@@ -392,7 +405,7 @@ Emitted by `aidlc attest anchor` when a commit is observed to have landed review
 
 Hooks emit events through the same library emitter as orchestrator-driven emissions (`appendAuditEntry` from `tools/aidlc-audit.ts`). Hook-emitted events are first-class taxonomy members (`ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `SUBAGENT_COMPLETED`, all `SESSION_*`). A hook with no active workflow in `cwd` is a no-op.
 
-The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
+The public `aidlc-audit.ts append` CLI is a diagnostic escape hatch, not the canonical emit path: it refuses authority-bearing receipts (`STAGE_COMPLETED`, `HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED`, `DOCUMENT_INDEXED`, `DOCUMENT_UPDATED`, `DOCUMENT_REMOVED`) plus the commit-provenance anchor `SOURCE_COMMITTED`, which only their owning tool or hook may emit. Field names must be printable single-line labels matching the audit field grammar; values have every line terminator escaped. `append-raw` likewise refuses a body carrying an `**Event**:` line naming a taxonomy event and refuses line-breaking headings.
 
 ## Format Standards
 

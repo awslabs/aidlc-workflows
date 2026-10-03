@@ -49,6 +49,7 @@ import {
   markSubagentInflight,
   readAuditShardEvents,
   readIntentRegistry,
+  readSessionBinding,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
@@ -61,6 +62,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
@@ -74,6 +76,10 @@ const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const FIXTURES = JSON.parse(
   readFileSync(join(REPO_ROOT, "tests", "fixtures", "kiro-hook-payloads", "payloads.json"), "utf-8"),
 ) as Record<string, unknown>;
+// The tool_input every captured delete_file PreToolUse carries: {explanation, targetFile}.
+const CAPTURED_DELETE_INPUT = (FIXTURES.preToolUse_delete_file as {
+  tool_input: Record<string, unknown>;
+}).tool_input;
 const ADAPTER_TOOL_NAMES = FIXTURES._adapter_tool_names as {
   writes: string[];
   deletes: string[];
@@ -144,6 +150,7 @@ function scratchProject(withState: boolean): string {
     join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
   );
   seedShell(dir);
+  seedAidlcMemory(dir);
   if (withState) {
     // State fixture into the default record so the active-intent cursor resolves.
     writeFileSync(
@@ -421,6 +428,62 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         expect(r.code).toBe(0);
       }
       expect(forwardedSessions(capture)).toEqual(["S-KIRO", "S-KIRO", "S-KIRO"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a3: state-transition, reviewer-scope and review-freeze calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const [target, file, payload] of [
+        ["state-transition-guard", "aidlc-state-transition-guard.ts", { tool_name: "execute_bash", tool_input: { command: "echo hi" } }],
+        ["reviewer-scope", "aidlc-reviewer-scope.ts", { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } }],
+        ["review-freeze", "aidlc-review-freeze.ts", { tool_name: "fs_write", tool_input: { path: join(dir, "src", "a.ts") } }],
+      ] as const) {
+        const capture = join(dir, `${target}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", file), recordingGuard(capture), "utf-8");
+        const r = runAdapter(
+          dir,
+          target,
+          { hook_event_name: "preToolUse", cwd: dir, session_id: "S-KIRO", ...payload },
+          [],
+          env,
+        );
+        expect({ target, code: r.code }).toEqual({ target, code: 0 });
+        expect({ target, sessions: forwardedSessions(capture) }).toEqual({ target, sessions: ["S-KIRO"] });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a4: a captured delete forwards its targetFile to every mutation guard", () => {
+    const dir = scratchProject(true);
+    try {
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      const target = CAPTURED_DELETE_INPUT.targetFile;
+      for (const [adapterTarget, hookFile, extraArgs] of [
+        ["plan-approval-guard", "aidlc-plan-approval-guard.ts", []],
+        ["review-freeze", "aidlc-review-freeze.ts", []],
+        ["reviewer-scope", "aidlc-reviewer-scope.ts", ["aidlc-architecture-reviewer-agent"]],
+      ] as const) {
+        const capture = join(dir, `${adapterTarget}.jsonl`);
+        writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+        const r = runAdapter(
+          dir,
+          adapterTarget,
+          { hook_event_name: "preToolUse", cwd: dir, tool_name: "delete_file", tool_input: CAPTURED_DELETE_INPUT },
+          [...extraArgs],
+          env,
+        );
+        expect(r.code, adapterTarget).toBe(0);
+        const forwarded = JSON.parse(readFileSync(capture, "utf-8").trim()) as {
+          tool_input?: { file_path?: unknown; paths?: unknown };
+        };
+        expect(forwarded.tool_input, adapterTarget).toEqual({ file_path: target, paths: [target] });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1313,6 +1376,37 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
+  test("5c2: a host agent in .kiro/agents is dispatched untouched; the same files claiming a persona are held to it", () => {
+    const dir = scratchProject(true);
+    try {
+      cpSync(join(REPO_ROOT, "dist", "kiro", "aidlc"), join(dir, "aidlc"), { recursive: true });
+      const hostMarkdown = join(dir, ".kiro", "agents", "reviewer-agent.md");
+      const hostBody = "---\nname: reviewer-agent\ndescription: Reviews diffs.\ntools: [\"read\"]\n---\n\nReview the diff.\n";
+      writeFileSync(hostMarkdown, hostBody);
+      writeFileSync(
+        join(dir, ".kiro", "agents", "reviewer-agent.json"),
+        JSON.stringify({ name: "reviewer-agent", resources: ["file://README.md"] }),
+      );
+      const payload = {
+        ...FIXTURES.preToolUse_invoke_sub_agent as Record<string, unknown>,
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: { name: "reviewer-agent", prompt: "Review the diff." },
+      };
+
+      const host = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(host.code, host.stderr).toBe(0);
+      expect(host.stderr).not.toContain("Worker dispatch blocked");
+
+      writeFileSync(hostMarkdown, hostBody.replace("description:", "display_name: Reviewer\ndescription:"));
+      const persona = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(persona.code).toBe(2);
+      expect(persona.stderr).toContain("Worker dispatch blocked");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test.each([
     ["empty resources", JSON.stringify({ resources: [] })],
     ["absent resources", "{}"],
@@ -1383,6 +1477,9 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         resources: ["file://aidlc/spaces/default/memory/**/*.md"],
       }));
       const memory = join(dir, "aidlc", "spaces", "default", "memory");
+      // The scratch project seeds real memory rules; this case needs none.
+      rmSync(memory, { recursive: true, force: true });
+      mkdirSync(memory, { recursive: true });
       writeFileSync(join(memory, "notes.txt"), "Not a rule file.\n");
       mkdirSync(join(memory, "not-a-file.md"));
       const result = runAdapter(dir, "deliver-stage-rules", {
@@ -1622,6 +1719,11 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
+      // A delete names its target `targetFile`, not `path`, so the delete cases
+      // take the captured payload's shape and override only the target.
+      const mutationInput = (tool_name: string, path: string): Record<string, unknown> =>
+        tool_name === "delete_file" ? { ...CAPTURED_DELETE_INPUT, targetFile: path } : { path };
+
       for (const tool_name of [
         ...ADAPTER_TOOL_NAMES.writes,
         ...ADAPTER_TOOL_NAMES.deletes,
@@ -1634,7 +1736,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
             hook_event_name: "preToolUse",
             cwd: dir,
             tool_name,
-            tool_input: { path: "construction/sibling-unit/design.md" },
+            tool_input: mutationInput(tool_name, "construction/sibling-unit/design.md"),
           },
           ["aidlc-architecture-reviewer-agent"],
         );
@@ -1653,7 +1755,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
           hook_event_name: "preToolUse",
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: mutationInput(tool_name, "construction/todo-core/design.md"),
         });
         expect(r.code, tool_name).toBe(0);
         expect(existsSync(freezeHeartbeat), tool_name).toBe(true);
@@ -1800,7 +1902,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
         const deleted = runAdapter(dir, "audit-and-sensors", {
           cwd: dir,
           tool_name,
-          tool_input: { path: "construction/todo-core/design.md" },
+          tool_input: { ...CAPTURED_DELETE_INPUT, targetFile: "construction/todo-core/design.md" },
         });
         expect(deleted.code, tool_name).toBe(0);
         expect(existsSync(auditHeartbeat), tool_name).toBe(false);
@@ -1892,11 +1994,16 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(first.code).toBe(0);
       const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
-      // Move the live cursor to B — a genuine drift A→B.
-      createIntent(dir, "intent-b", "default");
+      // Move the live cursor to B, a genuine drift from A to B. Another
+      // conversation creates B: without its session id, createIntent binds
+      // whichever session the test process's ancestry names, which on a slow
+      // host is this one, and then there is no drift left for the offer check
+      // to prove anything.
+      createIntent(dir, "intent-b", "default", undefined, undefined, "kiro-other-session");
+      expect(readSessionBinding(dir, sid)?.intent).toBe(a.dirName);
       // Fire again with a resume-shaped payload. Because Kiro coerces to
-      // startup, the core hook takes the STARTED path (re-stamps to B), never
-      // the RESUMED offer path.
+      // startup, the core hook takes the STARTED path, never the RESUMED offer
+      // path: the session's binding still selects A, so it re-stamps A.
       const second = runAdapter(dir, "session-start", {
         ...(FIXTURES.agentSpawn as object),
         session_id: sid,
@@ -1904,6 +2011,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       });
       expect(second.code).toBe(0);
       expect(second.stdout).not.toContain("INTENT REBIND OFFER");
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

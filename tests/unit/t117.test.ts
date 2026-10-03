@@ -10,9 +10,9 @@
 // in the covers header) because the jump branch's observable contract IS that
 // resolve's `direction` / `target_slug` is what the engine surfaces: tests 1-3
 // fire `bun aidlc-jump.ts resolve ...` directly and assert the same `direction`
-// value the engine relays into its run-stage directive, and the SKIP-for-scope
-// error (test 4) is resolve's VERBATIM `is skipped for scope` wording
-// (aidlc-jump.ts:117-119) the engine passes through unchanged.
+// value the engine relays into its run-stage directive, and test 4 pins
+// resolve's `target_skipped` mark for a stage the plan skips (the engine asks
+// with --allow-skipped; without it resolve still refuses).
 //
 // MECHANISM = cli: every .sh case shelled out to `bun "$TOOL" ...` (the engine)
 // and, for the jump cases, also `bun "$JUMP_TOOL" resolve ...`. We preserve the
@@ -32,7 +32,8 @@
 //   - .sh T3  OUT  '"stage":"code-generation"'        -> t3
 //             DIR  '"direction":"redo"'               -> t3
 //   - .sh T4  OUT  '"kind":"error"'                   -> t4
-//             OUT  'is skipped for scope'             -> t4 (resolve verbatim)
+//             OUT  'is skipped for scope'             -> t4 (resolve without
+//                  --allow-skipped; the engine's own message names --single)
 //   - .sh T5  OUT  direct continuation                -> t5 (resume, jumped)
 //   - .sh T6  OUT  direct continuation                -> t6 (resume, mid-ideation)
 //   - .sh T7  OUT  '"kind":"error"'                   -> t7 (init guard)
@@ -252,18 +253,27 @@ describe("t117 jump-direction delegation (migrated from t117-orchestrate-branche
     expect(resolved.direction).toBe("redo");
   });
 
-  // --- Test 4: jump to a SKIP-for-scope stage → error (verbatim resolve wording) ---
-  // state-mid-inception is bugfix scope; intent-capture is SKIP. The engine
-  // relays resolve's VERBATIM `is skipped for scope` message (aidlc-jump.ts:117-119).
-  test("4: jump to SKIP-for-scope stage → error carrying resolve's verbatim wording", () => {
+  // --- Test 4: jump BEHIND the cursor to a stage the plan skips ---
+  // state-mid-inception is bugfix scope at requirements-analysis; intent-capture
+  // is SKIP and behind it. Going back would run every stage after it again, so
+  // the engine names the isolated run instead of "change scope". resolve marks
+  // the skipped target (the engine asks with --allow-skipped) and still refuses
+  // it for a caller that does not.
+  test("4: jump behind the cursor to a skipped stage -> error naming the isolated run", () => {
     const p = proj("state-mid-inception.md");
     const r = next(["--stage", "intent-capture"], p);
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("is skipped for scope");
     // S1: the directive is a well-formed error directive, not a stray substring.
     const d = directive(r.stdout);
     expect(d.kind).toBe("error");
-    expect(d.message).toContain("is skipped for scope");
+    expect(d.message).toContain('comes before the current stage "requirements-analysis"');
+    expect(d.message).toContain("--stage intent-capture --single");
+    expect(d.message).not.toContain("change scope");
+    const marked = directive(jumpResolve(["--stage", "intent-capture", "--allow-skipped"], p).stdout);
+    expect(marked.target_skipped).toBe(true);
+    expect(marked.direction).toBe("backward");
+    const refused = jumpResolve(["--stage", "intent-capture"], p);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("is skipped for scope");
   });
 });
 

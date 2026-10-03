@@ -10,7 +10,7 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
-  openSync, readFileSync, readdirSync, writeFileSync,
+  openSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
@@ -123,6 +123,27 @@ describe("runner guard profile options", () => {
       .toBe(true);
   });
 
+  test("fresh file isolation accepts integration/e2e and bounds explicit retries", () => {
+    for (const tier of ["--integration", "--e2e"]) {
+      expect(parseRunnerArgs([tier, "--isolated-files", "--file-retries", "1"], {}))
+        .toMatchObject({ isolatedE2e: true, isolatedFiles: true, fileRetries: 1 });
+    }
+    for (const argv of [
+      ["--unit", "--isolated-files"], ["--isolated-files"],
+      ["--e2e", "--file-retries", "1"], ["--e2e", "--isolated-files", "--file-retries", "2"],
+      ["--integration", "--isolated-files", "--file-retries"],
+    ]) expect(() => parseRunnerArgs(argv, {})).toThrow(RunnerArgsError);
+  });
+
+  test("ordinary smoke/unit/integration runs accept one retry; e2e still needs fresh isolation", () => {
+    for (const argv of [["--smoke"], ["--unit", "--shard", "3/12"], ["--integration"], []]) {
+      expect(parseRunnerArgs([...argv, "--file-retries", "1"], {})).toMatchObject({ fileRetries: 1, isolatedFiles: false });
+    }
+    expect(() => parseRunnerArgs(["--integration", "--e2e", "--file-retries", "1"], {}))
+      .toThrow("--file-retries requires --isolated-files when e2e is selected");
+    expect(() => parseRunnerArgs(["--unit", "--file-retries", "2"], {})).toThrow("--file-retries must be 0 or 1");
+  });
+
   test("invalid arguments retain the existing exit-code contract", () => {
     for (const [argv, exitCode, showUsage] of [
       [["--production-guards=1"], 1, true],
@@ -224,6 +245,7 @@ function runnerFixture(files: Record<string, string>) {
     "tests/lib/e2e-deferred-cleanup.ts",
     "tests/lib/e2e-process.ts",
     "tests/lib/bun-junit-to-meta.ts",
+    "tests/lib/file-retry.ts",
     "tests/lib/test-sharding.ts",
   ]) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -572,5 +594,293 @@ describe("runner guard child environment", () => {
         expect(process.env[key], key).toBe(value);
       }
     }
+  });
+});
+
+function isolatedRunnerFixture(files: Record<string, string>) {
+  const fixture = runnerFixture(files);
+  writeFileSync(join(fixture.root, ".gitignore"), "tests/logs/\nrunner-*.log\nobserver/\n");
+  writeFileSync(join(fixture.root, "clean.txt"), "seed");
+  mkdirSync(join(fixture.root, "observer"));
+  for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]]) {
+    const child = spawnSync("git", args, {
+      cwd: fixture.root, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(child.status, child.stderr).toBe(0);
+  }
+  return fixture;
+}
+
+const FRESH_FILE_CASE = `
+import { expect, test } from "bun:test";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+const observer = process.env.AIDLC_ISOLATION_OBSERVER!;
+test("fresh file state", async () => {
+  const name = process.env.AIDLC_TEST_NAME!;
+  const listener = join(observer, "listener");
+  if (name === "t-a.test.ts") {
+    spawn(process.execPath, [join(import.meta.dir, "..", "fixtures", "linger.ts")], { stdio: "ignore" }).unref();
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(listener) && Date.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(listener)).toBe(true);
+  } else {
+    // The previous file left a real listening child. Rebinding its port proves
+    // the worker retired that process before dispatching another file.
+    const port = Number(readFileSync(listener, "utf8"));
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => server.close(error => error ? reject(error) : resolve()));
+    });
+  }
+  expect(readFileSync("clean.txt", "utf8")).toBe("seed");
+  expect(existsSync("untracked.txt")).toBe(false);
+  expect(existsSync(join(process.env.HOME!, "dirty"))).toBe(false);
+  expect(readFileSync(process.env.GIT_CONFIG_GLOBAL!, "utf8")).not.toContain("contamination");
+  expect(existsSync(process.env.AIDLC_MANAGED_SETTINGS_PATH!)).toBe(false);
+  writeFileSync("clean.txt", "dirty");
+  writeFileSync("untracked.txt", "dirty");
+  writeFileSync(join(process.env.HOME!, "dirty"), "dirty");
+  appendFileSync(process.env.GIT_CONFIG_GLOBAL!, "\\n[contamination]\\nvalue = dirty\\n");
+  writeFileSync(process.env.AIDLC_MANAGED_SETTINGS_PATH!, "{}");
+  appendFileSync(join(observer, "runs"), name + "\\n");
+  if (name.includes("t-b-retry") && !existsSync(join(observer, "retry"))) {
+    writeFileSync(join(observer, "retry"), "first attempt");
+    expect(false).toBe(true);
+  }
+});
+`;
+
+describe("bounded file workers through the public runner", () => {
+  test("restores state between files and retries only the failed file with retained attempts", () => {
+    const fixture = isolatedRunnerFixture({
+      ...Object.fromEntries(["a", "b-retry", "c"].map(name => [`integration/t-${name}.test.ts`, FRESH_FILE_CASE])),
+      "fixtures/linger.ts": `import { createServer } from "node:net";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => writeFileSync(join(process.env.AIDLC_ISOLATION_OBSERVER!, "listener"), String(server.address().port)));`,
+    });
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_ISOLATION_OBSERVER: join(fixture.root, "observer"),
+    });
+    expect(result.status, result.out + result.failures).toBe(0);
+    const runs = readFileSync(join(fixture.root, "observer", "runs"), "utf8").trim().split("\n");
+    expect(runs.map(name => name.replace(/\.test\.ts$/, ""))).toEqual(["t-a", "t-b-retry", "t-b-retry", "t-c"]);
+    expect(readFileSync(join(fixture.root, "clean.txt"), "utf8")).toBe("seed");
+    expect(existsSync(join(fixture.root, "untracked.txt"))).toBe(false);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.state).toBe("COMPLETE");
+    expect(report.coverageComplete).toBe(true);
+    expect(report.files.map((file: { attempts: unknown[] }) => file.attempts.length)).toEqual([1, 2, 1]);
+    const retry = report.files[1];
+    expect(retry.passedOnRetry).toBe(true);
+    expect(retry.attempts.map((attempt: { status: string }) => attempt.status)).toEqual(["FAIL", "PASS"]);
+    for (const attempt of retry.attempts) {
+      expect(existsSync(join(attempt.artifacts, "runner.log"))).toBe(true);
+      expect(existsSync(join(attempt.artifacts, "runner.execution.json"))).toBe(true);
+    }
+  });
+
+  test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        test("unexpected transport state", () => writeFileSync(join(process.env.AIDLC_TUI_BUN_ROOT!, "unexpected"), "retain"));`,
+      "integration/t-b-pending.test.ts": `import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        test("must not run", () => writeFileSync(process.env.AIDLC_ISOLATION_OBSERVER!, "ran"));`,
+    });
+    const marker = join(fixture.root, "observer", "pending");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_ISOLATION_OBSERVER: marker,
+    });
+    expect(result.status).not.toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.state).toBe("ERROR");
+    expect(report.coverageComplete).toBe(false);
+    expect(report.files[0].cleanupError).toContain("unexpected");
+    expect(report.files[0].attempts).toHaveLength(1);
+    expect(report.files[1].state).toBe("INCOMPLETE");
+  });
+
+  test("isolated integration files apply production guards independently", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-a-production.test.ts": PRODUCTION_JOURNEYS,
+      "integration/t-b-fixture.test.ts": `import { expect, test } from "bun:test";
+        test("fixture guards", () => expect(process.env.AIDLC_SKIP_ARTIFACT_GUARD).toBe("1"));`,
+    });
+    const result = fixture.run(["--integration", "--isolated-files", "-P", "2", "--require-coverage"], {
+      AIDLC_TUI_BACKEND: "bun",
+    });
+    expect(result.status, result.out + result.failures).toBe(0);
+    const events = readFileSync(join(result.stamp, "e2e-events.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(events.some(event => event.running === 2)).toBe(true);
+    expect(events.every(event => event.running <= 2)).toBe(true);
+  });
+});
+
+describe("integration start order through the public runner", () => {
+  const PASSES = `import { expect, test } from "bun:test";
+test("passes", () => expect(1).toBe(1));`;
+  const starts = (out: string): string[] => [...out.matchAll(/^=== START (\S+)\.test\.ts ===$/gm)].map((match) => match[1]);
+
+  test("weights start the longest file first; an unreadable weights file only costs the order", () => {
+    const fixture = runnerFixture({ "integration/t-a.test.ts": PASSES, "integration/t-b.test.ts": PASSES });
+    const weights = join(fixture.root, "tests", "integration-weights.json");
+    writeFileSync(weights, JSON.stringify({ defaultSeconds: 1, weights: { "t-b": 50 } }));
+    const weighted = fixture.run(["--integration", "--no-llm"]);
+    expect(weighted.status, weighted.out + weighted.failures).toBe(0);
+    expect(starts(weighted.out)).toEqual(["t-b", "t-a"]);
+    // A path that exists but cannot be read as a file: the tier still runs.
+    rmSync(weights);
+    mkdirSync(weights);
+    const unreadable = fixture.run(["--integration", "--no-llm"]);
+    expect(unreadable.status, unreadable.out + unreadable.failures).toBe(0);
+    expect(unreadable.out).toContain("integration-weights.json is unreadable; integration files start in name order");
+    expect(starts(unreadable.out)).toEqual(["t-a", "t-b"]);
+  });
+});
+
+// Merge-queue retries of ordinary smoke/unit/integration files. Each planted
+// file logs every attempt (and the attempt's TMPDIR) to the observer directory.
+const RETRY_PRELUDE = `
+import { expect, test } from "bun:test";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const name = process.env.AIDLC_TEST_NAME!;
+const observer = process.env.AIDLC_RETRY_OBSERVER!;
+appendFileSync(join(observer, "runs"), name + "\\n");
+appendFileSync(join(observer, name + ".tmp"), process.env.TMPDIR + "\\n");
+`;
+const RETRY_CASES = {
+  flakyOnce: `${RETRY_PRELUDE}
+test("fails on its first attempt only", () => {
+  const marker = join(observer, name + ".failed-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    expect("first attempt").toBe("second attempt");
+  }
+});`,
+  steady: `${RETRY_PRELUDE}
+test("passes", () => expect(1).toBe(1));`,
+  alwaysFails: `${RETRY_PRELUDE}
+test("fails every time", () => expect(1).toBe(2));`,
+  hangs: `${RETRY_PRELUDE}
+test("never finishes before the file deadline", async () => { await Bun.sleep(120_000); });`,
+  crashes: `${RETRY_PRELUDE}
+process.exit(3);
+test("never reached", () => expect(1).toBe(1));`,
+  empty: `${RETRY_PRELUDE}
+test.skip("executes nothing", () => expect(1).toBe(1));`,
+  failsThenSkips: `${RETRY_PRELUDE}
+const retried = existsSync(join(observer, name + ".failed-once"));
+if (!retried) writeFileSync(join(observer, name + ".failed-once"), "1");
+test.skipIf(retried)("fails, then skips on its retry", () => expect("first attempt").toBe("second attempt"));`,
+  failsThenSkipsBesidePass: `${RETRY_PRELUDE}
+const retried = existsSync(join(observer, name + ".failed-once"));
+if (!retried) writeFileSync(join(observer, name + ".failed-once"), "1");
+test("passes on both attempts", () => expect(1).toBe(1));
+test.skipIf(retried)("fails, then skips on its retry", () => expect("first attempt").toBe("second attempt"));`,
+};
+
+function retryFixture(files: Record<string, string>) {
+  const fixture = runnerFixture(files);
+  const observer = join(fixture.root, "observer");
+  mkdirSync(observer);
+  const runs = (): string[] => existsSync(join(observer, "runs"))
+    ? readFileSync(join(observer, "runs"), "utf8").trim().split("\n").map((name) => name.replace(/\.test\.ts$/, "")).sort()
+    : [];
+  return { fixture, observer, runs };
+}
+
+describe("merge-queue retry of ordinary tiers through the public runner", () => {
+  test("an assertion failure runs once more in a fresh process and is named as passed on retry", () => {
+    const { fixture, observer, runs } = retryFixture({
+      "unit/t-flaky-unit.test.ts": RETRY_CASES.flakyOnce,
+      "integration/t-flaky.test.ts": RETRY_CASES.flakyOnce,
+      "integration/t-steady.test.ts": RETRY_CASES.steady,
+    });
+    const result = fixture.run(["--unit", "--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status, result.out + result.failures).toBe(0);
+    // The serial unit path and the parallel integration pool both retry.
+    expect(runs()).toEqual(["t-flaky", "t-flaky", "t-flaky-unit", "t-flaky-unit", "t-steady"]);
+    const temps = readFileSync(join(observer, "t-flaky.test.ts.tmp"), "utf8").trim().split("\n");
+    expect(new Set(temps).size).toBe(2);
+    for (const name of ["t-flaky", "t-flaky-unit"]) {
+      const log = `${name}.attempt-1.log`;
+      // The row keeps PASS for the parsers; the line under it says it took a retry.
+      expect(result.summary).toMatch(new RegExp(`^ {2}${name} +PASS .*\\n {4}passed on retry: the first attempt failed 1 case\\(s\\); its log is ${log.replaceAll(".", "\\.")}$`, "m"));
+      expect(result.out).toContain(`=== RETRY ${name}.test.ts (first attempt failed 1 case(s); its log is ${log}) ===`);
+      expect(readFileSync(join(result.stamp, log), "utf8")).toContain("(fail) fails on its first attempt only");
+      expect(readFileSync(join(result.stamp, `${name}.log`), "utf8")).toContain("Status: PASS");
+      expect(existsSync(join(result.stamp, `${name}.attempt-1.junit.xml`))).toBe(true);
+    }
+    expect(result.summary).toContain("Passed on retry (flaky: fix these):\n  t-flaky-unit: first attempt failed 1 case(s), log t-flaky-unit.attempt-1.log");
+    expect(result.out).toMatch(/^Passed on retry \(flaky\): t-flaky-unit, t-flaky$/m);
+    const report = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8"));
+    expect(report.maxFirstAttemptSeconds).toBe(600);
+    expect(report.retries.map((retry: { file: string }) => retry.file).sort())
+      .toEqual(["tests/integration/t-flaky.test.ts", "tests/unit/t-flaky-unit.test.ts"]);
+    for (const retry of report.retries) {
+      expect(retry).toMatchObject({ passedOnRetry: true, firstAttempt: { failedCases: 1 }, secondAttempt: { status: "PASS", failedCases: 0 } });
+    }
+  });
+
+  test("a second failure stays a failure", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-always-fails.test.ts": RETRY_CASES.alwaysFails });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status).toBe(1);
+    expect(runs()).toEqual(["t-always-fails", "t-always-fails"]);
+    expect(result.summary).toMatch(/^ {2}t-always-fails +FAIL /m);
+    expect(result.summary).toContain("Still failed after a retry:\n  t-always-fails: first attempt failed 1 case(s)");
+    expect(result.failures).toContain("FAIL: t-always-fails");
+    const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
+    expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: "FAIL", failedCases: 1 } });
+  });
+
+  test.each([
+    ["executes no cases", "t-fails-then-skips", RETRY_CASES.failsThenSkips, "SKIP"],
+    ["skips the failed case beside a passing one", "t-fails-then-skips-beside-pass", RETRY_CASES.failsThenSkipsBesidePass, "PASS"],
+  ])("a failure whose retry %s stays a failure", (_label, name, source, secondStatus) => {
+    const { fixture, observer, runs } = retryFixture({ [`integration/${name}.test.ts`]: source });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status, result.out + result.failures).toBe(1);
+    expect(runs()).toEqual([name, name]);
+    expect(result.summary).toMatch(new RegExp(`^ {2}${name} +FAIL .*\\n {4}failed on its first attempt \\(1 case\\(s\\)\\); its retry did not pass every case the first attempt ran$`, "m"));
+    expect(result.summary).toContain(`Still failed after a retry:\n  ${name}: first attempt failed 1 case(s)`);
+    expect(result.failures).toContain(`FAIL: ${name}`);
+    const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
+    expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: secondStatus } });
+  });
+
+  test("a timeout, a crash and a file that executed no cases are never retried", () => {
+    const { fixture, observer, runs } = retryFixture({
+      "integration/t-hangs.test.ts": RETRY_CASES.hangs,
+      "integration/t-crashes.test.ts": RETRY_CASES.crashes,
+      "integration/t-empty.test.ts": RETRY_CASES.empty,
+    });
+    const result = fixture.run([
+      "--integration", "--no-llm", "--file-retries", "1", "--file-timeout", "20", "--filter", "^t-(hangs|crashes|empty)$",
+    ], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status).not.toBe(0);
+    expect(runs()).toEqual(["t-crashes", "t-empty", "t-hangs"]);
+    for (const name of ["t-hangs", "t-crashes", "t-empty"]) expect(result.summary).toMatch(new RegExp(`^ {2}${name} +FAIL `, "m"));
+    expect(result.out).not.toContain("=== RETRY");
+    expect(JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries).toEqual([]);
+  });
+
+  test("without --file-retries (PR CI) a flaky file fails on its one attempt", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-flaky.test.ts": RETRY_CASES.flakyOnce });
+    const result = fixture.run(["--integration", "--no-llm"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status).toBe(1);
+    expect(runs()).toEqual(["t-flaky"]);
+    expect(existsSync(join(result.stamp, "retries.json"))).toBe(false);
+    expect(result.summary).not.toContain("Passed on retry");
   });
 });

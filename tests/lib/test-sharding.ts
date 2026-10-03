@@ -130,3 +130,61 @@ export function selectShard(
 ): string[] {
   return assignWeightedShards(files, spec.total, config)[spec.index - 1];
 }
+
+export interface SummaryRow {
+  name: string;
+  status: "PASS" | "FAIL" | "SKIP";
+  /** NaN when the duration column is not a number; callers decide how to refuse it. */
+  seconds: number;
+  /** The duration column as written, without its unit. */
+  duration: string;
+}
+
+/** Per-file rows of a runner summary.txt, the one source of historical durations. */
+export function readSummaryRows(text: string): SummaryRow[] {
+  const rows: SummaryRow[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*(\S+)\s+(PASS|FAIL|SKIP)\s+\d+\s+\d+\s+(\S+)s\s*$/.exec(line);
+    if (match) {
+      rows.push({ name: match[1], status: match[2] as SummaryRow["status"], seconds: Number(match[3]), duration: match[3] });
+    }
+  }
+  return rows;
+}
+
+/** Historical durations used only to order files; they never select or skip one. */
+export interface OrderWeights {
+  defaultSeconds: number;
+  weights: Record<string, number>;
+}
+
+/** Parse an order-weights file, or return undefined so callers keep name order. */
+export function parseOrderWeights(text: string): OrderWeights | undefined {
+  try {
+    const parsed = JSON.parse(text) as Partial<OrderWeights>;
+    if (!Number.isFinite(parsed.defaultSeconds) || (parsed.defaultSeconds ?? 0) <= 0) return undefined;
+    if (!parsed.weights || typeof parsed.weights !== "object") return undefined;
+    for (const weight of Object.values(parsed.weights)) {
+      if (!Number.isFinite(weight) || weight <= 0) return undefined;
+    }
+    return { defaultSeconds: parsed.defaultSeconds!, weights: parsed.weights };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Longest-first admission for a worker pool: a long file started last sets the
+ * tier's wall time. Unweighted files take the default; ties keep input order.
+ */
+export function orderLongestFirst<T>(
+  items: readonly T[],
+  nameOf: (item: T) => string,
+  config: OrderWeights,
+): T[] {
+  const weightOf = (item: T): number => config.weights[nameOf(item)] ?? config.defaultSeconds;
+  return items
+    .map((item, index) => ({ item, index, weight: weightOf(item) }))
+    .sort((a, b) => b.weight - a.weight || a.index - b.index)
+    .map((entry) => entry.item);
+}

@@ -29,6 +29,14 @@
 //   - the terminal event is msg.type === 'result', subtype 'success' or one
 //     of the error subtypes; is_error + permission_denials live there.
 //     (sdk.d.ts:3477 SDKResultMessage = SDKResultSuccess | SDKResultError)
+//   - the prompt is sent as a user-message stream that stays open until the
+//     run is done. A plain string prompt is a single-turn query: the SDK
+//     closes the CLI's stdin at the first result, and every later permission
+//     request (an AskUserQuestion included) then fails with "Stream closed".
+//     A turn can end while subagents still run, and the session goes on when
+//     they report, so the stream closes only at a result with no task pending
+//     (task_started without its task_notification), or when the drive ends:
+//     a stop, an abort, or its own timeout.
 //   - on Windows the CLI is spawned through Options.spawnClaudeCodeProcess
 //     into a kill-on-close Job Object (sdk-process-containment.ts) and the
 //     whole tree is ended after every drive, because the SDK's abort kills
@@ -50,7 +58,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   createSdkProcessContainment,
   describeSdkContainment,
@@ -64,6 +72,7 @@ import {
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
+import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
@@ -256,6 +265,50 @@ function buildAnswers(
 }
 
 // ---------------------------------------------------------------------------
+// Drive input: the prompt as a user-message stream held open until close().
+// ---------------------------------------------------------------------------
+
+export interface DriveInput {
+  readonly messages: AsyncIterable<SDKUserMessage>;
+  close(reason: string): void;
+  readonly closedReason: string | undefined;
+}
+
+export function driveInput(prompt: string): DriveInput {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let closedReason: string | undefined;
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    yield {
+      type: "user",
+      message: { role: "user", content: prompt },
+      parent_tool_use_id: null,
+    } as SDKUserMessage;
+    await released;
+  }
+  return {
+    messages: messages(),
+    close(reason: string) {
+      if (closedReason !== undefined) return;
+      closedReason = reason;
+      release();
+    },
+    get closedReason() { return closedReason; },
+  };
+}
+
+/** Tasks the CLI has started and not yet reported, read from its
+ *  task_started and task_notification messages. Only the notification counts:
+ *  a task_updated "completed" can arrive before the result while the
+ *  notification that resumes the session arrives after it. */
+export function trackDriveTask(pending: Set<string>, message: Record<string, unknown>): void {
+  const taskId = typeof message.task_id === "string" ? message.task_id : undefined;
+  if (taskId === undefined) return;
+  if (message.subtype === "task_started") pending.add(taskId);
+  if (message.subtype === "task_notification") pending.delete(taskId);
+}
+
+// ---------------------------------------------------------------------------
 // Driver options + main entry point
 // ---------------------------------------------------------------------------
 
@@ -380,10 +433,25 @@ function settingsModel(settings: ClaudeSettings | undefined): string | undefined
     : undefined;
 }
 
+// A Claude Code session that launches the suite (it sets CLAUDECODE=1) passes
+// its own model defaults to every child. The SDK's bundled Claude Code resolves
+// `opus` from them, so a session model newer than that build turns every live
+// drive into a refused request. They are the session's, not the suite's: such a
+// run uses CI's pinned models when the drive's final provider is Bedrock, and
+// the bundled defaults otherwise. A run from any other shell, CI's included,
+// keeps its environment as it is.
+const SESSION_MODEL_ENV = Object.keys(CI_BEDROCK_MODELS.claude);
+
+function launchedFromClaudeSession(): boolean {
+  return process.env.CLAUDECODE === "1";
+}
+
 function processEnv(): Record<string, string> {
+  const fromSession = launchedFromClaudeSession();
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") out[key] = value;
+    if (typeof value !== "string" || (fromSession && SESSION_MODEL_ENV.includes(key))) continue;
+    out[key] = value;
   }
   return out;
 }
@@ -417,19 +485,21 @@ export function resolveDriveSdkSettings(
         ? projectSettingsPath
         : "harness-default";
 
-  return {
-    model,
-    modelSource,
-    // Keep the normal shell environment (PATH, AWS creds, etc.) intact. Project
-    // settings provide fallbacks, shipped dist settings win by default, and
-    // explicit per-call env remains the final override for focused tests.
-    env: {
-      ...processEnv(),
-      ...stringEnv(project),
-      ...stringEnv(shipped),
-      ...(opts.env ?? {}),
-    },
+  // Keep the normal shell environment (PATH, AWS creds, etc.) intact. Project
+  // settings provide fallbacks, shipped dist settings win by default, and
+  // explicit per-call env remains the final override for focused tests.
+  const env: Record<string, string> = {
+    ...processEnv(),
+    ...stringEnv(project),
+    ...stringEnv(shipped),
+    ...(opts.env ?? {}),
   };
+  // A session's dropped model defaults are replaced only for the provider the
+  // drive ends up on, and only where no later layer named a model itself.
+  if (launchedFromClaudeSession() && env.CLAUDE_CODE_USE_BEDROCK === "1") {
+    for (const [key, pinned] of Object.entries(CI_BEDROCK_MODELS.claude)) env[key] ??= pinned;
+  }
+  return { model, modelSource, env };
 }
 
 function sdkTracePath(): string | undefined {
@@ -552,6 +622,13 @@ export async function driveAidlc(
   let exhaustedParentBudget: unknown;
   let containmentFailure: unknown;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const input = driveInput(prompt);
+  const pendingTasks = new Set<string>();
+  const closeInput = (reason: string): void => {
+    if (input.closedReason !== undefined) return;
+    writeSdkTrace(tracePath, "input_closed", { reason, pendingTasks: [...pendingTasks] });
+    input.close(reason);
+  };
 
   try {
     const fileAllowance = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
@@ -572,7 +649,7 @@ export async function driveAidlc(
       }, timeoutMs);
     }
     const run = query({
-      prompt,
+      prompt: input.messages,
       options: {
         cwd: projectDir,
         permissionMode,
@@ -644,7 +721,18 @@ export async function driveAidlc(
 
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
-      if (msg.type === "assistant") {
+      if (msg.type === "system") {
+        const m = msg as Record<string, unknown>;
+        trackDriveTask(pendingTasks, m);
+        if (typeof m.subtype === "string" && m.subtype.startsWith("task_")) {
+          writeSdkTrace(tracePath, "system", {
+            subtype: m.subtype,
+            taskId: typeof m.task_id === "string" ? m.task_id : undefined,
+            status: typeof m.status === "string" ? m.status : undefined,
+            pendingTasks: pendingTasks.size,
+          });
+        }
+      } else if (msg.type === "assistant") {
         // Capture assistant text AND register any tool_use blocks so we can
         // join them to their tool_result by toolUseID.
         const content = (msg as { message?: { content?: unknown } }).message
@@ -778,7 +866,13 @@ export async function driveAidlc(
           is_error: resultEvent.is_error,
           num_turns: resultEvent.num_turns,
           permissionDenialsCount: resultEvent.permissionDenialsCount,
+          pendingTasks: pendingTasks.size,
         });
+        // With a task still unreported the session resumes when it reports,
+        // so the stream stays open; the drive's own timeout bounds the wait.
+        if (resultEvent.is_error || pendingTasks.size === 0) {
+          closeInput(resultEvent.is_error ? "error result" : "result with no task pending");
+        }
       }
     }
   } catch (err) {
@@ -801,6 +895,7 @@ export async function driveAidlc(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    closeInput(abortController.signal.aborted ? "drive stopped" : "drive ended");
     if (containment) {
       // End the CLI's whole tree before touching anything it may hold open.
       // An aborted drive gets no grace: the CLI is mid-turn and would only

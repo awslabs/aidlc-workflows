@@ -421,7 +421,7 @@ Record the mode question and the user's mode choice through the log tool, the sa
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
-- Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, if the user selects "Other" for any question, treat it as a request to discuss that question further — engage in conversation, then ask for their final answer before continuing the batch. Explicitly tell the user this before the first batch: "Select 'Other' on any question to discuss it before answering."
+- Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch: "Select 'Other' on any question to answer in your own words or to discuss it."
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
 - Record each batch through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details "<the exact selections>"` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - Continue until all questions are answered
@@ -581,12 +581,11 @@ When contradictions are detected:
 - If an answer seems incomplete, probe deeper.
 - Red flags that require follow-up:
   - Single-word answers to open-ended questions
-  - "Whatever you think is best" or "up to you" — ask what outcome they care about most
   - Contradictory signals between different answers
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.
     a test coverage threshold) instead of meeting it
-- When a user defers to AI judgment, reframe: "I want to make sure the design reflects YOUR priorities. Could you tell me [specific aspect]?"
+- When a user leaves a choice to you ("up to you", "whatever you think is best"), decide: pick the option that best fits what they have said so far, record it as their answer with a note that they left it to you, and say in one line what you chose, why, and that they can change it.
 
 ### Plan and question file location
 Plan files and question files are co-located with their stage artifacts, not in a centralized `plans/` directory. For example, user story plan questions live at `<record>/inception/user-stories/user-stories-questions.md` alongside the user story artifacts. This co-location improves discoverability — all inputs, questions, and outputs for a stage are found in the same directory.
@@ -716,7 +715,7 @@ unit owes it; otherwise it completes through its normal approval, which names
 the skipped units. A unit whose files for the stage are already written cannot
 be skipped.
 
-**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact`; approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch (e.g., logging an `ERROR_LOGGED` event where no specific tool owns it yet); it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`) and the commit-provenance anchor `SOURCE_COMMITTED`; those are emitted only by their owning tool or hook through the library path.
+**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact`; approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch for events without a specific owning path; it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`) and the commit-provenance anchor `SOURCE_COMMITTED`; those are emitted only by their owning tool or hook through the library path.
 
 **Stage graph lookups** (no state file needed):
 ```bash
@@ -749,7 +748,8 @@ The audit trail records what happened, what was asked, and what the user approve
 - Approval gates are report-owned: `{{INVOKE}} engine orchestrate report --result awaiting-approval` records that the gate was presented (`STAGE_AWAITING_APPROVAL`), and `report --result approved|rejected` records the response (`GATE_APPROVED`/`GATE_REJECTED` with the exact user input). Do not add separate log entries for the gate prompt or the gate choice.
 - Reviews and pipeline-link receipts use `{{INVOKE}} engine log review` and `{{INVOKE}} engine log link`. Lifecycle and configuration commands record their own events; artifact and session hooks record the activity they observe.
 - Free-form notes with no owning event (an error you worked around, a recovery you performed, a change request the user raised mid-workflow): `{{INVOKE}} engine audit append-raw "<heading>" "<body>"`. Use the heading `Error: <brief>`, `Recovery: <brief>`, or `Change Request: <brief>`, and put the details in the body as `**Field**: value` lines separated by literal `\n`: severity, type, description, cause, resolution, and impact for an error; issue, recovery steps, outcome, and artifacts affected for a recovery; the user's exact request, current state, impact assessment, the user's confirmation, action taken, and artifacts affected for a change request. The tool stamps the timestamp and refuses a body that names a taxonomy event.
-- `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append`; the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
+- `ERROR_LOGGED` is owned by `aidlc-lib.ts emitError` for non-zero tool exits and by `aidlc-continue-workflow.ts` for the first delivery of a distinct engine error directive. `RECOVERY_COMPLETED` is owned by `aidlc-state.ts acknowledge-compaction`. Do not hand-write either event via `aidlc-audit.ts append`; use the owning tool or hook. Canonical state transitions go through the state/log/bolt tools (see "Silent bookkeeping writes" in section 4).
+- Stop-hook error delivery retains 32 intent/session/state/stage/message fingerprints in FIFO order; only an unseen fingerprint delivers and audits again. An evicted fingerprint can be delivered again. Direct and Copilot paths share the same 2,000-byte UTF-8 message bound without splitting a code point.
 - CRITICAL: the user's words passed through `--user-input`, `--details`, or a note body MUST be COMPLETE and UNMODIFIED. NEVER summarize, paraphrase, or truncate user responses. This is a compliance and traceability requirement: the exact wording may carry nuance that summaries lose.
 - Read earlier questions with `{{INVOKE}} engine log answers --stage <slug>` (add `--unit <unit>` when unit-scoped). It returns `answered`, `open`, and `ambiguous`; ask a narrow follow-up for ambiguity.
 - Read the timeline with `{{INVOKE}} engine audit history`. Optional `--stage <slug>`, repeatable `--event <TYPE>`, and `--limit <n>` select entries and keep the newest n. Results are oldest first; `unordered: true` means tied entries have no known order across writers. Free-form notes appear as `NOTE` entries with their heading and body text; `--event NOTE` selects them, while `--stage` excludes them.
@@ -1051,7 +1051,7 @@ Loaded as the `learnings` protocol module when the directive lists it. When the 
 When a stage detects existing output artifacts in its artifact directory:
 
 1. List the existing artifacts found
-2. Present a 3-option structured question:
+2. When the person's request already chose (they picked "Redo the current stage" on the resume menu, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
    - **Keep** — Accept existing artifacts as-is, skip this stage's generation steps, proceed to approval gate
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.
@@ -1079,7 +1079,7 @@ pipeline completion check independently verifies the artifact set and freshness
 again. See
 `docs/reference/12-state-machine.md` for the canonical emitter registry.
 
-This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
+This applies to ALL stages, not just jump targets: when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice, unless the person already said what they want for it.
 
 **Autonomous failure loop-back**: when the replay was initiated by the
 Build-and-Test failure loop-back in the construction protocol module

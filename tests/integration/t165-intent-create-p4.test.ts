@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -27,8 +27,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
+  seededRecordDir,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
@@ -45,11 +46,14 @@ import {
   PROJECT_DESCRIPTION_FILE,
   readAllAuditShards,
   readIntentRegistry,
+  readSessionBinding,
   getField,
   setField,
   setActiveIntentCursor,
   slugify,
   updateIntentStatus,
+  boltName,
+  idSuffix,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -61,6 +65,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
 const STATE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-state.ts");
+const WORKTREE = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-worktree.ts");
 const SESSION_START = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-start.ts");
 const SESSION_END = join(REPO_ROOT, "dist", "claude", ".claude", "hooks", "aidlc-session-end.ts");
 const CONTINUE_WORKFLOW = join(
@@ -546,6 +551,8 @@ describe("t164 done-on-completed carries the new-work hint", () => {
     // Stage = final stage, Status = Completed) so next finds no in-scope stage and
     // emits `done` (the engine is read-only; it never auto-creates alongside it).
     seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    // This user's own intent, selected by the local cursor.
+    writeFileSync(join(dirname(seededRecordDir(proj)), "active-intent"), `${basename(seededRecordDir(proj))}\n`);
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("done");
@@ -690,6 +697,9 @@ describe("t164 --new-intent creation directive hands off to a fresh session", ()
   test("concurrent pre-workflow sessions bind only the session that invoked creation", () => {
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-a" })).toBe(0);
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-b" })).toBe(0);
+    // Both hooks ran under this test process, so its pid-map entry names B, the
+    // last to start. The creator is identified by its own PostToolUse instead.
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "pids"), { recursive: true, force: true });
 
     const created = util([
       "intent-create",
@@ -1069,6 +1079,7 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     const r = util(["intent", "unarchive", a]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(`Unarchived intent → ${a}`);
+    expect(r.stdout).not.toContain("--reason");
     expect(registryStatus(a)).toBe("in-flight");
     expect(stateStatus(a)).toBe("Running");
     expect(auditText(a)).toContain("WORKFLOW_UNARCHIVED");
@@ -1089,10 +1100,19 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(recovered.status, recovered.out).toBe(0);
     expect(registryStatus(only)).toBe("in-flight");
     expect(stateStatus(only)).toBe("Running");
+    // The other window: an unarchive of completed work wrote the state back
+    // but not the registry row. Running it again keeps the work complete.
+    const statePath = join(recordPath(only), "aidlc-state.md");
+    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Status", "Completed"), "utf-8");
+    expect(updateIntentStatus(proj, only, "archived")).toBe(true);
+    const finished = util(["intent", "unarchive", only]);
+    expect(finished.status, finished.out).toBe(0);
+    expect(registryStatus(only)).toBe("complete");
+    expect(stateStatus(only)).toBe("Completed");
   });
 
-  test("archive refuses nameless, unknown, completed, worktree-bearing, and already-archived targets; unarchive refuses in-flight", () => {
-    const { a, b } = createTwo();
+  test("archive refuses nameless, unknown, and already-archived targets; unarchive refuses in-flight", () => {
+    const { b } = createTwo();
     const missing = util(["intent", "archive"]);
     expect(missing.status).not.toBe(0);
     expect(missing.out).toContain("Usage: aidlc-utility intent archive <name>");
@@ -1108,30 +1128,6 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
       expect(registryStatus(b)).toBe("in-flight");
       expect(auditText(b)).not.toContain("WORKFLOW_ARCHIVED");
     }
-    // Only archive records a reason: unarchive refuses the flag outright.
-    expect(util(["intent", "archive", b]).status).toBe(0);
-    const reasoned = util(["intent", "unarchive", b, "--reason", "back on the roadmap"]);
-    expect(reasoned.status).not.toBe(0);
-    expect(reasoned.out).toContain("--reason is only accepted by intent archive");
-    expect(registryStatus(b)).toBe("archived");
-    expect(auditText(b)).not.toContain("WORKFLOW_UNARCHIVED");
-    expect(util(["intent", "unarchive", b]).status).toBe(0);
-    expect(registryStatus(b)).toBe("in-flight");
-    // A completed intent is already terminal.
-    expect(updateIntentStatus(proj, a, "complete")).toBe(true);
-    const completed = util(["intent", "archive", a]);
-    expect(completed.status).not.toBe(0);
-    expect(completed.out).toContain("is complete");
-    expect(registryStatus(a)).toBe("complete");
-    expect(stateStatus(a)).toBe("Running");
-    // Live Bolt worktrees would be orphaned.
-    const statePath = join(recordPath(b), "aidlc-state.md");
-    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Bolt Refs", "auth-service"), "utf-8");
-    const busy = util(["intent", "archive", b]);
-    expect(busy.status).not.toBe(0);
-    expect(busy.out).toContain("Bolt worktree");
-    expect(registryStatus(b)).toBe("in-flight");
-    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Bolt Refs", ""), "utf-8");
     // Idempotence is a refusal, not a silent no-op, in both directions.
     const notArchived = util(["intent", "unarchive", b]);
     expect(notArchived.status).not.toBe(0);
@@ -1141,6 +1137,100 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(twice.status).not.toBe(0);
     expect(twice.out).toContain("already archived");
     expect(registryStatus(b)).toBe("archived");
+  });
+
+  test("unarchive with --reason brings the intent back and says the reason was not recorded", () => {
+    const { b } = createTwo();
+    expect(util(["intent", "archive", b]).status).toBe(0);
+    const reasoned = util(["intent", "unarchive", b, "--reason", "back on the roadmap"]);
+    expect(reasoned.status, reasoned.out).toBe(0);
+    expect(reasoned.stdout).toMatch(new RegExp(`^Unarchived intent \\S+ ${b} `, "m"));
+    expect(reasoned.stdout).toContain("The --reason was not recorded: only intent archive records a reason.");
+    expect(registryStatus(b)).toBe("in-flight");
+    expect(stateStatus(b)).toBe("Running");
+    expect(auditText(b)).toContain("WORKFLOW_UNARCHIVED");
+    expect(auditText(b)).not.toContain("back on the roadmap");
+    // Nothing reads the flag on unarchive, so a bare one is not a usage error either.
+    expect(util(["intent", "archive", b]).status).toBe(0);
+    const bare = util(["intent", "unarchive", b, "--reason"]);
+    expect(bare.status, bare.out).toBe(0);
+    expect(bare.stdout).toContain("The --reason was not recorded");
+    expect(registryStatus(b)).toBe("in-flight");
+  });
+
+  test("a completed intent archives out of the default listing and unarchives back to complete", () => {
+    const { a } = createTwo();
+    const statePath = join(recordPath(a), "aidlc-state.md");
+    // The two writes workflow completion makes.
+    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Status", "Completed"), "utf-8");
+    expect(updateIntentStatus(proj, a, "complete")).toBe(true);
+    const before = readFileSync(statePath, "utf-8");
+    expect(util(["intent"]).stdout).toContain(`${a}  [complete]`);
+    const archived = util(["intent", "archive", a]);
+    expect(archived.status, archived.out).toBe(0);
+    expect(archived.stdout).toMatch(new RegExp(`^Archived intent \\S+ ${a} `, "m"));
+    expect(archived.stdout).toContain(
+      "It was complete, so it now leaves the default /aidlc intent list; unarchive brings it back as complete.",
+    );
+    expect(registryStatus(a)).toBe("archived");
+    expect(stateStatus(a)).toBe("Archived");
+    expect(getField(readFileSync(statePath, "utf-8"), "Archived From")).toBe("Completed");
+    expect(util(["intent"]).stdout).not.toContain(a);
+    expect(util(["intent", "list", "--all"]).stdout).toContain(`${a}  [archived]`);
+    const back = util(["intent", "unarchive", a]);
+    expect(back.status, back.out).toBe(0);
+    expect(back.stdout).toContain(` ${a} (space: default); it is complete again`);
+    expect(back.stdout).not.toContain("in-flight");
+    expect(registryStatus(a)).toBe("complete");
+    expect(stateStatus(a)).toBe("Completed");
+    // The round trip leaves the state as it was, apart from its timestamp.
+    const routed = (content: string): string =>
+      content.split("\n").filter((line) => line !== "" && !line.startsWith("- **Last Updated**")).join("\n");
+    expect(routed(readFileSync(statePath, "utf-8"))).toBe(routed(before));
+    expect(util(["intent"]).stdout).toContain(`${a}  [complete]`);
+  });
+
+  test("archiving an intent with Bolt worktrees keeps them on disk, names them, and unarchive brings them back", () => {
+    const { b } = createTwo();
+    const statePath = join(recordPath(b), "aidlc-state.md");
+    writeFileSync(statePath, setField(readFileSync(statePath, "utf-8"), "Bolt Refs", "auth-service"), "utf-8");
+    const uuid = readIntentRegistry(proj).find((e) => e.dirName === b)?.uuid ?? "";
+    const worktree = join(proj, ".aidlc", "worktrees", boltName(idSuffix(uuid), "auth-service"));
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, "work.txt"), "in progress\n", "utf-8");
+    const r = util(["intent", "archive", b]);
+    expect(r.status, r.out).toBe(0);
+    expect(r.stdout).toContain(
+      `Its Bolt worktree(s) stay on disk as they are (auth-service); /aidlc intent unarchive ${b} brings that work back.`,
+    );
+    expect(registryStatus(b)).toBe("archived");
+    expect(stateStatus(b)).toBe("Archived");
+    // Nothing touched the worktree or its bookkeeping, and doctor still reads
+    // it as this intent's active fork, not an orphan.
+    expect(readFileSync(join(worktree, "work.txt"), "utf-8")).toBe("in progress\n");
+    expect(getField(readFileSync(statePath, "utf-8"), "Bolt Refs")).toBe("auth-service");
+    expect(util(["doctor", "--verbose"]).out).toContain(`Orphan worktrees: 0 (1 active fork: ${basename(worktree)})`);
+    // Its work lands nowhere while it is archived.
+    const merge = (): Run => {
+      const run = Bun.spawnSync({
+        cmd: [BUN, WORKTREE, "merge", "--slug", "auth-service", "--target", "main", "--strategy", "squash", "--intent", b, "--project-dir", proj],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = run.stdout.toString();
+      return { status: run.exitCode, stdout, out: `${stdout}${run.stderr.toString()}` };
+    };
+    const refused = merge();
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain(
+      `Cannot merge a Bolt for an Archived workflow. Bring it back first with \`/aidlc intent unarchive ${b}\`.`,
+    );
+    const back = util(["intent", "unarchive", b]);
+    expect(back.status, back.out).toBe(0);
+    expect(registryStatus(b)).toBe("in-flight");
+    expect(stateStatus(b)).toBe("Running");
+    expect(getField(readFileSync(statePath, "utf-8"), "Bolt Refs")).toBe("auth-service");
+    expect(merge().out).not.toContain("Archived workflow");
   });
 
   test("park refuses an archived workflow", () => {
@@ -1397,9 +1487,9 @@ describe("t164 doctor readiness against the shipped shell", () => {
 // Migration wiring: a flat aidlc-docs/ project migrates on first creation + git-rm
 // ============================================================
 describe("t164 migration wiring (flat → per-intent on first creation)", () => {
-  test("intent-create migrates a flat project, git-rm's the flat tree, and is a no-op re-run", () => {
-    // Seed a flat (pre-workspace) project: aidlc-docs/aidlc-state.md present, no
-    // intent record, no .migrated marker.
+  // Seed a flat (pre-workspace) project: aidlc-docs/aidlc-state.md present, no
+  // intent record, no .migrated marker. Returns the flat tree's path.
+  function seedFlatProject(): string {
     const flat = join(proj, "aidlc-docs");
     mkdirSync(flat, { recursive: true });
     writeFileSync(
@@ -1408,8 +1498,13 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
       "utf-8",
     );
     writeFileSync(join(flat, "audit.md"), "# AI-DLC Audit Log\n", "utf-8");
+    rmSync(join(proj, "aidlc", "active-space"), { force: true });
+    return flat;
+  }
+
+  test("intent-create migrates a flat project, git-rm's the flat tree, and is a no-op re-run", () => {
+    const flat = seedFlatProject();
     const cursor = join(proj, "aidlc", "active-space");
-    rmSync(cursor, { force: true });
 
     expect(
       fireHook(SESSION_START, {
@@ -1460,5 +1555,31 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
       existsSync(join(intentsDir(proj), d, "aidlc-state.md")),
     );
     expect(records2.length).toBe(2);
+  });
+
+  test("a migration the tool cannot name a session for still joins the creating session", () => {
+    seedFlatProject();
+    expect(
+      fireHook(SESSION_START, { source: "startup", session_id: "migration-session" }),
+    ).toBe(0);
+    // The tool's process-ancestry walk names no session: a host whose tool
+    // processes cannot name one, or a walk that ran out of time on a loaded
+    // machine. Only the creating session's own PostToolUse can bind it.
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "pids"), { recursive: true, force: true });
+
+    const r = util(["intent-create", "--scope", "feature"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Migrated flat workspace into intent:");
+    expect(bindCreatedSession("migration-session", r)).toBe(0);
+
+    const [migrated] = readIntentRegistry(proj);
+    expect(
+      readFileSync(join(proj, "aidlc", ".aidlc-sessions", "migration-session"), "utf-8").trim(),
+    ).toBe(migrated?.uuid);
+    expect(readSessionBinding(proj, "migration-session")).toMatchObject({
+      space: "default",
+      intent: migrated?.dirName,
+      source: "create",
+    });
   });
 });

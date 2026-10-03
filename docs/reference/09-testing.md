@@ -133,7 +133,7 @@ Distribution coverage is split by contract:
   isolation of stable tags from scheduled/manual previews, shared
   `release-preview` concurrency, contract gate ancestry, channel-specific provenance
   signers, build stamping, and a failing Full Suite that still builds the preview
-  but keeps the run red.
+  without failing the preview workflow.
 - `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
   failing files and cases from each artifact's own run (never the runner's
   fixture runs), failed jobs, inert markup, and the report size budget.
@@ -517,6 +517,14 @@ and disables session persistence. Live tests therefore leave the user's
 directory is read-only inside a command sandbox. A per-call
 `env.CLAUDE_CONFIG_DIR` remains available for focused calibration.
 
+A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
+hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
+SDK's bundled Claude Code may be older than the session's model and refuse it.
+When a drive's final provider is Bedrock, it gets CI's pinned models
+(`CI_BEDROCK_MODELS` in `scripts/ci-credential-broker.ts`) for any model the
+project settings or the test did not set; otherwise the bundled defaults. A run
+from any other shell, CI's included, keeps its environment unchanged.
+
 | Assertion | Surface | On fail |
 |-----------|---------|---------|
 | AWS credentials valid | `aws sts get-caller-identity` exits 0 (PASS-by-skip when the `aws` CLI is absent) | bail — Bedrock needs IAM auth |
@@ -540,7 +548,15 @@ leading comment block (typically line 1; a few files legitimately declare none
 and simply contribute no coverage claim). The generator enumerates the framework's units across seven
 classes (`function`, `audit`, `scope`, `stage`, `hook`, `subcommand`,
 `render-surface`), maps each `covers:` claim onto an enumerated unit, and emits
-the coverage counts plus a ratchet floor. Regenerate and verify drift with:
+one entry per unit with its claims and status. The file stores no totals: a
+count that every unit-adding PR rewrites made queued PRs conflict, or merge
+into a stale file when two PRs changed it by the same amount. The generator
+prints the counts instead, and two PRs that add or cover different units merge
+with git into exactly the regenerated registry (a unit that sorts into the
+very same place as another PR's new unit still conflicts). `--check` also
+holds a ratchet: a unit the committed registry records as covered must stay
+covered, or the check names it; dropping a claim needs a regenerated registry
+in a reviewed commit. Regenerate and verify drift with:
 
 ```bash
 bun tests/gen-coverage-registry.ts          # rewrite the registry from disk
@@ -562,22 +578,65 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, eight unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, eight unit shards, integration and isolated E2E as separate jobs in the shared workflow | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running deterministic tiers on Linux/macOS/Windows and required hosted live jobs | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts and bounded hosted live shards | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Stable tag | Exact-source release validation | `release.yml` validates the tag and source, reuses a passing release-purpose `full-suite-result` for the exact tagged commit or calls `full-suite.yml` for it, and runs contract checks, builds, and native/installer/lifecycle validation alongside; `publish` and `release` require the passing Full Suite | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
+When the merge queue drops a PR only because a GitHub-hosted runner failed,
+`merge-queue-notice.yml` posts one comment on the PR saying so, naming the jobs,
+and noting that a maintainer can add it back. It runs on `workflow_run` after each
+merge-queue CI run, checks out only the default branch, and uses the built-in
+token with `actions: read`, `checks: read`, `contents: read` and
+`pull-requests: write`. `.github/scripts/merge-queue-notice.ts` owns the
+signatures, read from GitHub's records:
+
+- for a `failed_checks` removal, every red job either lost its runner ("The
+  hosted runner lost communication with the server", no failed step) or failed
+  checkout with "Could not resolve host: github.com";
+- for a `checks_timed_out` removal, every job still open at the removal was
+  either waiting for a runner or still in "Prepare unit test substrates".
+
+It posts nothing for test failures, conflicts, manual removals, PRs that change
+`.github/`, PRs already back in the queue, or a run it already explained, and
+it never enqueues, dequeues or merges. `t-ci-merge-queue-notice` pins this on
+trimmed records of real drops in `tests/fixtures/merge-queue-notice/`.
+
+PR CI stays strict: a failing file is red on the PR, with no retry, so a flake
+is seen where it was introduced. The merge queue is different, because one
+flaky file drops the PR and rebuilds every group queued behind it. There,
+`ci.yml` passes `retry-once` to the smoke, unit and integration legs, which run
+the tier with `--file-retries 1`: a file whose first attempt failed assertions
+(failed cases, complete JUnit evidence, no timeout, no cleanup failure, at most
+ten minutes, and at least five minutes left in the run) runs once more in a
+fresh process and temporary directory. The rule lives in
+`tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
+nonzero exit without failed cases, a file that executed no cases, a timeout,
+and a second failure are never retried. Only a retry that passes every case the
+first attempt ran replaces the first failure: a second failure, or a retry that
+skips one of those cases or executes none, stays a failure.
+The retry starts only after the first attempt's evidence is moved aside whole;
+if any of it cannot be, the file is not retried.
+A pass on the second attempt is never silent: the job shows a `Flaky test`
+warning ("<file> passed on its second attempt (merge queue)"), the step summary
+lists it under "Passed on retry", the file's `summary.txt` row keeps `PASS`
+with a "passed on retry" line under it, and `retries.json` in the run's log
+directory records every retry for flake triage. The first attempt's log and
+JUnit stay beside the second as `<file>.attempt-1.*`. Isolated e2e and Full
+Suite never take the flag. `t-runner-production-guards` and
+`t-ci-retry-report` cover the rule, the runner and the report.
+
 `main` is not production: PR CI and the merge queue remain the fast gates listed
-above, while deterministic E2E and required hosted live tiers run in
-`full-suite.yml`. `preview-release.yml` calls it every night; its failures keep
-the preview run red and are reported in the preview notes, but they do not stop
-the preview build. By maintainer decision on 2026-09-26, which reverses the
+above, while required hosted live tiers run in
+`full-suite.yml`. `preview-release.yml` dispatches it every night as a separate
+run for the preview source SHA. Its failures remain visible in that run and in
+the preview notes, without failing the preview workflow. By maintainer decision on 2026-09-26, which reverses the
 2026-09-21 decision that stable releases need no Full Suite result, a stable
 release publishes only after a release-purpose Full Suite passed for the exact
 tagged commit.
@@ -601,8 +660,8 @@ called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard and artifact label. PR CI selects Linux smoke, eight
-weighted unit shards, and integration; Full Suite selects smoke, the same eight
+runner, tier, unit shard and artifact label. PR CI selects Linux smoke, twelve
+weighted unit shards, and integration; Full Suite selects smoke, the same twelve
 shards, integration, and isolated E2E on Linux/macOS/Windows. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
@@ -616,7 +675,7 @@ job backstop and a 270-minute execution step. The runner shares a four-hour
 work deadline across the invocation, with a two-hour deadline per file,
 including smoke and isolated deterministic E2E.
 This hierarchy leaves time to retire processes, finish reports, sanitize logs
-and upload evidence after work stops. Unit work remains partitioned into eight
+and upload evidence after work stops. Unit work remains partitioned into twelve
 weighted shards per OS without duplication; compiled producer/consumer
 affinity is preserved.
 
@@ -660,7 +719,14 @@ Each run captures stdout/stderr in the checkout root's
 `tmp/ci-deterministic/run.log`, prints that path and the actual log stamp, and
 preserves both this capture and `tests/logs/` after successful sanitization.
 Artifacts use the caller's label plus the actual runner OS and retain evidence
-for 90 days.
+for 90 days. `ci.yml` passes `evidence-optional: true` because no workflow
+downloads its `ci-deterministic-*` artifacts: a failed upload is reported on
+the job but does not fail it, so an upload timeout cannot drop a PR whose tests
+passed. The test step's own exit code still fails the job. CI's
+`ci-native-*` and `production-guard-evidence` uploads follow the same rule.
+Full Suite does not pass the input, so the `full-suite-deterministic-*`
+uploads of a manual full verification run stay required: that run exists to
+hand a person its evidence, and no queued PR waits on it.
 
 For platform verification before a nightly fix lands, dispatch
 `gh workflow run ci.yml --ref <branch> -f platform_regressions=true`. This expands
@@ -917,7 +983,7 @@ bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
 ```
 
 The job creates that log directory and always uploads its logs and `tests/logs/`
-as `production-guard-evidence`. The existing `test` aggregate (`Tests (smoke +
+as `production-guard-evidence`; a failed upload does not fail the job. The existing `test` aggregate (`Tests (smoke +
 unit)`, retained as the required-check name) requires `test_guards` to succeed
 alongside smoke, every unit shard, and deterministic integration on every
 trigger, plus the native-terminal and live OS-isolation matrices outside PR
@@ -947,7 +1013,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses eight weighted unit shards on Linux and eight workers for integration. Full Suite uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses twelve weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -1077,7 +1143,8 @@ The runner writes these additional artifacts under its timestamped log directory
   worker assignment, case pass/fail/skip counts, durations, timeout/cleanup
   outcomes and diagnostic throttle-pattern counts.
 - `e2e-artifacts/<test>/`: retained JUnit and isolated SDK/TUI/IDE traces.
-- `e2e-artifacts/<test>/deferred-cleanup.json`: Windows Codex fixture retention
+- `e2e-artifacts/<test>/deferred-cleanup.json` (under `attempt-N/` in
+  isolated-file runs): Windows Codex fixture retention
   after the coordinator verifies native process retirement. These fixtures move
   to `retained-fixtures/` even on success; the host owns final deletion of the
   protected sandbox files. A cross-volume copy keeps the original too.
@@ -1281,10 +1348,12 @@ suite; documented excluded families remain untested.
 ### Nightly full-suite matrix and provisioning
 
 `Full Suite` is callable with an explicit `ref` and manually dispatchable
-(default `main`, both verification flags false). Its ordinary release-purpose plan resolves that ref once and requires the SHA to
-already be an ancestor of `origin/main` before installing dependencies or
-dispatching source-executing jobs. All matrix legs check out the authorized
-immutable SHA. Scheduled and manual `preview-release.yml` runs call it after
+(default `main`, both verification flags false). Its ordinary plan accepts the
+requested branch or commit, including an unmerged PR, and resolves it once.
+All matrix legs check out that immutable SHA. The preview and stable release
+workflows enforce their own publication source policy; Full Suite does not
+require a commit to be on `main` just to test it.
+Scheduled and manual `preview-release.yml` runs call it after
 packaging determinism, typecheck, lint, and installer shell checks, even when the
 source already has a published preview. Preview does not call the PR CI test
 matrix again; Full Suite owns its test coverage. A failing Full Suite does not
@@ -1295,14 +1364,15 @@ The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
-`Release result` still fails the run, so a failing suite never looks green. An
-unchanged source skips the publication build chain, and the run still fails
-when its tests fail. Stable releases consume `full-suite-result`: the tag
+`Release result` requires successful preview publication or an intentional
+skip. Full Suite runs separately: the preview records its run ID, downloads
+that run's evidence and reports its real result, without propagating its failure.
+An unchanged source skips publication but still receives the test report. Stable releases consume `full-suite-result`: the tag
 workflow validates that the exact tagged commit is on `main` and matches the
 authored version, reuses or produces a passing release-purpose Full Suite result
 for that commit, and runs contract checks and validates built native binaries,
-installers, lifecycle flows, checksums, and provenance. It runs the
-smoke/unit/integration/e2e source tiers only through that Full Suite. Preview also runs contract
+installers, lifecycle flows, checksums, and provenance. Deterministic source tiers and production guards remain in PR/merge CI and manual
+`full_verification`; the ordinary release Full Suite omits them. Preview also runs contract
 checks and Full Suite once, with publication deduplication applied only to the
 subsequent build and publication chain.
 
@@ -1317,15 +1387,15 @@ gh workflow run full-suite.yml --ref '<candidate-branch>' \
 Full verification runs every job that receives no credentials: native
 obligations and reconciliation, all deterministic tiers, production guards and
 Windows release contracts. Because it may select unmerged code, it never runs
-`live_prepare`, `live_linux`, `live_macos` or `live_windows` (the jobs that
+the three `live_prepare_*` jobs, `live_linux`, `live_macos` or `live_windows` (the jobs that
 request OIDC and AWS credentials); cover a candidate's live families with `live_verification`,
 the separately authorized mode below. Every checkout in Full Suite sets
 `persist-credentials: false`, so candidate code never finds the repository token
 on disk. It otherwise uses the same file matrices, assertions and timeouts as an
 ordinary Full Suite run. The separate `full-suite-verification-result` artifact
 contains `full-suite-result.json` with `purpose: "full-verification"`; `passed`
-requires every other job to succeed, the four live jobs to be `skipped`,
-`verificationFamily: "all"` and `omittedLegs` naming exactly those four jobs.
+requires every other job to succeed, the six live/preparation jobs to be `skipped`,
+`verificationFamily: "all"` and `omittedLegs` naming exactly those six jobs.
 Neither preview nor stable publication consumes this result, even after the
 candidate merges.
 
@@ -1372,7 +1442,7 @@ These verification inputs exist only on `workflow_dispatch`, never `workflow_cal
 Authorization requires that event and that the checked-out SHA equals
 `github.sha`; selecting the workflow on `main` cannot authorize a different
 branch's source. No push or pull-request trigger starts privileged verification.
-The mode runs `plan`, `live_prepare`, `live_linux`, `live_macos`, `live_windows`,
+The mode runs `plan`, the three `live_prepare_*` jobs, `live_linux`, `live_macos`, `live_windows`,
 and `release_contract_windows`. It intentionally skips native terminal/reconciliation,
 deterministic tiers, and production guards, so it does not repeat deterministic
 CI. Existing provider opt-ins, strict live coverage and credential isolation
@@ -1385,11 +1455,13 @@ the omitted jobs in
 succeed and every intentionally omitted job to be `skipped`; missing, failed,
 cancelled or unexpectedly executed jobs fail. Even a successful verification
 of `main` is not consumed by stable publication. Ordinary Full Suite runs keep
-the `full-suite-result` artifact name and require all jobs; older artifacts
+the `full-suite-result` artifact name and require all jobs except the explicitly omitted deterministic
+and production-guard jobs; older artifacts
 without the release purpose do not satisfy the Full Suite result policy.
 
-`live_prepare` installs dependencies and packages projections on all three hosted
-OSes with contents-read permission only. POSIX preparation selects official Node
+The three independent `live_prepare_*` jobs call `live-prepare.yml` to install
+dependencies and package projections with contents-read permission only. Each
+live OS job waits only for its own platform preparation. POSIX preparation selects official Node
 22.23.2 and packs its complete install prefix with the pinned CLIs
 (`ci-live-deps.py pack --cli ... --node-runtime ...`). The validated archive
 requires both `bin/node` and its library directory. The isolated runtime copies
@@ -1405,18 +1477,18 @@ live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
 They do not block preview publication: the preview still builds, its notes end
-with a Full Suite failure report, and the preview run stays red. They block stable
+with a Full Suite failure report, and only the separate Full Suite run stays red. They block stable
 publication: `release.yml` refuses to publish without a passing result for the
 tagged commit. The credential-free
 Windows release-contract job also runs.
 
 The declared coverage is:
 
-- Deterministic smoke, eight independent unit shards, integration, and isolated E2E
-  on each of Linux, macOS and Windows. Integration and E2E have separate jobs,
+- In manual `full_verification` only: deterministic smoke, twelve independent
+  unit shards, integration and isolated E2E on Linux, macOS and Windows. Integration and E2E have separate jobs,
   each with eight workers and its own runner process and evidence. Every unit file is
   assigned to one shard per OS; each shard retains its own debug logs and results.
-- A Linux production-guard slice selects `--production-guards` and
+- In manual `full_verification` only: a Linux production-guard slice selects `--production-guards` and
   `--require-coverage` for the runner and recovery contracts. Those cases are
   therefore exercised even though ordinary fixture-mode tiers skip them.
 - Source-bound native terminal obligations on Linux arm64/Bun and tmux,
@@ -1434,20 +1506,35 @@ The declared coverage is:
 After authorization and dependency installation, the plan emits `--matrix
 linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
-selects one file for its family/platform. Each OS job has its own concurrency
-cap, at most 12 Linux, 6 macOS and 6 Windows jobs at once, so macOS jobs waiting
-for scarcer runners never hold slots that Linux jobs could use. Windows
-release-contract coverage remains in its separate unsharded job. Every fresh
-job repeats isolation and authenticated
-readiness checks; required preflights may run in addition to its assigned file.
-Manual planning can use `--family FAMILY --test <repository-path>` to select
-one file on its declared platforms while preserving the full inventory's shard
-assignments.
+selects a duration-balanced group for its family/platform. Each OS has two Claude
+SDK, three Claude TUI, one Codex and one opencode shard: 21 live harness jobs in
+all. Timing weights in `tests/live-shard-weights.json` are scheduling hints;
+discovery still assigns every eligible file exactly once per platform. Each OS
+has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
+Every shard has at most two file workers; Windows Codex files remain serial.
+Windows release-contract coverage stays in its separate unsharded job.
+
+`--isolated-files` restores each worker from the original checkout snapshot
+before its next file, including generated and Git state. Each file/attempt gets
+fresh HOME/USERPROFILE, temporary directories, Claude/Codex/opencode and XDG
+profiles, a private Git config and a private copy of the broker-only AWS config.
+Installed tools and dependencies are reused. The existing process/transport
+retirement checks must succeed before a slot is reused. Cleanup uncertainty
+stops dispatch and marks remaining files incomplete.
+
+`--file-retries 1` retries only a short failed file after confirmed cleanup, in
+fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
+(Without `--isolated-files`, the same flag retries smoke, unit and integration
+files in a fresh process; the merge queue uses that, as described above.)
+Timeouts, incomplete evidence and cleanup failures are not retried. Passing
+files are not rerun. Each shard retains its authenticated isolation and required
+capability preflights. Manual `--family FAMILY --test <repository-path>` selects
+only that file on its declared platforms while preserving its shard identity.
 Dependency preparation uses fast gzip compression and uploads the resulting
 archive without a second compression pass to shorten startup.
 
 Every Full Suite job name leads with its runner OS, then its lane and matrix
-item, for example `Linux / claude-tui 3/19`, `macOS / deterministic unit-3`,
+item, for example `Linux / claude-tui 3/3`, `macOS / deterministic unit-3`,
 `Windows / native-terminal bun` or `Windows / release-contract`, so the
 Actions UI groups a run's jobs by OS. Result `legs` keep the job ids, and the
 preview report groups failed jobs by OS and lane.
@@ -1479,12 +1566,11 @@ does not convert those skips into passes. Full case coverage across OSes remains
 an explicit gap until that inventory and reconciliation exist.
 
 Add `--args` to print the complete runner arguments, one per line. The script
-owns tier selection: it emits only tiers with selected files, enables
-`--isolated-e2e` and resource limits only when e2e files exist, and applies each
-family's strict-coverage policy. An integration-only or unit-only selection does
-not launch an empty isolated e2e queue. A selection made only of production-guard
-journeys, whose cases run only in the production guard profile, also receives
-`--production-guards`; every other live selection keeps the fixture profile. The workflow uses `--run`
+owns tier selection: it emits only tiers with selected files and applies each
+family's strict-coverage policy. Live integration and E2E files use
+`--isolated-files`; unit release contracts retain their existing execution path.
+Production-guard journeys receive the production profile independently, including
+when they share a shard with fixture-profile files. The workflow uses `--run`
 to spawn the runner directly from the repository root, preserving each argument
 without shell word splitting or Bash-version-specific builtins:
 
@@ -1502,16 +1588,16 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-8`, `integration`, or `e2e`), `full-suite-live-<family>-<slice-number>-<OS>`,
+`unit-12`, `integration`, or `e2e`), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and the purpose-specific result
 (90-day retention): `full-suite-result` for `purpose: "release"`,
 `full-suite-live-verification-result` for `"live-verification"`, and
 `full-suite-verification-result` for `"full-verification"`. The final JSON records `sha`, `runId`,
 `runAttempt`, `purpose`, `verificationFamily`, `coveragePolicy`, `passed`, `complete`, every job's result in `legs`,
 `disabledLegs: []`, `omittedLegs`, and live families declared with `hosting: "excluded"` in the
-sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-v1`, `passed` means every
-declared job succeeded and `sha` is a 40-hex commit ID. A missing, failed,
-cancelled or skipped job fails. `disabledLegs` is retained so the Full Suite result policy can reject
+sorted `excluded` list. For `purpose: "release"` under `required-hosted-live-shards-v2`, `passed` requires a 40-hex commit ID, exactly `deterministic` and
+`production_guards` omitted and skipped, and every other declared job successful.
+Missing, failed, cancelled or unexpectedly skipped required jobs fail. `disabledLegs` is retained so the Full Suite result policy can reject
 historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro/Cursor/Copilot
 exclusions and is not the preview-publication predicate. Those exclusions warn
@@ -1519,8 +1605,9 @@ without failing the suite; disabled required jobs fail it.
 The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
 when `sha` is the tagged commit, `runId` is the run it came from, `purpose` is
 `"release"`, `verificationFamily` is `"all"`, `coveragePolicy` is
-`required-hosted-live-v1`, `passed` is true, `omittedLegs` and `disabledLegs` are
-empty, and every job the tagged commit declares, plus any extra leg, succeeded.
+`required-hosted-live-shards-v2`, `passed` is true, `disabledLegs` is empty, and
+`omittedLegs` is exactly the two deterministic/production-guard job IDs. Those jobs
+must be skipped; all other declared jobs and extra legs must have succeeded.
 It does not require `complete`, so the documented exclusions only warn.
 Neither job success nor this policy marker asserts full case coverage across OSes.
 
@@ -1532,7 +1619,7 @@ receipt reconciliation still discovers the receipts recursively.
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
 artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
-unit-1 through unit-8, integration, or e2e (expanded manual matrix only).
+unit-1 through unit-12, integration, or e2e (expanded manual matrix only).
 An upload requires both log locations
 to pass sanitization, including after a failed test command.
 
@@ -1597,9 +1684,16 @@ Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
 identity, followed by a real SDK turn. Codex 0.151.0 uses a provider `base_url`
 ending `/openai/v1`, verified against a loopback endpoint; the service-specific
 Bedrock Runtime override alone does **not** redirect Codex's Mantle traffic.
-Every scratch Codex home uses the shared broker endpoint renderer, including
-compose, workspace and memory journeys. Codex and opencode profiles contain only
-dummy `broker` keys. Opencode selects `AWS_PROFILE=broker` so its prerequisite
+Every scratch Codex home uses the shared Bedrock configuration renderer, including
+compose, workspace and memory journeys. Outside the isolated CI runtime, leaving
+`AIDLC_CODEX_AWS_PROFILE` unset or empty omits the profile from `config.toml`,
+allowing the AWS SDK default credential chain to resolve credentials, including an
+EC2 instance role. To keep using an existing named profile, set
+`AIDLC_CODEX_AWS_PROFILE=codex` (or its actual name); a profile named `codex` is no
+longer selected implicitly. `AIDLC_CODEX_AWS_REGION` still defaults to `us-east-2`.
+The isolated CI runtime explicitly sets `AIDLC_CODEX_AWS_PROFILE=codex` to select
+its dummy `broker` keys on Linux, macOS and Windows. Opencode profiles also contain
+only dummy keys. Opencode selects `AWS_PROFILE=broker` so its prerequisite
 check recognizes that profile; its documented provider `endpoint` override
 routes AI SDK requests through the proxy.
 Codex shell policy excludes provider/broker/API/GitHub/Actions variables, and the
@@ -1684,6 +1778,28 @@ and, on failure, the operation, safe relative path and exception codes. It omits
 exception messages, absolute paths and sensitive path components. An uploaded
 collection report or fallback log does not establish that a test passed.
 
+Windows live legs also keep evidence for a hook that stops making progress.
+`scripts/ci-live-sandbox.ts` sets `AIDLC_TEST_HOOK_TRACE=1` for every Windows
+live family, and the runner binds `AIDLC_HOOK_TRACE_DIR` to each file attempt's
+`e2e-artifacts/<file>/attempt-<n>/hook-trace/`, so every hook process in that
+attempt writes its phases there (see
+[Hook phase trace](06-hooks-and-tools.md#hook-phase-trace)). While a live run's
+scheduled task runs, the runner-side wait loop in
+`.github/scripts/prepare-live-runtime.ps1` checks the process table once a
+minute. When a process owned by the isolated account with `engine hook ` or
+`engine adapter ` in its command line has run 10 minutes, it writes one
+`hook-stall-<time>.json` to
+`tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with the stalled
+process's tree (its isolated-account parents and all its children) and their
+thread states, once per process. It reads process metadata only and checks
+ownership only for the stalled process and its parents. Every query is capped
+at what is left of a 60-second snapshot budget (15 seconds at most); a query
+that is skipped, fails or times out marks the snapshot `truncated`. A stalled
+process whose owner could not be checked is listed under `ownerUnknown` with
+only its id, name and start time (no command line, no children), since it
+may belong to another account. It never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
+Linux and macOS legs turn neither on.
+
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
 is blocked if sanitization fails. Full-suite and shared deterministic jobs retain
 eligible driver NDJSON, `sdk-drive*`, `tui-drive*` and `e2e-artifacts/**/traces`
@@ -1724,9 +1840,9 @@ calibration; it does not change this adapter's conservative injection policy.
 
 `--unit --shard N/M` assigns every discovered unit file to exactly one of `M`
 duration-balanced shards. Assignment is deterministic and uses
-`tests/unit-shard-weights.json` for the slowest files. Unlisted files receive a
-one-second default weight, so new tests join the least-loaded shard without
-changing the command. The runner exits 2 when `M` exceeds the number of
+`tests/unit-shard-weights.json`, which records each file's duration on its
+slowest CI OS. Unlisted files receive a one-second default weight, so new tests
+join the least-loaded shard without changing the command. The runner exits 2 when `M` exceeds the number of
 assignable groups, so no valid shard command can report success after running
 zero files.
 
@@ -1746,6 +1862,25 @@ Sharded unit execution requires t249 to resolve this handoff; a missing artifact
 fails instead of silently skipping the compiled cases, even when an explicit
 executable or an old repository build exists. Direct, non-sharded t249 runs can
 still opt into `AIDLC_TEST_COMPILED_EXECUTABLE` or a local native build result.
-The smoke runner contract verifies that all eight CI shards are non-empty,
+The smoke runner contract verifies that all twelve CI shards are non-empty,
 disjoint, cover the complete unit inventory, preserve producer/consumer ordering,
 and fail compiled coverage when the producer is filtered out.
+
+With more than one worker, the integration tier starts its parallel files
+longest-first by `tests/integration-weights.json` (keyed by summary row name), so
+a long file never starts last and sets the tier's wall time. Unweighted files
+and ties keep name order; with no readable weights file, files start in name
+order. Serial files and the smoke and unit tiers are unaffected.
+
+Weights only balance and order files; they never select, skip, or fail one.
+`scripts/ci-test-weights.ts refresh <dir>` rewrites both weight files from
+deterministic CI evidence downloaded with
+`gh run download <run-id> -p 'ci-deterministic-*' -D <dir>` (use several green
+merge-group runs: each file takes its median per OS, then its slowest OS).
+After each unit and integration job, the advisory "Report outdated test
+weights" step runs `scripts/ci-test-weights.ts report`: a file that ran more
+than a minute and more than 1.5 times past its weight gets a warning
+annotation and a row in the job summary naming the refresh command. The step
+always succeeds, so a stale weight slows CI but never fails a job or drops a
+PR from the merge queue. `t-ci-test-weights.test.ts` covers the refresh, the
+report, and the checked-in weight files.

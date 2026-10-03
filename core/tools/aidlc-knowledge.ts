@@ -71,6 +71,7 @@ import {
   ensureDirSync,
   errorMessage,
   type FileIdentity,
+  fileIdentity,
   intentsDir,
   isPidAlive,
   knowledgeDir,
@@ -84,6 +85,7 @@ import {
   removeTreeSync,
   renameIntoPlace,
   resolveProjectDir,
+  sameFileIdentity,
   uuidv7,
   validSpaceFlag,
   withAuditLock,
@@ -808,13 +810,6 @@ export interface ResolvedContainedFile {
   readonly identity: FileIdentity;
 }
 
-function sameFileIdentity(
-  left: FileIdentity,
-  right: FileIdentity,
-): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-
 /** Resolve a contained path and retain the identity that was validated there.
  *
  * The second resolution closes the gap between the first containment check and
@@ -826,9 +821,9 @@ export function resolveContainedFile(
   relPath: string,
 ): ResolvedContainedFile {
   const absPath = resolveContainedPath(anchorReal, relPath);
-  const first = statSync(absPath);
+  const first = fileIdentity(absPath);
   const verifiedPath = resolveContainedPath(anchorReal, relPath);
-  const verified = statSync(verifiedPath);
+  const verified = fileIdentity(verifiedPath);
   if (verifiedPath !== absPath || !sameFileIdentity(first, verified)) {
     throw new Error(
       `path changed while validating project containment: ${relPath}`,
@@ -836,7 +831,7 @@ export function resolveContainedFile(
   }
   return {
     absPath: verifiedPath,
-    identity: { dev: verified.dev, ino: verified.ino },
+    identity: verified,
   };
 }
 

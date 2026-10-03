@@ -507,6 +507,19 @@ function resolveWithLayers(
   ] as const) {
     if (value) mergeLeafValues(merged, value, layer, sources);
   }
+  // A bypass is on while any layer records it: a nearer file adds switches and
+  // never silently turns back on a check another file switched off. Each name's
+  // source is the nearest file that records it.
+  const bypasses = new Set<string>();
+  for (const [layer, file] of [["machine", machine], ["project", project], ["local", local]] as const) {
+    for (const name of file?.flags?.bypasses ?? []) {
+      bypasses.add(name);
+      sources[`flags.bypasses.${name}`] = layer;
+    }
+  }
+  if (bypasses.size > 0) {
+    (merged.flags as Record<string, unknown>).bypasses = [...bypasses];
+  }
   const normalized = normalizeAidlcSettings(
     merged,
     "machine",
@@ -541,6 +554,7 @@ export function resolveAidlcSettingsWithOverride(
   projectDir: string,
   target: SettingsTarget,
   override: AidlcSettingsFile | null,
+  others: ReadonlyArray<{ target: SettingsTarget; next: AidlcSettingsFile | null }> = [],
 ): ResolvedAidlcSettings {
   const paths = {
     machine: machineSettingsPath(),
@@ -553,6 +567,7 @@ export function resolveAidlcSettingsWithOverride(
     local: readCached(paths.local, "local"),
   };
   values[layerForTarget(target)] = override;
+  for (const other of others) values[layerForTarget(other.target)] = other.next;
   return resolveWithLayers(values.machine, values.project, values.local, {
     machine: { path: paths.machine, present: values.machine !== null },
     project: { path: paths.project, present: values.project !== null },
