@@ -56,6 +56,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stalePackageMessage } from "../scripts/package-sources.ts";
 
 // ---------------------------------------------------------------------------
 // Paths. Resolved from this file's location so the tool runs from any cwd.
@@ -1392,6 +1393,17 @@ function writeAll(rows: RegistryRow[]): void {
 
 function main(): void {
   const args = process.argv.slice(2);
+
+  // Units are read from dist/claude. Packaged from other sources than this
+  // checkout, it would describe old code, so refuse and name the fix. The
+  // AIDLC_COVERAGE_* seams point at temp trees that carry dist/ but no core/.
+  if (existsSync(join(REPO_ROOT, "core"))) {
+    const stale = stalePackageMessage(REPO_ROOT, "claude");
+    if (stale) {
+      console.error(`coverage registry: ${stale}`);
+      process.exit(1);
+    }
+  }
 
   if (args.includes("--check")) {
     const r = runCheck();

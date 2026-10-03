@@ -67,6 +67,7 @@ import {
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
+import { forgetPackagedSources, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
   type PluginTarget,
@@ -1836,6 +1837,7 @@ if (check) {
       `for ${targets.join(", ")}.`,
   );
 } else {
+  forgetPackagedSources(REPO_ROOT, targets);
   cleanWriteOutputs(targets, named === undefined);
   for (const n of targets) {
     writeHarness(n);
@@ -1845,4 +1847,6 @@ if (check) {
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
+  // Last, so only a finished build is recorded as current.
+  recordPackagedSources(REPO_ROOT, targets);
 }

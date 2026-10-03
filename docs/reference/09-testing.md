@@ -563,6 +563,14 @@ bun tests/gen-coverage-registry.ts          # rewrite the registry from disk
 bun tests/gen-coverage-registry.ts --check  # fail if the committed registry is stale
 ```
 
+The generator reads the units from the packaged `dist/claude` tree. If that
+tree was packaged from other `core/`, `harness/` or `plugins/` content than the
+checkout, both commands refuse with one line: run `bun scripts/package.ts`
+first. `package.ts` records a content fingerprint of its inputs per harness in
+`dist/.package-sources.json` (`scripts/package-sources.ts`), so undoing an edit
+needs no rebuild. Temp trees from the generator's `AIDLC_COVERAGE_*` seams have
+no `core/` and are not checked.
+
 `tests/.coverage-registry.json` is the authoritative, machine-checked index —
 consult it (or grep the `covers:` headers directly) to find which test exercises
 a given function, audit event, scope, stage, hook, subcommand, or render
