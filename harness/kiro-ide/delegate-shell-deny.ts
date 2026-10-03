@@ -11,9 +11,9 @@
 // spellings misses a quoted or re-spaced one. The persona therefore denies the
 // conductor's whole allow and excludes the canonical commands the guard lets a
 // delegate run, each decided by the guard itself. Any other spelling under the
-// allow is denied; one outside it asks the person. The copy channel's
-// aidlc-orchestrate.ts, aidlc-state.ts and aidlc-jump.ts stay denied whole: no
-// persona instruction runs them by that spelling.
+// allow is denied; one outside it asks the person. Kiro judges each part of a
+// command joined by &&, ;, | or $( ) on its own (measured), so an excluded part
+// lifts only itself.
 //
 // Kiro's exclude, as measured: "X *" lifts X followed by arguments but not the
 // bare X, so each command is excluded both ways.
@@ -34,6 +34,13 @@ const both = (command: string): string[] => [command, `${command} *`];
 const delegateMayRun = (command: string): boolean =>
   delegatedLifecycleCommand(`${command} x`) === null;
 
+// A lifecycle script's verbs: the utility's command list, or the verbs its
+// engine route passes straight through to it.
+const scriptVerbs = (file: string): readonly string[] =>
+  file === "aidlc-utility.ts"
+    ? UTILITY_COMMANDS
+    : ROUTES.filter((route) => route.tool === file && route.kind === "noun-passthrough").flatMap((route) => route.verbs);
+
 export function copyChannelDelegateShellDeny(harnessDir: string): ShellDeny {
   const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
   const lifecycle: readonly string[] = DELEGATED_LIFECYCLE_SCRIPTS;
@@ -41,9 +48,9 @@ export function copyChannelDelegateShellDeny(harnessDir: string): ShellDeny {
     match: [tool("aidlc-*")],
     exclude: [
       ...Object.values(TOOLS).filter((file) => !lifecycle.includes(file)).sort().flatMap((file) => both(tool(file))),
-      ...UTILITY_COMMANDS.map((command) => `${tool("aidlc-utility.ts")} ${command}`)
-        .filter(delegateMayRun)
-        .flatMap(both),
+      ...lifecycle.flatMap((file) =>
+        scriptVerbs(file).map((verb) => `${tool(file)} ${verb}`).filter(delegateMayRun).flatMap(both)
+      ),
     ],
   };
 }
