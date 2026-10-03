@@ -27,6 +27,7 @@ import {
   activeVersionPath,
   commandPath,
   type InstalledRuntimeIntegrity,
+  installRoot,
   machineTransactionRoot,
   projectPinTargetPath,
   readActiveExecutable,
@@ -1869,10 +1870,10 @@ describe("t244 Windows and completion release surfaces", () => {
       };
       // GitHub's Windows TEMP is an 8.3 short name (RUNNER~1). The active
       // pointer keeps that spelling while the running binary's path is the
-      // long one, so one case installs under the short spelling, when the
-      // volume has one.
-      const spelledMachine = spelling === "short"
-        ? spawnSync(
+      // long one, so one case installs under the short spelling.
+      let spelledMachine = machine;
+      if (spelling === "short") {
+        const short = spawnSync(
           "powershell.exe",
           [
             "-NoProfile",
@@ -1885,8 +1886,14 @@ describe("t244 Windows and completion release surfaces", () => {
             encoding: "utf-8",
             timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           },
-        ).stdout.trim() || machine
-        : machine;
+        );
+        expect(short.status, `${short.stdout}${short.stderr}`).toBe(0);
+        spelledMachine = short.stdout.trim();
+        // A volume without 8.3 names cannot show the defect; say so, not pass.
+        expect(spelledMachine, `no 8.3 short name for ${machine}; see fsutil 8dot3name query`)
+          .not.toBe(machine);
+        expect(spelledMachine).toContain("~");
+      }
       process.env.AIDLC_INSTALL_ROOT = spelledMachine;
       process.env.AIDLC_BIN_DIR = join(spelledMachine, "bin");
       const launch = (...args: string[]) => {
@@ -1930,7 +1937,21 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(previous).not.toBe(current);
         writeFileSync(helperPath, previous);
 
-        // A launcher or helper the installer did not write is left alone.
+        // A launcher or helper the installer did not write is left alone,
+        // and doctor's fix, done as written, gives the current launcher back.
+        // The installer's activation runs the ownership checks used here.
+        const reinstall = "rerun the AI-DLC installer (install.ps1)";
+        // Doctor names the helper in the install root's own spelling.
+        const reportedHelper = join(installRoot(), "aidlc-shim.ps1");
+        let asides = 0;
+        const followFix = (...paths: string[]) => {
+          for (const path of paths) renameSync(path, `${path}.aside-${++asides}`);
+          activate(fixtureVersion);
+          expect(readFileSync(commandPath(), "utf-8")).toBe(shim);
+          expect(readFileSync(helperPath, "utf-8")).toBe(current);
+          expect(launch("version").stdout).toBe(versionLine);
+          writeFileSync(helperPath, previous);
+        };
         writeFileSync(commandPath(), `${shim}rem local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
@@ -1939,17 +1960,25 @@ describe("t244 Windows and completion release surfaces", () => {
           label: expect.stringContaining(
             `cannot replace it because ${commandPath()} was changed after it was installed`,
           ),
-          fix: `move ${commandPath()} aside, then rerun the AI-DLC installer (install.ps1)`,
+          fix: `move ${commandPath()} aside, then ${reinstall}`,
         })]);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
-        writeFileSync(commandPath(), shim);
+        followFix(commandPath());
         writeFileSync(helperPath, `${previous}# local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
         expect(readFileSync(helperPath, "utf-8")).toBe(`${previous}# local change\r\n`);
-        writeFileSync(helperPath, previous);
+        expect(launcherRows()).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining(
+            `cannot replace it because ${reportedHelper} was changed after it was installed`,
+          ),
+          fix: `move ${commandPath()} and ${reportedHelper} aside, then ${reinstall}`,
+        })]);
+        followFix(commandPath(), reportedHelper);
         expect(launcherRows()).toEqual([expect.objectContaining({
           severity: "warn",
           label: expect.stringContaining("the next aidlc command replaces it"),
+          fix: expect.stringContaining("let any running `aidlc update` finish"),
         })]);
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
 

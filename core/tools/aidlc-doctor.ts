@@ -114,7 +114,13 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
     "Windows launcher: aidlc-shim.ps1 passes arguments the old way, so a value with spaces reaches aidlc as separate words";
   return blocker
     ? { pass: false, label: `${label}; AI-DLC cannot replace it because ${blocker.reason}`, fix: blocker.fix }
-    : { pass: false, severity: "warn", label: `${label}; the next aidlc command replaces it`, fix: "run `aidlc version`" };
+    : {
+      pass: false,
+      severity: "warn",
+      label: `${label}; the next aidlc command replaces it`,
+      // A running update holds the machine lock, and the command then leaves it.
+      fix: "run `aidlc version`; if this row is still here, let any running `aidlc update` finish and run it again",
+    };
 }
 
 export async function doctorUpdateState(

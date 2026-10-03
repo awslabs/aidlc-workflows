@@ -1311,9 +1311,10 @@ export function previousWindowsShimHelperBlocker(): { reason: string; fix: strin
   const reinstall = "rerun the AI-DLC installer (install.ps1)";
   try {
     if (!previousWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))) {
+      // The installer owns aidlc.cmd only beside its own helper, so both go.
       return {
         reason: `${windowsShimPath()} was changed after it was installed`,
-        fix: `move ${windowsShimPath()} aside, then ${reinstall}`,
+        fix: `move ${commandPath()} and ${windowsShimPath()} aside, then ${reinstall}`,
       };
     }
     if (readFileSync(commandPath(), "utf-8") !== windowsShim()) {
