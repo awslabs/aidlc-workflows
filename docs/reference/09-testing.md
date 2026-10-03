@@ -548,7 +548,15 @@ leading comment block (typically line 1; a few files legitimately declare none
 and simply contribute no coverage claim). The generator enumerates the framework's units across seven
 classes (`function`, `audit`, `scope`, `stage`, `hook`, `subcommand`,
 `render-surface`), maps each `covers:` claim onto an enumerated unit, and emits
-the coverage counts plus a ratchet floor. Regenerate and verify drift with:
+one entry per unit with its claims and status. The file stores no totals: a
+count that every unit-adding PR rewrites made queued PRs conflict, or merge
+into a stale file when two PRs changed it by the same amount. The generator
+prints the counts instead, and two PRs that add or cover different units merge
+with git into exactly the regenerated registry (a unit that sorts into the
+very same place as another PR's new unit still conflicts). `--check` also
+holds a ratchet: a unit the committed registry records as covered must stay
+covered, or the check names it; dropping a claim needs a regenerated registry
+in a reviewed commit. Regenerate and verify drift with:
 
 ```bash
 bun tests/gen-coverage-registry.ts          # rewrite the registry from disk
