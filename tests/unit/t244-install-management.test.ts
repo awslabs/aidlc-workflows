@@ -1949,23 +1949,34 @@ describe("t244 Windows and completion release surfaces", () => {
         const reportedHelper = join(installRoot(), "aidlc-shim.ps1");
         const reportedExecutable = installedExecutablePath(fixtureVersion);
         const reactivate = `run \`& '${reportedExecutable}' use ${fixtureVersion}\``;
-        let asides = 0;
-        const followFix = (...paths: string[]) => {
-          for (const path of paths) renameSync(path, `${path}.aside-${++asides}`);
-          const used = Bun.spawnSync([reportedExecutable, "use", fixtureVersion], {
+        const direct = (...args: string[]) => {
+          const result = Bun.spawnSync([reportedExecutable, ...args], {
             cwd: machine,
             env: { ...process.env },
             timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
             stdout: "pipe",
             stderr: "pipe",
           });
-          expect(used.exitCode, Buffer.from(used.stderr).toString("utf-8")).toBe(0);
+          return {
+            exitCode: result.exitCode,
+            stdout: Buffer.from(result.stdout).toString("utf-8").trim(),
+            stderr: Buffer.from(result.stderr).toString("utf-8").trim(),
+          };
+        };
+        const reactivated = () => {
+          const used = direct("use", fixtureVersion);
+          expect(used.exitCode, used.stderr).toBe(0);
           expect(readFileSync(commandPath(), "utf-8")).toBe(shim);
           expect(readFileSync(helperPath, "utf-8")).toBe(current);
           expect(readFileSync(activeVersionPath(), "utf-8").trim()).toBe(fixtureVersion);
           expect(readMachineChannel()).toBe(channel);
           expect(launch("version").stdout).toBe(versionLine);
           writeFileSync(helperPath, previous);
+        };
+        let asides = 0;
+        const followFix = (...paths: string[]) => {
+          for (const path of paths) renameSync(path, `${path}.aside-${++asides}`);
+          reactivated();
         };
         writeFileSync(commandPath(), `${shim}rem local change\r\n`);
         expect(launch("version").stdout).toBe(versionLine);
@@ -2003,6 +2014,23 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
         expect(readMachineChannel()).toBe(channel);
         writeFileSync(helperPath, previous);
+
+        // A damaged marker stops the old helper before aidlc starts, so only
+        // aidlc.exe reaches doctor; its fix keeps the version the target names.
+        writeFileSync(activeVersionPath(), "damaged\n");
+        expect(launch("version").exitCode).toBe(4);
+        const damaged = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
+          data?: { checks: Array<{ label: string; fix?: string }> };
+        };
+        expect(
+          (damaged.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:")),
+        ).toEqual([expect.objectContaining({
+          label: expect.stringContaining(
+            "cannot replace it because the active version marker and the active command target do not agree",
+          ),
+          fix: reactivate,
+        })]);
+        reactivated();
 
         // While another mutation holds the machine lock, as the update does
         // during its version probe, the command runs without waiting and

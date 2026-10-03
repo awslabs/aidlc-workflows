@@ -1316,11 +1316,14 @@ export function previousWindowsShimHelperState(): { reason: string | null; fix: 
   try {
     version = readVersionMarker(activeVersionPath());
   } catch {
-    // A damaged marker is reported below; the fix then cannot name a version.
+    // A damaged marker is reported below.
   }
-  // With aidlc.cmd moved aside, the active executable runs `use` by full path.
-  const reactivate = version
-    ? `run \`& '${installedExecutablePath(version).replaceAll("'", "''")}' use ${version}\``
+  // The version doctor reports as active (the command target first, then the
+  // marker) is the one to keep. With aidlc.cmd moved aside, its aidlc.exe
+  // runs `use` by full path.
+  const keep = activeVersion();
+  const reactivate = keep
+    ? `run \`& '${installedExecutablePath(keep).replaceAll("'", "''")}' use ${keep}\``
     : reinstall;
   try {
     if (!previousWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))) {
@@ -1341,7 +1344,7 @@ export function previousWindowsShimHelperState(): { reason: string | null; fix: 
     if (!version || !active || active !== resolve(installedExecutablePath(version))) {
       return {
         reason: "the active version marker and the active command target do not agree",
-        fix: reinstall,
+        fix: reactivate,
       };
     }
     if (!runningActiveExecutable(active)) {
