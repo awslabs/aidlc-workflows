@@ -2537,23 +2537,37 @@ describe("t243 project initialization", () => {
       expect(readFileSync(join(project, skills[0]), "utf-8")).toBe(`Shipped by an earlier release: ${skills[0]}\n`);
       expect(kept.stdout).not.toContain("no longer part of");
 
+      // The tracked-files check never runs the repository's fsmonitor program.
       const solo = ".claude/hooks/aidlc-retired-hook.ts";
       retire([solo]);
-      expect(refresh(project).stdout).toContain(
+      const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
+      const ran = `${monitor}.ran`;
+      writeFileSync(monitor, `#!/bin/sh\necho ran >> '${ran}'\n`, { mode: 0o755 });
+      git("config", "core.fsmonitor", monitor);
+      const monitored = refresh(project);
+      git("config", "--unset", "core.fsmonitor");
+      expect(existsSync(ran)).toBe(false);
+      expect(monitored.stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
 
-      // A recorded name the shell would read is shown quoted and never pasted
-      // into the command; run from elsewhere, the command names the project.
-      const crafted = ".claude/hooks/aidlc retired $(touch pwned).ts";
-      retire([crafted]);
+      // Run from elsewhere, the command names the project.
+      const away = ".claude/hooks/aidlc-retired-away.ts";
+      retire([away]);
       const elsewhere = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], dirname(project));
       expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
-      expect(existsSync(join(project, crafted))).toBe(false);
-      expect(elsewhere.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
       const undo = elsewhere.stdout.split("\n").find((line) => line.startsWith("To get it back"));
-      expect(undo).toMatch(/^To get it back, run `git -C .+ restore <path>`\.$/);
+      expect(undo).toMatch(new RegExp(`^To get it back, run \`git -C .+ restore ${away.replaceAll(".", "\\.")}\`\\.$`));
       expect(undo).toContain(basename(project));
+
+      // A recorded name the shell or git would read is shown quoted, and no
+      // command is printed that could mean something else.
+      const crafted = ".claude/hooks/aidlc retired $(touch pwned) [12].ts";
+      retire([crafted]);
+      const quoted = refresh(project);
+      expect(existsSync(join(project, crafted))).toBe(false);
+      expect(quoted.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
+      expect(quoted.stdout).not.toContain("git restore");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {

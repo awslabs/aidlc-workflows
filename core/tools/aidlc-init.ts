@@ -6965,16 +6965,22 @@ function retiredFilesReport(
     ...shown.map((row) => `  ${row.line}`),
     ...(more > 0 ? [`  and ${more} more files`] : []),
   ];
-  if (insideGitRepository(projectDir) && gitTracksEvery(projectDir, paths)) {
-    // The command runs from the same shell, so it names the project when this
-    // did not run from it. A recorded name goes into it only when it is plain
-    // text that neither the shell nor git would read as anything else.
+  // The command runs from the same shell, so it names the project when this
+  // did not run from it, and is printed only when it means exactly what it
+  // says: every name is plain text the shell and git read literally (as every
+  // release's are), and the project can be written out.
+  const plain = (path: string) => quoteCommandArgument(path) === path && !/^[-:]/.test(path);
+  if (
+    paths.every(plain) &&
+    (ranFromProject(projectDir) || !hasControlCharacters(projectDir)) &&
+    insideGitRepository(projectDir) &&
+    gitTracksEvery(projectDir, paths)
+  ) {
     const git = ranFromProject(projectDir) ? "git" : `git -C ${quoteCommandArgument(projectDir)}`;
-    const plain = paths.length === 1 && quoteCommandArgument(paths[0]) === paths[0] && !/^[-:]/.test(paths[0]);
     lines.push(
-      plain
+      paths.length === 1
         ? `To get it back, run \`${git} restore ${paths[0]}\`.`
-        : `To get ${paths.length === 1 ? "it" : "one"} back, run \`${git} restore <path>\`.`,
+        : `To get one back, run \`${git} restore <path>\`.`,
     );
   }
   return lines;
@@ -6988,7 +6994,8 @@ function gitTracksEvery(projectDir: string, paths: readonly string[]): boolean {
   const tops = [...new Set(paths.map((path) => path.split("/")[0]))];
   const listed = spawnSync(
     "git",
-    ["--literal-pathspecs", "-C", projectDir, "ls-files", "-z", "--", ...tops],
+    // A repository's fsmonitor program is never run just to word this line.
+    ["--literal-pathspecs", "-c", "core.fsmonitor=false", "-C", projectDir, "ls-files", "-z", "--", ...tops],
     { encoding: "utf-8", env, timeout: 10_000 },
   );
   if (listed.status !== 0) return false;
