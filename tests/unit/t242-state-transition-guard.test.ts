@@ -683,6 +683,8 @@ describe("t242 state-transition ownership guard", () => {
         `export ${name}=1`,
         `env ${name}=1 aidlc engine log answers`,
         `read ${name} <<< 1`,
+        `\\read ${name} <<< 1`,
+        `true && export ${name}`,
         `printf -v ${name} 1`,
         `declare -x ${name}`,
         `: \${${name}:=1}`,
@@ -732,6 +734,10 @@ describe("t242 state-transition ownership guard", () => {
       "Get-ChildItem env:",
       "printenv AIDLC_UNATTENDED",
       "MY_AIDLC_UNATTENDED=1 echo ok",
+      // A flag or a path segment that spells a builtin is not the builtin.
+      "aidlc config flags --local --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
+      "aidlc config flags --local --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "& 'C:\\Users\\me\\AppData\\Local\\aidlc\\versions\\1.0.0\\aidlc.exe' config flags --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
     ]) {
       expect(refused(command), command).toBe(false);
     }
