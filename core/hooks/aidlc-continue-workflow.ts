@@ -1457,8 +1457,11 @@ function continuationReason(
   committedTo?: string,
   unit?: string,
   finishedUnit?: string,
+  teamUnits = false,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  // A team-owned Unit's records and reports carry its Unit; solo ones do not.
+  const scopedUnit = teamUnits && unit && validateUnitName(unit) === null ? unit : undefined;
   if (kind === "rehydrate" && committedTo !== undefined) {
     // The report's `done` was loop bookkeeping, not the end of the workflow:
     // name the fresh `next` that starts the step it moved to, and `park` for a
@@ -1479,7 +1482,7 @@ function continuationReason(
     // The marker is a writable file: only a valid Unit name reaches the agent.
     const forUnit = unit && validateUnitName(unit) === null ? ` (unit "${unit}")` : "";
     const name = stage.length > 0 ? `The "${stage}" stage` : "The current stage";
-    return `${name}${forUnit} is not finished. ${askedQuestionStep(stage)} Otherwise carry on with that stage's steps, then record its real outcome with \`${aidlcDispatcherInvocation("orchestrate report")}\`. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\`. Never report an approval the person did not give, and ${SAY_NOTHING}.`;
+    return `${name}${forUnit} is not finished. ${askedQuestionStep(stage, scopedUnit)} Otherwise carry on with that stage's steps, then record its real outcome with \`${aidlcDispatcherInvocation("orchestrate report")} ${scopeFlags(stage, scopedUnit)} --result <outcome>\`. If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\`. Never report an approval the person did not give, and ${SAY_NOTHING}.`;
   }
   if (kind === "load-steering" && continueToken) {
     // Pointer plus receipt, never the payload. Hook messages are capped near
@@ -1497,7 +1500,7 @@ function continuationReason(
   }
   return (
     `${CONTINUATION_OPENING}${stage.length > 0 ? ` (current stage "${stage}")` : ""}. ` +
-    `${askedQuestionStep(stage)} Otherwise run ` +
+    `${askedQuestionStep(stage, scopedUnit)} Otherwise run ` +
     `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
     `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\`; ` +
     "repeat until it answers `done`. " +
@@ -1509,13 +1512,17 @@ function continuationReason(
 // The one wait this hook cannot see is a question the agent showed before
 // recording it. The person already has that question, so the step is to record
 // it and end the turn, never to ask it again.
-function askedQuestionStep(stage: string): string {
-  const slug = /^[a-z0-9][a-z0-9-]*$/.test(stage) ? stage : "<stage>";
+function askedQuestionStep(stage: string, unit?: string): string {
   return (
     "If you just asked the person a question and are waiting for the answer, " +
-    `run \`${aidlcDispatcherInvocation("log decision")} --stage ${slug} --decision "<the question>" --options "<the choices>"\` ` +
+    `run \`${aidlcDispatcherInvocation("log decision")} ${scopeFlags(stage, unit)} --decision "<the question>" --options "<the choices>"\` ` +
     "and end your turn without asking it again."
   );
+}
+
+function scopeFlags(stage: string, unit?: string): string {
+  const slug = /^[a-z0-9][a-z0-9-]*$/.test(stage) ? stage : "<stage>";
+  return unit ? `--stage ${slug} --unit ${unit}` : `--stage ${slug}`;
 }
 
 // --- Main ---------------------------------------------------------------------
@@ -2054,6 +2061,7 @@ return blockStop(
       : undefined,
     activeUnit,
     directive.finishedUnit,
+    isTeamUnitOwnership(stateContent),
   ),
 );
 }

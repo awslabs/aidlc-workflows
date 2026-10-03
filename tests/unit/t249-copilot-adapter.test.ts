@@ -1642,7 +1642,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const stage = String(routed.directive.stage);
     expect(reason).toStartWith(`The "${stage}" stage is not finished. `);
     expect(reason).toContain("Otherwise carry on with that stage's steps, then record its real outcome with `");
-    expect(reason).toContain("engine orchestrate report`");
+    expect(reason).toContain(`engine orchestrate report --stage ${stage} --result <outcome>\``);
     expect(reason).toContain("If the person asked to stop here, run `");
     expect(reason).toContain("engine orchestrate park`");
     expect(reason).toContain("Never report an approval the person did not give");
@@ -2730,6 +2730,10 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const working = walk.stop();
     expect(working.decision).toBe("block");
     expect(working.reason).toContain('The "functional-design" stage (unit "alpha") is not finished.');
+    // A solo Unit's records and reports name only the stage; each command is
+    // whole, with only the outcome to fill in.
+    expect(working.reason).toContain("engine log decision --stage functional-design --decision ");
+    expect(working.reason).toContain("engine orchestrate report --stage functional-design --result <outcome>`");
     walk.writeArtifacts();
     walk.unitVerb("complete");
     const done = walk.stop();

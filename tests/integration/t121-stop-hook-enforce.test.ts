@@ -2381,6 +2381,34 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("(f2) team unit-major: the reminder records a question for the active Unit, which then ends the turn", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      currentSlug: "functional-design",
+      phase: "construction",
+      autonomy: "gated",
+      iteration: "unit-major",
+      unit: "alpha",
+    });
+    writeFileSync(
+      seededStateFile(proj),
+      readFileSync(seededStateFile(proj), "utf-8").replace(
+        "- **Construction Iteration**: unit-major\n",
+        "- **Construction Iteration**: unit-major\n- **Unit Ownership**: team\n",
+      ),
+    );
+    const stop = () => runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "alpha", "code-generation");
+    const reminder = (JSON.parse(stop().out) as { reason: string }).reason;
+    // A team Unit's wait matches only a record for that Unit, so the record
+    // step names it.
+    expect(reminder).toContain(
+      'engine log decision --stage code-generation --unit alpha --decision "<the question>" --options "<the choices>"` and end your turn without asking it again.',
+    );
+    seedInteractionAudit(proj, [{ event: "DECISION_RECORDED", stage: "code-generation", unit: "alpha" }]);
+    expect(stop().out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(f2) team unit-major ignores an unresolved decision before a jump boundary", () => {
     const proj = makeProject();
     seedInProgressWithQuestions(proj, {
