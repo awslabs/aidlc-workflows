@@ -15,13 +15,18 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, join, posix } from "node:path";
 import { parse as parseToml } from "smol-toml";
-import { REPO_ROOT } from "../harness/fixtures.ts";
+import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
   codexTrustIssues,
+  copilotConfigPath,
+  copilotFolderTrusted,
   deriveNonInteractivePath,
   detectAwsCredentials,
   harnessOwnsModelAccess,
@@ -40,13 +45,15 @@ import {
   resolveExecutableOnPath,
   runtimeDoctorChecks,
   runtimeIssues,
+  vscodeRequestCapDoctorCheck,
+  vscodeWorkspaceRequestCapDoctorCheck,
   trustStatus,
   workspaceSiblingDoctorCheck,
   workspaceSiblingIssues,
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
-import { collectDoctorReport } from "../../core/tools/aidlc-utility.ts";
+import { collectDoctorReport, firingHooksLastFired } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -316,6 +323,100 @@ describe("t294 runtime diagnostics", () => {
     expect(absent.binaries.find((item) => item.name === "bun")?.status).toBe(
       "missing",
     );
+  });
+
+  // The doctor row reported bun "interactive-only" while the project's hooks
+  // were running through it, and an agent took that as the person's PATH being
+  // broken. Hooks that fire settle it; without them the row says what it saw.
+  function interactiveOnlyProject(): { project: string; runtime: Parameters<typeof probeRuntime>[3] } {
+    const project = temp("aidlc-t294-runtime-row-");
+    // The shipped projection marker makes .claude an installed harness.
+    cpSync(join(DIST, "claude", ".claude", "tools", "data"), join(project, ".claude", "tools", "data"), { recursive: true });
+    writeFileSync(join(project, ".claude", "settings.json"), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ command: "bun .claude/tools/aidlc.ts engine hook continue-workflow" }] }] },
+    }));
+    const interactiveBin = join(project, "interactive-bin");
+    mkdirSync(interactiveBin);
+    writeExecutable(join(interactiveBin, "bun"));
+    return {
+      project,
+      runtime: {
+        baselinePath: join(project, "empty"),
+        interactivePath: interactiveBin,
+        which(command, pathValue) {
+          const path = join(pathValue, command);
+          return existsSync(path) ? path : null;
+        },
+        run: () => ({ status: 0, stdout: "2.0.0\n" }),
+      },
+    };
+  }
+
+  test("a bun found only on this shell's PATH passes while the project's hooks are firing", () => {
+    const { project, runtime } = interactiveOnlyProject();
+    const row = runtimeDoctorChecks(project, ".claude", { runtime, hooksLastFired: "2026-10-02T01:23:45Z" })
+      .find((check) => check.label.startsWith("Runtime hook PATH: bun "));
+    expect(row).toEqual({
+      pass: true,
+      label: `Runtime hook PATH: bun -> ${join(project, "interactive-bin", "bun")} (this project's hooks found it; last fired 2026-10-02T01:23:45Z)`,
+    });
+  });
+
+  test("without firing hooks it warns with what it saw, and rc file edits are not the fix", () => {
+    const { project, runtime } = interactiveOnlyProject();
+    const row = runtimeDoctorChecks(project, ".claude", { runtime })
+      .find((check) => check.label.startsWith("Runtime hook PATH: bun "));
+    expect(row?.pass).toBe(false);
+    expect(row?.severity).toBe("warn");
+    expect(row?.label).toBe(
+      `Runtime hook PATH: bun is on this shell's PATH (${join(project, "interactive-bin", "bun")}) but not on the system-wide PATH`,
+    );
+    if (process.platform !== "win32") {
+      expect(row?.fix).toContain("A harness you start from a terminal normally hands that terminal's PATH to its hooks");
+      // The directory named is the one bun was found in, not a default.
+      expect(row?.fix).toContain(`add ${join(project, "interactive-bin")} to `);
+      expect(row?.fix).toContain("Editing .bashrc or .zshrc does not change this check.");
+    }
+    // The old wording asserted a fault it had not observed; it stays gone.
+    for (const check of runtimeDoctorChecks(project, ".claude", { runtime })) {
+      expect(check.label).not.toContain("is interactive-only at");
+    }
+    expect(readFileSync(join(REPO_ROOT, "docs", "guide", "12-cli-commands.md"), "utf-8"))
+      .not.toContain("is interactive-only at");
+  });
+
+  test("the doctor reads firing hooks from fresh heartbeats only", () => {
+    const project = createOrchestrationTestProject();
+    try {
+      const health = hooksHealthReadDir(project);
+      // No heartbeat yet: no evidence.
+      expect(firingHooksLastFired(project)).toBeUndefined();
+      appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, project);
+      const fresh = new Date().toISOString();
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "session-start.last"), `${fresh}\n`);
+      expect(firingHooksLastFired(project)).toBe(fresh);
+      // An older heartbeat names no launch, even with no progress since: a
+      // later launch (a dock-started harness) may not find the runtime.
+      expect(firingHooksLastFired(project, Date.parse(fresh) + 11 * 60 * 1000)).toBeUndefined();
+      // That launch closed, and the one running now (reopened from the dock)
+      // has not started its hooks: its recent heartbeats no longer count.
+      const closed = new Date(Date.parse(fresh) + 1000).toISOString();
+      writeFileSync(join(health, "validate-state.last"), `${fresh}\n`);
+      writeFileSync(join(health, "session-end.last"), `${closed}\n`);
+      expect(firingHooksLastFired(project, Date.parse(closed))).toBeUndefined();
+      // The next launch's session-start fired: its hooks found the runtime.
+      const reopened = new Date(Date.parse(closed) + 1000).toISOString();
+      writeFileSync(join(health, "session-start.last"), `${reopened}\n`);
+      expect(firingHooksLastFired(project, Date.parse(reopened))).toBe(reopened);
+      // The workflow advanced long after the newest heartbeat: hooks stopped.
+      rmSync(join(health, "validate-state.last"));
+      rmSync(join(health, "session-end.last"));
+      writeFileSync(join(health, "session-start.last"), "2026-01-01T00:00:00.000Z\n");
+      expect(firingHooksLastFired(project)).toBeUndefined();
+    } finally {
+      cleanupTestProject(project);
+    }
   });
 
   // getconf PATH is glibc's compile-time _CS_PATH (/bin:/usr/bin on the Debian
@@ -615,6 +716,219 @@ describe("t294 runtime diagnostics", () => {
     })).toEqual(expect.objectContaining({
       command: "kiro-cli",
       status: "found",
+    }));
+  });
+
+  // VS Code's Copilot Chat puts a stand-in `copilot` on its terminals' PATH.
+  // Without the real CLI it prints this line and exits 0 (#1411).
+  const STAND_IN = {
+    interactivePath: "/vscode/globalStorage/github.copilot-chat/copilotCli",
+    which: () => "/vscode/globalStorage/github.copilot-chat/copilotCli/copilot",
+    run: () => ({
+      status: 0,
+      stdout: "Cannot find GitHub Copilot CLI (https://docs.github.com/copilot/how-tos/copilot-cli)\n",
+    }),
+  };
+  const printsVersion = (stdout: string) => ({ ...STAND_IN, run: () => ({ status: 0, stdout }) });
+
+  test("a --version reply with no version number is not an installed CLI", () => {
+    expect(probeHarnessCli("copilot", STAND_IN)).toEqual(expect.objectContaining({
+      command: "copilot",
+      required: false,
+      status: "missing",
+    }));
+    expect(probeHarnessCli("copilot", STAND_IN).version).toBeUndefined();
+    expect(probeHarnessCli("copilot", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
+      status: "found",
+      version: "1.0.80",
+    }));
+    expect(probeHarnessCli("copilot", printsVersion("GitHub Copilot CLI 1.0.60.\n"))).toEqual(expect.objectContaining({
+      status: "too-old",
+      minimumVersion: "1.0.74",
+    }));
+    // The same reading for a required CLI with a floor.
+    expect(probeHarnessCli("codex", printsVersion("Cannot find Codex\n"))).toEqual(expect.objectContaining({
+      required: true,
+      status: "missing",
+    }));
+  });
+
+  test("doctor's report and fix lines reach the agent whole in VS Code", () => {
+    // VS Code's terminal tool drops output up to the line that repeats the
+    // command it ran. The old footer erased a healthy report this way (#1411).
+    const oldReport = "AI-DLC doctor\n\nMachine\n  ok    4 checks passed\n\n0 problems, 0 warnings.\n" +
+      "Run 'aidlc doctor --verbose' to see every check.";
+    expect(vscodeVisibleOutput(oldReport, "aidlc doctor").trim()).toBe("");
+    expect(vscodeVisibleOutput(oldReport, "aidlc doctor 2>&1")).toBe(oldReport);
+    for (const [tree, invoke] of [[DIST, "bun .aidlc/tools/aidlc.ts"], [DIST_RELEASE, "aidlc"]] as const) {
+      const project = temp("aidlc-t294-vscode-trim-");
+      cpSync(join(tree, "copilot"), project, { recursive: true });
+      // An unreadable harness.json adds the Providers row and its fix.
+      writeFileSync(join(project, ".aidlc", "tools", "data", "harness.json"), "{\n");
+      for (const flags of [[], ["--verbose"]]) {
+        const result = spawnSync(BUN, [join(project, ".aidlc", "tools", "aidlc.ts"), "doctor", ...flags], {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, NO_COLOR: "1", AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        const report = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+        expect(report).toContain("Providers: could not read recorded answers");
+        const commandLine = [invoke, "doctor", ...flags].join(" ");
+        expect(doctorCommandLines()).toContain(commandLine);
+        expect(vscodeVisibleOutput(report, commandLine), commandLine).toBe(report);
+      }
+    }
+  });
+
+  test("doctor warns when VS Code would pause a Copilot stage for its request cap", () => {
+    const copilot = temp("aidlc-t294-request-cap-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const settings = join(copilot, ".vscode", "settings.json");
+    const check = (text: string | null) => {
+      if (text === null) rmSync(settings, { force: true });
+      else writeFileSync(settings, text);
+      const row = vscodeRequestCapDoctorCheck(copilot, ".aidlc");
+      if (!row) throw new Error("no request cap row for a Copilot project");
+      return row;
+    };
+    expect(check('{\n  "chat.agent.maxRequests": 200\n}\n')).toEqual({
+      pass: true,
+      label: "VS Code agent request cap: chat.agent.maxRequests is 200 in .vscode/settings.json",
+    });
+    expect(check('// ours\n{ "chat.agent.maxRequests": 100, }\n').pass).toBe(true);
+    const low = check('{ "chat.agent.maxRequests": 75 }');
+    expect(low).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(low.label).toBe("VS Code agent request cap: chat.agent.maxRequests is 75 in .vscode/settings.json");
+    expect(low.fix).toContain('raise "chat.agent.maxRequests" in .vscode/settings.json to 100 or more');
+    expect(low.fix).toContain("Continue to iterate?");
+    // The fix is the one edit that works on every channel, including a copied
+    // project, whose runtime ships no .vscode/settings.json.
+    for (const unset of [null, '{\n  "editor.tabSize": 2\n}\n']) {
+      const row = check(unset);
+      expect(row, String(unset)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row.label, String(unset)).toContain("your user setting or VS Code's default of 50 applies");
+      expect(row.fix, String(unset)).toContain('add "chat.agent.maxRequests": 200 to .vscode/settings.json');
+    }
+    // A number written as text is named as text, with how to write it.
+    const text = check('{ "chat.agent.maxRequests": "200" }');
+    expect(text).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(text.label).toBe('VS Code agent request cap: chat.agent.maxRequests is "200" in .vscode/settings.json, text rather than a number');
+    expect(text.fix).toContain('write it as a number without quotes: "chat.agent.maxRequests": 200');
+    expect(check('{ "chat.agent.maxRequests": " 50 " }').fix)
+      .toContain('write it as a number of 100 or more without quotes, for example "chat.agent.maxRequests": 200');
+    for (const other of ['{ "chat.agent.maxRequests": true }', '{ "chat.agent.maxRequests": "lots" }', '{ "chat.agent.maxRequests": null }']) {
+      const row = check(other);
+      expect(row, other).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row.label, other).toBe("VS Code agent request cap: chat.agent.maxRequests in .vscode/settings.json is not a number");
+      expect(row.fix, other).toContain('set it to a number of 100 or more, for example "chat.agent.maxRequests": 200');
+    }
+    const broken = check("{ ,, }");
+    expect(broken).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(broken.label).toContain("could not be read as JSONC");
+    // Only a Copilot project gets the row.
+    const claude = temp("aidlc-t294-request-cap-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    expect(vscodeRequestCapDoctorCheck(claude, ".claude")).toBeNull();
+
+    // A key AI-DLC added once and the team then removed from the file it kept
+    // is the team's choice, so doctor does not warn about it. A checkout with
+    // no settings file at all is still told how to add it.
+    const baseline = join(copilot, ".aidlc", "tools", "data", "aidlc-manifest.json");
+    writeFileSync(baseline, JSON.stringify({ rootContributions: { ".vscode/settings.json": { policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] } } }));
+    expect(check('{\n  "editor.tabSize": 2\n}\n')).toEqual({
+      pass: true,
+      label: "VS Code agent request cap: the team removed chat.agent.maxRequests from .vscode/settings.json, so AI-DLC leaves it out",
+    });
+    expect(check(null)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    rmSync(baseline, { force: true });
+    expect(check('{\n  "editor.tabSize": 2\n}\n').pass).toBe(false);
+  });
+
+  test("doctor checks the request cap in the multi-root workspace file too", () => {
+    const copilot = temp("aidlc-t294-workspace-request-cap-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const file = join(copilot, "aidlc.code-workspace");
+    const check = (text: string) => {
+      writeFileSync(file, text);
+      return vscodeWorkspaceRequestCapDoctorCheck(copilot, ".aidlc");
+    };
+    // No workspace file: the person opens the folder, which the other row checks.
+    expect(vscodeWorkspaceRequestCapDoctorCheck(copilot, ".aidlc")).toBeNull();
+    const workspace = (settings?: unknown) => JSON.stringify({ folders: [{ path: "." }], ...(settings === undefined ? {} : { settings }) });
+    expect(check(workspace({ "chat.agent.maxRequests": 200 }))).toEqual({
+      pass: true,
+      label: "VS Code agent request cap (multi-root workspace): chat.agent.maxRequests is 200 in aidlc.code-workspace",
+    });
+    const low = check(workspace({ "chat.agent.maxRequests": 75 }));
+    expect(low).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(low?.fix).toContain('raise "chat.agent.maxRequests" in aidlc.code-workspace to 100 or more');
+    // A file written before this release: workspace-sync adds the key.
+    const older = check(workspace());
+    expect(older).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+    expect(older?.fix).toContain("run aidlc system workspace-sync");
+    // A settings object without the key is the team's choice.
+    expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
+    // A settings member that is not an object is broken, never the team's choice.
+    for (const broken of [null, [], "200", true]) {
+      const row = check(JSON.stringify({ folders: [{ path: "." }], settings: broken }));
+      expect(row, JSON.stringify(broken)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row?.fix, JSON.stringify(broken)).toContain('make "settings" an object');
+    }
+    expect(check("{ ,, }")?.label).toContain("could not be read as JSONC");
+    // Only a Copilot project gets the row.
+    const claude = temp("aidlc-t294-workspace-request-cap-claude-");
+    cpSync(join(DIST, "claude"), claude, { recursive: true });
+    writeFileSync(join(claude, "aidlc.code-workspace"), workspace());
+    expect(vscodeWorkspaceRequestCapDoctorCheck(claude, ".claude")).toBeNull();
+  });
+
+  test("doctor never fails an optional harness CLI and keeps required CLI warnings", () => {
+    const copilot = temp("aidlc-t294-doctor-copilot-cli-");
+    cpSync(join(DIST, "copilot"), copilot, { recursive: true });
+    const cliRow = (project: string, harnessDir: string, runtime: NonNullable<Parameters<typeof runtimeDoctorChecks>[2]>["runtime"]) => {
+      const row = runtimeDoctorChecks(project, harnessDir, { runtime })
+        .find((check) => check.label.startsWith("Harness CLI:"));
+      if (!row) throw new Error("no Harness CLI row");
+      return row;
+    };
+
+    // VS Code-only install: the stand-in is not the CLI, so it is just absent.
+    const standIn = cliRow(copilot, ".aidlc", STAND_IN);
+    expect(standIn).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    expect(standIn.severity).toBeUndefined();
+    expect(cliRow(copilot, ".aidlc", { which: () => null })).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional copilot is not installed",
+    }));
+    // A real but old optional CLI is a warning with a plain fix, never a fail.
+    const old = cliRow(copilot, ".aidlc", printsVersion("1.0.60\n"));
+    expect(old).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: optional copilot 1.0.60 is below 1.0.74",
+      fix: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    }));
+    expect(cliRow(copilot, ".aidlc", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
+      pass: true,
+      label: `Harness CLI: copilot 1.0.80 at ${STAND_IN.which()}`,
+    }));
+
+    // Required CLIs are unchanged: missing or too old is a warning.
+    const codex = temp("aidlc-t294-doctor-codex-cli-");
+    cpSync(join(DIST, "codex"), codex, { recursive: true });
+    expect(cliRow(codex, ".codex", printsVersion("codex-cli 0.144.0\n"))).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: codex codex-cli 0.144.0 is below 0.145.0",
+    }));
+    expect(cliRow(codex, ".codex", { which: () => null })).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: codex is missing",
     }));
   });
 });
@@ -1127,6 +1441,71 @@ describe("t294 trust diagnostics", () => {
       .toBe(seed);
   });
 
+  test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {
+    const configIn = (dir: string) => join(dir, ".copilot", "config.json");
+    // A Windows desktop process has no HOME; the CLI reads USERPROFILE. The
+    // old lookup read HOME alone and looked for a relative .copilot instead.
+    expect(copilotConfigPath({ USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    // A HOME that is set on Windows is not where the CLI looks either.
+    expect(copilotConfigPath({ HOME: "H:\\", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(configIn("C:\\Users\\dev"));
+    expect(copilotConfigPath({ HOME: "/home/dev", USERPROFILE: "/elsewhere" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({ COPILOT_HOME: "/copilot", HOME: "/home/dev" }, "linux"))
+      .toBe(join("/copilot", "config.json"));
+    expect(copilotConfigPath({ COPILOT_HOME: "D:\\copilot", USERPROFILE: "C:\\Users\\dev" }, "win32"))
+      .toBe(join("D:\\copilot", "config.json"));
+    // The CLI ignores an empty COPILOT_HOME, and with no home variable at all
+    // the lookup still lands in the account's home, never under the cwd.
+    expect(copilotConfigPath({ COPILOT_HOME: "", HOME: "/home/dev" }, "linux"))
+      .toBe(configIn("/home/dev"));
+    expect(copilotConfigPath({}, "win32")).toBe(configIn(homedir()));
+  });
+
+  test("Copilot folder trust matches entries the way the Copilot CLI does", () => {
+    // Windows: case, drive-letter spelling (VS Code says c:\, a terminal C:\),
+    // separator style, and trailing separators never change the folder, and
+    // a trusted parent covers the project. These paths do not exist, so the
+    // comparison is the string rule alone on every host.
+    const app = "C:\\aidlc-t294-copilot-trust\\Work\\App";
+    for (const entry of [
+      app,
+      "c:\\aidlc-t294-copilot-trust\\Work\\App",
+      "C:/aidlc-t294-copilot-trust/Work/App/",
+      "C:\\AIDLC-T294-COPILOT-TRUST\\WORK\\APP\\",
+      "c:/aidlc-t294-copilot-trust/work",
+    ]) {
+      expect(copilotFolderTrusted(app, [entry], "win32"), entry).toBe(true);
+    }
+    expect(copilotFolderTrusted("c:\\aidlc-t294-copilot-trust\\Work\\App", [app], "win32"))
+      .toBe(true);
+    expect(copilotFolderTrusted(`${app}Other`, [app], "win32")).toBe(false);
+    expect(copilotFolderTrusted("C:\\aidlc-t294-copilot-trust\\Work", [app], "win32"))
+      .toBe(false);
+    expect(copilotFolderTrusted(app, ["", 42, null], "win32")).toBe(false);
+    // Linux and macOS: the CLI keeps case, and a backslash is no separator.
+    const posixApp = "/aidlc-t294-copilot-trust/work/App";
+    expect(copilotFolderTrusted(posixApp, [`${posixApp}/`], "linux")).toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work"], "linux"))
+      .toBe(true);
+    expect(copilotFolderTrusted(posixApp, ["/aidlc-t294-copilot-trust/work/app"], "linux"))
+      .toBe(false);
+    expect(copilotFolderTrusted(`${posixApp}Other`, [posixApp], "linux")).toBe(false);
+  });
+
+  test("Copilot folder trust resolves links on either side", () => {
+    const root = temp("aidlc-t294-copilot-trust-links-");
+    const app = join(root, "work", "App");
+    mkdirSync(join(app, "sub"), { recursive: true });
+    const link = join(root, "link");
+    symlinkSync(app, link, process.platform === "win32" ? "junction" : "dir");
+    expect(copilotFolderTrusted(link, [app])).toBe(true);
+    expect(copilotFolderTrusted(app, [link])).toBe(true);
+    expect(copilotFolderTrusted(join(link, "sub"), [join(root, "work")])).toBe(true);
+    expect(copilotFolderTrusted(app, [join(root, "gone")])).toBe(false);
+  });
+
   test("Kiro IDE trust needs no .vscode settings and required sibling directories are verified", () => {
     // Kiro IDE 1.x no longer reads kiroAgent.trustedCommands; the shipped
     // conductor's permissions carry the grant, so a copy install with no
@@ -1139,6 +1518,16 @@ describe("t294 trust diagnostics", () => {
     expect(status.files).toContain(join(project, ".kiro", "agents", "aidlc.md"));
     expect(status.files).toContain(join(project, ".kiro", "settings", "cli.json"));
     expect(status.files.some((file) => file.includes(".vscode"))).toBe(false);
+    // Under the shared name `kiro` the installed tree, not the name, picks the
+    // files: the KAS tree's Markdown agents and engine pin, the agent-v1 tree's
+    // JSON agents and legacy hooks.
+    expect(trustStatus(project, ".kiro", "kiro").files).toEqual(status.files);
+    const agentV1 = temp("aidlc-t294-trust-kiro-");
+    cpSync(join(DIST, "kiro"), agentV1, { recursive: true });
+    const legacy = trustStatus(agentV1, ".kiro", "kiro").files;
+    expect(legacy).toContain(join(agentV1, ".kiro", "agents", "aidlc.json"));
+    expect(legacy.some((file) => file.endsWith(".kiro.hook"))).toBe(true);
+    expect(legacy).not.toContain(join(agentV1, ".kiro", "settings", "cli.json"));
 
     const codex = temp("aidlc-t294-siblings-codex-");
     cpSync(join(DIST, "codex"), codex, { recursive: true });

@@ -69,7 +69,7 @@ The human can also open `<record>/verification-command.txt`. The canonical
 command is a nonblank single line of at most 1024 characters. Control characters
 and display-spoofing characters (Unicode format characters, including zero-width
 and bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-The human's exact **Approve** / **Request Changes** reply in that session binds
+The human's **Approve** / **Request Changes** reply in that session binds
 the answer to the pending command. Only **Approve** authorizes the receipt;
 an unrelated reply, **Request Changes**, or a reply from another session does not.
 Never write `--details "Approve"` unless the human chose it; only then run
@@ -942,8 +942,11 @@ This stage has a **two-part structure**: planning followed by generation.
    checkpoint), while the plan is still the one approved before, `next` first
    returns `revise` with the person's words from that gate, so the question
    that follows shows the revised plan. Re-running `next`, or a
-   reissued directive for the same target and attempt, never reopens it. A
-   forwarding-loop continuation is never approval.
+   reissued directive for the same target and attempt, never reopens it, and
+   neither does whatever the engine said in between: a chat that compacted, a
+   piece of work parked and resumed, or a guard-recovery question. `next` reads
+   the approval for the plans its routed directive builds, not for the
+   directive it replaces. A forwarding-loop continuation is never approval.
 
    `testing-posture verify` reports `execution_allowed: true` with exit 0 when
    continuation is permitted, even if `ok: false` says the current content is

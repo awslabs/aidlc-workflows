@@ -243,7 +243,7 @@ describe("t199 per-intent memory path (write + read)", () => {
       otherDiary,
       "## Interpretations\n- This belongs to the shared cursor only\n",
     );
-    writeSessionBinding(pd, "session-a", DEFAULT_SPACE, DEFAULT_RECORD_DIR);
+    writeSessionBinding(pd, "session-a", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
     setActiveIntentCursor(pd, other.dirName, DEFAULT_SPACE);
 
     const surfaced = spawnSync(

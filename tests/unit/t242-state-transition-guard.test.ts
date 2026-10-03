@@ -10,8 +10,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
@@ -21,6 +21,7 @@ import {
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -658,6 +659,84 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("runtime integrity refuses every terminal form that sets an AI-DLC control variable", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const refused = (command: string) => violatesRuntimeIntegrity({ cwd: project, tool_name: "Bash", tool_input: { command } });
+    // The session and presence overrides, the direct state and audit
+    // authorities, the human-turn token, and every recordable bypass.
+    const names = [
+      "AIDLC_SESSION_OVERRIDE",
+      "AIDLC_SESSION_OVERRIDE_SOURCE",
+      "AIDLC_UNATTENDED",
+      "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
+      "AIDLC_STATE_TRANSITION_OWNER",
+      "AIDLC_ALLOW_DIRECT_AUDIT_EVENTS",
+      "AIDLC_INTERNAL_HUMAN_TURN_TOKEN",
+      "AIDLC_SKIP_REVIEWER_GATE_GUARD",
+      ...RECORDABLE_PROJECT_BYPASSES,
+    ];
+    for (const name of names) {
+      for (const command of [
+        // POSIX shells
+        `${name}=1 aidlc engine log answers`,
+        `export ${name}=1`,
+        `env ${name}=1 aidlc engine log answers`,
+        `read ${name} <<< 1`,
+        `printf -v ${name} 1`,
+        `declare -x ${name}`,
+        `: \${${name}:=1}`,
+        // PowerShell, in any letter case
+        `$env:${name}=1; aidlc engine log answers`,
+        `$env:${name} = "1"`,
+        `$Env:${name.toLowerCase()} = '1'`,
+        `\${env:${name}} = 1`,
+        `$env:${name} += "1"`,
+        `Set-Item env:${name} 1`,
+        `Set-Item -Path "Env:\\${name}" -Value 1`,
+        `si env:/${name} 1`,
+        `New-Item -Path env: -Name ${name} -Value 1`,
+        `Rename-Item env:OTHER -NewName ${name}`,
+        `[Environment]::SetEnvironmentVariable("${name}", "1")`,
+        `[System.Environment]::SetEnvironmentVariable('${name}', '1', 'User')`,
+        `Start-Process aidlc -Environment @{ "${name}" = "1" }`,
+        // cmd
+        `set ${name}=1`,
+        `set "${name}=1" && aidlc engine log answers`,
+        `set /a ${name}=1`,
+        `cmd /c "set ${name}=1&& aidlc engine log answers"`,
+        `setx ${name} 1`,
+        // Windows reads variable names in any case, so a lower-case name is the same variable
+        `${name.toLowerCase()}=abc git status`,
+      ]) {
+        expect(refused(command), command).toBe(true);
+      }
+    }
+    // The hook itself refuses with the runtime-integrity reason.
+    const env = unownedEnv();
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    for (const command of ['$env:AIDLC_ALLOW_DIRECT_AUDIT_EVENTS = "1"', "setx AIDLC_UNATTENDED 1", "set AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1"]) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    // Reading a variable, or naming one in a search, is not setting it.
+    for (const command of [
+      "echo $AIDLC_UNATTENDED",
+      "echo $env:AIDLC_UNATTENDED",
+      "grep -rn AIDLC_DISABLE_SENSORS src",
+      "Get-ChildItem env:",
+      "printenv AIDLC_UNATTENDED",
+      "MY_AIDLC_UNATTENDED=1 echo ok",
+    ]) {
+      expect(refused(command), command).toBe(false);
+    }
+  });
+
   test("runtime integrity refuses inline imports, dispatcher argv, command substitutions, aliases, functions, and heredocs", () => {
     // These payloads exercise module loading and dispatcher calls inside scripts.
     // A module name assembled from fragments at run time is outside this
@@ -813,6 +892,99 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(relativeWrite.status).toBe(2);
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+  });
+
+  // The words the human-turn hook keeps for a stage gate become the Feedback a
+  // Request Changes records as the person's own, so a tool call may not write
+  // or remove them; the rest of the engine directory stays writable.
+  const GATE_WORDS = "aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words/01995000-7a11-7000-8000-00000000c0de.json";
+  const GATE_WORDS_MIXED_CASE = GATE_WORDS.replace(".aidlc-engine/gate-words", ".AIDLC-Engine/Gate-Words");
+
+  test("runtime integrity refuses tool-call writes of the kept gate words", () => {
+    const guard = (tool_name: string, tool_input: Record<string, unknown>, cwd?: string) =>
+      spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", ...(cwd ? { cwd } : {}), tool_name, tool_input }),
+        encoding: "utf-8",
+        env: unownedEnv(),
+      });
+    const words = JSON.stringify({ version: 1, messages: [{ offset: 1, text: "rename it" }] });
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: GATE_WORDS, content: words }],
+      ["Edit", { file_path: GATE_WORDS, old_string: "a", new_string: "b" }],
+      ["MultiEdit", { edits: [{ file_path: "notes.md" }, { file_path: GATE_WORDS }] }],
+      ["Write", { file_path: GATE_WORDS.replaceAll("/", "\\"), content: words }],
+      ["Write", { file_path: `C:\\project\\${GATE_WORDS.replaceAll("/", "\\")}`, content: words }],
+      // Windows resolves any casing to the same record.
+      ["Write", { file_path: `C:\\project\\${GATE_WORDS_MIXED_CASE.replaceAll("/", "\\")}`, content: words }],
+    ] as const) {
+      const r = guard(tool_name, tool_input);
+      expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(2);
+      expect(r.stderr, tool_name).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    const relativeWrite = guard("Write", { file_path: "s.json", content: words }, "/tmp/p/aidlc/spaces/default/intents/r/.aidlc-engine/gate-words");
+    expect(relativeWrite.status).toBe(2);
+    expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
+    for (const command of [
+      `echo '${words}' > ${GATE_WORDS}`,
+      `printf x | tee ${GATE_WORDS}`,
+      `Set-Content -Path ${GATE_WORDS} -Value 'rename it'`,
+      `Set-Content -Path "${GATE_WORDS.replaceAll("/", "\\")}" -Value 'rename it'`,
+      `Remove-Item ${GATE_WORDS}`,
+      `rm -rf aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
+      `mkdir -p aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-words`,
+      `cp words.json ${GATE_WORDS}`,
+      `node -e "require('node:fs').writeFileSync('${GATE_WORDS}', 'x')"`,
+      `echo x > ${GATE_WORDS_MIXED_CASE}`,
+      `Set-Content -Path "${GATE_WORDS_MIXED_CASE.replaceAll("/", "\\")}" -Value 'rename it'`,
+      `node -e "require('node:fs').writeFileSync('${GATE_WORDS_MIXED_CASE}', 'x')"`,
+    ]) {
+      const r = guard("Bash", { command });
+      expect(r.status, command).toBe(2);
+      expect(r.stderr, command).toContain("AIDLC runtime records and hooks belong to the harness");
+    }
+    // Only the gate words: the conductor's own engine-directory record, and
+    // reading the words, stay allowed.
+    for (const [tool_name, tool_input] of [
+      ["Write", { file_path: "aidlc/spaces/default/intents/todo-app/.aidlc-engine/reviewer-dispatch.json", content: "{}" }],
+      ["Bash", { command: `cat ${GATE_WORDS}` }],
+      ["Bash", { command: "echo x > aidlc/spaces/default/intents/todo-app/.aidlc-engine/gate-wordsmith.json" }],
+    ] as const) {
+      const r = guard(tool_name, tool_input);
+      expect(r.status, `${tool_name} ${JSON.stringify(tool_input)}`).toBe(0);
+    }
+  });
+
+  test("the human-turn hook's own save and the engine's clear still write the gate words", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, "state-mid-ideation.md");
+    const session = "01995000-7a11-7000-8000-00000000c0de";
+    const record = dirname(seededStateFile(project));
+    const words = join(record, ".aidlc-engine", "gate-words", `${session}.json`);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_UNATTENDED: "0", CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project };
+    delete env.AIDLC_SESSION_OVERRIDE;
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const saved = spawnSync(process.execPath, [join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: project,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: "Rename the list command." }),
+      encoding: "utf-8",
+      env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(saved.status, saved.stderr).toBe(0);
+    expect(existsSync(words)).toBe(true);
+    expect(readFileSync(words, "utf-8")).toContain("Rename the list command.");
+    // Presenting a gate spends them, through the engine's own transition.
+    const state = (args: string[]) => spawnSync(process.execPath, [STATE, ...args, "--project-dir", project], {
+      encoding: "utf-8",
+      env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const slug = (state(["get", "Current Stage"]).stdout ?? "").trim();
+    expect(state(["checkbox", `${slug}=in-progress`]).status).toBe(0);
+    const opened = state(["gate-start", slug]);
+    expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+    expect(existsSync(words)).toBe(false);
   });
 
   test("runtime integrity refuses written hook imports and dispatcher argv outside the runtime and authored repository", () => {
@@ -1374,6 +1546,8 @@ describe("t242 state-transition ownership guard", () => {
       ".claude/settings.json",
       ".codex/hooks.json",
       ".kiro/agents/aidlc.json",
+      ".kiro/agents/aidlc.md",
+      ".kiro/agents/aidlc-developer-agent.md",
       ".github/hooks/aidlc.json",
     ]) {
       for (const [tool_name, tool_input] of [
@@ -1499,7 +1673,7 @@ describe("t242 state-transition ownership guard", () => {
       ["Bash", { command: "cat aidlc/.aidlc-sessions/foo.json" }],
       ["Bash", { command: "cp aidlc/.aidlc-sessions/foo.json /tmp/copy.json" }],
       ["Bash", { command: "echo x > aidlc/.aidlc-sessions-backup/foo.json" }],
-      ["Bash", { command: "aidlc_session_override=abc git status" }],
+      ["Bash", { command: "MY_AIDLC_SESSION_OVERRIDE=abc git status" }],
       ["Write", { file_path: "aidlc/spaces/default/intents/x/.aidlc-engine/reviewer-dispatch.json" }],
       ["Edit", { file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }],
       ["MultiEdit", { edits: [{ file_path: "aidlc/spaces/default/intents/x/inception/requirements.md" }] }],

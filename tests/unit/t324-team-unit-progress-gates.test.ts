@@ -12,11 +12,13 @@ import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
+  auditBlockField,
   findStageBySlug,
   freshReviewReceipts,
   isTeamUnitOwnership,
   parseCheckboxes,
   readAllAuditShards,
+  readAuditShardEvents,
   readUnitGateRhythm,
   UNIT_GATE_RHYTHM_FIELD,
   UNIT_OWNERSHIP_FIELD,
@@ -401,6 +403,7 @@ function approveGate(proj: string, directive: Directive): void {
   ];
   expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind)
     .toBe("print");
+  // A Unit approval never ends the workflow, so its done says the walk goes on.
   expect(
     runReport(proj, [
       ...args,
@@ -408,8 +411,8 @@ function approveGate(proj: string, directive: Directive): void {
       "approved",
       "--user-input",
       "Approve",
-    ]).kind,
-  ).toBe("done");
+    ]),
+  ).toMatchObject({ kind: "done", workflow_continues: true });
 }
 
 function state(proj: string): string {
@@ -977,6 +980,68 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const stage = findStageBySlug("functional-design")!;
     const reviews = freshReviewReceipts(proj, state(proj), stage);
     expect([...reviews.unitVerdicts.keys()]).toEqual(["beta"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a team Unit gate's Request Changes records the person's typed words", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    const session = "01995000-7a11-7000-8000-0000000324aa";
+    const typed = 'Split "alpha" & "beta" entities; keep the rules as they are.';
+    const env: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const hook = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: typed }),
+      env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(hook.status, hook.stderr).toBe(0);
+    const rejected = spawnSync(BUN, [
+      ORCH, "report", ...args, "--result", "rejected", "--user-input", "Request Changes",
+      "--reason", "Split the entities", "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    const directive = JSON.parse((rejected.stdout ?? "").trim()) as Directive;
+    expect(directive.kind, rejected.stdout + rejected.stderr).toBe("print");
+    expect(directive.message).toStartWith('Recorded rejected for unit "alpha" of "functional-design".');
+    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(typed)}`);
+    const row = (event: string) => readAuditShardEvents(proj).filter((entry) => entry.event === event).at(-1)!.block;
+    expect(auditBlockField(row("GATE_REJECTED"), "Unit")).toBe("alpha");
+    expect(auditBlockField(row("GATE_REJECTED"), "Feedback")).toBe(typed);
+    expect(auditBlockField(row("GATE_REJECTED"), "Conductor Summary")).toBe("Split the entities");
+    expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A conductor that reports a team Unit gate complete before asking it gets
+  // that Unit's question opened, never a stage-wide gate or an approval.
+  test("a team Unit gate reported complete before its question opens only that Unit's question", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const env: NodeJS.ProcessEnv = { ...ENV };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const report = (args: string[]): Directive => {
+      const result = spawnSync(BUN, [
+        ORCH, "report", "--stage", "functional-design", ...args, "--project-dir", proj,
+      ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      return JSON.parse((result.stdout ?? "").trim()) as Directive;
+    };
+
+    const unitless = report(["--result", "completed"]);
+    expect(unitless.kind).toBe("error");
+    expect(unitless.message).toContain("requires --unit");
+
+    const opened = report(["--unit", "alpha", "--result", "completed"]);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(opened.message).toContain('Unit "alpha" of "functional-design" has not asked for approval yet');
+    expect(opened.message).toContain("nothing is approved until they answer");
+    const events = readAuditShardEvents(proj);
+    const awaiting = events.filter((entry) => entry.event === "STAGE_AWAITING_APPROVAL");
+    expect(awaiting.map((entry) => auditBlockField(entry.block, "Unit"))).toEqual(["alpha"]);
+    expect(events.some((entry) => entry.event === "GATE_APPROVED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team gates record review finding dispositions for only the gated Unit", () => {

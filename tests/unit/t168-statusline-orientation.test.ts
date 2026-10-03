@@ -37,12 +37,14 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createIntent,
+  setActiveIntentCursor,
   setActiveSpaceCursor,
   stateFilePath,
+  writeSessionBinding,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
@@ -65,11 +67,14 @@ afterEach(() => {
 });
 
 /** Spawn the per-shipped statusline hook with the workspace JSON on stdin. */
-function runStatusline(p: string): string {
+function runStatusline(p: string, sessionId?: string): string {
   const r = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [BUN, HOOK],
-    stdin: new TextEncoder().encode(JSON.stringify({ workspace: { project_dir: p } })),
+    stdin: new TextEncoder().encode(JSON.stringify({
+      workspace: { project_dir: p },
+      ...(sessionId ? { session_id: sessionId } : {}),
+    })),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -152,5 +157,63 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
     expect(out).toContain("[AIDLC] ready");
     expect(out).not.toContain("retired-work");
     expect(out).not.toContain("CONSTRUCTION");
+  });
+
+  test("an archived binding paints `[AIDLC] ready` beside a space-root workflow", () => {
+    const created = createIntent(proj, "retired-work", "default", "feature");
+    writeFileSync(
+      stateFilePath(proj, created.dirName, "default"),
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Status**: Archived\n",
+      "utf-8",
+    );
+    // A workflow at the space root, the selection a binding to no record also names.
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "intents", "aidlc-state.md"),
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: INCEPTION\n- **Current Stage**: requirements-analysis\n- **Status**: Running\n",
+      "utf-8",
+    );
+    const session = "01995100-0000-7000-8000-000000000168";
+    writeSessionBinding(proj, session, "default", created.dirName, "switch");
+    expect(runStatusline(proj, session)).toContain("[AIDLC] ready");
+    expect(runStatusline(proj, session)).not.toContain("INCEPTION");
+    writeSessionBinding(proj, session, "default", null, "archive");
+    expect(runStatusline(proj, session)).toContain("[AIDLC] ready");
+    expect(runStatusline(proj, session)).not.toContain("INCEPTION");
+    // A session that has chosen no record still sees the space-root workflow.
+    writeSessionBinding(proj, session, "default", null, "none");
+    expect(runStatusline(proj, session)).toContain("INCEPTION");
+  });
+
+  test("a binding naming a record with a DEL or C1 control character is not displayed", () => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const sessions = join(proj, "aidlc", ".aidlc-sessions");
+    mkdirSync(sessions, { recursive: true });
+    const plain = createIntent(proj, "plain-work", "default", "feature");
+    writeFileSync(
+      stateFilePath(proj, plain.dirName, "default"),
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: INCEPTION\n- **Current Stage**: requirements-analysis\n- **Status**: Running\n",
+      "utf-8",
+    );
+    for (const [i, named] of ["del\u007fname", "nel\u0085name", "csi\u009bname"].entries()) {
+      const created = createIntent(proj, `control-${i}`, "default", "feature");
+      renameSync(join(intents, created.dirName), join(intents, named));
+      writeFileSync(
+        join(intents, named, "aidlc-state.md"),
+        "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: ci-pipeline\n- **Status**: Running\n",
+        "utf-8",
+      );
+      // Written by hand: the engine refuses to bind such a name.
+      const session = `01995100-0000-7000-8000-00000000016${i}`;
+      writeFileSync(
+        join(sessions, `${session}.binding.json`),
+        JSON.stringify({ space: "default", intent: named, boundAt: new Date().toISOString(), source: "switch" }),
+      );
+      // The binding does not count, so the cursor's record shows instead.
+      setActiveIntentCursor(proj, plain.dirName, "default");
+      const out = runStatusline(proj, session);
+      expect(out).toContain("INCEPTION");
+      expect(out).not.toContain("CONSTRUCTION");
+      expect(out).not.toContain(named);
+    }
   });
 });

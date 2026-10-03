@@ -65,13 +65,14 @@ const CONTINUE_COMMAND_PREFIX =
   "bun .claude/tools/aidlc-orchestrate.ts continue ";
 // The steering payload stored on a marker. `n` (next_stage) and `q` (unit_gate)
 // are dropped by JSON when undefined, so only the rest are always present.
-// `o` carries the open-gate re-entry flag (gate_only) as a boolean.
+// `o` carries the open-gate re-entry flag (gate_only) as a boolean. `l` is how
+// the rules were cut into parts, so a part is never continued under another cut.
 const STEERING_PAYLOAD_KEYS = [
   "v", "s", "c", "i", "b", "d", "r", "a", "u", "k",
-  "f", "g", "n", "x", "p", "w", "z", "o", "q", "h",
+  "f", "g", "n", "x", "p", "w", "z", "o", "q", "h", "l",
 ] as const;
 const STEERING_PAYLOAD_REQUIRED_KEYS = [
-  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h",
+  "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h", "l",
 ] as const;
 const REVIEWER_AGENTS = [
   "aidlc-architecture-reviewer-agent",
@@ -1307,7 +1308,7 @@ describe("t248 deterministic steering delivery", () => {
     }
   });
 
-  test("a consumed receipt restarts delivery at part 1, and after run-stage every old receipt re-answers the run-stage", () => {
+  test("a consumed receipt restarts delivery at part 1, and after run-stage every repeat ask gets the rules again", () => {
     const proj = statefulProject();
     inflateOrg(proj);
     const first = invoke(proj, "next", []);
@@ -1335,15 +1336,22 @@ describe("t248 deterministic steering delivery", () => {
       expect(hops).toBeLessThan(100);
     }
     expect(current.kind).toBe("run-stage");
-    const finalLine = invoke(proj, "next", []).line;
-    expect(JSON.parse(finalLine)).toEqual(current);
-    for (const receipt of receipts) {
-      expect(invoke(proj, "continue", [receipt]).line, receipt).toBe(finalLine);
+    expect(current).not.toHaveProperty("rules_content");
+    // The Stop hook's own reading is the run-stage in hand and publishes nothing.
+    const atRunStage = readFileSync(statefulMarkerPath(proj), "utf-8");
+    const probeEnv = { ...process.env, AIDLC_STOP_HOOK_PROBE: "1" };
+    expect(JSON.parse(invoke(proj, "next", [], probeEnv).line)).toEqual(current);
+    expect(readFileSync(statefulMarkerPath(proj), "utf-8")).toBe(atRunStage);
+    // That run-stage arrived without its rules. A repeat ask cannot show it holds
+    // them (a new chat, a compacted context, a resume), so it restarts at part 1.
+    expect(invoke(proj, "next", []).line).toBe(first.line);
+    for (const receipt of receipts.slice(1)) {
+      expect(invoke(proj, "continue", [receipt]).line, receipt).toBe(first.line);
     }
     const marker = readMarker(statefulMarkerPath(proj));
-    expect(marker.kind).toBe("run-stage");
-    expect(marker).not.toHaveProperty("continue_token");
-    expect(marker).not.toHaveProperty("continue_token_sha256");
+    expect(marker.kind).toBe("load-steering");
+    expect(marker.part).toBe(1);
+    expect(marker.continue_token).toBe(r1);
   });
 
   test("the Stop-hook probe retains the current part with its receipt and never publishes", () => {

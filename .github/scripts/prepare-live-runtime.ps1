@@ -7,7 +7,8 @@ param(
     [ValidateSet('claude-sdk', 'claude-tui', 'codex', 'opencode', 'release-contract', 'isolation')]
     [string]$Family = 'isolation',
     [ValidatePattern('^[1-9][0-9]*/[1-9][0-9]*$')]
-    [string]$Shard
+    [string]$Shard,
+    [string]$Test
 )
 
 Set-StrictMode -Version Latest
@@ -18,6 +19,7 @@ if ($PSVersionTable.PSEdition -ne 'Desktop') {
     $nativeArguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Mode', $Mode)
     if ($PSBoundParameters.ContainsKey('Family')) { $nativeArguments += @('-Family', $Family) }
     if ($PSBoundParameters.ContainsKey('Shard')) { $nativeArguments += @('-Shard', $Shard) }
+    if ($PSBoundParameters.ContainsKey('Test')) { $nativeArguments += @('-Test', $Test) }
     & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @nativeArguments
     exit $LASTEXITCODE
 }
@@ -2979,6 +2981,10 @@ exit $LASTEXITCODE
             if ($Family -ne 'release-contract') { Add-BrokerEnvironment $safe }
             $arguments = @($Family, 'win32')
             if ($PSBoundParameters.ContainsKey('Shard')) { $arguments += $Shard }
+            if ($Test) {
+                if (-not $Shard) { throw 'An exact live test requires its planned shard.' }
+                $arguments += $Test
+            }
             $quotedArguments = ($arguments | ForEach-Object { ConvertTo-PSLiteral $_ }) -join ' '
             $body = "& 'C:\aidlc-live\tools\bun.exe' scripts/ci-live-sandbox.ts " + $quotedArguments + "`nexit `$LASTEXITCODE"
         }

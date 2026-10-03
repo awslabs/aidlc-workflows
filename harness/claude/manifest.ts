@@ -120,6 +120,8 @@ const manifest: HarnessManifest = {
   // Claude renames no core dir.
   rulesRename: null,
 
+  runnerFrontmatterAdditions: ["disable-model-invocation: true"],
+
   // No emit() plugin: Claude's runners come from the shared runner-gen
   // composition and its compiled data from graph compile, both driven by the
   // packager. (Codex is the only harness that ships an emit.ts today.)

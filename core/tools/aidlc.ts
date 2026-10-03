@@ -24,6 +24,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  kiroTreeLayout,
   packagedDistributionRoot,
   discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
@@ -1218,6 +1219,15 @@ function adapterFile(harness: AdapterHarness): string {
   return "aidlc-kiro-adapter.ts";
 }
 
+// The KAS adapter reads its own payload, and only for the targets that need one,
+// because Kiro IDE 0.12 left stdin open; every other adapter is handed stdin.
+// `kiro-ide` names the KAS adapter. `kiro` names whichever Kiro tree carries the
+// adapter file, so its layout decides.
+function kasAdapter(action: Extract<Action, { type: "adapter" }>): boolean {
+  if (action.harness === "kiro-ide") return true;
+  return action.harness === "kiro" && kiroTreeLayout(dirname(dirname(action.path))) === "kas";
+}
+
 // The distribution name can come from project metadata and the harness
 // directory from the environment, so the packaged path counts only when each is
 // one directory inside the executable's runtime/ tree. Anything else resolves
@@ -2302,10 +2312,11 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       return 1;
     }
     let input = "";
-    if (action.harness !== "kiro-ide") {
+    if (!kasAdapter(action)) {
       input = await readStdin();
     } else if (
       action.target === "audit-and-sensors" ||
+      action.target === "enforce-approval-gate" ||
       action.target === "log-subagent" ||
       action.target === "plan-approval-guard" ||
       action.target === "record-human-turn" ||
@@ -2439,7 +2450,23 @@ async function execute(action: Action): Promise<number> {
   return 1;
 }
 
-function withoutProjectDirFlag(argv: readonly string[]): string[] {
+// Whether `engine adapter <harness> …` will run the KAS adapter, decided before
+// startup buffers stdin for it: the KAS adapter must not have stdin read for it.
+function kasAdapterInvocation(argv: string[]): boolean {
+  const harness = withoutProjectDirFlag(argv)[2];
+  if (harness === "kiro-ide") return true;
+  if (harness !== "kiro") return false;
+  try {
+    const action = resolveAction(argv);
+    return action.type === "adapter" && kasAdapter(action);
+  } catch {
+    return false;
+  }
+}
+
+// The argv the route table reads: global output flags and --project-dir are
+// dropped before the `--` delimiter, so `unit --json land` routes as `unit land`.
+export function withoutProjectDirFlag(argv: readonly string[]): string[] {
   const clean: string[] = [];
   let literalArgs = false;
   for (let index = 0; index < argv.length; index++) {
@@ -2642,6 +2669,12 @@ async function dispatchPinnedVersion(
     );
   }
   const releaseReservation = reserveDispatchedVersion(result.version);
+  if (!releaseReservation) {
+    text(
+      2,
+      `aidlc: another AI-DLC command is still changing this machine's install, so this ran on aidlc ${result.version} without waiting for it to finish.\n`,
+    );
+  }
   try {
     const child = Bun.spawnSync([result.executable, ...argv], {
       cwd: process.cwd(),
@@ -2656,7 +2689,7 @@ async function dispatchPinnedVersion(
     });
     return child.exitCode ?? 1;
   } finally {
-    releaseReservation();
+    releaseReservation?.();
   }
 }
 
@@ -3093,7 +3126,7 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (
     route?.routeOnly === "hook" ||
     route?.routeOnly === "statusline" ||
-    (route?.routeOnly === "adapter" && withoutProjectDirFlag(argv)[2] !== "kiro-ide")
+    (route?.routeOnly === "adapter" && !kasAdapterInvocation(argv))
   ) {
     await readStdin();
   }

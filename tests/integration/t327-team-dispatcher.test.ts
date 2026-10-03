@@ -427,6 +427,8 @@ function pickerFixture(teamMode: boolean, count: 1 | 3): string {
     join(intentsRoot, "intents.json"),
     `${JSON.stringify(rows, null, 2)}\n`,
   );
+  // A single record is this user's own workflow, selected by the local cursor.
+  if (count === 1) writeFileSync(join(intentsRoot, "active-intent"), "team-work-11111111\n");
   return project;
 }
 

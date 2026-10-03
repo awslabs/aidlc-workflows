@@ -3136,8 +3136,12 @@ export async function run(
     }
 
     case "validate-state": {
-      // preCompact: the core hook reads no stdin fields — self-contained.
-      runCore("aidlc-validate-state.ts", rawInput);
+      // preCompact: the core hook resolves the workflow from the session id,
+      // which Cursor may send only as conversation_id.
+      runCore("aidlc-validate-state.ts", JSON.stringify({
+        hook_event_name: "PreCompact",
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }));
       return 0;
     }
 

@@ -49,6 +49,7 @@ import {
   attributeAgents,
   buildAgentTypeMapFromParent,
   computeCost,
+  DEFAULT_RATES,
   dedupeByMessageId,
   foldTranscriptIntoLedger,
   ledgerPath,
@@ -68,6 +69,11 @@ import {
   type TokenCounts,
   type UsageRow,
 } from "../../dist/claude/.claude/tools/aidlc-usage.ts";
+import {
+  createIntent,
+  writeSessionBinding,
+  writeSessionIntentUuid,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -217,6 +223,80 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     expect(normalizeModel("anthropic.opus-4-8")).toBeNull();
   });
 
+  test("normalizeModel resolves a point release to its OWN key, never its major (#1577)", () => {
+    // Every real id shape of a point release must land on the point-release
+    // row. Before the fix these matched `opus-5` / `sonnet-5` / `fable-5` by
+    // prefix and were priced on the major version's row.
+    for (const id of [
+      "claude-opus-5-5",
+      "claude-opus-5-5[1m]",
+      "global.anthropic.claude-opus-5-5[1m]",
+      "us.anthropic.claude-opus-5-5",
+      "converse/global.anthropic.claude-opus-5-5",
+      "anthropic.claude-opus-5-5-v1:0",
+    ]) {
+      expect(normalizeModel(id)).toBe("opus-5-5");
+    }
+    expect(normalizeModel("claude-sonnet-5-5")).toBe("sonnet-5-5");
+    expect(normalizeModel("us.anthropic.claude-sonnet-5-5")).toBe("sonnet-5-5");
+    expect(normalizeModel("global.anthropic.claude-sonnet-5-5")).toBe("sonnet-5-5");
+    expect(normalizeModel("claude-fable-5-1")).toBe("fable-5-1");
+    expect(normalizeModel("global.anthropic.claude-fable-5-1")).toBe("fable-5-1");
+    // The major versions keep their own rows.
+    expect(normalizeModel("claude-opus-5")).toBe("opus-5");
+    expect(normalizeModel("global.anthropic.claude-sonnet-5")).toBe("sonnet-5");
+    expect(normalizeModel("claude-fable-5")).toBe("fable-5");
+  });
+
+  test("normalizeModel returns null for an unpriced point release of a priced major", () => {
+    // `opus-5` is priced; `opus-5-7` is not. It must be an honest unknown, not
+    // `opus-5` by prefix.
+    expect(normalizeModel("claude-opus-5-7")).toBeNull();
+    expect(normalizeModel("global.anthropic.claude-opus-5-7[1m]")).toBeNull();
+    expect(normalizeModel("claude-sonnet-5-9")).toBeNull();
+    expect(normalizeModel("us.anthropic.claude-fable-5-2")).toBeNull();
+    expect(normalizeModel("claude-opus-4-8-1")).toBeNull();
+    // Only a trailing 8-digit date is a snapshot suffix.
+    expect(normalizeModel("claude-opus-5-2026")).toBeNull();
+    expect(normalizeModel("claude-opus-5-20260101")).toBe("opus-5");
+    // Dotted ids are not a wire form this table keys on.
+    expect(normalizeModel("claude-opus-5.5")).toBeNull();
+  });
+
+  test("computeCost prices each point release on its own published row (#1577)", () => {
+    const one = (k: keyof TokenCounts): TokenCounts => ({
+      input: 0,
+      output: 0,
+      cacheCreate5m: 0,
+      cacheCreate1h: 0,
+      cacheRead: 0,
+      [k]: 1_000_000,
+    });
+    const buckets: (keyof TokenCounts)[] = [
+      "input",
+      "output",
+      "cacheCreate5m",
+      "cacheCreate1h",
+      "cacheRead",
+    ];
+    const price = (id: string) => buckets.map((k) => computeCost(one(k), id).usd);
+    // USD per 1M tokens: input, output, cache write 5m, cache write 1h, cache read.
+    expect(price("global.anthropic.claude-opus-5-5[1m]")).toEqual([4, 20, 5, 8, 0.2]);
+    expect(price("us.anthropic.claude-sonnet-5-5")).toEqual([2, 10, 2.5, 4, 0.2]);
+    expect(price("global.anthropic.claude-fable-5-1")).toEqual([10, 50, 12.5, 20, 0.25]);
+    expect(price("claude-sonnet-5")).toEqual([2, 10, 2.5, 4, 0.2]);
+    expect(price("claude-opus-5")).toEqual([5, 25, 6.25, 10, 0.5]);
+    expect(price("claude-fable-5")).toEqual([10, 50, 12.5, 20, 1]);
+    expect(price("claude-opus-5-7")).toEqual([null, null, null, null, null]);
+  });
+
+  test("the shipped model-rates.json carries exactly DEFAULT_RATES", () => {
+    const shipped = JSON.parse(
+      readFileSync(join(import.meta.dir, "../../core/tools/data/model-rates.json"), "utf-8"),
+    ) as { rates: Record<string, unknown> };
+    expect(shipped.rates).toEqual(DEFAULT_RATES);
+  });
+
   test("normalizeModel returns null for unknown / synthetic / empty", () => {
     expect(normalizeModel("<synthetic>")).toBeNull();
     expect(normalizeModel("gpt-4o")).toBeNull();
@@ -259,10 +339,11 @@ describe("Task 1 - normalizeModel + computeCost", () => {
     const o46 = computeCost(oneM, "converse/au.anthropic.claude-opus-4-6-v1");
     expect(o46.model).toBe("opus-4-6");
     expect(o46.usd).toBeCloseTo(30.0, 6);
-    // sonnet-5: 1e6*3 + 1e6*15 = 18.0
+    // sonnet-5: 1e6*2 + 1e6*10 = 12.0 (the $2/$10 price is now standard; the
+    // scheduled move to $3/$15 did not happen).
     const s5 = computeCost(oneM, "converse/us.anthropic.claude-sonnet-5");
     expect(s5.model).toBe("sonnet-5");
-    expect(s5.usd).toBeCloseTo(18.0, 6);
+    expect(s5.usd).toBeCloseTo(12.0, 6);
     // fable-5: 1e6*10 + 1e6*50 = 60.0
     const f5 = computeCost(oneM, "claude-fable-5");
     expect(f5.model).toBe("fable-5");
@@ -1102,6 +1183,102 @@ describe("Task 6 - transcript path round-trip + foldTranscriptIntoLedger", () =>
         "stage-before-transition"
       ].byAgent["code-reviewer"].tokens.output,
     ).toBe(50);
+  });
+
+  test("a session that left its workflow folds none of its usage", () => {
+    const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+    const fold = (source: "archive" | "space-switch-none" | "none") => {
+      const dir = mkProject();
+      const session = "01995100-0000-7000-8000-000000000267";
+      // Leaving should have cleared this stamp; the session kept it.
+      writeSessionIntentUuid(dir, session, "01995100-0000-7000-8000-00000000a267");
+      writeSessionBinding(dir, session, "default", null, source);
+      const transcript = join(dir, "session.jsonl");
+      writeFileSync(transcript, assistantLine({ uuid: `left-${source}`, timestamp: "t", model: "opus", input: 100 }));
+      const result = Bun.spawnSync([process.execPath, hook], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+        stdin: new TextEncoder().encode(JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage s --result completed" },
+          session_id: session,
+          transcript_path: transcript,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+      return existsSync(ledgerPath(dir)) ? Object.keys(loadLedger(dir).workflows) : [];
+    };
+    expect(fold("archive")).toEqual([]);
+    expect(fold("space-switch-none")).toEqual([]);
+    // A conversation that never chose a record still folds, as before any workflow exists.
+    expect(fold("none")).toEqual(["record:default/legacy"]);
+  });
+
+  test("usage produced while outside every workflow is not folded into the workflow joined later", () => {
+    const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+    const dir = mkProject();
+    const session = "01995100-0000-7000-8000-000000000268";
+    const transcript = join(dir, "session.jsonl");
+    const fold = () => {
+      const result = Bun.spawnSync([process.execPath, hook], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+        stdin: new TextEncoder().encode(JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage s --result completed" },
+          session_id: session,
+          transcript_path: transcript,
+        })),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(result.exitCode).toBe(0);
+    };
+    // Archived: the session is bound to no record while these turns happen.
+    writeSessionBinding(dir, session, "default", null, "archive");
+    writeFileSync(transcript, `${assistantLine({ uuid: "outside", timestamp: "t", model: "opus", input: 100 })}\n`);
+    fold();
+    // It then joins another record and works there.
+    const joined = createIntent(dir, "joined-work", "default", "feature");
+    writeSessionBinding(dir, session, "default", joined.dirName, "switch");
+    appendFileSync(transcript, `${assistantLine({ uuid: "inside", timestamp: "t", model: "opus", input: 7 })}\n`);
+    fold();
+    const workflows = loadLedger(dir).workflows;
+    expect(Object.keys(workflows)).toEqual([`intent:${joined.uuid}`]);
+    // Only the turn after the join; the 100 input tokens from outside are not replayed.
+    expect(workflows[`intent:${joined.uuid}`].totals.tokens.input).toBe(7);
+  });
+
+  test("a stale ledger first met outside every workflow is left for the rebuild", () => {
+    const hook = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "hooks", "aidlc-fold-usage.ts");
+    const dir = mkProject();
+    const session = "01995100-0000-7000-8000-000000000269";
+    const transcript = join(dir, "session.jsonl");
+    writeFileSync(transcript, `${assistantLine({ uuid: "outside", timestamp: "t", model: "opus", input: 100 })}\n`);
+    // A ledger from before the current schema: the next fold that owns the bytes rebuilds it.
+    mkdirSync(join(dir, "aidlc", ".aidlc-sessions"), { recursive: true });
+    const stale = JSON.stringify({ schemaVersion: 2, cursors: {}, workflows: {} });
+    writeFileSync(ledgerPath(dir), stale);
+    writeSessionBinding(dir, session, "default", null, "archive");
+    const result = Bun.spawnSync([process.execPath, hook], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+      stdin: new TextEncoder().encode(JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "bun .claude/tools/aidlc-orchestrate.ts report --stage s --result completed" },
+        session_id: session,
+        transcript_path: transcript,
+      })),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(ledgerPath(dir), "utf-8")).toBe(stale);
   });
 
   test("quoted lifecycle text does not flush an active subagent group", () => {

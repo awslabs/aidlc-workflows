@@ -9,7 +9,7 @@ keywords:
 description: Facilitated group session with mandatory gates
 skeleton: on
 review_cap: advisory
-guard_policy: relaxed
+guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: on
@@ -25,7 +25,7 @@ construction, and operation arc end to end (so participants see the whole
 lifecycle) while skipping the ideation discovery stages that a facilitator
 front-loads by hand.
 
-Guard Policy defaults to relaxed: moved inputs are reported once and plan approval and review freeze are lowered for undirected work; a facilitator who wants approvals reopened and every fence up sets strict.
+Guard Policy defaults to off: moved inputs are reported once and plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work; human presence stays up, and a facilitator who wants approvals reopened and every fence up sets strict.
 
 ## Why these stages, why skip those
 

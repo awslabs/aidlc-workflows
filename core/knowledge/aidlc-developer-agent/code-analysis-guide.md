@@ -31,9 +31,28 @@ Identify frameworks by scanning imports and configuration:
 - **Spring Boot**: `@SpringBootApplication`, `application.properties/yml`
 - **Rails**: `config/routes.rb`, `app/controllers/`, `ActiveRecord`
 
+## What to Skip
+
+Scan what people wrote. Follow the repository's `.gitignore` files, and also
+skip generated and installed content that nothing ignores:
+
+- **Build outputs**: .NET `bin/` and `obj/` beside a `.csproj`, `.fsproj` or
+  `.vbproj` (and `out/` from `dotnet publish -o out`), `dist/`, `build/`,
+  `target/`, `coverage/`, and compiled files such as `*.dll`, `*.pdb`,
+  `*.class` and `*.pyc`
+- **Dependencies**: `node_modules/`, `.venv/` and `venv/`, `vendor/`, and
+  NuGet's solution-level `packages/`
+- **IDE and tool caches**: `.vs/`, `.idea/`, `.gradle/`, `__pycache__/`,
+  `.pytest_cache/`, `.next/`
+
+A folder with one of these names that holds hand-written code is source: Node's
+`bin/www`, Rails' `bin/` scripts, a hexagonal `adapter/out/` package, or a
+JavaScript monorepo's `packages/`. Open a file in it to tell which.
+
 ## Source File Classification
 
-Classify every source file into one of these categories:
+Classify every source file that "What to Skip" leaves in into one of these
+categories:
 - **Model/Entity**: Data structures, database models, DTOs, schemas
 - **Controller/Handler**: Request routing, input parsing, response formatting
 - **Service/UseCase**: Business logic, orchestration, domain operations

@@ -20,6 +20,9 @@ import {
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
+  openDecisionBlock,
+  readProtectedQuestion,
+  readProtectedResponse,
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
@@ -67,6 +70,8 @@ import {
   holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
+  humanTurnState,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
@@ -179,6 +184,13 @@ import {
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
 import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import {
+  APPROVAL_GATE_CHOICES,
+  readApprovalGateReply,
+  readSummaryConfirmationReply,
+  replyFollowUp,
+  SUMMARY_CONFIRMATION_CHOICES,
+} from "./aidlc-reply-reader.ts";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -252,6 +264,115 @@ function parseFlags(
   }
   return { positional, flags };
 }
+
+// decision and answer read only their flags, so a word outside any flag used to
+// vanish and the record kept a value cut short. A value arrives split like this
+// when it was not quoted as one argument, or when Windows PowerShell 5.1 passed
+// it with a bare double quote inside: that shell removes those quotes and can
+// split the value at them, so `--details 'Chose "Option A" for auth'` arrives as
+// `--details "Chose Option"` plus a separate `A for auth`. Refuse before
+// anything is recorded. The refusal prints no rebuilt command: the split parts
+// have already lost their quotes, so only the caller still has the person's
+// exact words. It says how to pass them instead (in Windows PowerShell 5.1 a
+// double quote written as \" inside the value reaches the engine intact).
+// A split fragment can also start with `--`: `Run "todo --help" first` passed
+// with bare quotes arrives as `--details "Run todo"` plus `--help first`, which
+// parseFlags would take as one more flag and the handler would ignore. So a
+// `--` token is refused unless it is an option the subcommand reads (below).
+// Walks the raw arguments (the `--project-dir` pair included), mirroring
+// parseFlags, so the words are named with the flag they really followed.
+function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[]): void {
+  const what = subcommand === "decision" ? "this decision" : "this answer";
+  // The example uses this subcommand's own free-text flag, so copying it never
+  // passes an option the subcommand refuses. The single-quote clause matches
+  // the Kiro IDE skill: through aidlc.cmd, cmd.exe acts on & | < > ^ between a
+  // value's inner double quotes, and the Kiro IDE hook refuses that command.
+  const textFlag = subcommand === "decision" ? "--decision" : "--details";
+  const howToPass = (example: string): string =>
+    "Run the command again with each value as one argument, in the person's exact words; " +
+    `in Windows PowerShell write each double quote inside a value as \\" (for example ${textFlag} '${example}'), ` +
+    "or as a single quote ('') when the value also holds &, |, <, > or ^.";
+  const options = subcommand === "decision" ? DECISION_OPTIONS : ANSWER_OPTIONS;
+  let first: { flag: string; value: string; words: string[] } | null = null;
+  let open: { flag: string; value: string; words: string[] } | null = null;
+  const unattached: string[] = [];
+  let seenSubcommand = false;
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i];
+    if (a.startsWith("--")) {
+      if (!options.has(a)) {
+        error(
+          `Cannot record ${what}: ${JSON.stringify(a)} is not an option of log ${subcommand}, so it is probably ` +
+            `part of a value that a bare double quote split. ${howToPass('Run \\"todo --help\\" first')}`,
+        );
+      }
+      if (first === null && open !== null && open.words.length > 0) first = open;
+      open = null;
+      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level";
+      const next = rawArgs[i + 1];
+      if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
+      open = { flag: a, value: next, words: [] };
+      i++;
+    } else if (!seenSubcommand && a === subcommand) {
+      if (first === null && open !== null && open.words.length > 0) first = open;
+      open = null;
+      seenSubcommand = true;
+    } else if (open !== null) {
+      open.words.push(a);
+    } else {
+      unattached.push(a);
+    }
+  }
+  if (first === null && open !== null && open.words.length > 0) first = open;
+  if (unattached.length > 0) {
+    error(
+      `Cannot record ${what}: ${JSON.stringify(unattached.join(" "))} is not the value of any flag. ` +
+        "Remove it, or put it right after the flag it belongs to, as one argument.",
+    );
+  }
+  if (first === null) return;
+  error(
+    `Cannot record ${what}: ${JSON.stringify(first.words.join(" "))} arrived as a separate argument after ` +
+      `${first.flag} ${JSON.stringify(first.value)}, so only ${JSON.stringify(first.value)} would be recorded. ` +
+      "A value splits like this when it is not quoted as one argument, or when Windows PowerShell passes a bare " +
+      `double quote inside it (it removes those quotes). ${howToPass('Chose \\"Option A\\" for auth')}`,
+  );
+}
+
+// The options decision and answer read: their handlers, the helpers each one
+// passes its flags to (summaryQuestionEvidence, verificationCommandFromFlags,
+// resolvePlanApprovalSession, sessionWarning, planApprovalTarget,
+// handlePlanApprovalBatch, constructionPolicyFields), parseFlags' valueless
+// --single and --stage-level, and the --project-dir main extracts. A new
+// option either subcommand reads belongs here too, or refuseSplitValues
+// refuses it.
+const LOG_INTERACTION_OPTIONS = [
+  "--project-dir",
+  "--stage",
+  "--unit",
+  "--stage-level",
+  "--single",
+  "--checkpoint",
+  "--session",
+  "--questions-file",
+  "--batch-file",
+  "--command",
+  "--command-file",
+  "--field",
+  "--value",
+  "--override",
+  "--override-file",
+  "--options",
+  "--hash-option-labels",
+  "--legacy-directive-options",
+];
+const DECISION_OPTIONS: ReadonlySet<string> = new Set([
+  ...LOG_INTERACTION_OPTIONS,
+  "--decision",
+  "--rationale",
+  "--exact-option-labels",
+]);
+const ANSWER_OPTIONS: ReadonlySet<string> = new Set([...LOG_INTERACTION_OPTIONS, "--details"]);
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
@@ -521,8 +642,11 @@ function constructionPolicyFields(flags: Record<string, string>): Record<string,
 }
 
 // The stage's latest recorded question is the summary's: recorded with the
-// checkpoint, or offering its two choices in the plain form.
-function answersSummaryQuestion(pd: string, stage: string, unit: string | null, single: boolean): boolean {
+// checkpoint, or offering its two choices in the plain form. Says which, or
+// null when the latest question is something else.
+function answersSummaryQuestion(
+  pd: string, stage: string, unit: string | null, single: boolean,
+): "checkpoint" | "plain" | null {
   const workflow = single ? `single-stage:${stage}` : null;
   const decisions = readAuditShardEvents(pd).filter((row) =>
     row.event === "DECISION_RECORDED" &&
@@ -530,11 +654,10 @@ function answersSummaryQuestion(pd: string, stage: string, unit: string | null, 
     auditBlockField(row.block, "Workflow") === workflow &&
     (unit === null || auditBlockField(row.block, "Unit") === unit),
   );
-  return maximalAttemptEvents(decisions).some((row) => {
-    const checkpoint = auditBlockField(row.block, "Checkpoint");
-    return checkpoint === SUMMARY_CONFIRMATION_CHECKPOINT ||
-      (checkpoint === null && isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined));
-  });
+  const latest = maximalAttemptEvents(decisions).map((row) => auditBlockField(row.block, "Checkpoint") === null
+    ? (isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined) ? "plain" : null)
+    : auditBlockField(row.block, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT ? "checkpoint" : null);
+  return latest.includes("checkpoint") ? "checkpoint" : latest.includes("plain") ? "plain" : null;
 }
 
 // A summary confirmation recorded without its checkpoint flags is an ordinary
@@ -543,9 +666,12 @@ function answersSummaryQuestion(pd: string, stage: string, unit: string | null, 
 // choices) on a stage that owes one, refuse it and name the command that counts.
 function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "decision" | "answer"): void {
   if (flags.checkpoint !== undefined) return;
+  // An answer names a summary choice in the person's own words too.
+  const summaryRead = verb === "answer" ? readSummaryConfirmationReply(flags.details ?? "") : null;
+  const summaryReply = summaryRead?.choice ?? null;
   const looksLikeSummary = verb === "decision"
     ? isSummaryConfirmationOptions(flags.options)
-    : isSummaryConfirmationChoice(flags.details);
+    : isSummaryConfirmationChoice(flags.details) || summaryReply !== null;
   if (!looksLikeSummary) return;
   const pd = resolveActiveProjectDir(projectDir);
   const stage = loadStageGraphAll().find((entry) => entry.slug === flags.stage);
@@ -555,8 +681,18 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
   const unit = flags.unit ?? null;
   // An ordinary question may take the same words as its answer; only an answer
   // to the stage's summary question is refused.
-  if (verb === "answer" && !answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined)) return;
-  const details = verb === "answer" && /^request/i.test(flags.details.trim()) ? "Request changes" : "Looks correct";
+  const asked = verb === "answer" ? answersSummaryQuestion(pd, stage.slug, unit, flags.single !== undefined) : null;
+  if (verb === "answer" && asked === null) return;
+  // A change request that says what to change keeps the person's words, so
+  // the receipt carries them and nobody asks "What should change?" again. The
+  // command renderer quotes them for the shell; line breaks become spaces.
+  // A summary asked in the plain form is asked again, so its answer takes the
+  // person's new reply, never this one.
+  const details = asked === "plain"
+    ? "<their reply>"
+    : verb === "answer" && (summaryReply === "Request changes" || /^request/i.test(flags.details.trim()))
+    ? (summaryRead?.feedback ? summaryRead.feedback.replace(/\s+/g, " ") : "Request changes")
+    : "Looks correct";
   const commands = summaryConfirmationCommands({
     stage: stage.slug,
     unit: unit ?? (isPerUnitStage(stage) ? "<unit>" : null),
@@ -571,9 +707,14 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
       ? `Refusing to record this ${verb}: ${why} Run \`${commands.decision}\` instead (the summary ` +
           "section needs exactly one blank `[Answer]:` line), end the turn, and after the human replies run " +
           `\`${commands.answer}\`.`
+      : asked === "checkpoint"
+      // The person already answered the recorded summary question: record it
+      // with the flags, without asking again.
+      ? `Refusing to record this ${verb}: ${why} The summary question is already recorded and answered; ` +
+          `write the choice their reply names in its \`[Answer]:\` line and run \`${commands.answer}\`.`
       : `Refusing to record this ${verb}: ${why} Record the summary with \`${commands.decision}\` ` +
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
-          `reply run \`${commands.answer}\`.`,
+          `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
   );
 }
 
@@ -1130,6 +1271,27 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Session") === session;
 }
 
+// When the hook read the person's reply to this question and recorded no
+// choice, say what to ask next rather than refuse with no reason: on a harness
+// that drops the hook's notice, this is the only place the conductor sees it.
+function refuseUnrecordedProtectedReply(
+  pd: string,
+  session: string,
+  kind: "verification-command" | "construction-policy",
+  reply: string,
+  recovery: string,
+): void {
+  const question = readProtectedQuestion(pd, session);
+  if (question?.kind !== kind || question.replied !== true || readProtectedResponse(pd, session) !== null) return;
+  const read = readApprovalGateReply(reply, { bound: false });
+  if (read.choice !== null) return;
+  const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+  error(
+    `The person's reply to this question recorded no choice. ${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
+      recovery,
+  );
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -1160,29 +1322,48 @@ function handleAnswer(args: string[]): void {
   const verificationCheckpoint = flags.checkpoint === "verification-command";
   const policyCheckpoint = flags.checkpoint === "construction-policy";
   const policyFields = policyCheckpoint ? constructionPolicyFields(flags) : null;
-  if (policyCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
-    error('Construction policy requires the exact human choice "Approve" or "Request Changes". ' + CONSTRUCTION_POLICY_RECOVERY);
-  }
   if (verificationCheckpoint && (flags.single !== undefined || flags.unit !== undefined)) {
     error("Construction verification commands apply to the whole intent; omit --single and --unit.");
   }
-  if (verificationCheckpoint && flags.details !== "Approve" && flags.details !== "Request Changes") {
-    error('Construction verification command requires the exact human choice "Approve" or "Request Changes". ' + VERIFICATION_COMMAND_RECOVERY);
+  // The person's reply, read in their own words; the receipt records the
+  // choice it names. The self-attribution tripwire below reads the words.
+  // A dismissed widget keeps its own refusal below.
+  const reply = flags.details;
+  if ((policyCheckpoint || verificationCheckpoint) && !isNonAnswer(reply)) {
+    const read = readApprovalGateReply(reply, { bound: true });
+    if (read.choice !== "Approve" && read.choice !== "Request Changes") {
+      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+      error(
+        `${policyCheckpoint ? "Construction policy" : "Construction verification command"} reply ` +
+          `${formatReceivedReply(reply)} did not choose "Approve" or "Request Changes". ` +
+          `${replyFollowUp(followUp, APPROVAL_GATE_CHOICES)} ` +
+          (policyCheckpoint ? CONSTRUCTION_POLICY_RECOVERY : VERIFICATION_COMMAND_RECOVERY),
+      );
+    }
+    flags.details = read.choice;
   }
   if (flags["batch-file"] !== undefined) {
     handlePlanApprovalBatch(resolveActiveProjectDir(projectDir), flags, "answer");
     return;
   }
-  if (
-    summaryCheckpoint &&
-    flags.details !== "Looks correct" &&
-    flags.details !== "Request changes"
-  ) {
-    error(
-      `Cannot record the summary choice because reply ${formatReceivedReply(flags.details)} ` +
-        'did not match an offered option. Present "Looks correct" and ' +
-        '"Request changes". Re-present those choices and wait for the human to choose one.',
+  let summaryFeedback: string | null = null;
+  if (summaryCheckpoint && !isNonAnswer(reply)) {
+    // A plain yes answers the summary only when its prompt is the stage's
+    // latest open question; another question asked after it could own the yes.
+    const open = openDecisionBlock(resolveActiveProjectDir(projectDir), flags.stage);
+    const read = readSummaryConfirmationReply(
+      reply,
+      open === null || auditBlockField(open, "Checkpoint") === SUMMARY_CONFIRMATION_CHECKPOINT,
     );
+    if (read.choice === null) {
+      const followUp = read.reading === "confirm" || read.reading === "question" ? read.reading : "unclear";
+      error(
+        `Cannot record the summary choice because reply ${formatReceivedReply(reply)} ` +
+          `did not match an offered option. ${replyFollowUp(followUp, SUMMARY_CONFIRMATION_CHOICES)}`,
+      );
+    }
+    flags.details = read.choice;
+    summaryFeedback = read.feedback;
   }
   if (
     planCheckpoint &&
@@ -1252,6 +1433,8 @@ function handleAnswer(args: string[]): void {
     fields["Questions File"] = summaryEvidence!.relativePath;
     fields["Questions SHA-256"] = summaryEvidence!.sha256;
     fields["Hash Scope"] = SUMMARY_CONFIRMATION_HASH_SCOPE;
+    // A change request's own words ride on the receipt as its feedback.
+    if (summaryFeedback !== null) fields.Feedback = summaryFeedback.replace(/\s+/g, " ");
   }
   if (verificationCommand) {
     fields.Checkpoint = VERIFICATION_COMMAND_CHECKPOINT;
@@ -1331,7 +1514,7 @@ function handleAnswer(args: string[]): void {
       (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
       humanPresenceGuardDisabled()
         ? null
-        : selfAttributedDecisionMarker(flags.details, "answer");
+        : selfAttributedDecisionMarker(reply, "answer");
     if (answerAuthorship) {
       error(
         `Cannot record this answer for "${flags.stage}" because --details says it was ` +
@@ -1345,6 +1528,7 @@ function handleAnswer(args: string[]): void {
         error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + VERIFICATION_COMMAND_RECOVERY);
       }
       // Neither presence bypass nor autonomy supplies the hook-recorded choice.
+      refuseUnrecordedProtectedReply(pd, fields.Session, "verification-command", reply, VERIFICATION_COMMAND_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
@@ -1362,6 +1546,7 @@ function handleAnswer(args: string[]): void {
       if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
         error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
+      refuseUnrecordedProtectedReply(pd, fields.Session, "construction-policy", reply, CONSTRUCTION_POLICY_RECOVERY);
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
@@ -1505,7 +1690,9 @@ function handleAnswer(args: string[]): void {
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
           checkpoint: "summary-confirmation",
           stage: flags.stage,
+          choice: flags.details,
           ...(positive ? { summary_authorization_id: authorization.id } : {}),
+          ...(summaryFeedback !== null ? { feedback: summaryFeedback } : {}),
         }),
       );
       return;
@@ -1662,10 +1849,17 @@ function handleAnswer(args: string[]): void {
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
     } else if (!humanActedSinceLastAnswer(pd)) {
+      // One reply records one answer. When an earlier answer already used the
+      // latest reply, the person did reply: the answers from that reply belong
+      // in one entry, so say that instead of asking them to reply again.
       error(
-        "Cannot record this answer because no new human reply has arrived for the question. "
-          + "Wait for the human to type an answer, then try again."
-          + unattendedHumanPresenceHint(),
+        humanTurnState(pd) === "answered" && humanTurnMintAllowed()
+          ? "Cannot record this answer because the person's latest reply is already recorded as an answer. "
+            + "Record every answer from one reply in a single answer entry, and wait for the next reply "
+            + "before recording another."
+          : "Cannot record this answer because no new human reply has arrived for the question. "
+            + "Wait for the human to type an answer, then try again."
+            + unattendedHumanPresenceHint(),
       );
     }
 
@@ -3275,6 +3469,9 @@ export function main(argv: string[]): void {
 
   const subcommand = filteredArgs[0];
   readOnlyCommand = subcommand === "answers";
+  if (subcommand === "decision" || subcommand === "answer") {
+    refuseSplitValues(subcommand, rawArgs);
+  }
 
   try {
     switch (subcommand) {

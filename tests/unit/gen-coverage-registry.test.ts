@@ -819,6 +819,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-summary-confirmation-plain-form.test.ts",
     "integration/t-guard-native-remedies.test.ts",
     "integration/t-guard-recovery-production.test.ts",
+    // spawns bun on a scratch copy of the runner, whose file list names the
+    // runtime-budget tool that sdk-drive.ts loads through the credential broker
+    "integration/t-e2e-native-cancellation.test.ts",
     "unit/t-kiro-ide-native-recovery.test.ts",
     // spawns the real `next`, human-turn hook, and guard: the engine's question,
     // the person's reply, and what the guard refuses are process boundaries
@@ -826,11 +829,18 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, utility setter, and guard: who
     // turns plan approval off, and what the engine builds, are process boundaries
     "unit/t-plan-approval-switch.test.ts",
+    // spawns the real engine, human-turn hook, Kiro adapter, and worker brief: one
+    // approval through the rule parts to the build is a process boundary
+    "unit/t-plan-approval-stock-parts.test.ts",
+    // spawns the real `next` and `continue` on the packaged Copilot tree: the
+    // printed result is what VS Code's terminal tool keeps or cuts
+    "unit/t-copilot-directive-budget.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
     "unit/t238-build-binaries.test.ts",
     "unit/t243-install-mechanism.test.ts",
+    "unit/t256-workspace-doctor.test.ts",
     "unit/t267-usage.test.ts",
     "unit/t270-metrics-transport.test.ts",
     "unit/t280-contract-design-wiring.test.ts",
@@ -1005,6 +1015,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t326-team-unit-merge-guards.test.ts",
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
+    "integration/t351-fresh-clone-participation.test.ts",
     "integration/t33-hook-concurrency.test.ts",
     "integration/t328-authority-rebinding.test.ts",
     "integration/t329-guard-recovery-loop.test.ts",
@@ -1052,8 +1063,10 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-kiro-acp-protocol-trace.test.ts",
     "unit/t-memory-seed.test.ts",
     "unit/t-native-hook-project-root.test.ts",
+    "unit/t-own-words-gates.test.ts",
     "unit/t-plan-approval-recovery-paths.test.ts",
     "unit/t-recorded-bypass-parity.test.ts",
+    "unit/t-request-changes-own-words.test.ts",
     "unit/t-tui-process-identity.test.ts",
     "unit/t07-hook-audit-logger.test.ts",
     "unit/t08.test.ts",

@@ -218,7 +218,7 @@ describe("t338 atomic per-intent settings", () => {
       { "Old Depth": "Standard", "New Depth": "Minimal" },
       { "Old Strategy": "Standard", "New Strategy": "Comprehensive" },
       { "Old Override": "none set", "New Override": "none" },
-      { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
+      { "Old Value": "off", "New Value": "strict", Source: "you" },
       { Key: "sensors", Old: "on", New: "off", Source: "command" },
       { Key: "learnings", Old: "on", New: "off", Source: "command" },
       { Key: "summary_confirmation", Old: "off", New: "on", Source: "command" },

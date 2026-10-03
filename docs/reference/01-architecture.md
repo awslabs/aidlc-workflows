@@ -361,8 +361,11 @@ under `tools/data/`:
   version, distribution, and harness directory.
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
-  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
-  `whole-file`). Optional integrations and exact legacy hashes are declared
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`,
+  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  file key by key: it adds a shipped key only when absent, keeps every other
+  key and comment, and is left out of the copy runtime). Optional
+  integrations and exact legacy hashes are declared
   here; an unclassified top-level entry makes packaging or loading fail.
 
 `aidlc config` validates the stamp and descriptor before planning. It writes a
@@ -454,7 +457,11 @@ User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
 the installed hook bytes, and probes the selected harness CLI. The recorded
 absolute paths are diagnostic evidence, not rewritten hook commands: host
-allowlists and Codex trust hashes bind the bare command prefix.
+allowlists and Codex trust hashes bind the bare command prefix. The doctor's
+runtime row also reads the project's hook heartbeats: a command found only on
+the current shell's PATH passes when those hooks fired in the last ten minutes
+(not stale, and with no `session-end` heartbeat newer than the last
+`session-start`), since they ran through it.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the
@@ -561,6 +568,34 @@ or audit failure restores committed paths in reverse order. A failed rollback
 preserves recovery evidence, and the next transaction quarantines abandoned
 staging rather than deleting it. Project init/refresh, machine lifecycle,
 project pins, plugin selection, and plugin sync all build plans for this engine.
+
+The root lock prefers hard-link publication and falls back automatically to an
+owner-stamped directory when hard links are unavailable. Both use
+`.aidlc-transaction.lock`, so a live legacy file owner still blocks the directory
+fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
+gate in the temporary directory, keyed by canonical root, around transaction
+execution, including
+acquisition, stale-owner recovery, and ownership-checked release. Directory
+recovery requires a matching host/boot identity and a dead owner PID; unknown,
+foreign, or incomplete directory owners are retained for manual diagnosis.
+
+The coordination contract covers cooperating processes on one continuously
+running mount on one host with a common local temporary directory (`TMPDIR` on
+Unix), canonical root, and PID namespace. It provides no distributed locking
+between hosts or independent mounts. Moving the gate locally does not change
+the data contract: workflow append and descriptor identity must remain coherent,
+and transaction publication still depends on atomic file replacement and
+directory rename supplied by the filesystem. No copy-and-delete rename
+fallback is added.
+
+`assertTransactionFilesystem` probes exclusive creation, regular-file `fsync`,
+mutable append/readback and descriptor identity, file/directory rename, Unix
+`chmod`, and transaction and runtime workflow locking. The first-run wizard and
+transactions using the directory fallback invoke it; unsupported directory
+`fsync` is tolerated. Successful probes cannot establish crash durability or
+rename atomicity, nor certify a driver through simulated failures. Mountpoint's
+missing directory rename/mutable-file support and s3fs's non-atomic rename
+remain outside the full transaction contract. See the [storage compatibility matrix](../guide/18-install-and-lifecycle.md#transactions-and-recovery).
 
 ### Release assembly and provenance
 
@@ -748,6 +783,32 @@ binding then precede the two shared per-user cursors:
   means "no record yet" - the signal the orchestrator uses to auto-creation the
   first intent.
 
+**Participation.** Resolution names a record; it does not decide whether this
+conversation may write into or be held by it. `workflowParticipation()` does, from
+machine-local evidence only: a binding whose `source` records a choice (`create`,
+`migration`, `switch`, `space-switch-cursor`, `cursor`, `stamp`), or the `active-intent`
+cursor naming the record; and, re-checked on every call rather than trusted as a
+stored source, a validated delegated worktree, this worktree's own metadata
+(checked against the creating repository's git common dir) and a Unit claimed on
+this machine for that intent. A creation seen only in a command's output counts
+as `create` when intent create's one-shot receipt in the record's gitignored
+engine dir is present. On resume, a session with no binding follows its own UUID
+stamp and binds that record as `stamp`: only a joined session is stamped, since
+writers that bind without a choice (`observed-create`, `space-switch-lone`) clear
+the stamp. A lone committed record and an unsourced binding whose cursor names
+another record are not evidence, so a plain
+`git worktree` without AI-DLC worktree metadata selects its intent explicitly. Hooks classify once
+per call, with the payload session pinned so their writes use the same selection;
+a conversation outside the selected workflow writes nothing into it and is not held
+by its gates, while runtime integrity, direct lifecycle-command refusals and the
+claimed-checkout write bound still apply. The engine treats such a conversation as
+having no active intent (`next` asks which intent to work on; `continue`, `report`
+and `park` refuse). When participation cannot be decided because a sibling-only
+worktree's delegated metadata is malformed or stale, no workflow is selected: hooks
+write nothing, the reviewer read scope fails open, gates do not stand aside so
+Plan Approval refuses mutations, and the engine refuses with the file to repair
+(`.aidlc/worktree-meta.json`) or the parent checkout to work from.
+
 Session bindings live at
 `aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
 their session through the nearest live entry in
@@ -834,7 +895,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 108-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 110-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

@@ -3338,12 +3338,13 @@
       "keywords": [
         "fix",
         "bug",
-        "broken"
+        "broken",
+        "bugfix"
       ],
       "description": "Fix a specific bug",
       "runner": true,
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3391,7 +3392,7 @@
       "keywords": [],
       "description": "V1-style ceremony through Inception and Construction - the implicit default",
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3540,7 +3541,7 @@
       "description": "Full lifecycle for new features, practical depth",
       "runner": true,
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3592,7 +3593,7 @@
       ],
       "description": "Infrastructure changes",
       "skeleton": true,
-      "guardPolicy": "strict",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3644,7 +3645,7 @@
       "description": "Skip operations, ship the core",
       "runner": true,
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3697,7 +3698,7 @@
       ],
       "description": "Prove feasibility fast",
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3749,7 +3750,7 @@
       ],
       "description": "Clean up existing code",
       "skeleton": false,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3803,7 +3804,7 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false,
-      "guardPolicy": "strict",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
@@ -3856,7 +3857,7 @@
       "description": "Facilitated group session with mandatory gates",
       "testStrategy": "Minimal",
       "skeleton": true,
-      "guardPolicy": "relaxed",
+      "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",

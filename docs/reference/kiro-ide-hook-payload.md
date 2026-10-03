@@ -31,11 +31,18 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the payload-dependent targets,
-including `plan-approval-guard`, the two terminal-command targets, plus
-`session-start` and `continue-workflow` for their modern `session_id`, and
-`record-human-turn` for the exact approval response. Every other target
-(including the per-tool-call approval floor) touches neither channel and keeps
-its zero-latency path.
+including `plan-approval-guard`, the per-tool-call approval floor
+(`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
+that concurrent chats are held by their own gates), the two terminal-command
+targets, plus `session-start` and `continue-workflow` for their modern
+`session_id`, and `record-human-turn` for the exact approval response. Every
+other target touches neither channel and keeps its zero-latency path. The
+approval floor runs on every `PreToolUse`; on 1.x its payload arrives and the
+channel closes with the call, so the normal path does not wait, and only a
+channel that never closes holds it until the ceiling. A 0.12 payload carries no
+`session_id`, so the floor uses the identity derived from the IDE host
+instance: every chat in that host shares it and is judged by the gates of the
+workflow it is bound to.
 
 The legacy environment variable name does not imply raw user text: the measured
 0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
@@ -253,6 +260,47 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   session identity use the host-derived identity or the retained session, with
   an explicit legacy bucket when neither is available. The 0.12 camelCase
   fallback reads the command from `toolArgs.command`.
+- **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
+  reads the command line Windows PowerShell 5.1 builds for it: a value holding
+  a space is wrapped in double quotes with its own double quotes left as they
+  are, and cmd.exe acts on `&`, `|`, `<`, `>` and `^` outside its quotes. So
+  `--details 'Use "R & D" team'`, or the same with `\"`, runs `D" team"` as a
+  separate command. Before anything else, `terminal-command-guard` refuses
+  (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
+  `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
+  quotes, or in which a value holds a `%NAME%` pair (cmd.exe replaces it with
+  that environment variable's value, even inside its quotes; a lone `%` passes,
+  and so does a pair whose name would start or end with a space, such as the
+  one in `10% and 20%`). The reason is a fixed sentence that names the flag
+  whose value is at fault (or "A value") and the character or "a %NAME% pair",
+  and never repeats the value, so text in a value cannot add lines to it. It
+  simulates PowerShell 5.1's argument passing (an empty argument dropped, a
+  value with a space or tab wrapped in double quotes) and cmd.exe's quote
+  toggling, reading past a `#` comment and a closed `<# ... #>` block comment,
+  and joining a line that ends in a backtick continuation (CRLF, LF or CR) to
+  the next. Statements inside `(...)`, `$(...)`, `@(...)`, `@{...}` and
+  `{...}` groupings are read too, nested or not, so an `aidlc` call such as
+  `(aidlc engine orchestrate next 2>$null | Select-Object -Last 1)` is
+  checked like any other; a `$(...)` inside a double-quoted string is not.
+  Redirects (`2>$null`, `*>$null`, `>$null`, `2>&1`, `> file`) are never
+  `aidlc` values. A person's words that PowerShell resolves before
+  `aidlc.cmd` runs are refused as well, because the check cannot see what
+  reaches cmd.exe. That is the value of `--details`, `--decision`,
+  `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` or
+  `--arguments`, or the request after `next`, given as a variable such as `$x`
+  or `$env:X`, an expression such as `$(...)`, or a double-quoted string
+  holding `$` or a backtick. The reason says the value comes from a
+  PowerShell variable or expression and asks for the value itself in single
+  quotes. A variable for any other flag or for a positional token, such as
+  the receipt in `continue $obj.receipt`, passes, unless its own text holds a
+  metacharacter or a `%NAME%` pair; so does a variable in any other command.
+  A statement it cannot
+  read to the end (one using the `--%` stop-parsing token, or one holding an
+  unterminated quote or block comment) is refused when its program is `aidlc`
+  or `aidlc.cmd`, bare, by path, or after `&` or `.`, as far as the words
+  before that point show; a statement running any other program passes, even
+  when it mentions aidlc as data. `bun .kiro/tools/...` calls and other
+  programs are not checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels

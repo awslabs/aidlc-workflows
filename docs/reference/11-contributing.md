@@ -97,7 +97,7 @@ requires a passing Full Suite for the tagged commit: `release.yml` reuses a
 passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
-checks and release-asset validation, runs the full deterministic/live suite,
+checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
 concurrency; each later run re-reads releases and skips publication when the
@@ -106,7 +106,8 @@ that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
 them. A failing Full Suite does not block preview publication: the preview notes end
-with a Full Suite failure report, and the preview run stays red.
+with a Full Suite failure report. The separate Full Suite run retains its
+failed status without failing the Preview Release workflow.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
@@ -173,6 +174,24 @@ behavior accidentally:
 5. If authored prose invokes the command, use `{{INVOKE}}` or
    `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
    both local channels and run the package determinism guard.
+6. Declare `mutationScope` and `networkPolicy` truthfully: they also decide
+   whether VS Code runs the command with no Allow prompt. The Copilot adapter
+   answers `allow` in VS Code for an `engine` or `public` route whose
+   `mutationScope` is `none` or `project` and whose `networkPolicy` is
+   `forbidden`, after every guard passes; hook, adapter, and statusline routes
+   never qualify. A route that changes the machine or reaches the network keeps
+   the person's own approval. A verb that deletes, overwrites, or merges the
+   person's work or git history (for example `worktree discard`, `unit land`),
+   changes which stages, gates, or reviews the person sees (for example
+   `jump execute`; `recompose` keeps it only until the person has replied
+   since the last gate), switches the active intent or space, needs the
+   person's consent (for example `bolt abort`), reaches a remote, or runs code
+   AI-DLC does not ship (for example `knowledge onboard`, which runs the
+   configured extractor) must also be added to `keepsPrompt` in
+   `harness/copilot/hooks/aidlc-copilot-adapter.ts`, so the person sees the
+   prompt before it runs. An option that hands AI-DLC a command or script to
+   run belongs in `CALLER_RUNS` there. Arguments that read as paths outside the
+   project already keep the prompt.
 
 ## Adding an Install-Mechanism Mutation
 
@@ -204,6 +223,12 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 3. No task tracking needed -- the script runs in under a second
 4. Handle audit logging inside the script via `appendAuditEntry` or `appendAuditEntries` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks). Multi-setting mutations use one caller-held lock and append the complete audit batch before the single state write.
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
+
+Text a command prints must not repeat that command's own command line. VS
+Code's terminal tool drops a command's output up to the line that repeats the
+command it ran, so a doctor fix line that said "rerun `aidlc doctor`" reached
+the chat agent empty. Name a rerun in words ("run doctor again") instead;
+`tests/harness/vscode-output-trim.ts` models the rule for regression tests.
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
 
@@ -296,7 +321,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist; plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist or a fix request (`fix` or `bugfix` used as the request itself); plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
@@ -389,7 +414,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 ## Adding an Agent
 
-Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every `.md` file in that directory and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
+Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every persona `.md` file in that directory (one named `aidlc-*` or carrying `display_name`, `examples`, `tier`, or `plugin`) and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
 
 ### Steps
 
@@ -421,8 +446,8 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 ### What validates automatically
 
-- `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next invocation — no code edit.
-- The parser throws if `name` or `display_name` is missing, naming the file and the missing field.
+- `loadAgents()` discovers any new persona `.md` file in `.claude/agents/` on next invocation — no code edit. A persona is a file named `aidlc-*` or one whose frontmatter carries `display_name`, `examples`, `tier`, or `plugin`; any other file there is the host's own agent and is left alone.
+- The parser throws if a persona's `name` or `display_name` is missing, naming the file, the missing field, and (for a file not named `aidlc-*`) the key that made it a persona.
 - Agents are returned alphabetically sorted by slug, so `readdirSync` order on any platform produces the same output.
 - Intent creation creates the empty space-level `aidlc/knowledge/` directory (it does not seed per-agent subdirectories or READMEs).
 - Statusline rendering derives the display name from the same metadata source.

@@ -282,3 +282,63 @@ test("relative ignored seeds resolve from the source checkout after worker isola
     await pool.dispose(false);
   }
 }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+test("reusing a worker restores tracked, generated and Git state without changing its siblings", async () => {
+  const source = fixture();
+  mkdirSync(join(source, "dist"));
+  writeFileSync(join(source, "dist", "seed.txt"), "generated seed");
+  const pool = await prepareE2eWorkers(source, scratch(), 2);
+  try {
+    const [worker, sibling] = pool.workers;
+    writeFileSync(join(worker.root, "real.txt"), "changed");
+    writeFileSync(join(worker.root, "dist", "seed.txt"), "changed");
+    writeFileSync(join(worker.root, "untracked.txt"), "dirty");
+    git(worker.root, "config", "aidlc.contamination", "dirty");
+    await pool.reset(worker);
+    for (const root of [worker.root, sibling.root, source]) {
+      expect(readFileSync(join(root, "real.txt"), "utf8")).toBe("original bytes");
+      expect(readFileSync(join(root, "dist", "seed.txt"), "utf8")).toBe("generated seed");
+      expect(existsSync(join(root, "untracked.txt"))).toBe(false);
+      expect(git(root, "config", "--local", "--list")).not.toContain("aidlc.contamination");
+    }
+    await expect(pool.reset({ ...worker })).rejects.toThrow("outside this pool");
+  } finally {
+    await pool.dispose(false);
+  }
+});
+
+test("each file attempt gets fresh application homes while keeping the explicit broker config", async () => {
+  const pool = await prepareE2eWorkers(fixture(), scratch(), 1);
+  const output = scratch();
+  const homes: string[] = [];
+  const brokerConfig = join(output, "broker-config");
+  writeFileSync(brokerConfig, "broker seed");
+  try {
+    for (const attempt of [1, 2]) {
+      const artifacts = join(output, `attempt-${attempt}`);
+      const env = await e2eWorkerEnvironment(pool.workers[0], "t-file.test.ts", artifacts, {
+        ...process.env, AIDLC_TUI_BACKEND: "bun", AWS_CONFIG_FILE: join(output, "broker-config"),
+      }, true);
+      try {
+        expect(env.HOME).toBe(env.USERPROFILE);
+        expect(homes).not.toContain(env.HOME!);
+        homes.push(env.HOME!);
+        expect(env.AWS_CONFIG_FILE).toBe(join(env.HOME!, ".aws", "config"));
+        expect(readFileSync(env.AWS_CONFIG_FILE!, "utf8")).toBe("broker seed");
+        writeFileSync(env.AWS_CONFIG_FILE!, "dirty");
+        expect(readFileSync(brokerConfig, "utf8")).toBe("broker seed");
+        for (const key of ["HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENCODE_CONFIG_DIR", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]) {
+          const marker = join(env[key]!, "prior-file-state");
+          expect(existsSync(marker), key).toBe(false);
+          writeFileSync(marker, "dirty");
+        }
+      } finally {
+        await cleanupE2eTransports(pool.workers[0], env);
+        await finishE2eTemporaryFiles(env, artifacts, false);
+      }
+      expect(existsSync(env.HOME!)).toBe(false);
+    }
+  } finally {
+    await pool.dispose(false);
+  }
+});

@@ -166,7 +166,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -186,9 +186,25 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("/aidlc intent <name>");
+      expect(d.question).toContain("/aidlc intent <record>");
       expect(d.available_intents).toHaveLength(2);
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
+    });
+
+    test("a cursor-less space whose every intent is complete routes to creation, not the picker", () => {
+      const records = seedTwoIntentsNoCursor();
+      // Mark every record complete: finished work is not offered as a pick.
+      const rows = readIntentRegistry(proj).map((row) =>
+        records.includes(row.dirName ?? "") ? { ...row, status: "complete" } : row,
+      );
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      // New prose over an all-complete, cursor-less space: no picker, no
+      // "pieces of work" prompt — it routes to a creation-side directive.
+      const d = JSON.parse(next(["a brand new standalone thing"]).stdout.trim());
+      expect(d.ask_type).not.toBe("intent-pick");
+      expect(d.ask_type).not.toBe("new-work-routing");
+      expect(JSON.stringify(d)).not.toContain("pieces of work");
+      expect(recordDirs(proj).length).toBe(2); // read-only: no third intent yet
     });
 
     for (const selector of ["customer work", "x; touch pwned"]) {
@@ -232,6 +248,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.available_intents).toHaveLength(2);
         expect(d.new_work_description).toBe("Create a tiny TypeScript command-line program that prints Hello World.");
         expect(d.proposed_scope).toBe("poc");
+      });
+
+      test(`${harness.name}: the intent picker names the harness's own entry`, () => {
+        seedTwoIntentsNoCursor();
+        const orchestrator = join(harness.engineRoot, "tools", "aidlc-orchestrate.ts");
+        const d = JSON.parse(next(["--scope", "poc"], proj, orchestrator).stdout.trim());
+        expect(d.ask_type).toBe("intent-pick");
+        // A Codex user invokes the skill, not a slash command.
+        expect(d.question).toContain(`${harness.name === "codex" ? "$aidlc" : "/aidlc"} intent <record>`);
       });
     }
 

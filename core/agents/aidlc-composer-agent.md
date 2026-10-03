@@ -620,7 +620,9 @@ keep it as advisory evidence only. Route solely on
 - To confirm depth compatibility and read its settings (`guard_policy`,
   `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `review_cap`), read the `.md`
   of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
-  reads the same file as its settings baseline. **Efficiency rule**: never read
+  takes its settings and Guard Policy from the validator's `custom_start`
+  instead (Step 8), and reads that file for its settings only when the
+  validator echoes no `custom_start`. **Efficiency rule**: never read
   any other scope `.md` - the grid JSON has the complete EXECUTE/SKIP data; the
   `.md` files only add depth, keywords, and these settings.
 - If the final validator distance is `> 2` (or the depth is incompatible),
@@ -699,15 +701,21 @@ no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, and continues,
 and also stands the plan-approval and review-freeze checks aside; `off` does
 that and stands the state-transition and reviewer-scope checks aside too. No
-value removes a gate, and none of them touches human presence. For `mode: "matched"` copy the stock scope's
+value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md` in the order
 the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
-then strict when neither line is present) and say so in the rationale; the
-final `validate-grid --matched` run rejects any other value except `strict`. For `mode: "custom"` propose
-the value from the evidence: strict when `r` (risk) or `ve` (verification
-entropy) is high, when the work is regulated, or when several people share the
-approvals; relaxed for a spike, a fix, or a solo run where re-approving on
-every changed file would only slow the human down. For `mode: "in-flight"`
+then strict when neither line is present) and say so in the rationale. When the
+human has asked for a stricter value, keep theirs on every re-dispatch: the
+plan stays matched and creation applies it. The final `validate-grid --matched`
+run rejects only a value below the stock default. For `mode: "custom"` copy
+the validator's `custom_start.guard_policy`, the classic scope's default (`off`
+in core), and keep it: a custom plan runs with the guards a person gets without
+composing, and the human raises the value on the gate row when they want a
+changed input to reopen an approval (keep theirs on every re-dispatch). When a
+memory layer declares strict, the validator refuses a lower value: propose
+strict and name that file in the rationale. When the validator echoes no
+`custom_start`, start from `nearest_stock[0]`'s `guard_policy` the same way.
+For `mode: "in-flight"`
 return the running intent's current value unchanged (read `Guard Policy` from
 `aidlc-state.md`, or the retired `Change Control` line on an intent created
 before the rename); the composer never flips it. Mark that row read-only in
@@ -720,12 +728,15 @@ validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.
 No scope file is written for either route: a matched plan carries its stock
 scope's default, and a custom plan runs on a `base_scope` the validator picks
-because that stock scope defaults to the approved value (any stock scope
-serves `strict`), so intent creation carries it from the scope and the
-conductor passes `--guard-policy` only for `strict`. A Guard Policy flip on a
-matched proposal is an edit like any other grid change: convert it to `mode:
-"custom"` with a suggested `scopeName` and revalidate with `--custom`, which
-picks a base that carries the value. No setter runs afterwards.
+because that stock scope defaults to the approved value or lower (any stock
+scope serves `strict`), so intent creation carries it: the conductor passes
+`--guard-policy` for `strict` or `relaxed`, which records the scope's own
+default or raises a lower one, and never for `off`. A Guard Policy flip below
+a matched proposal's stock default is an edit like any other grid change:
+convert it to `mode: "custom"` with a suggested `scopeName` and revalidate with
+`--custom`, which picks a base that carries the value. No setter runs
+afterwards. A flip above the default keeps `mode: "matched"`: revalidate with
+`--matched`, and creation applies the value through `--guard-policy`.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
 omitted for `mode: "in-flight"`. The grid decides which stages run; these five
@@ -735,21 +746,27 @@ gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
 `summary_confirmation` (`on | off`: the "Looks correct" checkpoint before a
 stage writes its artifacts), `plan_approval` (`on | off`: the person's
 approval of each code plan before it is built; off builds the plan as written
-with one line naming it. Keep the value of the scope the plan runs on, the
-matched stock scope or a custom plan's base scope: never propose turning it
-off, since only the person does that, and the validator rejects off where that
-scope asks. When the person asks at the gate to skip plan approval, the harness
+with one line naming it. Keep the value you start from, the matched stock
+scope's or a custom plan's `custom_start`: never propose turning it off, since
+only the person does that, and the validator rejects off where the scope the
+plan runs on asks. When the person asks at the gate to skip plan approval, the harness
 records their words and creation turns it off, so the proposal stays as it
 is), and `review_cap` (`adversarial | advisory |
 none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
 turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
 sentence `scopeSettingsRationale` naming what is off or capped and why this
-work does not need it. Start from the values of the scope you route to (the
-stock scope for `mode: "matched"`, the validator's `nearest_stock[0]` for
-`mode: "custom"`; a missing ceremony line means `on`, a missing `review_cap`
-means `adversarial`) and move one only when the evidence gives a reason, as a
-SKIP needs one (see "Scope settings" in `composing.md`). No value removes a
+work does not need it. For `mode: "matched"` start from the stock scope's
+values (a missing ceremony line means `on`, a missing `review_cap` means
+`adversarial`). For `mode: "custom"` start from the validator's
+`custom_start.scope_settings`, the classic scope's values, whichever stock
+scope the plan runs on: a custom plan picks its own stages but runs the
+ceremony a person gets without composing (when the validator echoes no
+`custom_start`, start from `nearest_stock[0]`'s values). A matched proposal
+that the human's edit turns custom keeps the Guard Policy and settings the
+gate showed, with their change applied. Either way, move one
+only when the evidence gives a reason, as a SKIP needs one (see "Scope
+settings" in `composing.md`). No value removes a
 gate, Plan Approval, a required question, or the audit trail. A global kill
 switch such as `AIDLC_DISABLE_SENSORS=1` still forces its ceremony off
 whatever the scope says: when the validator's advisories name one forcing an
@@ -767,9 +784,11 @@ usual ceiling included (a review level set for the piece of work replaces its
 scope's), and echoes `creation_settings`, the typed changes (for example
 `{ "learnings": "off", "review": "adversarial" }`). Copy that object unchanged
 into `creationSettings` (`{}` when nothing differs). `--matched` rejects a grid
-that differs from the stock scope, and a Guard Policy other than its default
-or `strict`, because a lowering is the person's to type; `--custom` rejects a
-Guard Policy no stock scope defaults to (other than `strict`). The proposal is
+that differs from the stock scope, and a Guard Policy below its default,
+because a lowering is the person's to type (a stricter value stays matched and
+creation applies it); `--custom` picks a base whose default is the Guard Policy
+or lower (any stock scope serves `strict`) and rejects a value no stock scope
+can carry that way. The proposal is
 not ready until that run passes: take `mode` from its `routing` echo (and,
 when matched, `scopeName` from `matched_scope`; when custom, `baseScope`,
 `changes`, and `creationDepth` from `base_scope`, `plan_changes`, and

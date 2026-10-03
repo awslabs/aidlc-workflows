@@ -34,6 +34,11 @@ import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  consumeCreationReceipt,
+  clearSessionIntentUuid,
+  isTrustedBindingSource,
+  readSessionBinding,
+  workflowParticipation,
   auditShards,
   classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
@@ -59,6 +64,7 @@ import {
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
 // conversation yet. PostToolUse is the first boundary that carries both the
@@ -104,11 +110,42 @@ function bindCreatedIntentToInvokingSession(
     existingUuid: existingUuid ?? "",
   });
   if (!created?.uuid) return;
-  writeSessionBinding(projectDir, sessionId, space, dirName);
+  // Hosts whose tool processes cannot name the session bind the creator here.
+  // The response text alone proves nothing; the creation receipt intent create
+  // left on this machine does, once. A binding intent create already wrote for
+  // this record keeps its source.
+  const source = consumeCreationReceipt(projectDir, space, dirName) ? "create" : "observed-create";
+  const existing = readSessionBinding(projectDir, sessionId);
+  // Unproven text cannot move a session that takes part in another record, by
+  // any evidence participation accepts: its binding, handoff and stamp stay.
+  if (
+    source === "observed-create" &&
+    existing !== null &&
+    existing.intent !== null &&
+    (existing.space !== space || existing.intent !== dirName) &&
+    workflowParticipation(projectDir, {
+      space: existing.space,
+      intent: existing.intent,
+      sessionId,
+      binding: existing,
+    }) === "participant"
+  ) {
+    return;
+  }
+  if (existing?.space !== space || existing.intent !== dirName || existing.source === undefined) {
+    writeSessionBinding(projectDir, sessionId, space, dirName, source);
+  }
   if (existingUuid && existingUuid !== created.uuid) {
     writeSessionIntentHandoff(projectDir, sessionId, existingUuid, created.uuid);
   }
-  writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+  // A stamp joins the session on resume, so only a session this creation joined
+  // is stamped; an observed creation clears the older stamp instead.
+  const bound = readSessionBinding(projectDir, sessionId);
+  if (bound?.intent === dirName && isTrustedBindingSource(bound.source)) {
+    writeSessionIntentUuid(projectDir, sessionId, created.uuid);
+  } else {
+    clearSessionIntentUuid(projectDir, sessionId);
+  }
 }
 
 // Both relay gates live in engineErrorRelayMessage (aidlc-lib.ts): one literal
@@ -196,6 +233,8 @@ if (!ideAuditMode) {
 const selection = resolveWorkflowSelection(projectDir, {
   sessionId: validSessionId(parsed.session_id) ?? undefined,
 });
+// A conversation that has not joined this workflow does not recompile its graph.
+if (selection.intent !== null && workflowParticipation(projectDir, selection) !== "participant") return 0;
 const space = selection.space;
 const intent = selection.intent ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");

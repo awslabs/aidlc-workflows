@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 export interface CodexExecution {
@@ -100,7 +101,7 @@ async function deferredWindowsCleanup(root: string): Promise<{ defer(): void; cl
   const verifyDirectories = [temp, root, artifacts].map(pinDirectory);
   // The coordinator's live report binds this exact worker to its cleanup TEMP.
   // Ordinary/direct test invocations have no such handoff and clean up eagerly.
-  const reportPath = join(dirname(dirname(artifacts)), "e2e-results.json");
+  const reportPath = coordinatorReportPath(artifacts);
   const verifyReport = () => {
     const report = JSON.parse(readFileSync(reportPath, "utf8"));
     const rows = Array.isArray(report.files) ? report.files.filter((row: Record<string, unknown>) =>
