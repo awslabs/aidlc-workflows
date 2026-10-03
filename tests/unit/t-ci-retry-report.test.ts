@@ -4,12 +4,12 @@
 // which first attempts earn that second run; the report makes every pass on a
 // second attempt visible as a flaky test, and can never fail the job itself.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
 import {
-  ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible,
+  ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible,
 } from "../lib/file-retry.ts";
 
 const roots: string[] = [];
@@ -49,6 +49,45 @@ describe("the retry rule", () => {
   test("never starts a second attempt the run deadline would cut short", () => {
     expect(retryEligible(failed, ORDINARY_RETRY_MAX_MS, RETRY_DEADLINE_RESERVE_MS + 1)).toBe(true);
     expect(retryEligible(failed, ORDINARY_RETRY_MAX_MS, RETRY_DEADLINE_RESERVE_MS)).toBe(false);
+  });
+});
+
+describe("keeping the first attempt's evidence", () => {
+  function logDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-retry-keep-"));
+    roots.push(dir);
+    for (const file of ["t-x.log", "t-x.junit.xml", "t-x.execution.json"]) writeFileSync(join(dir, file), `first ${file}`);
+    mkdirSync(join(dir, "processes", "t-x"), { recursive: true });
+    writeFileSync(join(dir, "processes", "t-x", "trace"), "first trace");
+    return dir;
+  }
+
+  test("moves the log, JUnit, execution record and process artifacts to attempt-1 names", () => {
+    const dir = logDir();
+    expect(preserveFirstAttempt(dir, "t-x")).toEqual({ ok: true, log: "t-x.attempt-1.log" });
+    for (const file of ["t-x.attempt-1.log", "t-x.attempt-1.junit.xml", "t-x.attempt-1.execution.json"]) {
+      expect(readFileSync(join(dir, file), "utf8")).toStartWith("first ");
+    }
+    expect(readFileSync(join(dir, "processes", "t-x.attempt-1", "trace"), "utf8")).toBe("first trace");
+    expect(existsSync(join(dir, "t-x.log"))).toBe(false);
+  });
+
+  test("refuses, and undoes every move, when any evidence cannot be kept, so the caller does not retry", () => {
+    const dir = logDir();
+    // An existing attempt-1 target must never be overwritten.
+    writeFileSync(join(dir, "t-x.attempt-1.execution.json"), "older evidence");
+    expect(preserveFirstAttempt(dir, "t-x")).toEqual({ ok: false, log: null });
+    for (const file of ["t-x.log", "t-x.junit.xml", "t-x.execution.json"]) {
+      expect(readFileSync(join(dir, file), "utf8")).toBe(`first ${file}`);
+    }
+    expect(readFileSync(join(dir, "t-x.attempt-1.execution.json"), "utf8")).toBe("older evidence");
+    expect(existsSync(join(dir, "t-x.attempt-1.log"))).toBe(false);
+  });
+
+  test("a file with no logs at all is kept trivially", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-retry-keep-"));
+    roots.push(dir);
+    expect(preserveFirstAttempt(dir, "t-none")).toEqual({ ok: true, log: null });
   });
 });
 

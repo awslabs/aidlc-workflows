@@ -15,7 +15,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -46,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, retryEligible } from "./lib/file-retry.ts";
+import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -1253,25 +1252,6 @@ interface OrdinaryRetry {
 }
 const ordinaryRetries: OrdinaryRetry[] = [];
 
-/** Move a failed first attempt's evidence aside so the retry cannot overwrite it. */
-function keepFirstAttempt(name: string): string | null {
-  if (!args.verbose) return null;
-  const kept = `${name}.attempt-1.log`;
-  for (const [from, to] of [
-    [`${name}.log`, kept],
-    [`${name}.junit.xml`, `${name}.attempt-1.junit.xml`],
-    [`${name}.execution.json`, `${name}.attempt-1.execution.json`],
-    [join("processes", name), join("processes", `${name}.attempt-1`)],
-  ]) {
-    try {
-      if (existsSync(join(logDir, from))) renameSync(join(logDir, from), join(logDir, to));
-    } catch {
-      // Best effort: the second attempt still runs, and its own log is complete.
-    }
-  }
-  return existsSync(join(logDir, kept)) ? kept : null;
-}
-
 /**
  * Ordinary smoke/unit/integration files get one fresh second run (the merge
  * queue passes --file-retries 1) when the first attempt failed assertions
@@ -1282,24 +1262,45 @@ async function runFileWithRetry(file: string, parallelMode: boolean): Promise<Fi
   const first = await runBunTestFile(file, parallelMode);
   if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
   const name = resultName(file);
-  const log = keepFirstAttempt(name);
-  const announce = (): void => {
-    process.stdout.write(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}) ===\n`);
+  const say = async (line: string): Promise<void> => {
+    if (parallelMode) await withStdoutLock(() => process.stdout.write(line));
+    else process.stdout.write(line);
   };
-  if (parallelMode) await withStdoutLock(announce);
-  else announce();
-  const second = await runBunTestFile(file, parallelMode);
+  // Without verbose logs there is no evidence to keep; with them, a retry that
+  // would overwrite the first attempt's evidence never starts.
+  const kept = args.verbose ? preserveFirstAttempt(logDir, name) : { ok: true, log: null };
+  if (!kept.ok) {
+    await say(`=== NO RETRY ${basename(file)} (its first attempt's evidence could not be kept aside) ===\n`);
+    return first;
+  }
+  const log = kept.log;
+  await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}) ===\n`);
+  let second = await runBunTestFile(file, parallelMode);
   if (!second) return first;
   const passedOnRetry = second.status === "PASS";
+  const secondAttempt = { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs };
+  const metaPath = join(resultsDir, `${name}.meta`);
+  if (!passedOnRetry && second.status !== "FAIL") {
+    // Only a complete pass replaces the first failure: a retry that executed
+    // no cases (all skipped, empty) leaves the file failed.
+    const meta: ResultRow = existsSync(metaPath)
+      ? parseMeta(metaPath)
+      : { name, status: "FAIL", tests: 0, skipped: 0, failed: 0, duration: "0" };
+    writeMeta(name, {
+      ...meta, status: "FAIL", failed: Math.max(1, meta.failed, first.cases.failed),
+      reason: `failed on its first attempt (${first.cases.failed} case(s)), then executed no cases on retry`,
+    });
+    second = { ...second, status: "FAIL" };
+    fileExecutions.set(name, second);
+  }
   ordinaryRetries.push({
     file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
     name,
     passedOnRetry,
     firstAttempt: { failedCases: first.cases.failed, wallTimeMs: first.wallTimeMs, log },
-    secondAttempt: { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs },
+    secondAttempt,
   });
   if (passedOnRetry) {
-    const metaPath = join(resultsDir, `${name}.meta`);
     if (existsSync(metaPath)) {
       writeMeta(name, {
         ...parseMeta(metaPath),

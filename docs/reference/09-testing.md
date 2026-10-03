@@ -618,7 +618,10 @@ ten minutes, and at least five minutes left in the run) runs once more in a
 fresh process and temporary directory. The rule lives in
 `tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
 nonzero exit without failed cases, a file that executed no cases, a timeout,
-and a second failure are never retried, and a second failure stays a failure.
+and a second failure are never retried. Only a complete pass replaces the first
+failure: a second failure, or a retry that executes no cases, stays a failure.
+The retry starts only after the first attempt's evidence is moved aside whole;
+if any of it cannot be, the file is not retried.
 A pass on the second attempt is never silent: the job shows a `Flaky test`
 warning ("<file> passed on its second attempt (merge queue)"), the step summary
 lists it under "Passed on retry", the file's `summary.txt` row keeps `PASS`

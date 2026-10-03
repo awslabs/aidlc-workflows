@@ -1,3 +1,6 @@
+import { existsSync, renameSync } from "node:fs";
+import { join } from "node:path";
+
 /**
  * The one rule for re-running a failed test file once. A retry is earned only
  * by an ordinary assertion failure with complete evidence: never by a timeout,
@@ -29,4 +32,34 @@ export function retryEligible(first: RetryEvidence, maxWallMs: number, remaining
   return first.status === "FAIL" && first.cases.failed > 0 && first.evidenceComplete === true &&
     !first.cleanupError && !first.timedOut && first.wallTimeMs <= maxWallMs &&
     remainingMs > RETRY_DEADLINE_RESERVE_MS;
+}
+
+/**
+ * Move a failed first attempt's log, JUnit, execution record and process
+ * artifacts to `<name>.attempt-1.*` before its retry, all or nothing. When
+ * anything that exists cannot be moved (or its target already exists), every
+ * move is undone and `ok` is false: the caller must then not retry, because
+ * the second attempt would overwrite the first attempt's evidence.
+ */
+export function preserveFirstAttempt(logDir: string, name: string): { ok: boolean; log: string | null } {
+  const moves = [
+    [`${name}.log`, `${name}.attempt-1.log`],
+    [`${name}.junit.xml`, `${name}.attempt-1.junit.xml`],
+    [`${name}.execution.json`, `${name}.attempt-1.execution.json`],
+    [join("processes", name), join("processes", `${name}.attempt-1`)],
+  ].map(([from, to]) => [join(logDir, from), join(logDir, to)] as const).filter(([from]) => existsSync(from));
+  const done: Array<readonly [string, string]> = [];
+  try {
+    for (const [from, to] of moves) {
+      if (existsSync(to)) throw new Error(`${to} already exists`);
+      renameSync(from, to);
+      done.push([from, to]);
+    }
+  } catch {
+    for (const [from, to] of done.reverse()) {
+      try { renameSync(to, from); } catch { /* the retry is refused either way */ }
+    }
+    return { ok: false, log: null };
+  }
+  return { ok: true, log: existsSync(join(logDir, `${name}.attempt-1.log`)) ? `${name}.attempt-1.log` : null };
 }
