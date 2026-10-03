@@ -62,6 +62,7 @@ import {
   relativeRecordDir,
   recordAcceptedChanges,
   recordGuardStoodAside,
+  recordHookDrop,
   renderChangedPaths,
   governedChangeControl,
   intentRepos,
@@ -2379,10 +2380,13 @@ function recordCodeGenerationContinuation(
     tool: `testing-posture ${operation}`,
     details: detail,
   });
+  // The row is the lowered fence's account of what it let through, not
+  // approval evidence: a ledger that cannot take it never stops the person's
+  // build. The line says it was not recorded, and the doctor lists the miss.
   if (!recorded) {
-    throw new Error("Code Generation continuation could not be recorded in the audit ledger. Repair the ledger and retry; the earlier approval and plan-approval setting are unchanged.");
+    recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail);
+  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
 }
 
 export interface LegacyPlanApprovalGuardState {

@@ -1138,4 +1138,39 @@ describe("read-only inspection", () => {
       expect.stringContaining("fixture recapture failure"),
     ]);
   });
+
+  // The person said the work is existing code after it started as a new
+  // project: only stages whose work follows the type go stale, so the advisory
+  // names a stage worth redoing rather than the first one ever finished.
+  test("a project-type change stales only the stages whose work follows the type", () => {
+    const typed: StageValidityNode[] = [
+      { slug: "intent-capture", phase: "ideation", produces: [], consumes: [] },
+      {
+        slug: "requirements-analysis",
+        phase: "inception",
+        produces: [],
+        consumes: [{ artifact: "architecture", required: true, conditional_on: "brownfield" }],
+      },
+      { slug: "code-generation", phase: "construction", produces: [], consumes: [] },
+    ];
+    const asNew = basis({ inputs: [], outputs: [] });
+    const audit = [
+      auditEvent("WORKFLOW_STARTED", "2026-08-05T00:00:00.000Z"),
+      ...typed.map((stage, index) =>
+        auditEvent("STAGE_COMPLETED", `2026-08-05T00:00:0${index + 1}.000Z`, {
+          Stage: stage.slug,
+          [VALIDATION_BASIS_FIELD]: JSON.stringify(asNew),
+        })),
+    ].join("\n---\n");
+    const state = `## Stage Progress\n${typed.map((stage) => `- [x] ${stage.slug} ${SEP} EXECUTE`).join("\n")}\n`;
+    const result = inspectStageValidity(tempProject(), state, {
+      stages: typed,
+      audit,
+      currentBasis: () => ({ ...asNew, projectType: "brownfield" }),
+    });
+    expect(result.issues.map((issue) => [issue.stage, issue.reasons])).toEqual([
+      ["requirements-analysis", ["project-type"]],
+      ["code-generation", ["project-type"]],
+    ]);
+  });
 });

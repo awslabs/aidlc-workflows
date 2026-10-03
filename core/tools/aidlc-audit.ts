@@ -193,6 +193,10 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // The person said the work is a new project or existing code: the folder
+  // rescanned and the type recorded as theirs. Emitted by aidlc-utility.ts
+  // handleReclassify.
+  "WORKSPACE_RECLASSIFIED",
   // A piece of work's plan kept as a reusable scope. Emitted by
   // aidlc-utility.ts handleScopeSave.
   "SCOPE_SAVED",
@@ -334,6 +338,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  WORKSPACE_RECLASSIFIED: "Workspace Reclassified",
   SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",

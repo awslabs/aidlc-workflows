@@ -579,7 +579,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts and bounded hosted live shards | GitHub Actions |
@@ -607,6 +607,30 @@ It posts nothing for test failures, conflicts, manual removals, PRs that change
 `.github/`, PRs already back in the queue, or a run it already explained, and
 it never enqueues, dequeues or merges. `t-ci-merge-queue-notice` pins this on
 trimmed records of real drops in `tests/fixtures/merge-queue-notice/`.
+
+PR CI stays strict: a failing file is red on the PR, with no retry, so a flake
+is seen where it was introduced. The merge queue is different, because one
+flaky file drops the PR and rebuilds every group queued behind it. There,
+`ci.yml` passes `retry-once` to the smoke, unit and integration legs, which run
+the tier with `--file-retries 1`: a file whose first attempt failed assertions
+(failed cases, complete JUnit evidence, no timeout, no cleanup failure, at most
+ten minutes, and at least five minutes left in the run) runs once more in a
+fresh process and temporary directory. The rule lives in
+`tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
+nonzero exit without failed cases, a file that executed no cases, a timeout,
+and a second failure are never retried. Only a retry that passes every case the
+first attempt ran replaces the first failure: a second failure, or a retry that
+skips one of those cases or executes none, stays a failure.
+The retry starts only after the first attempt's evidence is moved aside whole;
+if any of it cannot be, the file is not retried.
+A pass on the second attempt is never silent: the job shows a `Flaky test`
+warning ("<file> passed on its second attempt (merge queue)"), the step summary
+lists it under "Passed on retry", the file's `summary.txt` row keeps `PASS`
+with a "passed on retry" line under it, and `retries.json` in the run's log
+directory records every retry for flake triage. The first attempt's log and
+JUnit stay beside the second as `<file>.attempt-1.*`. Isolated e2e and Full
+Suite never take the flag. `t-runner-production-guards` and
+`t-ci-retry-report` cover the rule, the runner and the report.
 
 `main` is not production: PR CI and the merge queue remain the fast gates listed
 above, while required hosted live tiers run in
@@ -1500,6 +1524,8 @@ stops dispatch and marks remaining files incomplete.
 
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
+(Without `--isolated-files`, the same flag retries smoke, unit and integration
+files in a fresh process; the merge queue uses that, as described above.)
 Timeouts, incomplete evidence and cleanup failures are not retried. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
 capability preflights. Manual `--family FAMILY --test <repository-path>` selects

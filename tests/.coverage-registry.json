@@ -95,6 +95,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
@@ -118,6 +122,10 @@
       "unitId": "CHANGE_ACCEPTED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -1021,6 +1029,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
@@ -1109,7 +1121,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -1285,6 +1305,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "WORKSPACE_RECLASSIFIED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKSPACE_SCAFFOLDED",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1314,6 +1346,10 @@
       "unitId": "WORKTREE_DISCARDED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
@@ -2184,6 +2220,10 @@
       "unitId": "function:changeAlreadyAccepted",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -4591,6 +4631,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t319-doctor-hooks-blocked.test.ts",
           "mechanism": "cli"
         }
@@ -4634,8 +4678,13 @@
       "unitClass": "function",
       "unitId": "function:hookLiveness",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5085,7 +5134,7 @@
           "mechanism": "none"
         },
         {
-          "file": "tests/unit/t334-change-control-plan-approval.test.ts",
+          "file": "tests/unit/t334-change-control-execution.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7178,6 +7227,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:promptMovesSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:protectedQuestionRelativePath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7711,11 +7767,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t326-team-unit-merge.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7775,6 +7835,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         }
@@ -7805,6 +7869,10 @@
       "unitId": "function:recordAcceptedChanges",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -7935,6 +8003,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordPreWorkflowHeartbeat",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -9697,6 +9777,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         }
@@ -10302,6 +10386,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:takeSessionSelectionNotice",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:teamUnitGateStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -10427,7 +10518,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -10584,7 +10683,15 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -11134,6 +11241,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         }
@@ -11609,6 +11720,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeSessionSelectionNotice",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -11679,6 +11797,10 @@
       "unitId": "function:writeWorkspaceSourceSnapshot",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
@@ -11837,6 +11959,10 @@
         },
         {
           "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13004,7 +13130,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13188,6 +13314,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         },
@@ -13205,6 +13335,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t343-swarm-checkpoints.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13645,6 +13779,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t334-change-control-plan-approval.test.ts",
           "mechanism": "cli"
         },
@@ -13682,6 +13820,10 @@
         },
         {
           "file": "tests/unit/t31.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t334-change-control-execution.test.ts",
           "mechanism": "cli"
         },
         {
@@ -13781,6 +13923,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         },
@@ -13858,6 +14004,10 @@
         },
         {
           "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14386,7 +14536,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14786,7 +14936,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14802,7 +14960,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14818,7 +14984,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14842,7 +15008,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14858,7 +15032,15 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t326-team-unit-merge-drift.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t326-team-unit-merge-guards.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t326-team-unit-merge-recovery.test.ts",
           "mechanism": "cli"
         },
         {
@@ -15111,6 +15293,10 @@
         },
         {
           "file": "tests/integration/t341-composed-scope-durability.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         },
         {
@@ -15384,6 +15570,10 @@
         {
           "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -15463,6 +15653,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility reclassify",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -15845,6 +16047,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t344-swarm-checkpoint-retry.test.ts",
           "mechanism": "cli"
         }
@@ -15897,6 +16103,10 @@
         },
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t344-swarm-checkpoint-discard.test.ts",
           "mechanism": "cli"
         },
         {

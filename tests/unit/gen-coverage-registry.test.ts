@@ -781,6 +781,23 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
+  test.each([
+    ["runCheckpointTool", "swarm-checkpoint", 'runCheckpointTool(pd, "tools/aidlc-bolt.ts", ["abort"])'],
+    ["runChangeControlTool", "change-control-plan-approval", "runChangeControlTool([BUN, GUARD], project)"],
+  ])("%s derives cli through its shared t334/t344 fixture", (name, module, call) => {
+    const src = [
+      "// covers: subcommand:aidlc-bolt:abort",
+      `import { ${name} } from "../harness/${module}.ts";`,
+      'test("x", () => {',
+      `  const r = ${call};`,
+      "  expect(r.code).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+    // Named only in a comment or an import, the helper drives nothing.
+    expect(mechanismsOf("t99.none.test.ts", src.replace(`  const r = ${call};`, `  // ${call}`))).toEqual(["none"]);
+  });
+
   test("a // inside a string literal (a URL) does NOT truncate the real spawn", () => {
     // codeView strips comments while respecting string literals — so the "//" in
     // an "https://…" string is NOT treated as a line-comment opener. This fixture
@@ -879,6 +896,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t351-composer-unsaved-plans.test.ts",
     "unit/t352-hook-phase-trace.test.ts",
     "unit/t352-workflow-selector-names.test.ts",
+    // spawns the real intent-create, next, reclassify, and jump: the person's
+    // word on the project type and the question about it are process boundaries
+    "unit/t352-workspace-reclassify.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
     "unit/t-summary-confirmation-plain-form.test.ts",
@@ -894,6 +914,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, utility setter, and guard: who
     // turns plan approval off, and what the engine builds, are process boundaries
     "unit/t-plan-approval-switch.test.ts",
+    // spawns the shipped Copilot adapter, core hooks, engine, and doctor: whether
+    // a hook ran is decided across those process boundaries
+    "unit/t-copilot-hook-health.test.ts",
     // spawns the real audit append, Unit verbs, and `next`: which shard a
     // process writes, and the walk after a copied shard, are process boundaries
     "unit/t-audit-shard-identity.test.ts",
@@ -1025,6 +1048,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t341-construction-checkpoints.test.ts",
     "unit/t342-construction-checkpoint-routing.test.ts",
     "unit/t343-swarm-checkpoints.test.ts",
+    // The t344 and t334 halves drive the shipped tools through their shared
+    // fixtures' runCheckpointTool and runChangeControlTool spawns.
+    "unit/t344-swarm-checkpoint-discard.test.ts",
     "unit/t344-swarm-checkpoint-retry.test.ts",
     "unit/t345-full-suite-workflow.test.ts",
     "unit/t345-sensor-detail-prune.test.ts",
@@ -1081,9 +1107,11 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t31-help.test.ts",
     "integration/t325-team-unit-claims.test.ts",
     "integration/t326-team-unit-merge.test.ts",
-    // t326's guard cases drive the shipped aidlc-unit/aidlc-state CLIs through
+    // t326's other cases drive the shipped aidlc-unit/aidlc-state CLIs through
     // the shared fixture's runMergeTool spawn (tests/harness/team-unit-merge.ts).
+    "integration/t326-team-unit-merge-drift.test.ts",
     "integration/t326-team-unit-merge-guards.test.ts",
+    "integration/t326-team-unit-merge-recovery.test.ts",
     "integration/t327-team-dispatcher.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
     "integration/t351-fresh-clone-participation.test.ts",
@@ -1268,6 +1296,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t331-guard-deadlock-liveness.test.ts",
     "unit/t332-summary-authorization.test.ts",
     "unit/t333-change-control.test.ts",
+    "unit/t334-change-control-execution.test.ts",
     "unit/t334-change-control-plan-approval.test.ts",
     "unit/t335-change-control-review-summary.test.ts",
     "unit/t336-change-control-surfaces.test.ts",

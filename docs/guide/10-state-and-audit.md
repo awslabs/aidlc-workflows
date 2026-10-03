@@ -22,7 +22,7 @@ sidecar's final line ending.
 
 | Section | Purpose |
 |---------|---------|
-| **Project Information** | Project description, type (greenfield/brownfield), scope, start date, current phase, active agent |
+| **Project Information** | Project description, type (greenfield/brownfield) and who set it (`Project Type Source`: `workspace scan` or `you`), scope, start date, current phase, active agent |
 | **Scope Configuration** | Stages to execute, stages to skip (with reasons), depth level, test strategy, and the per-intent settings: `Guard Policy`, `Guards Off` (fences lowered for this piece of work), `Guards On` (fences forced on above the policy word), `Sensors`, `Learnings`, `Summary Confirmation`. The fence lines appear only when used and never include human presence, which has no per-work switch. |
 | **Workspace State** | Project root, detected languages, frameworks, build system |
 | **Execution Plan Summary** | Total stages, completed count, in-progress stage |
@@ -111,7 +111,7 @@ means. The write guard is a guardrail, not a security boundary. See
 [Audit Trail Rules](../reference/04-stage-protocol.md#audit-trail-rules) for
 the owning commands and the read-only query contract.
 
-### 111-event taxonomy
+### 112-event taxonomy
 
 Events are organized into 25 categories:
 
@@ -122,7 +122,7 @@ Events are organized into 25 categories:
 | **Stage Lifecycle** | 6 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED` |
 | **Session** | 5 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN` (hook-emitted) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` |
-| **Navigation** | 8 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` |
+| **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` |
 | **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (retired name, still read), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` |
 | **Ceremony** | 1 | `CEREMONY_SET`, emitted by `aidlc-utility.ts config-change` (also via the shared `scope-change` applier). Fields: `Key` (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`), `Old`, `New`, `Source` (`you` for an explicit set, `scope <name>` for an inherited default). `Old` is the previously saved value (raw text if invalid; scope default if absent), not the environment-effective value. One row per real stored field/source change; no-op commands emit none. |
 | **Interaction** | 14 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `SUMMARY_CONFIRMATION_RECORDED`, `VERIFICATION_COMMAND_RECORDED`, `CONSTRUCTION_POLICY_RECORDED`, `CHECKPOINT_VERIFICATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `PLAN_APPROVAL_OVERRIDDEN`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` |
