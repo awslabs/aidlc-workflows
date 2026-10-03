@@ -24,7 +24,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 
-Generated runners are **explicit-only**: on Claude Code and Cursor each runner carries `disable-model-invocation: true`, so the agent never starts one on its own and its description stays out of the skill listing the model reads every turn. You start a runner by typing it. `/aidlc` is not a runner and stays available to the agent.
+Generated runners are **explicit-only**: on Claude Code and Cursor each runner carries `disable-model-invocation: true` (on Codex, `allow_implicit_invocation: false` in its `agents/openai.yaml`), so the agent never starts one on its own and its description stays out of the skill listing the model reads every turn. You start a runner by typing it. `/aidlc` is not a runner and stays available to the agent.
 
 ---
 
