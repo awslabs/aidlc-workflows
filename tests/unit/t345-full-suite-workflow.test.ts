@@ -22,6 +22,7 @@ interface Step {
   "timeout-minutes"?: number | string;
   uses?: string;
   if?: string;
+  "continue-on-error"?: boolean | string;
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
@@ -58,7 +59,7 @@ const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/
 };
 const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
   on: {
-    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }>; secrets?: unknown; outputs?: unknown };
+    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string | boolean }>; secrets?: unknown; outputs?: unknown };
     workflow_dispatch: { inputs: Record<string, { description?: string; type: string; required?: boolean; default?: string; options?: string[] }> };
   };
   permissions: Record<string, string>;
@@ -200,7 +201,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "ref", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "ref", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -238,6 +239,7 @@ describe("t345 complete nightly coverage", () => {
       tier: { type: "string", required: true },
       "unit-shard": { type: "string", default: "" },
       "artifact-label": { type: "string", required: true },
+      "evidence-optional": { type: "boolean", default: false },
     });
     expect(callable.inputs.diagnostic_filter).toBeUndefined();
     expect(callable.inputs.diagnostic_backend).toBeUndefined();
@@ -863,6 +865,47 @@ describe("t345 complete nightly coverage", () => {
     expect(upload.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
     expect(upload.with).toMatchObject({ "retention-days": 90, "include-hidden-files": true, "if-no-files-found": "error" });
     expect(upload.with?.path).toBe("tests/logs/\ntmp/ci-deterministic/\n");
+  });
+
+  test("a failed CI evidence upload never fails passing tests, and Full Suite evidence stays required", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job & { "continue-on-error"?: unknown }>;
+    };
+    // Only CI opts in. Full Suite (read by Preview Release) and manual probes
+    // never pass the input, and a missing input compares unequal to true.
+    expect(ci.jobs.deterministic.with?.["evidence-optional"] as unknown).toBe(true);
+    expect(workflow.jobs.deterministic.with?.["evidence-optional"]).toBeUndefined();
+    expect(deterministic.on.workflow_dispatch.inputs["evidence-optional"]).toBeUndefined();
+    // These are the three uploads in the required check's chain; each test step
+    // keeps its own exit code, so a real failure still fails the job.
+    for (const [job, testStep, tolerance] of [
+      [deterministic.jobs.test, "Run deterministic tier", `\${{ inputs.evidence-optional == true }}`],
+      [ci.jobs.test_native_terminal, "Run native terminal contracts", true],
+      [ci.jobs.test_guards, "Exercise recovery with production guards", true],
+    ] as const) {
+      const all = steps(job);
+      const tolerant = all.filter((step) => step["continue-on-error"] !== undefined);
+      expect(tolerant.map((step) => step.uses?.split("@")[0]), testStep).toEqual(["actions/upload-artifact"]);
+      expect(tolerant[0]["continue-on-error"], testStep).toBe(tolerance);
+      expect(tolerant[0].if, testStep).toContain("always()");
+      const run = all.findIndex((step) => step.name === testStep);
+      expect(run, testStep).toBeGreaterThanOrEqual(0);
+      expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
+      expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
+    }
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    // Uploads outside the required chain, and every Full Suite upload, stay fatal.
+    const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
+      steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
+    expect(ciTolerant.sort()).toEqual([
+      "test_guards: Preserve guard evidence",
+      "test_native_terminal: Preserve native terminal evidence",
+    ]);
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of steps(job).filter((entry) => entry.uses?.startsWith("actions/upload-artifact@"))) {
+        expect(step["continue-on-error"], step.name).toBeUndefined();
+      }
+    }
   });
 
   test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {
