@@ -3867,6 +3867,63 @@ export async function collectDoctorReport(
           fix: "hooks from .claude/settings.json are blocked by organization policy (allowManagedHooksOnly); only the Claude Code administrator can lift it in managed-settings.json. Until then, the workflow's human-presence and summary-confirmation receipts cannot be minted; attended sessions can set AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1 in the environment that launches the CLI as a temporary bypass",
         });
       }
+
+      // Active hook-spawn selftest. Every check above verifies STATIC wiring —
+      // the hook file is present, referenced, and not policy-disabled. None of
+      // them proves the host can actually SPAWN the wired command (its
+      // interpreter against the projected aidlc.ts under .claude/tools). That is
+      // the exact gap behind the field failure where /hooks lists the hooks, the
+      // presence rows pass, yet no hook ever fires and no HUMAN_TURN is minted:
+      // the host cannot resolve the interpreter on the hook subprocess's PATH, or
+      // $CLAUDE_PROJECT_DIR does not expand for it. This probe closes that gap by
+      // spawning the wired interpreter against the wired script and reporting the
+      // failure shape.
+      //
+      // Target: `aidlc.ts version --json`, a pure read that mints nothing, needs
+      // no recognized project dir, and is not the record-human-turn hook (so it
+      // cannot touch any ledger). It is not the specific hook SUBCOMMAND that
+      // fails in the field — it is the spawn of `bun <aidlc.ts>` itself, which
+      // this reproduces. `--json` keeps the args free of the `engine`/`hook`
+      // namespace tokens the release projector rewrites.
+      //
+      // `bun` resolution: the doctor is itself running under `bun`
+      // (process.execPath), the most faithful interpreter available from here. A
+      // host that launches its hook subprocess with a DIFFERENT environment (the
+      // GUI-vs-shell PATH split this probe's remedy names) can still fail where
+      // this canary passes, so a pass narrows the cause to that environment split
+      // rather than certifying every launch path.
+      const aidlcToolPath = join(projectDir, harness, "tools", "aidlc.ts");
+      if (existsSync(aidlcToolPath)) {
+        const canary = spawnSync(
+          process.execPath,
+          [aidlcToolPath, "version", "--json"],
+          {
+            encoding: "utf-8",
+            timeout: 30_000,
+            env: { ...process.env },
+          },
+        );
+        if (canary.error) {
+          const code = (canary.error as NodeJS.ErrnoException).code;
+          results.push({
+            pass: false,
+            label: `Hook spawn selftest: the interpreter could not be launched (${code ?? canary.error.message})`,
+            fix: "the host cannot spawn the hook command's interpreter (bun). Verify bun resolves on the PATH the harness gives its hook subprocess (a GUI-launched CLI inherits the login PATH, not your interactive shell's), or pin bun's absolute path in the hook command in .claude/settings.json, then fully restart the CLI",
+          });
+        } else if (canary.status !== 0) {
+          const detail = (canary.stderr || canary.stdout || "").trim().split("\n").pop() || "";
+          results.push({
+            pass: false,
+            label: `Hook spawn selftest: bun spawned but the wired aidlc.ts exited ${canary.status ?? "by signal"}${detail ? ` (${detail})` : ""}`,
+            fix: "the interpreter runs but cannot execute the wired script. Verify the projected aidlc.ts under .claude/tools is present and that the wired path resolves (a cmd.exe host does not expand $CLAUDE_PROJECT_DIR), then rerun config --force if the wiring drifted",
+          });
+        } else {
+          results.push({
+            pass: true,
+            label: "Hook spawn selftest: the wired hook interpreter spawns and exits clean",
+          });
+        }
+      }
     }
   } else {
     // Kiro / Codex: the wiring config is not settings.json (it is

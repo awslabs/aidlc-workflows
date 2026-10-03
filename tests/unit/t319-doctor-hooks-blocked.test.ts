@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -376,6 +377,29 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(output(run)).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
     expect(output(run)).toContain("AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1");
   });
+
+  test("hook-spawn selftest passes on a healthy Claude project", () => {
+    // The static wiring rows can all pass while the host still cannot SPAWN the
+    // hook command (bun off the hook subprocess's PATH). This active probe
+    // spawns the wired interpreter against the wired aidlc.ts and reports the
+    // outcome; a healthy fixture spawns clean.
+    const project = freshProject();
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).toContain(
+      "Hook spawn selftest: the wired hook interpreter spawns and exits clean",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("hook-spawn selftest is skipped when the wired aidlc.ts is absent", () => {
+    // No aidlc.ts to spawn means the probe has nothing to test, so it emits no
+    // row rather than a false failure — the wiring rows already flag a missing
+    // tool tree.
+    const project = freshProject();
+    const tool = join(project, ".claude", "tools", "aidlc.ts");
+    renameSync(tool, `${tool}.bak`);
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(output(run)).not.toContain("Hook spawn selftest:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("managed settings fragments merge alphabetically and a later false clears the finding", () => {
     const project = freshProject();
