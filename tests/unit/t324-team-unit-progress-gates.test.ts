@@ -758,6 +758,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
 - [S] observability-setup — SKIP
 - [S] incident-response — SKIP
 - [S] performance-validation — SKIP
+- [S] retrospective — SKIP
 - [S] feedback-optimization — SKIP`,
       ),
     );
