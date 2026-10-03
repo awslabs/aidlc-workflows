@@ -891,7 +891,16 @@ Claude Code may coexist with any other harness. Copilot's `AGENTS.md`
 stays exclusive: pairing it with another harness that ships that block is refused
 with `cannot coexist in one project`, regardless of which is installed first.
 Kiro CLI and Kiro IDE still share `.kiro/`, and OpenCode and Copilot share `.aidlc/`,
-so those pairs cannot coexist. For an older installed harness whose root block
+so those pairs cannot coexist. Kiro CLI and Kiro IDE can replace each other
+instead: in a project that has one of them, `aidlc config --harness kiro-ide`
+(or `--harness kiro`) switches `.kiro/` to the other in place. The switch is a
+refresh planned from the installed row's ownership baseline: it removes the files
+only that row shipped, keeps `aidlc/`, reports a locally modified file it would
+replace or remove as a conflict, and is refused while a workflow is active. It needs that baseline
+(`.kiro/tools/data/aidlc-manifest.json`); without it, refresh the installed row
+with `aidlc config --harness <installed>` first. A release passed with `--from`
+and no `--harness` never switches the row. OpenCode and Copilot are not switched
+this way. For an older installed harness whose root block
 is not shared, the `predates shared onboarding` error suggests refreshing it with
 `aidlc config --harness <name>` first. This is a hint for an older sibling, not a
 promise that refreshing enables coexistence: if it still refuses afterwards,

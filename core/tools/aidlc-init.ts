@@ -3449,6 +3449,20 @@ function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, 
   }
 }
 
+// Kiro CLI's agent-v1 row and the KAS row project into the same .kiro
+// directory and own disjoint host files there, so either replaces the other in
+// place through its ownership baseline. OpenCode and Copilot also share .aidlc,
+// but they write host files outside it (.opencode/, .github/,
+// .vscode/settings.json) and Copilot's AGENTS.md block is exclusive, so they
+// are not switched.
+const IN_PLACE_SWITCHABLE: ReadonlySet<string> = new Set(["kiro", "kiro-ide"]);
+
+function switchesInPlace(installed: string, requested: string): boolean {
+  return installed !== requested &&
+    IN_PLACE_SWITCHABLE.has(installed) &&
+    IN_PLACE_SWITCHABLE.has(requested);
+}
+
 function predatesFrameworkVersion(version: string | undefined, incoming: string): boolean {
   if (version === undefined) return true;
   try {
@@ -5155,7 +5169,13 @@ function selectSource(
     }
     if (existingDistribution && stamp.distribution !== existingDistribution) {
       if (source.cleanup) rmSync(source.cleanup, { recursive: true, force: true });
-      throw new Error(`existing project uses ${existingDistribution}; refusing ${stamp.distribution}`);
+      // A source alone never replaces the installed harness; naming the
+      // harness is the request to switch.
+      throw new Error(
+        switchesInPlace(existingDistribution, stamp.distribution)
+          ? `existing project uses ${existingDistribution}; refusing ${stamp.distribution} without --harness ${stamp.distribution}, which switches ${stamp.harnessDir} to it in place`
+          : `existing project uses ${existingDistribution}; refusing ${stamp.distribution}`,
+      );
     }
     return { ...source, stamp, descriptor };
   }
@@ -8130,21 +8150,44 @@ export async function main(
       throw new Error(`project uses ${existing.distribution}; refusing ${stamp.distribution}`);
     }
     const installed = discoverProjectHarnesses(projectDir);
+    // The harness this run replaces in its own directory, if any. A switch is
+    // a refresh of that directory: it plans from the occupant's ownership
+    // baseline and is refused under an active workflow like any refresh.
+    let switchingFrom: ProjectHarness | undefined;
     if (!existing.distribution) {
       const collision = installed.find(
         (candidate) => candidate.harnessDir === descriptor.harnessDir,
       );
-      if (collision) {
+      if (collision && !switchesInPlace(collision.distribution, stamp.distribution)) {
         throw new Error(
           `harness ${stamp.distribution} shares directory ${descriptor.harnessDir} with installed ${collision.distribution}; they cannot coexist in one project`,
         );
       }
+      if (collision) {
+        // Without the occupant's baseline nothing says which of its files are
+        // AI-DLC's, so the files only it ships would be left behind.
+        const occupantBaselinePath = join(collision.root, "tools", "data", "aidlc-manifest.json");
+        const occupantBaseline = readBaseline(occupantBaselinePath);
+        if (!occupantBaseline) {
+          throw new Error(
+            `cannot switch ${descriptor.harnessDir} from ${collision.distribution} to ${stamp.distribution}: installed ${collision.distribution} has no ownership baseline (${descriptor.harnessDir}/tools/data/aidlc-manifest.json); run aidlc config --harness ${collision.distribution} first`,
+          );
+        }
+        if (
+          occupantBaseline.distribution !== collision.distribution ||
+          occupantBaseline.harnessDir !== collision.harnessDir
+        ) {
+          throw new Error(`${occupantBaselinePath}: baseline identity does not match the installed harness`);
+        }
+        switchingFrom = collision;
+      }
     }
+    const refreshing = Boolean(existing.distribution || switchingFrom);
     for (const sibling of installed) {
       if (sibling.harnessDir === descriptor.harnessDir) continue;
       const siblingProjection = siblingDescriptor(sibling);
       if (!siblingProjection) {
-        if (existing.distribution) {
+        if (refreshing) {
           const baseline = siblingBaseline(sibling);
           for (const integration of descriptor.rootIntegrations) {
             if (integration.policy !== "managed-block" || integration.shared === "union") continue;
@@ -8179,7 +8222,7 @@ export async function main(
           !(integration.shared === "identical" && candidate.shared === "identical")
         );
         if (collision) {
-          if (existing.distribution && !integration.shared && collision.shared === "identical") {
+          if (refreshing && !integration.shared && collision.shared === "identical") {
             throw new Error(
               `refusing to refresh ${stamp.distribution} from a release whose ${integration.path} is not shared while installed ${sibling.distribution} shares it; use a release that declares it shared`,
             );
@@ -8202,7 +8245,7 @@ export async function main(
     // active-workflow refusal does not apply to it: the apply path keeps its
     // own assertRefreshSafe inside the audit lock, which is what actually
     // stops a refresh from moving project files under a live workflow.
-    if (existing.distribution && !argv.includes("--dry-run")) {
+    if (refreshing && !argv.includes("--dry-run")) {
       assertRefreshSafe(projectDir);
     }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
@@ -8474,7 +8517,11 @@ export async function main(
         choicesContext?.section ??
         (modelsContext ? "models" : null);
       emitResult(success(
-        withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}: ${
+        withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}${
+          switchingFrom
+            ? ` (switches ${descriptor.harnessDir} in place from ${switchingFrom.distribution} to ${stamp.distribution})`
+            : ""
+        }: ${
           Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
         }`),
         {
@@ -8535,7 +8582,7 @@ export async function main(
       ), options);
       return;
     }
-    if (existing.distribution) {
+    if (refreshing) {
       withAuditLock(
         projectDir,
         () => {
@@ -8620,7 +8667,11 @@ export async function main(
       ? `configured ${diagnosticsContext.section} settings for ${projectDir}`
       : modelsContext
       ? `configured model policy for ${projectDir}`
-      : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}; next: ${
+      : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}${
+        switchingFrom
+          ? `, switched ${descriptor.harnessDir} in place from ${switchingFrom.distribution} to ${stamp.distribution} (aidlc/ kept)`
+          : ""
+      }; next: ${
         cursorOutsideGit
           ? "run `git init` in this project, then open it in Cursor and trust it (fully restart Cursor if it is already open), then run `/aidlc --doctor`"
           : descriptor.configNextStep
@@ -8779,6 +8830,7 @@ export async function main(
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
       candidate.distribution === selected?.stamp.distribution
     );
+    const switchTarget = /; refusing (\S+) without --harness \1, which switches /.exec(rawMessage)?.[1];
     emitResult(failure(
       rawMessage,
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
@@ -8790,6 +8842,8 @@ export async function main(
       // project or fail to select the same source in a copied installation.
       /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
         ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
+        : switchTarget && from
+        ? configCommand(`--from ${quoteCommandArgument(from)} --harness ${switchTarget}${projectTarget(projectDir)}`)
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
