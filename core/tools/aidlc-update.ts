@@ -186,6 +186,12 @@ export async function refreshUpdateState(
     apiUrl?: string;
   } = {},
 ): Promise<UpdateState> {
+  const deadline = performance.now() + timeoutMs;
+  const remainingBudget = (): number => {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining <= 0) throw new ReleaseUnavailableError("update refresh timed out");
+    return remaining;
+  };
   let config: MachineConfig;
   let channel: ReleaseChannel;
   try {
@@ -216,7 +222,7 @@ export async function refreshUpdateState(
           baseUrl: settings.baseUrl,
           apiUrl: overrides.apiUrl,
           caBundle: settings.caBundle,
-          timeoutMs,
+          timeoutMs: remainingBudget(),
         })
       : undefined;
     release = await fetchReleaseMetadata({
@@ -224,7 +230,8 @@ export async function refreshUpdateState(
       offline: settings.offline,
       baseUrl: settings.baseUrl,
       caBundle: settings.caBundle,
-      metadataTimeoutMs: timeoutMs,
+      metadataTimeoutMs: remainingBudget(),
+      verifyProvenance: false,
     });
     const cache: UpdateCache = validateCache({
       schemaVersion: 1,
@@ -233,28 +240,14 @@ export async function refreshUpdateState(
       releaseDate: release.manifest.date,
       channel,
     });
-    const previousCache = (() => {
-      try {
-        return readUpdateCache();
-      } catch {
-        return null;
-      }
-    })();
-    // A stream regresses only against its own channel: the newest stable is
-    // expected to sort below a preview binary, and the other channel's cache
-    // says nothing about this one.
+    // Only the installed binary is a trusted regression floor, and only within
+    // its channel. The advisory cache has no provenance: a forged future id
+    // must not prevent recovery when the mirror serves the real latest again.
     if (
-      (versionChannel(AIDLC_VERSION) === channel &&
-        compareVersions(cache.latestVersion, AIDLC_VERSION) < 0) ||
-      (previousCache &&
-        (previousCache.channel ?? STABLE_CHANNEL) === channel &&
-        compareVersions(cache.latestVersion, previousCache.latestVersion) < 0)
+      versionChannel(AIDLC_VERSION) === channel &&
+      compareVersions(cache.latestVersion, AIDLC_VERSION) < 0
     ) {
-      throw new Error(
-        `release metadata regressed from ${
-          previousCache?.latestVersion ?? AIDLC_VERSION
-        } to ${cache.latestVersion}`,
-      );
+      throw new Error("release metadata is older than the installed version");
     }
     const path = updateCachePath();
     const root = machineTransactionRoot();
@@ -279,13 +272,21 @@ export async function refreshUpdateState(
           `update refresh unavailable; cached version ${previous.latestVersion} is stale or unverifiable`,
       };
     }
+    // Parser and transport errors can contain mirror-controlled text. Preserve
+    // actionable discovery guidance using internal codes, never error.message.
+    let message = "update refresh unavailable; release metadata could not be checked";
+    if (error instanceof ReleaseUnavailableError) {
+      if (error.code === "preview-api-required") {
+        message = "update refresh unavailable; pass --release-api-url or set AIDLC_RELEASE_API_URL for this mirror";
+      } else if (error.code === "preview-unpublished") {
+        message = `update refresh unavailable; no ${PREVIEW_CHANNEL} release is published`;
+      }
+    }
     return {
       state: "unavailable",
       currentVersion: AIDLC_VERSION,
       channel,
-      message: error instanceof ReleaseUnavailableError
-        ? error.message
-        : `update refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+      message,
     };
   } finally {
     if (release?.cleanup) rmSync(release.cleanup, { recursive: true, force: true });

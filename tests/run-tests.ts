@@ -847,6 +847,15 @@ async function runSpawnCapture(
         };
         transport = { worker: { id: 0, root: cwd, socket }, env };
       }
+      // Keep each file's machine install beside its temporary project fixtures.
+      // Debug logs live inside the source checkout; putting the machine root
+      // there makes project-required routes correctly reject that checkout as
+      // overlapping an installation. The existing fixture cleanup owns this
+      // directory in both ordinary and isolated E2E runs.
+      const machineRoot = join(env.TMPDIR!, "machine");
+      mkdirSync(machineRoot, { recursive: true });
+      env.AIDLC_INSTALL_ROOT = machineRoot;
+      env.AIDLC_BIN_DIR = join(machineRoot, "bin");
       const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");
       // Both the coordinator-side helper and its child entry point must use
       // the snapshot, even if authored source changes while a file is queued.

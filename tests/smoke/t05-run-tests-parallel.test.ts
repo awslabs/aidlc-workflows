@@ -77,6 +77,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -368,6 +369,43 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       rmSync(plant, { force: true });
       rmSync(root, { recursive: true, force: true });
     }
+  }, PER_TEST_TIMEOUT);
+
+  test("machine settings stay isolated across every settings-hierarchy case", () => {
+    const host = mkdtempSync(join(tmpdir(), "aidlc-t05-host-machine-"));
+    const machine = join(host, "aidlc");
+    mkdirSync(machine);
+    const policy = join(machine, "aidlc.settings.json");
+    const sentinel = "invalid host policy: tests must never read or overwrite this\n";
+    writeFileSync(policy, sentinel);
+    try {
+      const result = run(["--unit", "--no-llm", "--filter", "^t298-settings-hierarchy$"], {
+        AIDLC_TEST_PACKAGE_READY: "1",
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(host, "bin"),
+        XDG_DATA_HOME: host,
+        LOCALAPPDATA: host,
+      });
+      expect(result.status, result.out).toBe(0);
+      expect(result.out).toContain("=== DONE t298-settings-hierarchy.test.ts (PASS) ===");
+      expect(readFileSync(policy, "utf-8")).toBe(sentinel);
+      expect(readdirSync(host)).toEqual(["aidlc"]);
+      expect(readdirSync(machine)).toEqual(["aidlc.settings.json"]);
+    } finally {
+      rmSync(host, { recursive: true, force: true });
+    }
+  }, PER_TEST_TIMEOUT);
+
+  test("debug logging keeps the source project separate from machine fixtures", () => {
+    const result = run([
+      "--debug", "-P", "8", "--unit", "--no-llm", "--filter", "^t230-dispatcher-routes$",
+    ], {
+      AIDLC_TEST_PACKAGE_READY: "1",
+      BUN_OPTIONS: "--test-name-pattern=compose.translates.to.orchestrate.next.compose",
+    });
+    expect(result.status, result.out).toBe(0);
+    expect(result.out).toContain("=== DONE t230-dispatcher-routes.test.ts (PASS) ===");
+    expect(result.out).not.toContain("cannot use an AI-DLC machine install");
   }, PER_TEST_TIMEOUT);
 
   // --- 3. --parallel 1 ≡ serial on the smoke tier --------------------------

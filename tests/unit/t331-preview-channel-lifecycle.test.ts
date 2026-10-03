@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { PREVIEW_CHANNEL, STABLE_CHANNEL } from "../../core/tools/aidlc-channel.ts";
 import { resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { refreshUpdateState } from "../../core/tools/aidlc-update.ts";
 import {
   type FixtureRelease,
   type ReleaseServerFault,
@@ -132,6 +133,58 @@ function retained(machine: string): string[] {
 }
 
 describe("t331 preview release channel", () => {
+  test("preview discovery and metadata share one cumulative refresh deadline", async () => {
+    const release = fixture(PREVIEW_2);
+    const { machine, env } = machineEnv();
+    const requests: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        requests.push(path);
+        if (path === "/api/releases") {
+          await Bun.sleep(1200);
+          return Response.json([{ tag_name: `v${PREVIEW_2}`, draft: false, prerelease: true }]);
+        }
+        if (path.endsWith("/version.json")) {
+          await Bun.sleep(1200);
+          return new Response(Bun.file(join(release, "version.json")), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (path.endsWith("/checksums.txt")) {
+          return new Response(Bun.file(join(release, "checksums.txt")), {
+            headers: { "content-type": "text/plain" },
+          });
+        }
+        return new Response("missing", { status: 404 });
+      },
+    });
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    try {
+      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const started = performance.now();
+      const result = await refreshUpdateState(2000, {
+        channel: PREVIEW_CHANNEL,
+        baseUrl,
+        apiUrl: `${baseUrl}/api/releases`,
+        offline: false,
+      });
+      const elapsed = performance.now() - started;
+      expect(result.state).toBe("unavailable");
+      expect(elapsed).toBeLessThan(2500);
+      expect(requests).toEqual(["/api/releases", `/download/v${PREVIEW_2}/version.json`]);
+      expect(existsSync(join(machine, "update-check.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("config --channel persists the machine channel beside the update cache and pins", async () => {
     const { machine, project, env } = machineEnv();
     const shown = await run(DISPATCHER, ["config", "--channel", "--json"], project, env);
@@ -170,10 +223,12 @@ describe("t331 preview release channel", () => {
   test("update --check follows the channel, ignores drafts and stable, and treats API failure as unavailable", async () => {
     const release = fixture(PREVIEW_2);
     const listed: FixtureRelease[] = [
+      { tag_name: "v9007199254740992.0.0-preview.20260903.1", prerelease: true },
       { tag_name: `v${DRAFT_PREVIEW}`, prerelease: true, draft: true },
       { tag_name: `v${NEXT_STABLE}`, prerelease: false },
       { tag_name: `v${PREVIEW_1}`, prerelease: true },
       { tag_name: `v${PREVIEW_2}`, prerelease: true },
+      { tag_name: `v${NEXT_STABLE}-preview.20260903.9007199254740992`, prerelease: true },
       { tag_name: "v9.9.9-rc.1", prerelease: true },
     ];
     const server = serve(release, listed);
@@ -298,6 +353,38 @@ describe("t331 preview release channel", () => {
       `updated ${AIDLC_VERSION} -> ${PREVIEW_2} (switched channel ${STABLE_CHANNEL} -> ${PREVIEW_CHANNEL})`,
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("listing and pruning ignore malformed legacy version directories without deleting them", async () => {
+    if (process.platform === "win32") return;
+    const { machine, project, env } = machineEnv();
+    const installed = await run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", fixture(AIDLC_VERSION),
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const invalid = [
+      "9007199254740992.0.0",
+      `${NEXT_STABLE}-preview.20260903.9007199254740992`,
+      `${"9".repeat(85)}.0.0`,
+    ];
+    for (const version of invalid) {
+      const path = join(machine, "versions", version);
+      mkdirSync(path, { recursive: true });
+      writeFileSync(join(path, "sentinel"), "legacy data");
+    }
+    for (const args of [["versions", "list", "--json"], ["versions", "prune", "--yes", "--json"]]) {
+      const result = await run(LIFECYCLE, args, project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("9007199254740992");
+      if (args[1] === "list") {
+        expect(JSON.parse(result.stdout).data.versions.map((entry: { version: string }) => entry.version))
+          .toEqual([AIDLC_VERSION]);
+      }
+      for (const version of invalid) {
+        expect(readFileSync(join(machine, "versions", version, "sentinel"), "utf-8")).toBe("legacy data");
+      }
+    }
+    expect(retained(machine)).toEqual([AIDLC_VERSION, ...invalid].sort());
+  });
 
   test("previews keep the newest two on top of the active, rollback, in-use, and pinned protection", async () => {
     if (process.platform === "win32") return;
