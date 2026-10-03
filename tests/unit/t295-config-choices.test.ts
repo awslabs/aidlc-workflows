@@ -2,6 +2,7 @@
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -776,6 +777,35 @@ describe("t295 flags section", () => {
     expect(other.stdout + other.stderr).toContain("requires exactly one of --local, --project, or --global");
   });
 
+  test("a clear that reaches the machine file says which files changed when that file cannot be written", () => {
+    // A read-only folder is the way to make the machine step fail here.
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const project = install();
+    const machine = temp("aidlc-t295-machine-layer-");
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv({ AIDLC_INSTALL_ROOT: machine }),
+    );
+    expect(flags("--global", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
+    expect(flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
+    chmodSync(machine, 0o555);
+    let partial: ReturnType<typeof run>;
+    try {
+      partial = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS");
+    } finally {
+      chmodSync(machine, 0o755);
+    }
+    expect(partial.status).not.toBe(0);
+    expect(partial.stdout + partial.stderr).toContain(
+      "aidlc.settings.local.json changed, but the machine settings file did not: ",
+    );
+    expect(partial.stdout + partial.stderr).toContain("Run the same command again to finish.");
+    const finished = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS");
+    expect(finished.status, finished.stdout + finished.stderr).toBe(0);
+    expect(finished.stdout).toContain(`Cleared AIDLC_DISABLE_SENSORS from ${join(machine, "aidlc.settings.json")}.`);
+  });
+
   test("with no harness installed a bypass records without --yes, and other flags still need it", () => {
     const project = temp("aidlc-t295-no-harness-");
     mkdirSync(join(project, ".git"));
@@ -806,6 +836,18 @@ describe("t295 flags section", () => {
     expect(resolvedFlags(project)?.swarm).toBe(true);
     expect(run(["config", "flags", "--help"], project, runtimeEnv()).stdout)
       .toContain("In an installed project a bypass needs none");
+    // With no layer named it works the same: a bypass goes to the person's own
+    // file, and a clear reaches every file that records it.
+    const bare = (...args: string[]) => run(["config", "flags", "--project-dir", project, ...args], project, runtimeEnv());
+    const mine = bare("--bypass", "AIDLC_DISABLE_LEARNINGS");
+    expect(mine.status, mine.stdout + mine.stderr).toBe(0);
+    expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_LEARNINGS in aidlc.settings.local.json.");
+    expect(bare("--project", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
+    const both = bare("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    expect(both.status, both.stdout + both.stderr).toBe(0);
+    expect(both.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.local.json.");
+    expect(both.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json.");
+    expect(resolvedFlags(project)?.bypasses).toBeUndefined();
     // Where the clone's exclude list cannot take the line, the result says so.
     if (process.platform === "win32") return;
     const repo = temp("aidlc-t295-no-harness-git-");

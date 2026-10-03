@@ -547,11 +547,12 @@ model, without Opus:
   and Kiro CLI that is the session's effort. On Claude Code, Codex CLI, and
   opencode, Code Generation runs on the developer agent, which follows the
   session only while no preset or effort is recorded for it. Otherwise its
-  effort is the recorded one for every Unit of the workflow: to raise it,
-  record it before the workflow starts, for example
-  `aidlc config models --agent developer --effort high --project --yes`, and
-  it then applies to all of Code Generation, because config does not refresh
-  agent files while a workflow is active.
+  effort is the recorded one: to raise it, record it, for example
+  `aidlc config models --agent developer --effort high --project --yes`. That
+  works while a workflow is open too: config rewrites the developer agent's
+  file, and the harness uses it the next time it starts the agent (Claude Code
+  does so at the agent's next start; a step already running keeps what it
+  started with). The command prints the one that puts it back.
 - **Change model or effort between stages, in a new chat.** See
   [Changing Model Mid-Workflow](11-session-management.md#changing-model-mid-workflow).
 

@@ -7867,7 +7867,10 @@ function handleSettingsOnlySection(
     return true;
   }
   try {
-    const target = settingsTargetForMutation(argv, projectDir);
+    // A bypass with no layer goes to the person's own file, and a clear with no
+    // layer reaches every file that records it, as in an installed project.
+    const bypassTargets = section === "flags" ? bypassSettingsTargets(argv, projectDir, projectDir) : null;
+    const target = bypassTargets?.[0] ?? settingsTargetForMutation(argv, projectDir);
     const path = settingsPathForTarget(projectDir, target);
     const currentFile = readSettingsTarget(projectDir, target);
     let nextFile: AidlcSettingsFile | null;
@@ -7922,12 +7925,17 @@ function handleSettingsOnlySection(
       previous: currentFile,
       next: nextFile,
     };
+    const mutations = [
+      mutation,
+      ...(bypassTargets ?? []).slice(1).map((layer) => flagsMutationFor(argv, projectDir, projectDir, layer)),
+    ];
     if (argv.includes("--dry-run")) {
       emitResult(success(`${section} settings plan`, {
         target,
         path,
         previous: currentFile,
         next: nextFile,
+        ...(mutations.length > 1 ? { others: mutations.slice(1) } : {}),
       }), options);
       return true;
     }
@@ -7941,20 +7949,29 @@ function handleSettingsOnlySection(
       return true;
     }
     const notes: string[] = [];
-    if (target === "global") {
-      executeGlobalSettingsMutation(mutation);
-    } else {
-      const operations: TransactionOperation[] = [];
-      const actions: PlannedAction[] = [];
-      const exclude = planProjectSettingsMutation(projectDir, mutation, operations, actions);
-      executePlan({ schemaVersion: 1, root: projectDir, operations });
+    const operations: TransactionOperation[] = [];
+    const actions: PlannedAction[] = [];
+    const excludes = mutations
+      .filter((change) => change.target !== "global")
+      .map((change) => planProjectSettingsMutation(projectDir, change, operations, actions));
+    if (operations.length > 0) executePlan({ schemaVersion: 1, root: projectDir, operations });
+    afterProjectSettings(projectDir, mutations, () => {
+      for (const change of mutations) {
+        if (change.target === "global") executeGlobalSettingsMutation(change);
+      }
+    });
+    for (const exclude of excludes) {
       const note = excludeLocalSettingsFromClone(exclude);
       if (note) notes.push(note);
-      invalidateSettingsCache(path);
     }
-    const changes = settingsChangeLines(projectDir, [mutation]);
+    for (const change of mutations) invalidateSettingsCache(change.path);
+    const changes = settingsChangeLines(projectDir, mutations);
+    // The lines above already name any other file that still records a
+    // cleared switch.
     const switchLines = section === "flags"
-      ? recordSwitchChange(projectDir, target, currentFile, nextFile)
+      ? [...new Set(mutations.flatMap((change) =>
+        recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+      ))]
       : [];
     if (options.mode === "human") {
       writeMenuLines("", changes.map((line) => `  ${line}`));
@@ -8196,6 +8213,29 @@ function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undef
   return `${who} pick${open.length === 1 ? "s" : ""} this up from the next step; a step already running keeps what it started with.`;
 }
 
+// The machine settings file lives outside the project, so its change runs as
+// its own step after the project's. When that step fails, the project files
+// have already changed: the error says which, and rerunning the same command
+// finishes the rest.
+function afterProjectSettings(
+  projectDir: string,
+  changed: readonly SettingsMutation[],
+  machineStep: () => void,
+): void {
+  try {
+    machineStep();
+  } catch (error) {
+    const files = changed
+      .filter((change) => change.target !== "global" && canonical(change.previous) !== canonical(change.next))
+      .map((change) => relative(projectDir, change.path));
+    if (files.length === 0) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${files.join(" and ")} changed, but the machine settings file did not: ${reason}. Run the same command again to finish.`,
+    );
+  }
+}
+
 function recordBypassesOnly(
   projectDir: string,
   argv: readonly string[],
@@ -8291,7 +8331,9 @@ function recordBypassesOnly(
     // changed since they were planned is a conflict, not overwritten.
     if (operations.length > 0) executePlan({ schemaVersion: 1, root: projectDir, operations });
     if (machineOperations.length > 0) {
-      executePlan({ schemaVersion: 1, root: machineTransactionRoot(), operations: machineOperations });
+      afterProjectSettings(projectDir, operations.length > 0 ? mutations : [], () =>
+        executePlan({ schemaVersion: 1, root: machineTransactionRoot(), operations: machineOperations })
+      );
     }
     const notes = excludes.flatMap((exclude) => excludeLocalSettingsFromClone(exclude) ?? []);
     for (const change of mutations) invalidateSettingsCache(change.path);
