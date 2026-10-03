@@ -391,7 +391,10 @@ that omit it retain the native 600-second identity default.
 Required audit and active-directive publication waits use the five-minute
 shared default. A pinned dispatch waits 30 seconds to reserve its release,
 because hooks make one on every tool call; other machine reservations, such as
-install and pin, keep the five-minute default. The environment controls are:
+install and pin, keep the five-minute default. The dispatch checks the
+release's integrity once, under the machine lock as the reservation lands (or
+just before it runs unreserved), and the release it launches does not check
+itself again. The environment controls are:
 
 | Variable | Default | Applies to |
 |---|---|---|

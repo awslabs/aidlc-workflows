@@ -2689,11 +2689,8 @@ async function dispatchPinnedVersion(
   const projectDir = dispatcherProjectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
-  const {
-    reserveDispatchedVersion,
-    resolvePinnedDispatch,
-  } = await import("./aidlc-lifecycle.ts");
-  const result = resolvePinnedDispatch(argv, projectDir);
+  const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");
+  const result = resolvePinnedDispatch(argv, projectDir, { reserve: true });
   if (result.kind === "none") return null;
   if (result.kind === "failure") {
     return renderDispatcherFailure(
@@ -2703,7 +2700,7 @@ async function dispatchPinnedVersion(
       result.remediation,
     );
   }
-  const releaseReservation = reserveDispatchedVersion(result.version);
+  const releaseReservation = result.release;
   if (!releaseReservation) {
     text(
       2,

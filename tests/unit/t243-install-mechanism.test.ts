@@ -4875,6 +4875,16 @@ describe("t243 release lifecycle", () => {
         message: `this project requires ${AIDLC_VERSION}, which is not installed completely`,
         remediation: `aidlc config --pin ${AIDLC_VERSION}`,
       }));
+      // The release a dispatcher launched trusts the check that dispatcher made.
+      const dispatched = process.env.AIDLC_PIN_DISPATCHED;
+      process.env.AIDLC_PIN_DISPATCHED = AIDLC_VERSION;
+      try {
+        expect(resolvePinnedDispatch(["engine", "status", "--project-dir", project]))
+          .toEqual({ kind: "none" });
+      } finally {
+        if (dispatched === undefined) delete process.env.AIDLC_PIN_DISPATCHED;
+        else process.env.AIDLC_PIN_DISPATCHED = dispatched;
+      }
 
       writeFileSync(filePath, originalContent);
       expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
@@ -5655,6 +5665,76 @@ describe("t243 release lifecycle", () => {
       holder.kill();
       await holder.exited;
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned hook checks its release once, after the lock wait or before running unreserved", async () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-check-machine-");
+    const project = temp("aidlc-t243-reservation-check-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const runtime = join(machine, "versions", NEXT_VERSION, "runtime");
+    const filePath = join(
+      runtime,
+      walkFiles(runtime).find((path) => !path.endsWith("aidlc-stamp.json")) as string,
+    );
+    const original = readFileSync(filePath);
+    const tampered = Buffer.concat([original, Buffer.from("\ntampered\n")]);
+    const hookEnv = { ...env, AIDLC_PROJECT_DIR: project };
+    const refusal = `this project requires ${NEXT_VERSION}, which is not installed completely`;
+    const note = "without waiting for it to finish";
+
+    const holder = Bun.spawn([BUN, "-e", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const lockPath = join(machine, ".aidlc-transaction.lock");
+    try {
+      writeFileSync(lockPath, `${JSON.stringify({ pid: holder.pid, staging: ".aidlc-txn-held" })}\n`);
+      writeFileSync(filePath, tampered);
+      // Running unreserved after a busy lock still checks the release first.
+      const unreserved = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, {
+        ...hookEnv,
+        AIDLC_PIN_RESERVATION_TIMEOUT_MS: "200",
+      });
+      expect(unreserved.status, unreserved.stdout + unreserved.stderr).toBe(1);
+      expect(unreserved.stderr).toContain(refusal);
+      expect(unreserved.stderr).not.toContain(note);
+
+      // Damage repaired while the hook waits for the lock is never seen: the one
+      // check runs under the lock, as the reservation lands.
+      const waiting = runAsync(DISPATCHER, ["engine", "hook", "fold-usage"], project, {
+        ...hookEnv,
+        AIDLC_PIN_RESERVATION_TIMEOUT_MS: "60000",
+      });
+      await Bun.sleep(3_000);
+      writeFileSync(filePath, original);
+      rmSync(lockPath, { force: true });
+      const reserved = await waiting;
+      expect(reserved.status, reserved.stdout + reserved.stderr).toBe(0);
+      expect(reserved.stderr).not.toContain(refusal);
+      expect(reserved.stderr).not.toContain(note);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
+
+    // With the lock free, damage found under the lock gives the same refusal
+    // and leaves no reservation behind.
+    writeFileSync(filePath, tampered);
+    const refused = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+    expect(refused.stderr).toContain(refusal);
+    expect(refused.stderr).toContain(`aidlc config --pin ${NEXT_VERSION}`);
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
