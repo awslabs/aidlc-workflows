@@ -176,6 +176,7 @@ import {
   unitGateStatus,
   readAuditShardEvents,
   unitLifecycleSnapshot,
+  validateUnitName,
   withAuditLock,
   writeFileAtomic,
 } from "../tools/aidlc-lib.ts";
@@ -1420,6 +1421,7 @@ function retainedUnitWorkRecorded(
   retained: { kind: string; stage?: string; unit?: string } | undefined,
 ): string | undefined {
   if (retained?.kind !== "run-stage" || !retained.stage || !retained.unit) return undefined;
+  if (validateUnitName(retained.unit) !== null) return undefined;
   try {
     const unreadable: string[] = [];
     const rows = readAuditShardEvents(projectDir, undefined, undefined, unreadable);
@@ -1465,7 +1467,8 @@ function continuationReason(
     return `The delivered AIDLC rules part${where} is still active. Apply it if you have not, then run \`${aidlcToolInvocation("orchestrate")} continue ${continueToken}\` and keep following each step it returns until \`run-stage\`; do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
-    const forUnit = unit ? ` (unit "${unit}")` : "";
+    // The marker is a writable file: only a valid Unit name reaches the agent.
+    const forUnit = unit && validateUnitName(unit) === null ? ` (unit "${unit}")` : "";
     return `The exact delivered AIDLC run-stage${where}${forUnit} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
   }
   if (kind === "load-steering" && continueToken) {
