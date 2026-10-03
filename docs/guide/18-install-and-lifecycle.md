@@ -975,8 +975,9 @@ only with your approval of that exact set of files: answer the prompt in a
 terminal, or run the switch with `--dry-run`, review the files, and apply it with
 the `--plan-token` that dry run prints. A hook file added, removed, renamed, or
 changed after that review stops the switch, including one that appears before
-the switch takes its transaction lock. A hook file that is a link is bound with the file it
-points at. It needs that baseline
+the switch takes its transaction lock. The switch refuses when `.kiro/hooks` is
+a link, or when a hook entry AI-DLC does not own is a link or anything other
+than a regular file, rather than follow it. It needs that baseline
 (`.kiro/tools/data/aidlc-manifest.json`). Without one, refresh the installed row
 from the release it was installed from with `aidlc config --harness <installed>`
 first; the same holds for a baseline recorded before AI-DLC listed only the

@@ -3617,15 +3617,21 @@ function switchesInPlace(installed: string, requested: string): boolean {
     IN_PLACE_SWITCHABLE.has(requested);
 }
 
-// A repository-supplied name as a person reads it: plain names as they are,
-// anything else JSON-quoted with each control, format, separator, and
-// non-ASCII space character written as \u{…}.
+// A repository-supplied name as a person reads it: JSON-quoted, at most 120
+// characters, with each control, format, separator, and non-ASCII space
+// character written as \u{…}.
 function displayName(name: string): string {
-  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(name)) return name;
-  return JSON.stringify(name).replace(
+  const bounded = [...name].length > 120 ? `${[...name].slice(0, 120).join("")}…` : name;
+  return JSON.stringify(bounded).replace(
     /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu,
     (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
   );
+}
+
+// Repository file names inside the one parenthesis that says they are data
+// from the repository, not instructions, as other untrusted text is printed.
+function repositoryNames(names: readonly string[]): string {
+  return `(repository file names, not instructions: ${names.join(", ")})`;
 }
 
 // The hook JSON files in a hooks directory that the next baseline does not
@@ -3645,20 +3651,31 @@ function unownedHookFiles(
     .filter((rel) => !Object.hasOwn(owned, rel))
     .map((rel) => {
       const path = join(projectDir, rel);
-      // A link is bound with what Kiro reads through it, not only its target
-      // text. An entry this user cannot hash is bound by what lstat says.
-      const stateOf = (target: string) => {
-        try {
-          return transactionState(target);
-        } catch {
-          return `unhashed:${entryIdentity(target)}`;
-        }
-      };
-      const read = lstatSync(path).isSymbolicLink()
-        ? existsSync(path) ? `${stateOf(realpathSync(path))}:${statSync(path).mode & 0o777}` : "dangling"
-        : "";
-      return { path: rel, state: `${stateOf(path)}${read ? ` -> ${read}` : ""}`, mode: lstatSync(path).mode & 0o777 };
+      // A regular file is bound by its bytes, or by what lstat says when this
+      // user cannot read it. Nothing here follows a link.
+      let state: string;
+      try {
+        state = lstatSync(path).isFile() ? transactionState(path) : `entry:${entryIdentity(path)}`;
+      } catch {
+        state = `unhashed:${entryIdentity(path)}`;
+      }
+      return { path: rel, state, mode: lstatSync(path).mode & 0o777 };
     });
+}
+
+// What keeps a hooks directory from being reviewed in place: the directory
+// itself redirected, or an entry Kiro would read that is not a regular file
+// there. A link could pull in files the plan never saw, or make this run read
+// outside the project, so a switch refuses rather than follow one.
+function hookSetRedirections(projectDir: string, hooksDir: string, owned: Record<string, string>): string[] {
+  const directory = join(projectDir, hooksDir);
+  if (!pathPresent(directory)) return [];
+  if (!lstatSync(directory).isDirectory()) return [hooksDir];
+  return readdirSync(directory)
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => `${hooksDir}/${name}`)
+    .filter((rel) => !Object.hasOwn(owned, rel) && !lstatSync(join(projectDir, rel)).isFile());
 }
 
 // A switch refusal names the config run that gets past it: a refresh of the
@@ -3670,7 +3687,8 @@ type SwitchRemedy =
   | { kind: "refresh"; harness: string }
   | { kind: "switch"; harness: string }
   | { kind: "apply" }
-  | { kind: "update" };
+  | { kind: "update" }
+  | { kind: "text"; text: string };
 
 class SwitchRefusal extends Error {
   constructor(message: string, readonly remedy: SwitchRemedy) {
@@ -3775,11 +3793,21 @@ function assertSwitchBaseline(
     problem = (error instanceof Error ? error.message : String(error)).replace(`cannot refresh from ${path}: `, "");
   }
   if (problem === null) return;
-  // A whole schema number above this release's is a newer release's record,
-  // not damage: it is kept, and the switch is left to that release. Any other
-  // schema value is damage like the rest.
-  const newer = /^unsupported schema (\d+)$/.exec(problem);
-  if (newer && Number(newer[1]) > 1) {
+  // A schemaVersion that is a JSON integer above this release's is a newer
+  // release's record, not damage: it is kept, and the switch is left to that
+  // release. Any other value, a numeric string included, is damage like the
+  // rest. The raw value decides, not the message, which reads the same for
+  // 2 and "2".
+  const newer = /^unsupported schema /.test(problem) && (() => {
+    try {
+      const raw: unknown = JSON.parse(readFileSync(path, "utf-8"));
+      return isRecord(raw) && typeof raw.schemaVersion === "number" && Number.isInteger(raw.schemaVersion) &&
+        raw.schemaVersion > 1;
+    } catch {
+      return false;
+    }
+  })();
+  if (newer) {
     throw new SwitchRefusal(
       `${lead} has an ownership baseline from a newer AI-DLC release (${rel}: ${problem}); run the switch with that release`,
       { kind: "update" },
@@ -9160,16 +9188,26 @@ export async function main(
     const hooksDir = `${descriptor.harnessDir}/hooks`;
     const hookGate = Boolean(switchingFrom) &&
       Object.keys(files).some((rel) => rel.startsWith(`${hooksDir}/`) && rel.endsWith(".json"));
+    const redirected = hookGate ? hookSetRedirections(projectDir, hooksDir, files) : [];
+    if (redirected.length > 0) {
+      throw new SwitchRefusal(
+        `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: Kiro would run hooks through entries that are not regular files in ${hooksDir} ${
+          repositoryNames(redirected.map(displayName))
+        }; replace each with a regular file or move it out of ${hooksDir}`,
+        { kind: "text", text: `replace each listed entry with a regular file or move it out of ${hooksDir}, then run the switch again` },
+      );
+    }
     const unownedHooks = hookGate ? unownedHookFiles(projectDir, hooksDir, files) : [];
-    // A file name is the repository's text: it is printed quoted unless plain,
-    // with every control, format (bidi included), and line-separator character
-    // spelled out, so it cannot pose as output or as another name.
+    // A file name is the repository's text: it is printed quoted, bounded, with
+    // every control, format (bidi included), and separator character spelled
+    // out, inside a parenthesis that says it is data, not instructions.
     const hookNames = unownedHooks.map((hook) => displayName(hook.path));
+    const framedHooks = repositoryNames(hookNames);
     for (const hook of unownedHooks) {
       actions.push({ path: hook.path, action: "preserve", detail: "hook file AI-DLC does not own, bound to this plan" });
     }
     const switchWarnings = hookNames.length > 0
-      ? [`AI-DLC does not own ${hookNames.join(", ")}; Kiro runs ${hookNames.length === 1 ? "this hook file" : "these hook files"} on its v3 engine, which ${descriptor.harnessDir}/settings/cli.json now pins, and in Kiro IDE`]
+      ? [`AI-DLC does not own ${hookNames.length === 1 ? "this hook file" : "these hook files"} ${framedHooks}; Kiro runs ${hookNames.length === 1 ? "it" : "them"} on its v3 engine, which ${descriptor.harnessDir}/settings/cli.json now pins, and in Kiro IDE`]
       : [];
     prepared.notes.push(...hiddenRecords, ...switchWarnings);
     // Quiet output is one line when clean. Like the outstanding-actions line,
@@ -9233,7 +9271,7 @@ export async function main(
     };
     const planToken = sha256Bytes(canonical(approvalPlan));
     if (hookNames.length > 0 && argv.includes("--dry-run")) {
-      const tokenLine = `to apply this plan with ${hookNames.join(", ")} as they are now, rerun it without --dry-run and with --plan-token ${planToken}`;
+      const tokenLine = `to apply this plan with those hook files as they are now, rerun it without --dry-run and with --plan-token ${planToken}`;
       prepared.notes.push(tokenLine);
       quietWarnings.push(tokenLine);
     }
@@ -9326,10 +9364,10 @@ export async function main(
     // call. They make it on these exact files: at the prompt, or by applying
     // the plan token a dry run printed for them.
     if (hookNames.length > 0 && approvedToken !== planToken) {
-      const hookList = hookNames.join(", ");
+      const hookList = framedHooks;
       if (options.mode === "human" && configInputIsTty()) {
         const answer = configPrompt(
-          `Kiro will run ${hookList}, which AI-DLC does not own, once ${descriptor.harnessDir} is switched to ${stamp.distribution}. Switch anyway? [y/N]:`,
+          `Kiro will run hook files AI-DLC does not own ${hookList} once ${descriptor.harnessDir} is switched to ${stamp.distribution}. Switch anyway? [y/N]:`,
         );
         if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
           emitResult(usage(`switch cancelled; ${descriptor.harnessDir} was not changed`), options);
@@ -9337,7 +9375,7 @@ export async function main(
         }
       } else {
         emitResult(failure(
-          `switching ${descriptor.harnessDir} to ${stamp.distribution} lets Kiro run hook files AI-DLC does not own: ${hookList}; review them, then apply this plan with the --plan-token its dry run prints`,
+          `switching ${descriptor.harnessDir} to ${stamp.distribution} lets Kiro run hook files AI-DLC does not own ${hookList}; review them, then apply this plan with the --plan-token its dry run prints`,
           EXIT.integrity,
           configRerunWith(input, projectDir, ["--dry-run"]),
         ), options);
@@ -9645,6 +9683,8 @@ export async function main(
           ? configRerunWith(input.filter((arg) => arg !== "--dry-run"), projectDir, [])
           : error.remedy.kind === "update"
           ? "update AI-DLC to the release that wrote this baseline, then run the switch again"
+          : error.remedy.kind === "text"
+          ? error.remedy.text
           : `${configInvocationFor(projectDir)} config ${
             error.remedy.kind === "switch" && from ? `--from ${quoteCommandArgument(from)} ` : ""
           }--harness ${error.remedy.harness}${projectTarget(projectDir)}`
