@@ -362,6 +362,18 @@ describe("a check switched off for the project is always said, never refused", (
     expect(long).toMatch(/because you said: "(?:word ){39}word\.\.\."/);
     expect(clearSwitchCommand(NAME)).toEndWith(`config flags --clear-bypass ${NAME} --yes`);
   });
+
+  test("the way back, printed from another folder, names the project so the shell reads it as one path", () => {
+    const back = `config flags --clear-bypass ${NAME} --yes`;
+    expect(clearSwitchCommand(NAME, process.cwd(), "win32")).toEndWith(back);
+    expect(clearSwitchCommand(NAME, "/work/Jo's app", "linux")).toEndWith(`${back} --project-dir '/work/Jo'"'"'s app'`);
+    expect(clearSwitchCommand(NAME, "C:\\Users\\O'Brien\\app", "win32"))
+      .toEndWith(`${back} --project-dir 'C:\\Users\\O''Brien\\app'`);
+    // cmd.exe, which runs native Windows aidlc, would split or expand these.
+    for (const dir of ["C:\\R&D\\app", "C:\\work\\%USERNAME%\\app", "C:\\a^b\\app"]) {
+      expect(clearSwitchCommand(NAME, dir, "win32")).toEndWith(`${back}, run in ${dir}`);
+    }
+  });
 });
 
 // The directive and session start are the channels each harness shows: the

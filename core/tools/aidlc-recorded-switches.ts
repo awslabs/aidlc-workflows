@@ -16,13 +16,13 @@ import {
   delegatedWorktreeIntent,
   isoTimestamp,
   latestPersonTurn,
+  normalizeDriveLetter,
   personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
   sessionsDir,
-  shellArg,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
 import {
   type AidlcSettingsFile,
   PERSON_CHECK_SWITCH_LABELS,
@@ -175,12 +175,27 @@ function where(target: SettingsTarget): string {
 }
 
 // The way back: a clear with no layer turns the switch off in every settings
-// file that records it, so the check is really back on.
-export function clearSwitchCommand(name: RecordableProjectBypass, projectDir?: string): string {
-  const elsewhere = projectDir !== undefined && resolve(projectDir) !== resolve(process.cwd());
-  return `${aidlcInvocation()} config flags --clear-bypass ${name} --yes${
-    elsewhere ? ` --project-dir ${shellArg(projectDir)}` : ""
-  }`;
+// file that records it, so the check is really back on. Printed from another
+// folder it names the project, quoted for the platform's shell. Native Windows
+// `aidlc` is aidlc.cmd, and cmd.exe acts on & | < > ^ in an argument with no
+// space and on %NAME% even inside quotes, so a folder holding one is named
+// beside the command instead of inside it.
+export function clearSwitchCommand(
+  name: RecordableProjectBypass,
+  projectDir?: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const command = `${aidlcInvocation()} config flags --clear-bypass ${name} --yes`;
+  if (
+    projectDir === undefined ||
+    normalizeDriveLetter(resolve(projectDir)) === normalizeDriveLetter(resolve(process.cwd()))
+  ) {
+    return command;
+  }
+  if (platform !== "win32") return `${command} --project-dir ${quoteCommandArgument(projectDir, "posix")}`;
+  return /[&|<>^%]/.test(projectDir)
+    ? `${command}, run in ${projectDir}`
+    : `${command} --project-dir ${quoteCommandArgument(projectDir, "powershell")}`;
 }
 
 /** The one line the person hears while a switch is off. */
