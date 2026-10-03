@@ -186,8 +186,10 @@ import {
   isoTimestamp,
   isPackageJson,
   isValidRepoName,
+  aidlcRootIntegrations,
   codekbDir,
   intentsDir,
+  codekbFingerprintExcludes,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -6657,31 +6659,11 @@ function skipNestedScanDir(entry: string): boolean {
 // person owns content in them. Absolute paths, matched against the walk's own
 // join(dir, entry). A legacy or unreadable descriptor claims nothing.
 function aidlcWholeFiles(dir: string): ReadonlySet<string> {
-  const owned = new Set<string>();
-  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
-  try {
-    harnesses = discoverProjectHarnesses(dir);
-  } catch {
-    return owned;
-  }
-  for (const harness of harnesses) {
-    let integrations: unknown;
-    try {
-      const descriptor = JSON.parse(
-        readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8")
-      ) as { rootIntegrations?: unknown } | null;
-      integrations = descriptor?.rootIntegrations;
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(integrations)) continue;
-    for (const integration of integrations) {
-      if (integration?.policy === "whole-file" && typeof integration.path === "string") {
-        owned.add(join(dir, integration.path));
-      }
-    }
-  }
-  return owned;
+  return new Set(
+    aidlcRootIntegrations(dir)
+      .filter((integration) => integration.policy === "whole-file")
+      .map((integration) => join(dir, integration.path)),
+  );
 }
 
 // skipDirs: directory names to skip at THIS level only (not propagated into
@@ -9242,7 +9224,7 @@ function resolveCodekbRepo(
     repo,
     repoDir: sourceDir,
     storeDir: codekbDir(projectDir, repo, space),
-    excludes: sourceDir === projectDir ? ["aidlc"] : [],
+    excludes: codekbFingerprintExcludes(projectDir, sourceDir),
   };
 }
 
@@ -9658,10 +9640,11 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
   // basename(projectDir)).
   const siblingDir = join(projectDir, repo);
   const repoDir = existsSync(siblingDir) && statSync(siblingDir).isDirectory() ? siblingDir : projectDir;
-  // In the lone-repo layout the framework-owned aidlc workspace tree lives
-  // under the repository root. Exclude it from full-root fingerprints so
-  // writing the scope draft, codekb, audit, or state cannot stale its own hash.
-  const fingerprintExcludes = repoDir === projectDir ? ["aidlc"] : [];
+  // In the lone-repo layout AI-DLC's workspace and install live under the
+  // repository root. Leave them out of full-root fingerprints, so writing the
+  // scope draft, codekb, audit, or state cannot stale its own hash, and an
+  // AI-DLC update or setting change is not a source change.
+  const fingerprintExcludes = codekbFingerprintExcludes(projectDir, repoDir);
 
   if (flags.mint === "true") {
     const paths = (flags.paths ?? "")

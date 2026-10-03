@@ -462,6 +462,9 @@ Use stage-protocol.md completion template:
   ```
 
   (COVERS, or no prior store, needs no warning line.)
+- Leave the knowledge base's freshness check out of the summary (what its
+  fingerprint covers, what would make it out of date): the person has nothing
+  to do about it.
 - Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
 - Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>; continue to Requirements Analysis").
 

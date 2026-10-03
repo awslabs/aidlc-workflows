@@ -14,6 +14,7 @@ import {
   entrySkillInvocation,
   type DirectiveLimit,
   directiveLimitFor,
+  discoverProjectHarnesses,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -3087,20 +3088,36 @@ export function codekbScopeFingerprint(
         ),
     );
   if (survivingPaths.length === 0) return null;
-  const exclusions = normalizedExclusions
-    .filter((exclusion) =>
-      survivingPaths.some(
-        ({ normalized: positive }) =>
-          positive === "" || exclusion.startsWith(`${positive}/`),
-      ),
-    )
-    .map((exclusion) => `:(exclude,literal)${exclusion}`);
+  const candidateExclusions = normalizedExclusions.filter((exclusion) =>
+    survivingPaths.some(
+      ({ normalized: positive }) =>
+        positive === "" || exclusion.startsWith(`${positive}/`),
+    ),
+  );
 
   const inTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd: repoDir,
     encoding: "utf-8",
   });
   if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
+  // `add` already leaves ignored paths out, and naming one, even as an
+  // exclusion, makes it fail, so only exclusions it would otherwise add are
+  // named. The temporary index starts empty, so ignore rules also cover paths
+  // the real index tracks (--no-index).
+  let ignoredExclusions = new Set<string>();
+  if (candidateExclusions.length > 0) {
+    const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin", "-z"], {
+      cwd: repoDir,
+      input: candidateExclusions.map((path) => `${path}\0`).join(""),
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (ignored.status !== 0 && ignored.status !== 1) return null;
+    ignoredExclusions = new Set(ignored.stdout.split("\0").filter(Boolean));
+  }
+  const exclusions = candidateExclusions
+    .filter((path) => !ignoredExclusions.has(path))
+    .map((exclusion) => `:(exclude,literal)${exclusion}`);
   // .NET build outputs beside a project file are not source even where nothing
   // ignores them; a path the scan names itself is still read. They leave the
   // index after `add`, because naming an ignored path to `add` fails.
@@ -3271,6 +3288,81 @@ export function codekbSourceFingerprint(
   return tree === null ? null : `tree:${tree}`;
 }
 
+// The root files each installed harness's projection writes into (its
+// rootIntegrations: .gitignore, AGENTS.md, .mcp.json, opencode.json, Cursor's
+// install.ts), with their merge policy. A legacy or unreadable descriptor, or
+// an entry that is not a plain path inside the project, names nothing.
+export function aidlcRootIntegrations(dir: string): Array<{ path: string; policy: string }> {
+  const found: Array<{ path: string; policy: string }> = [];
+  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
+  try {
+    harnesses = discoverProjectHarnesses(dir);
+  } catch {
+    return found;
+  }
+  for (const harness of harnesses) {
+    let integrations: unknown;
+    try {
+      const descriptor = JSON.parse(
+        readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8"),
+      ) as { rootIntegrations?: unknown } | null;
+      integrations = descriptor?.rootIntegrations;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(integrations)) continue;
+    for (const integration of integrations) {
+      const path = typeof integration?.path === "string" ? normalizeGenerationPath(integration.path) : null;
+      if (path !== null && path !== "." && typeof integration.policy === "string") {
+        found.push({ path, policy: integration.policy });
+      }
+    }
+  }
+  return found;
+}
+
+// AI-DLC's own files, which the Reverse Engineering scan never reads, so a
+// change to them never makes the code knowledge base out of date. They live
+// only in a repository rooted at the workspace; a sibling repo leaves nothing
+// out. Repository-relative literal paths: the aidlc/ workspace and the harness
+// directories; the aidlc-named agents, hooks and skills under .github/ and
+// .agents/, and the stage runners generated there; every root file an
+// installed harness writes into, left out whole because none of them is
+// application code (a .gitignore edit that adds or drops files still moves the
+// fingerprint through those files); and AI-DLC's root settings files.
+const CODEKB_INSTALL_DIRS = ["aidlc", ".aidlc", ".claude", ".codex", ".cursor", ".kiro", ".opencode"];
+const CODEKB_INSTALL_ENTRY_DIRS = [".github/agents", ".github/hooks", ".github/skills", ".agents/skills"];
+export function codekbFingerprintExcludes(projectDir: string, sourceDir: string): string[] {
+  if (sourceDir !== projectDir) return [];
+  const excluded = new Set<string>([...CODEKB_INSTALL_DIRS, ...AIDLC_ROOT_SETTINGS_FILES]);
+  for (const parent of CODEKB_INSTALL_ENTRY_DIRS) {
+    const parentDir = join(projectDir, ...parent.split("/"));
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith("aidlc") || (entry.isDirectory() && generatedRunnerSkill(join(parentDir, entry.name)))) {
+        excluded.add(`${parent}/${entry.name}`);
+      }
+    }
+  }
+  for (const integration of aidlcRootIntegrations(projectDir)) excluded.add(integration.path);
+  return [...excluded].sort();
+}
+
+function generatedRunnerSkill(skillDir: string): boolean {
+  try {
+    const skillMd = join(skillDir, "SKILL.md");
+    const stat = lstatSync(skillMd);
+    return stat.isFile() && stat.size <= 256 * 1024 && hasRunnerGenMarker(readFileSync(skillMd, "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
 // Hash the complete on-disk CodeKB directory, not only its timestamp. This is
 // the compare-and-swap generation for cumulative merges: any concurrent edit to
 // any artifact changes the token and makes a stale publish refuse.
@@ -3315,7 +3407,7 @@ export function codekbStoreIsCurrent(
   const current = codekbScopeFingerprint(
     sourceRoot,
     parsed.scope.analyzedPaths,
-    sourceRoot === projectDir ? ["aidlc"] : [],
+    codekbFingerprintExcludes(projectDir, sourceRoot),
   );
   return current !== null && current === parsed.scope.fingerprint;
 }
@@ -32703,6 +32795,17 @@ function parseAgentFrontmatter(path: string): AgentMetadata {
 export function frontmatterBlock(body: string): string | null {
   const m = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   return m?.[1] ?? null;
+}
+
+// Every runner skill aidlc-runner-gen writes carries `generated-by:
+// aidlc-runner-gen` in its frontmatter; a plugin runner's directory has no
+// aidlc- prefix, so the marker is how it is told from the project's own skill.
+const RUNNER_GEN_MARKER_KEY = "generated-by";
+const RUNNER_GEN_MARKER_VALUE = "aidlc-runner-gen";
+export function hasRunnerGenMarker(body: string): boolean {
+  const frontmatter = frontmatterBlock(body);
+  if (!frontmatter) return false;
+  return new RegExp(`^${RUNNER_GEN_MARKER_KEY}:\\s*${RUNNER_GEN_MARKER_VALUE}\\s*$`, "m").test(frontmatter);
 }
 
 // Scalar field parser. Rejects YAML folded/literal block markers
