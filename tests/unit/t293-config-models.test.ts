@@ -1007,6 +1007,18 @@ describe("t293 doctor model policy advisory", () => {
     const check = modelsPolicyCheck(kiro, true);
     expect(check.pass).toBe(false);
     expect(check.fix).toContain("effort policy is not expressible on kiro");
+
+    // Beside a harness that applies the preset, the preset is not called
+    // inert; each harness gets its own account.
+    const mixed = temp("aidlc-t293-doctor-session-mixed-");
+    cpSync(join(DIST, "claude"), mixed, { recursive: true });
+    cpSync(join(DIST, "cursor"), mixed, { recursive: true });
+    preset(mixed);
+    expect(modelsPolicyCheck(mixed, true)).toEqual({
+      pass: true,
+      label: "Models: recorded policy is expressible on Claude Code; " +
+        "every agent uses your Cursor session's model and effort",
+    });
   });
 });
 

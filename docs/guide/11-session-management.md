@@ -133,8 +133,11 @@ discards it too.
 
 AI-DLC keeps everything it needs on disk, so a new chat is the cheaper switch:
 
-1. Finish or park the current stage. The cleanest moment is right after you
-   approve a stage; `/aidlc park` stops the workflow where it is.
+1. Stop at a stage boundary: approve the stage and ask to stop in the same
+   reply, for example `Approved. Stop here for today.` The workflow parks
+   before the next stage starts (see
+   [Interaction Modes](07-interaction-modes.md)). `/aidlc park` also parks it
+   where it is.
 2. Open a new chat or session and choose the new model and effort there.
 3. Run `/aidlc --resume`. The new chat reads the saved state, artifacts, and
    audit trail from disk instead of the old conversation, and continues where

@@ -1377,13 +1377,19 @@ function diagnosticHelp(section: DiagnosticSection): string {
 
 // The projected descriptor's product name ("Kiro CLI", "Claude Code"), so a
 // prompt can name the harness the user is actually running; the distribution
-// id is the fallback when the descriptor is unreadable.
+// id is the fallback when the descriptor is unreadable. The descriptor is a
+// project file, so only a plain name reaches the terminal.
+const PLAIN_PRODUCT_NAME = /^[A-Za-z0-9][A-Za-z0-9 .+-]{0,39}$/;
+
 function projectionProductName(root: string, distribution: string): string {
   try {
     const value = JSON.parse(
       readFileSync(join(root, "tools", "data", "harness.json"), "utf-8"),
     ) as { productName?: unknown };
-    if (typeof value.productName === "string" && value.productName.trim()) {
+    if (
+      typeof value.productName === "string" &&
+      PLAIN_PRODUCT_NAME.test(value.productName)
+    ) {
       return value.productName;
     }
   } catch {

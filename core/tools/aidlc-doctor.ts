@@ -51,6 +51,7 @@ import {
   modelPolicyDoctorIssues,
   sessionModelsDetail,
   sessionSetsAgentModels,
+  type ModelHarness,
 } from "./aidlc-model-policy.ts";
 import {
   flagsDoctorCheck,
@@ -235,18 +236,33 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
       fix: issues.join("; "),
     };
   }
-  // Where the session sets every agent, say where the lever is instead.
-  const only = harnesses.length === 1 ? harnesses[0].distribution : null;
-  if (only && isModelHarness(only) && sessionSetsAgentModels(only)) {
-    return {
-      pass: true,
-      label: `Models: ${
+  // Where the session sets every agent, say where the lever is instead. A
+  // recorded policy is named as not applying only when no other installed
+  // harness can apply it.
+  const product = (distribution: string) => PRODUCT_NAMES[distribution] ?? distribution;
+  const sessionSet = harnesses
+    .map((harness) => harness.distribution)
+    .filter((distribution): distribution is ModelHarness =>
+      isModelHarness(distribution) && sessionSetsAgentModels(distribution)
+    );
+  if (sessionSet.length > 0) {
+    const others = harnesses
+      .map((harness) => harness.distribution)
+      .filter((distribution) => !sessionSet.includes(distribution as ModelHarness));
+    const parts = [
+      ...(others.length > 0
+        ? [`recorded policy is expressible on ${others.map(product).join(", ")}`]
+        : []),
+      ...sessionSet.map((distribution) =>
         sessionModelsDetail(
-          PRODUCT_NAMES[only] ?? only,
-          modelPolicyForHarness(resolved.models, only),
+          product(distribution),
+          harnesses.length === 1
+            ? modelPolicyForHarness(resolved.models, distribution)
+            : null,
         )
-      }`,
-    };
+      ),
+    ];
+    return { pass: true, label: `Models: ${parts.join("; ")}` };
   }
   return {
     pass: true,
