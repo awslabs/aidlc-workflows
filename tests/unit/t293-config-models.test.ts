@@ -749,7 +749,7 @@ describe("t293 config models CLI", () => {
     expect(`${result.stdout}${result.stderr}`).toContain("unknown config section");
   });
 
-  test("model mutations inherit the active workflow refresh refusal", () => {
+  test("a model change while a workflow runs is recorded, reaches the agents, and says how to undo it", () => {
     const project = install("claude");
     const dirName = "active-model-policy";
     const intents = join(project, "aidlc", "spaces", "default", "intents");
@@ -778,10 +778,53 @@ describe("t293 config models CLI", () => {
       "xhigh",
       "--yes",
     ], project, runtimeEnv());
-    expect(result.status).toBe(4);
-    expect(result.stdout).toContain("refusing to refresh while 1 workflow(s) are active");
-    expect(existsSync(projectSettingsPath(project))).toBe(false);
-    expect(harnessData(project, ".claude").models).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("refusing to refresh");
+    expect(result.stdout).toContain("Recorded Reviewing effort xhigh in aidlc.settings.json. To undo: ");
+    expect(result.stdout).toContain("config models --reset --project --yes");
+    expect(result.stdout).toContain(
+      `1 open workflow (default/${dirName}) picks this up from the next step; a step already running keeps what it started with.`,
+    );
+    expect((projectSettings(project).models as { groups?: Record<string, { effort: string }> }).groups?.reviewing?.effort)
+      .toBe("xhigh");
+    // The reviewing agents' own files carry it, so their next start uses it.
+    expect(readFileSync(join(project, ".claude", "agents", "aidlc-architecture-reviewer-agent.md"), "utf-8"))
+      .toContain("\neffort: xhigh\n");
+    // A second change names the earlier value as its undo.
+    const raised = run([
+      "config", "models", "--project-dir", project, "--project", "--reviewing-effort", "max", "--yes",
+    ], project, runtimeEnv());
+    expect(raised.status, raised.stdout + raised.stderr).toBe(0);
+    expect(raised.stdout).toContain("Reviewing effort: xhigh -> max in aidlc.settings.json. To undo: ");
+    expect(raised.stdout).toContain("config models --reviewing-effort xhigh --project --yes");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("on Copilot a model change while a workflow runs is recorded without claiming the agents use it", () => {
+    const project = install("copilot");
+    const dirName = "active-copilot-policy";
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000294",
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const result = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "developer", "--effort", "high", "--yes",
+    ], project, runtimeEnv());
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain("agents inherit the session");
+    expect(result.stdout).toContain("Recorded developer effort high in aidlc.settings.json. To undo: ");
+    expect(result.stdout).not.toContain("picks this up");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro reports unsupported group effort and applies model-bound exceptions", () => {
