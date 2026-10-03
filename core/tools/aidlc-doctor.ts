@@ -49,6 +49,8 @@ import {
 import {
   isModelHarness,
   modelPolicyDoctorIssues,
+  sessionModelsDetail,
+  sessionSetsAgentModels,
 } from "./aidlc-model-policy.ts";
 import {
   flagsDoctorCheck,
@@ -182,6 +184,16 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
   };
 }
 
+const PRODUCT_NAMES: Record<string, string> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+};
+
 export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorCheck {
   const harnesses = discoverProjectHarnesses(projectDir);
   if (harnesses.length === 0) {
@@ -223,6 +235,19 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
       fix: issues.join("; "),
     };
   }
+  // Where the session sets every agent, say where the lever is instead.
+  const only = harnesses.length === 1 ? harnesses[0].distribution : null;
+  if (only && isModelHarness(only) && sessionSetsAgentModels(only)) {
+    return {
+      pass: true,
+      label: `Models: ${
+        sessionModelsDetail(
+          PRODUCT_NAMES[only] ?? only,
+          modelPolicyForHarness(resolved.models, only),
+        )
+      }`,
+    };
+  }
   return {
     pass: true,
     label: "Models: recorded policy is expressible",
@@ -236,15 +261,6 @@ function humanReport(
   verbose: boolean,
 ): string {
   const harness = discoverProjectHarnesses(projectDir)[0];
-  const productNames: Record<string, string> = {
-    claude: "Claude Code",
-    codex: "Codex CLI",
-    copilot: "GitHub Copilot",
-    cursor: "Cursor",
-    kiro: "Kiro CLI",
-    "kiro-ide": "Kiro IDE",
-    opencode: "opencode",
-  };
   const frameworkPattern =
     /^(?:Agent filename|Scope filename|Cycle detection|Orphan stage|Uncompiled stage|Enabled stage compile coverage|Scope validation|Schema validation|Graph references|Keyword overlap|Rule drift|Paired sensor coverage|Stage graph|Scope grid|Sensor |Required sections|Upstream coverage|Traceability|Linter|Type check)/i;
   const machinePattern =
@@ -308,7 +324,7 @@ function humanReport(
   output += renderSection(machine);
   output += `\n${heading(`Project${
     harness
-      ? ` (${harness.harnessDir}, ${productNames[harness.distribution] ?? harness.distribution})`
+      ? ` (${harness.harnessDir}, ${PRODUCT_NAMES[harness.distribution] ?? harness.distribution})`
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);

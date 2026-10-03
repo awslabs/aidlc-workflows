@@ -966,7 +966,47 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.pass).toBe(false);
     expect(check.severity).toBe("warn");
     expect(check.label).toContain("policy issue");
-    expect(check.fix).toContain("not expressible on cursor");
+    // The model was recorded for Cursor by name, so it still warns; the shared
+    // effort is not a Cursor problem.
+    expect(check.fix).toContain("architect: model policy is not expressible on cursor");
+    expect(check.fix).not.toContain("effort policy");
+  });
+
+  test("doctor names the session where it sets every agent, and still warns on Kiro CLI", () => {
+    // The first-run default records balanced on every harness. Where the host
+    // cannot pin an agent's model or effort, that is not a problem to fix.
+    const preset = (project: string) => {
+      const settings = projectSettingsPath(project);
+      writeFileSync(settings, `${JSON.stringify({
+        schemaVersion: 1,
+        models: { schemaVersion: 1, preset: "balanced" },
+      }, null, 2)}\n`);
+      invalidateSettingsCache(settings);
+    };
+    for (const [harness, product] of [
+      ["copilot", "GitHub Copilot"],
+      ["cursor", "Cursor"],
+      ["kiro-ide", "Kiro IDE"],
+    ] as const) {
+      const project = temp(`aidlc-t293-doctor-session-${harness}-`);
+      cpSync(join(DIST, harness), project, { recursive: true });
+      expect(modelsPolicyCheck(project, true), harness).toEqual({
+        pass: true,
+        label: `Models: every agent uses your ${product} session's model and effort`,
+      });
+      preset(project);
+      expect(modelsPolicyCheck(project, true), harness).toEqual({
+        pass: true,
+        label: `Models: every agent uses your ${product} session's model and effort; ` +
+          "the recorded balanced preset does not apply here",
+      });
+    }
+    const kiro = temp("aidlc-t293-doctor-session-kiro-");
+    cpSync(join(DIST, "kiro"), kiro, { recursive: true });
+    preset(kiro);
+    const check = modelsPolicyCheck(kiro, true);
+    expect(check.pass).toBe(false);
+    expect(check.fix).toContain("effort policy is not expressible on kiro");
   });
 });
 

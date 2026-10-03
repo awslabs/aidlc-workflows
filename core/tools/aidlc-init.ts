@@ -144,6 +144,8 @@ import {
   profileGroups,
   readAgentTiers,
   resolveModelPolicy,
+  sessionModelsDetail,
+  sessionSetsAgentModels,
   type AgentTiers,
   type ModelEffort,
   type ModelGroup,
@@ -2184,8 +2186,13 @@ function setupMapRows(
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
   const providerNeeds = providerManaged &&
     (providers.length > 0 || records.providers === null);
-  const modelsUnrecorded = !policy || modelPolicyIsEmpty(policy);
-  const modelDetail = modelsUnrecorded
+  // Where the session sets every agent, there is no policy to ask for: the
+  // row names the host's session as the lever and is never walked.
+  const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
+  const modelDetail = sessionSet
+    ? sessionModelsDetail(projectionProductName(root, distribution), policy)
+    : !policy || modelPolicyIsEmpty(policy)
     ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset
     ? `preset ${policy.preset}`
@@ -2357,7 +2364,10 @@ function setupLedgerActions(
   actions: readonly ConfigOutstandingAction[],
 ): ConfigOutstandingAction[] {
   const next = [...actions];
-  if (!next.some((action) => action.section === "models")) {
+  if (
+    !sessionSetsAgentModels(harness) &&
+    !next.some((action) => action.section === "models")
+  ) {
     const resolved = resolveAidlcSettings(projectDir);
     const policy = modelPolicyForHarness(resolved.models, harness);
     if (!policy || modelPolicyIsEmpty(policy)) {

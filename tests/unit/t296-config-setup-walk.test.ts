@@ -709,4 +709,62 @@ describe("t296 first-run config setup walk", () => {
       expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("where the session sets every agent's model and effort, the Models row names it and is never walked", () => {
+    // These hosts cannot pin an agent's model or effort, so a recorded policy
+    // changes nothing there. The row says where the lever is, counts as done,
+    // and never sends the person into the models wizard or the closing list.
+    const hosts = [
+      ["copilot", ".aidlc", "GitHub Copilot"],
+      ["cursor", ".cursor", "Cursor"],
+      ["kiro-ide", ".kiro", "Kiro IDE"],
+    ] as const;
+    const env = hookPathEnv("aidlc", true);
+    for (const [harness, dir, product] of hosts) {
+      const path = project(`aidlc-t296-session-models-${harness}-`);
+      const args = [
+        "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
+        "--harness", harness, "--mcp", "none", "--yes",
+      ];
+      const fresh = run(args, path, env, "n\n");
+      expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+      const models = setupRows(fresh.stdout).find((line) => line.includes("Models"));
+      expect(models, harness).toContain("[ok]");
+      expect(models, harness).toContain(
+        `every agent uses your ${product} session's model and effort`,
+      );
+      expect(models, harness).not.toContain("does not apply");
+      expect(fresh.stdout, harness).not.toContain("config models");
+      expect(fresh.stdout, harness).not.toContain("Models [Enter keep everything");
+      expect(existsSync(join(path, "aidlc.settings.json")), harness).toBe(false);
+
+      // A team's recorded preset (often for teammates on other harnesses) is
+      // named so nobody reads it as applied here.
+      writeFileSync(join(path, "aidlc.settings.json"), `${JSON.stringify({
+        schemaVersion: 1,
+        models: { schemaVersion: 1, preset: "balanced" },
+      }, null, 2)}\n`);
+      const rerun = run(["config", "--project-dir", path], path, env, "n\n");
+      expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+      expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
+        .toContain(
+          `[ok]     Models      every agent uses your ${product} session's model and effort; ` +
+            "the recorded balanced preset does not apply here",
+        );
+      expect(rerun.stdout, harness).not.toContain("config models");
+      expect(readFileSync(join(path, dir, "tools", "data", "harness.json"), "utf-8"), harness)
+        .toContain(`"productName": "${product}"`);
+    }
+
+    // Kiro CLI can carry a per-agent model, so its row still asks.
+    const kiro = project("aidlc-t296-session-models-kiro-");
+    const kiroRun = run([
+      "config", "--project-dir", kiro, "--from", join(REPO_ROOT, "dist-release", "kiro"),
+      "--harness", "kiro", "--mcp", "none", "--yes",
+    ], kiro, env, "n\n");
+    expect(kiroRun.status, kiroRun.stdout + kiroRun.stderr).toBe(0);
+    expect(setupRows(kiroRun.stdout).find((line) => line.includes("Models")))
+      .toContain("[needs]  Models      no recorded policy; agents inherit your session model and effort");
+    expect(kiroRun.stdout).toContain("models       bun .kiro/tools/aidlc.ts config models");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
