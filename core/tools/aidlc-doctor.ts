@@ -243,13 +243,12 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
     const others = installed.filter((distribution) => !sessionSet.includes(distribution));
     const policyFor = (distribution: ModelHarness) =>
       modelPolicyForHarness(resolved.models, distribution);
-    const othersNamed = others.map(productName).join(", ");
+    const named = (list: ModelHarness[]) => list.map(productName).join(", ");
+    const configured = others.filter((distribution) => !modelPolicyIsEmpty(policyFor(distribution)));
+    const unconfigured = others.filter((distribution) => !configured.includes(distribution));
     const parts = [
-      ...(others.length === 0
-        ? []
-        : others.some((distribution) => !modelPolicyIsEmpty(policyFor(distribution)))
-        ? [`recorded policy is expressible on ${othersNamed}`]
-        : [`no recorded policy for ${othersNamed}`]),
+      ...(configured.length > 0 ? [`recorded policy is expressible on ${named(configured)}`] : []),
+      ...(unconfigured.length > 0 ? [`no recorded policy for ${named(unconfigured)}`] : []),
       ...sessionSet.map((distribution) =>
         sessionModelsDetail(distribution, others.length === 0 ? policyFor(distribution) : null)
       ),

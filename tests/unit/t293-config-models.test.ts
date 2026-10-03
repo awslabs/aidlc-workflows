@@ -1025,6 +1025,26 @@ describe("t293 doctor model policy advisory", () => {
       label: "Models: recorded policy is expressible on Claude Code; " +
         "every agent uses your Cursor session's model and effort",
     });
+    // A model recorded for one harness by name is that harness's policy only.
+    const partial = temp("aidlc-t293-doctor-session-partial-");
+    for (const harness of ["claude", "codex", "cursor"]) {
+      cpSync(join(DIST, harness), partial, { recursive: true });
+    }
+    const partialSettings = projectSettingsPath(partial);
+    writeFileSync(partialSettings, `${JSON.stringify({
+      schemaVersion: 1,
+      models: {
+        schemaVersion: 1,
+        agents: { architect: { model: { claude: "opus" } } },
+      },
+    }, null, 2)}\n`);
+    invalidateSettingsCache(partialSettings);
+    expect(modelsPolicyCheck(partial, true)).toEqual({
+      pass: true,
+      label: "Models: recorded policy is expressible on Claude Code; no recorded policy for Codex CLI; " +
+        "every agent uses your Cursor session's model and effort",
+    });
+
     // Two session-set harnesses and no other: the preset applies on neither.
     // They are listed in the project's harness discovery order.
     const hosts = temp("aidlc-t293-doctor-session-hosts-");
