@@ -30305,7 +30305,7 @@ function stageStartsUnderStageFlooring(
   rows: readonly AuditShardEvent[],
 ): Set<AuditShardEvent> {
   const counted = new Set<AuditShardEvent>();
-  const changes = rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+  const changes = rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET" && constructionPolicyRowComplete(row));
   if (changes.length === 0) return counted;
   // The shared causal order: append position within a shard, the timestamp
   // across shards (attemptEventDefinitelyBefore). It is not transitive, so when
@@ -30320,6 +30320,20 @@ function stageStartsUnderStageFlooring(
     if (candidates.some((change) => !constructionPolicyFoundUnitMajor(change))) counted.add(start);
   }
   return counted;
+}
+
+// A policy row the typed setters wrote in full: a known field with a value,
+// the value it found, and the iteration and checkpoint values it left. A row
+// cut short (an interrupted append) says nothing about the policy and is not
+// read.
+function constructionPolicyRowComplete(row: AuditShardEvent): boolean {
+  const field = auditBlockField(row.block, "Field");
+  return (field === "Construction Iteration" || field === "Construction Checkpoints" ||
+      field === "Construction Execution") &&
+    !!auditBlockField(row.block, "Value") &&
+    !!auditBlockField(row.block, "Previous Value") &&
+    !!auditBlockField(row.block, "Construction Iteration") &&
+    !!auditBlockField(row.block, "Construction Checkpoints");
 }
 
 // Whether a recorded policy change found unit-major flooring in force: Construction
