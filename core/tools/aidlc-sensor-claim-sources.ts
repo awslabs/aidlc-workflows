@@ -26,9 +26,7 @@ interface Result {
 }
 
 interface ClaimBlock {
-	// The section heading as written, for findings.
 	section: string;
-	// Its contract-heading key, for comparisons against contract names.
 	sectionKey: string;
 	text: string;
 	// The text with its parser-located code spans blanked, for source tags.
@@ -105,17 +103,8 @@ function h2Heading(line: string): string | null {
 	return match[1].replace(/[ \t]+#+[ \t]*$/, "").trim();
 }
 
-// A run of fully-qualified emoji followed by whitespace, the decoration a
-// house style puts before a heading (`## ℹ️ Sources`). RGI_Emoji is the
-// Unicode-defined set of recommended emoji, so it keeps ZWJ, keycap, flag and
-// skin-tone sequences whole, while a bare text-presentation symbol such as
-// `©`, `®`, `™` or `▶` is not in it and stays part of the heading. A ZWJ may
-// also join two emoji that form no recommended sequence (`ℹ️‍💡`), since a
-// renderer shows that pair side by side as the same kind of decoration.
 const LEADING_EMOJI_DECORATION = /^\p{RGI_Emoji}(?:\u200D?\p{RGI_Emoji})*[ \t]+/v;
 
-// The comparison key for a contract heading name. Only comparisons use it;
-// findings keep the heading as the author wrote it.
 function headingKey(heading: string): string {
 	return heading.replace(LEADING_EMOJI_DECORATION, "").trim();
 }
@@ -336,8 +325,6 @@ function memoryRuleMatches(
 		);
 		return false;
 	}
-	// The citation names the memory file's exact H2 (intent-capture.md), so
-	// this lookup does not use the contract-heading key.
 	const sections = sectionsNamed(
 		visibleMarkdownLines(memoryBody, { preserveIndentedCode: true }),
 		heading,
@@ -625,9 +612,6 @@ function claimBlocks(
 			}
 			continue;
 		}
-		// Exact on purpose: this section is exempt from every check, so a
-		// decorated `## Review` stays claim text. Reading decoration the other
-		// way could only turn a false failure into a false pass.
 		if (section === REVIEW_HEADING) continue;
 		if (confirmationRange && line.kind === "paragraph" && CONFIRMATION_SCAFFOLD_RE.test(text)) {
 			flush();
