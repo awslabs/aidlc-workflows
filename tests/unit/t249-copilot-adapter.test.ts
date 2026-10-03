@@ -4492,4 +4492,36 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(stopped.code).toBe(0);
     expect(JSON.parse(stopped.stdout)).toMatchObject({ decision: "block" });
   });
+
+  test("40: in PowerShell a cd to the project before next runs like the bare command while a plan waits for approval", () => {
+    // An agent in VS Code on Windows types `cd C:\work\app; aidlc engine
+    // orchestrate next` (#1411). The terminal's shell is simulated so the
+    // PowerShell reading also runs on Linux; on Windows the path keeps its
+    // backslashes.
+    const dir = scratchProject(true);
+    seedUnapprovedCodeGeneration(dir);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    type Decision = { hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string } } };
+    const decide = (command: string, shell: string | undefined, attempt: string): Decision => {
+      const pre = runAdapter(dir, "guard-tool-call", {
+        hook_event_name: "PreToolUse", session_id: "cd-lead", tool_use_id: attempt, cwd: dir,
+        tool_name: "run_in_terminal", tool_input: { command, ...(shell ? { shell } : {}) },
+      });
+      expect(pre.code, command).toBe(0);
+      return pre.stdout.trim() ? JSON.parse(pre.stdout) as Decision : {};
+    };
+    const next = "aidlc engine orchestrate next";
+    for (const [index, shell] of ["pwsh", ...(process.platform === "win32" ? [undefined] : [])].entries()) {
+      for (const [at, lead] of [`cd ${dir}; `, `Set-Location -LiteralPath '${dir}'; `].entries()) {
+        const attempt = `cd-lead-${index}-${at}`;
+        const out = decide(`${lead}${next}`, shell, attempt);
+        expect(out.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
+        expect(out.hookSpecificOutput?.updatedInput?.command, `${shell}: ${lead}`).toBe(`${lead}${next} --aidlc-attempt-id ${attempt}`);
+      }
+      // A cd anywhere else changes where the command runs, so the plan still holds it.
+      const elsewhere = decide(`cd ${join(dir, "src")}; ${next}`, shell, `cd-elsewhere-${index}`);
+      expect(elsewhere.hookSpecificOutput?.permissionDecision, String(shell)).toBe("deny");
+      expect(elsewhere.hookSpecificOutput?.updatedInput, String(shell)).toBeUndefined();
+    }
+  });
 });
