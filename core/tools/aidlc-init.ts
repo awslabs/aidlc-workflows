@@ -2285,9 +2285,8 @@ function setupMapRows(
   // Where the session sets every agent, there is no policy to ask for: the
   // row names the host's session as the lever and is never walked.
   const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
-  // On those hosts (Copilot, Cursor) no answer means the session's own model
-  // access, as the Models row says, so it is not a gap; Bedrock stays a choice.
-  const sessionAccess = providerManaged && sessionSet && records.providers === null;
+  const sessionAccess = records.providers === null &&
+    providerAnswerIsTheSession(modelHarness(distribution));
   const providerNeeds = providerManaged && !sessionAccess &&
     (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
@@ -2332,7 +2331,7 @@ function setupMapRows(
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
     : sessionAccess
     ? `model access comes with your ${HARNESS_PRODUCT_NAMES[modelHarness(distribution)]} session; ` +
-      `to use your own Amazon Bedrock access instead, run \`${configCommand("providers")}\``
+      `to use your own Amazon Bedrock access instead, run \`${configCommandForHarness(harnessDir, "providers")}\``
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0
@@ -2473,6 +2472,13 @@ function existingProjectionOutstanding(
   ];
 }
 
+// On hosts where the session sets every agent's model (Copilot, Cursor), no
+// provider answer means the session's own model access, as the Models row
+// says: not a gap for the map or the ledger. Bedrock stays a choice there.
+function providerAnswerIsTheSession(harness: ModelHarness): boolean {
+  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+}
+
 function setupLedgerActions(
   projectDir: string,
   harnessDir: string,
@@ -2505,7 +2511,7 @@ function setupLedgerActions(
     // Only chase a missing answer where AI-DLC configures the model provider.
     // Asking a subscription-harness user to "choose and configure a model
     // provider" is a instruction they cannot complete and never needed.
-    if (record === null && !harnessOwnsModelAccess(harness)) {
+    if (record === null && !harnessOwnsModelAccess(harness) && !providerAnswerIsTheSession(harness)) {
       next.push({
         section: "providers",
         id: "provider-record-missing",
