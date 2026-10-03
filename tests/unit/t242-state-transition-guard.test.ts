@@ -338,7 +338,21 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc engine state init --scope feature", "aidlc engine state init"],
       ["bun .claude/tools/aidlc-utility.ts reclassify --type existing", "aidlc-utility.ts reclassify"],
       ["aidlc engine workspace reclassify --type existing", "aidlc engine workspace reclassify"],
-      ["bun .claude/tools/aidlc-utility.ts select-plugins --enable test-pro", "aidlc-utility.ts select-plugins"],
+      ["bun .claude/tools/aidlc-utility.ts select-plugins test-pro", "aidlc-utility.ts select-plugins"],
+      ["bun .claude/tools/aidlc-unit.ts gate u1 --decision approve", "aidlc-unit.ts gate"],
+      ["bun .claude/tools/aidlc-unit.ts land u1", "aidlc-unit.ts land"],
+      ["aidlc unit pin u1", "aidlc unit pin"],
+      ["bun .claude/tools/aidlc-utility.ts claim u1", "aidlc-utility.ts claim"],
+      ["bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", "aidlc-bolt.ts set-autonomy"],
+      ["bun .claude/tools/aidlc-swarm.ts finalize", "aidlc-swarm.ts finalize"],
+      ["bun .claude/tools/aidlc-log.ts link --stage x", "aidlc-log.ts link"],
+      ["bun .claude/tools/aidlc-learnings.ts persist", "aidlc-learnings.ts persist"],
+      ["bun .claude/tools/aidlc-runtime.ts fragment-merge", "aidlc-runtime.ts fragment-merge"],
+      ["bun .claude/tools/aidlc-testing-posture.ts fingerprint --unit u1", "aidlc-testing-posture.ts fingerprint"],
+      ["bun .claude/tools/aidlc-plugin.ts sync", "aidlc-plugin.ts sync"],
+      ["bun .claude/tools/aidlc-utility.ts set-status x", "aidlc-utility.ts set-status"],
+      ["aidlc engine state set-status x", "aidlc engine state set-status"],
+      ["aidlc engine bolt hold-merge u1", "aidlc engine bolt hold-merge"],
       ["bun .claude/tools/aidlc-utility.ts upgrade", "aidlc-utility.ts upgrade"],
       ["aidlc engine plugin sync", "aidlc engine plugin sync"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
@@ -377,6 +391,19 @@ describe("t242 state-transition ownership guard", () => {
     // Reads stay open to a delegate.
     for (const read of ["get", "count", "lookup", "resume"]) {
       expect(delegatedLifecycleCommand(`bun .claude/tools/aidlc-state.ts ${read} x`), read).toBeNull();
+    }
+    for (const read of [
+      "bun .claude/tools/aidlc-unit.ts merge-status u1",
+      "bun .claude/tools/aidlc-unit.ts status",
+      "bun .claude/tools/aidlc-utility.ts select-plugins",
+      "aidlc engine plugin select",
+      "bun .claude/tools/aidlc-log.ts answers",
+      "bun .claude/tools/aidlc-learnings.ts surface",
+      "bun .claude/tools/aidlc-runtime.ts read",
+      "bun .claude/tools/aidlc-testing-posture.ts brief --unit u1",
+      "bun .claude/tools/aidlc-worktree.ts merge u1",
+    ]) {
+      expect(delegatedLifecycleCommand(read), read).toBeNull();
     }
     expect(
       delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),

@@ -1391,7 +1391,11 @@ also refuses conductor-only entrypoints from reviewers, leads, and support
 agents: orchestrator `next`/`report`/`park`, mutating state verbs including
 `unpark`, the construction setters and the `unit` receipts, jump execution,
 workflow routing/configuration mutations, project reclassification, plugin
-selection and sync, and upgrade. Delegated agents retain ordinary shell
+selection and sync (a bare selection query stays open), upgrade, the team Unit
+commands that claim, publish, pin, gate, land, or release a Unit, Bolt and swarm
+lifecycle and checkpoint decisions, question, review, and pipeline-link
+receipts, learnings persistence, runtime fragment fork and merge, and the Code
+Generation boundary and plan-approval fingerprint. Delegated agents retain ordinary shell
 access for artifact work, builds, validation, and read-only state inspection;
 they return their result to the main conductor, which alone owns workflow
 lifecycle and gates. Kiro IDE and Kiro CLI v3 supply no such identity, so the

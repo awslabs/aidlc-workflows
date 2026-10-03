@@ -35,6 +35,10 @@ const both = (command: string): string[] => [command, `${command} *`];
 // read as the mutation it is.
 const delegateMayRun = (command: string): boolean =>
   delegatedLifecycleCommand(`${command} x`) === null;
+// A command the guard refuses with an argument but allows bare (a query, such
+// as `select-plugins` printing the current selection) is excluded exactly.
+const exclusionsFor = (command: string): string[] =>
+  delegateMayRun(command) ? both(command) : delegatedLifecycleCommand(command) === null ? [command] : [];
 
 const isWorkspaceNoun = (word: string): boolean => (WORKSPACE_NOUNS as readonly string[]).includes(word);
 const hostRoutes = ROUTES.filter((route) => route.classification !== "routing-only");
@@ -71,7 +75,7 @@ export function copyChannelDelegateShellDeny(harnessDir: string): ShellDeny {
         .sort()
         .flatMap((file) => both(tool(file))),
       ...lifecycle.flatMap((file) =>
-        scriptVerbs(file).map((verb) => `${tool(file)} ${verb}`).filter(delegateMayRun).flatMap(both)
+        scriptVerbs(file).flatMap((verb) => exclusionsFor(`${tool(file)} ${verb}`))
       ),
       ...WORKSPACE_NOUNS.flatMap((noun) => workspaceExclusions(tool("aidlc-utility.ts"), noun)),
     ],
@@ -86,16 +90,18 @@ export function nativeDelegateShellDeny(): ShellDeny {
       routes.filter((route) => route.group === group).flatMap((route) => route.verbs),
     )].filter((verb) => !verb.startsWith("<"));
     if (group === "top") {
-      exclude.push(...verbs.map((verb) => trustedCommand(verb)).filter(delegateMayRun).flatMap(both));
+      exclude.push(...verbs.flatMap((verb) => exclusionsFor(trustedCommand(verb))));
       continue;
     }
     if (isWorkspaceNoun(group)) {
       exclude.push(...workspaceExclusions(trustedCommand(), group));
       continue;
     }
-    const allowed = verbs.map((verb) => trustedCommand(`${group} ${verb}`)).filter(delegateMayRun);
+    const commands = verbs.map((verb) => trustedCommand(`${group} ${verb}`));
     // A noun the guard never refuses is excluded whole.
-    exclude.push(...(allowed.length === verbs.length ? both(trustedCommand(group)) : allowed.flatMap(both)));
+    exclude.push(
+      ...(commands.every(delegateMayRun) ? both(trustedCommand(group)) : commands.flatMap(exclusionsFor)),
+    );
   }
   return { match: [trustedCommand("*")], exclude };
 }

@@ -58,18 +58,56 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
 ]);
 
 // The authored engine scripts a delegated agent may not use to change stage
-// status or routing, and their lifecycle verbs (state's are
-// DELEGATED_STATE_MUTATIONS). The kiro-ide row, whose calls carry no agent
-// identity, reads the scripts here and asks delegatedLifecycleCommand about
-// each verb to build each persona's own shell deny.
-export const DELEGATED_LIFECYCLE_SCRIPTS = [
-  "aidlc-orchestrate.ts",
-  "aidlc-state.ts",
-  "aidlc-jump.ts",
-  "aidlc-utility.ts",
-] as const;
+// status or routing, record an authority-bearing receipt, or apply the
+// person's choice, and their verbs (state's are DELEGATED_STATE_MUTATIONS, the
+// utility's DELEGATED_UTILITY_VERBS). The kiro-ide row, whose calls carry no
+// agent identity, reads the scripts here and asks delegatedLifecycleCommand
+// about each verb to build each persona's own shell deny.
 const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
 const DELEGATED_JUMP_VERBS = ["execute"];
+// Team Unit coordination: claims, publication, the merge pin, the human merge
+// gate, and landing. merge-status and status are reads.
+const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
+// Bolt and swarm lifecycle, the Construction autonomy grant, merge holds, and
+// checkpoint decisions; the referee calls belong to the conductor.
+const DELEGATED_BOLT_VERBS = [
+  "start",
+  "complete",
+  "fail",
+  "abort",
+  "set-autonomy",
+  "checkpoint",
+  "swarm-checkpoint",
+  "dispatch-event",
+  "hold-merge",
+  "release-merge",
+];
+const DELEGATED_SWARM_VERBS = ["prepare", "check", "finalize"];
+// Question, review and pipeline-link receipts; answers is a read.
+const DELEGATED_LOG_VERBS = ["decision", "answer", "review", "link"];
+const DELEGATED_LEARNINGS_VERBS = ["persist"];
+const DELEGATED_RUNTIME_VERBS = ["fragment-fork", "fragment-merge"];
+// The Code Generation boundary and the plan-approval fingerprint.
+const DELEGATED_TESTING_POSTURE_VERBS = ["begin", "fingerprint"];
+const DELEGATED_SCRIPT_VERBS: Readonly<Record<string, readonly string[]>> = {
+  "aidlc-orchestrate.ts": DELEGATED_ORCHESTRATE_VERBS,
+  "aidlc-jump.ts": DELEGATED_JUMP_VERBS,
+  "aidlc-unit.ts": DELEGATED_UNIT_VERBS,
+  "aidlc-bolt.ts": DELEGATED_BOLT_VERBS,
+  "aidlc-swarm.ts": DELEGATED_SWARM_VERBS,
+  "aidlc-log.ts": DELEGATED_LOG_VERBS,
+  "aidlc-learnings.ts": DELEGATED_LEARNINGS_VERBS,
+  "aidlc-runtime.ts": DELEGATED_RUNTIME_VERBS,
+  "aidlc-testing-posture.ts": DELEGATED_TESTING_POSTURE_VERBS,
+  "aidlc-plugin.ts": ["sync"],
+};
+export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
+  "aidlc-state.ts",
+  "aidlc-utility.ts",
+  ...Object.keys(DELEGATED_SCRIPT_VERBS),
+];
+// Bare, these print the current selection instead of changing it.
+const SELECTION_QUERIES = ["select-plugins"];
 const DELEGATED_UTILITY_VERBS = [
   "scope-change",
   "scope-save",
@@ -82,12 +120,16 @@ const DELEGATED_UTILITY_VERBS = [
   "select-plugins",
   "plugin-sync",
   "upgrade",
+  "claim",
+  "release",
+  "participate",
+  "set-status",
 ];
 
 // The same rule through the `aidlc` dispatcher (script or native binary,
 // optionally under the engine/system namespace): top-level routing groups, and
-// lifecycle verbs per noun. `state` takes DELEGATED_STATE_MUTATIONS and `init`,
-// the route to the utility's state-init. The workspace nouns' switch, create
+// lifecycle verbs per noun. `state` takes DELEGATED_STATE_MUTATIONS and `init`
+// and `set-status`, its routes to the utility's state-init and set-status. The workspace nouns' switch, create
 // and archive forms are read separately (workspaceMutation).
 const DELEGATED_DISPATCHER_GROUPS = [
   ...DELEGATED_ORCHESTRATE_VERBS,
@@ -108,6 +150,13 @@ const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = 
   config: ["set"],
   workspace: ["reclassify"],
   plugin: ["select", "sync"],
+  unit: DELEGATED_UNIT_VERBS,
+  bolt: DELEGATED_BOLT_VERBS,
+  swarm: DELEGATED_SWARM_VERBS,
+  log: DELEGATED_LOG_VERBS,
+  learnings: DELEGATED_LEARNINGS_VERBS,
+  runtime: DELEGATED_RUNTIME_VERBS,
+  "testing-posture": DELEGATED_TESTING_POSTURE_VERBS,
 };
 
 const isOneOf = (list: readonly string[], word: string): boolean => list.includes(word);
@@ -853,10 +902,11 @@ function delegatedDispatcherCommand(
   if (isOneOf(DELEGATED_DISPATCHER_GROUPS, group)) {
     return `${routePrefix} ${group}`;
   }
+  if (group === "plugin" && verb === "select" && parseArgs(args.slice(2)).positional.length === 0) return null;
   if (Object.hasOwn(DELEGATED_DISPATCHER_VERBS, group) && isOneOf(DELEGATED_DISPATCHER_VERBS[group], verb)) {
     return `${routePrefix} ${group} ${verb}`;
   }
-  if (group === "state" && (DELEGATED_STATE_MUTATIONS.has(verb) || verb === "init")) {
+  if (group === "state" && (DELEGATED_STATE_MUTATIONS.has(verb) || verb === "init" || verb === "set-status")) {
     return `${routePrefix} state ${verb}`;
   }
   return workspaceMutation(routePrefix, args);
@@ -868,6 +918,7 @@ function delegatedUtilityCommand(
 ): string | null {
   const { positional } = parseArgs(rawArgs);
   const verb = positional[0] ?? "";
+  if (isOneOf(SELECTION_QUERIES, verb) && positional.length === 1) return null;
   if (isOneOf(DELEGATED_UTILITY_VERBS, verb)) {
     return `${prefix} ${verb}`;
   }
@@ -986,17 +1037,15 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       args = invocation.args;
     }
     if (isOneOf(DELEGATED_LIFECYCLE_SCRIPTS, script)) {
-      const tool = script.slice("aidlc-".length, -".ts".length);
       const positional = withoutProjectDir(args);
       const verb = positional[0] ?? "";
       if (
-        (tool === "orchestrate" && isOneOf(DELEGATED_ORCHESTRATE_VERBS, verb)) ||
-        (tool === "state" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
-        (tool === "jump" && isOneOf(DELEGATED_JUMP_VERBS, verb))
+        (script === "aidlc-state.ts" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
+        (Object.hasOwn(DELEGATED_SCRIPT_VERBS, script) && isOneOf(DELEGATED_SCRIPT_VERBS[script], verb))
       ) {
-        return `aidlc-${tool}.ts ${verb}`;
+        return `${script} ${verb}`;
       }
-      if (tool === "utility") {
+      if (script === "aidlc-utility.ts") {
         const utility = delegatedUtilityCommand("aidlc-utility.ts", args);
         if (utility !== null) return utility;
       }
