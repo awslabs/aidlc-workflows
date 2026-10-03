@@ -111,6 +111,8 @@ import {
   stateFilePath,
   isArchivedIntent,
   isCompletedIntent,
+  isSafeIntentRecordName,
+  SPACE_NAME_REGEX,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
   withAuditLock,
@@ -4933,7 +4935,11 @@ function activeWorkflowDescriptions(projectDir: string): string[] {
         const status = getField(readFileSync(path, "utf-8"), "Status");
         if (status === "Completed" || status === "Archived") continue;
       }
-      active.push(`${space.name}/${intent.dirName}`);
+      // Printed for the person and read by agents: committed names pass the
+      // model-facing name rules, else a placeholder stands in.
+      active.push(`${SPACE_NAME_REGEX.test(space.name) ? space.name : "(unnamed space)"}/${
+        isSafeIntentRecordName(intent.dirName) ? intent.dirName : "(unnamed intent)"
+      }`);
     }
   }
   return active;
@@ -7788,7 +7794,10 @@ function handleSettingsOnlySection(
     return true;
   }
   try {
-    const target = settingsTargetForMutation(argv, projectDir);
+    // A bypass with no layer goes to the person's own file, and a clear with no
+    // layer reaches every file that records it, as in an installed project.
+    const bypassTargets = section === "flags" ? bypassSettingsTargets(argv, projectDir, projectDir) : null;
+    const target = bypassTargets?.[0] ?? settingsTargetForMutation(argv, projectDir);
     const path = settingsPathForTarget(projectDir, target);
     const currentFile = readSettingsTarget(projectDir, target);
     let nextFile: AidlcSettingsFile | null;
@@ -7843,17 +7852,23 @@ function handleSettingsOnlySection(
       previous: currentFile,
       next: nextFile,
     };
+    const mutations = [
+      mutation,
+      ...(bypassTargets ?? []).slice(1).map((layer) => flagsMutationFor(argv, projectDir, projectDir, layer)),
+    ];
     if (argv.includes("--dry-run")) {
       emitResult(success(`${section} settings plan`, {
         target,
         path,
         previous: currentFile,
         next: nextFile,
+        ...(mutations.length > 1 ? { others: mutations.slice(1) } : {}),
       }), options);
       return true;
     }
-    // A bypass or clear-bypass is done as typed, here as with a harness.
-    if (!options.yes && !(section === "flags" && bypassOnlyRequest(argv, mutation))) {
+    // Typed at a terminal, or a bypass or clear-bypass, it is done as typed;
+    // a script still confirms with --yes.
+    if (!options.yes && !configInputIsTty() && !(section === "flags" && bypassOnlyRequest(argv, mutation))) {
       emitResult(usage(
         `non-interactive ${section} mutation requires --yes; --yes confirms but never chooses`,
         configMutationRerun(section, argv),
@@ -7861,21 +7876,30 @@ function handleSettingsOnlySection(
       return true;
     }
     const notes: string[] = [];
-    if (target === "global") {
-      executeGlobalSettingsMutation(mutation);
-    } else {
-      const operations: TransactionOperation[] = [];
-      const actions: PlannedAction[] = [];
-      const exclude = planProjectSettingsMutation(projectDir, mutation, operations, actions);
-      executePlan({ schemaVersion: 1, root: projectDir, operations });
+    const operations: TransactionOperation[] = [];
+    const actions: PlannedAction[] = [];
+    const excludes = mutations
+      .filter((change) => change.target !== "global")
+      .map((change) => planProjectSettingsMutation(projectDir, change, operations, actions));
+    if (operations.length > 0) executePlan({ schemaVersion: 1, root: projectDir, operations });
+    afterProjectSettings(projectDir, mutations, () => {
+      for (const change of mutations) {
+        if (change.target === "global") executeGlobalSettingsMutation(change);
+      }
+    });
+    for (const exclude of excludes) {
       const note = excludeLocalSettingsFromClone(exclude);
       if (note) notes.push(note);
-      invalidateSettingsCache(path);
     }
-    if (options.mode === "human") writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+    for (const change of mutations) invalidateSettingsCache(change.path);
+    const changes = settingsChangeLines(projectDir, mutations);
+    if (options.mode === "human") {
+      writeMenuLines("", changes.map((line) => `  ${line}`));
+      writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+    }
     emitResult(success(
       `configured ${section} settings in ${path}`,
-      { target, path, ...(notes.length > 0 ? { notes } : {}) },
+      { target, path, changes, ...(notes.length > 0 ? { notes } : {}) },
     ), options);
   } catch (error) {
     emitResult(usage(
@@ -7909,6 +7933,256 @@ function bypassOnlyRequest(
   mutation: SettingsMutation | undefined,
 ): mutation is SettingsMutation {
   return !argv.includes("--download") && changesOnlyBypasses(mutation);
+}
+
+// One recorded setting as the person reads it, and the flags that set it.
+type SettingLeaf = {
+  section: "flags" | "models";
+  label: string;
+  value: string;
+  args: string[];
+};
+
+const FLAG_LEAVES: ReadonlyArray<{
+  key: "defaultScope" | "swarm" | "hookDebug" | "sensorTimeoutMs" | "questionRetentionDays";
+  label: string;
+  flag: string;
+}> = [
+  { key: "defaultScope", label: "default scope", flag: "--default-scope" },
+  { key: "swarm", label: "swarm", flag: "--swarm" },
+  { key: "hookDebug", label: "hook debug", flag: "--hook-debug" },
+  { key: "sensorTimeoutMs", label: "sensor timeout (ms)", flag: "--sensor-timeout-ms" },
+  { key: "questionRetentionDays", label: "question retention (days)", flag: "--question-retention-days" },
+];
+
+// A committed value as printed: one line, with control characters shown as "?".
+function shownValue(value: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  return value.replace(/[\u0000-\u001f\u007f]/g, "?");
+}
+
+/**
+ * Every setting a settings file records apart from bypasses, keyed by where it
+ * lives. `args` is empty when no one command sets the value back by itself.
+ */
+function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf> {
+  const leaves = new Map<string, SettingLeaf>();
+  const flags = file?.flags;
+  for (const { key, label, flag } of FLAG_LEAVES) {
+    const raw = flags?.[key];
+    if (raw === undefined) continue;
+    const value = typeof raw === "boolean" ? (raw ? "on" : "off") : String(raw);
+    leaves.set(`flags.${key}`, { section: "flags", label, value, args: [flag, value] });
+  }
+  const models = file?.models;
+  if (models?.preset !== undefined) {
+    leaves.set("models.preset", {
+      section: "models",
+      label: "model preset",
+      value: models.preset,
+      args: ["--preset", models.preset],
+    });
+  }
+  for (const [group, policy] of Object.entries(models?.groups ?? {})) {
+    if (!policy?.effort) continue;
+    leaves.set(`models.groups.${group}`, {
+      section: "models",
+      label: `${MODEL_GROUPS[group as ModelGroup]?.label ?? group} effort`,
+      value: policy.effort,
+      args: [`--${group}-effort`, policy.effort],
+    });
+  }
+  for (const [agent, policy] of Object.entries(models?.agents ?? {})) {
+    if (policy.effort) {
+      leaves.set(`models.agents.${agent}.effort`, {
+        section: "models",
+        label: `${agent} effort`,
+        value: policy.effort,
+        args: ["--agent", agent, "--effort", policy.effort],
+      });
+    }
+    for (const [harness, model] of Object.entries(policy.model ?? {})) {
+      if (!model) continue;
+      // --agent always takes --effort, so the model comes back with the
+      // agent's effort, and only when one is recorded.
+      leaves.set(`models.agents.${agent}.model.${harness}`, {
+        section: "models",
+        label: `${agent} model (${harness})`,
+        value: model,
+        args: policy.effort
+          ? ["--agent", agent, "--effort", policy.effort, "--model", model, "--harness", harness]
+          : [],
+      });
+    }
+  }
+  return leaves;
+}
+
+// What a settings change did, one line each, with the command that undoes it.
+// A setting that was not there before has no flag that removes it, so its undo
+// is the section's --reset, offered only when that resets nothing else the
+// file records; otherwise the line says it was not set there before.
+function settingsChangeLines(projectDir: string, mutations: readonly SettingsMutation[]): string[] {
+  const fileOf = (target: SettingsTarget): string => {
+    const path = settingsPathForTarget(projectDir, target);
+    return target === "global" ? path : relative(projectDir, path);
+  };
+  const command = (section: "flags" | "models", args: string[], target: SettingsTarget): string =>
+    `${configInvocationFor(projectDir)} config ${section} ${
+      args.map((arg) => quoteCommandArgument(arg)).join(" ")
+    } --${target} --yes${projectTarget(projectDir)}`;
+  const lines: string[] = [];
+  for (const change of mutations) {
+    const file = fileOf(change.target);
+    const before = new Set(change.previous?.flags?.bypasses ?? []);
+    const after = new Set(change.next?.flags?.bypasses ?? []);
+    for (const name of after) {
+      if (!before.has(name)) {
+        lines.push(`Recorded ${name} in ${file}. To undo: ${command("flags", ["--clear-bypass", name], change.target)}`);
+      }
+    }
+    for (const name of before) {
+      if (!after.has(name)) {
+        lines.push(`Cleared ${name} from ${file}. To undo: ${command("flags", ["--bypass", name], change.target)}`);
+      }
+    }
+    const was = settingLeaves(change.previous);
+    const now = settingLeaves(change.next);
+    for (const section of ["flags", "models"] as const) {
+      const ids = [...new Set([...was.keys(), ...now.keys()])]
+        .filter((id) => id.startsWith(`${section}.`) && was.get(id)?.value !== now.get(id)?.value)
+        .sort();
+      if (ids.length === 0) continue;
+      // --reset removes the whole section, so it is the undo only when the
+      // file had none of it before (saved profiles included) and, for flags,
+      // it would not also clear a bypass.
+      const before = change.previous?.[section];
+      const sectionWasEmpty = !before || Object.keys(before).every((key) => key === "schemaVersion");
+      const resetUndoes = sectionWasEmpty && (section === "models" || after.size === 0);
+      if (resetUndoes) {
+        lines.push(
+          `Recorded ${ids.map((id) => shownValue(`${now.get(id)?.label} ${now.get(id)?.value}`)).join(", ")} in ${file}. To undo: ${
+            command(section, ["--reset"], change.target)
+          }`,
+        );
+        continue;
+      }
+      for (const id of ids) {
+        const old = was.get(id);
+        const fresh = now.get(id);
+        const label = old?.label ?? fresh?.label ?? id;
+        const undo = old && old.args.length > 0
+          ? ` To undo: ${command(section, old.args, change.target)}`
+          : old
+          ? ""
+          : id === "flags.questionRetentionDays"
+          ? ` To undo: ${command(section, ["--question-retention-days", "unlimited"], change.target)}`
+          : " It was not set there before.";
+        lines.push(shownValue(`${label}: ${old?.value ?? "not set"} -> ${fresh?.value ?? "not set"} in ${file}.${undo}`));
+      }
+    }
+  }
+  // A clear aimed at one layer leaves the switch on where another records it:
+  // say so, with the command that clears it there.
+  const cleared = mutations.flatMap((change) => {
+    const after = new Set(change.next?.flags?.bypasses ?? []);
+    return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
+  });
+  for (const name of new Set(cleared)) {
+    for (const layer of layersRecordingBypass(projectDir, name)) {
+      lines.push(
+        `${name} is still recorded in ${fileOf(layer)}, so it stays on. To clear it there: ${
+          command("flags", ["--clear-bypass", name], layer)
+        }`,
+      );
+    }
+  }
+  return lines;
+}
+
+// What a harness.json answer changed, with the command that puts the earlier
+// one back where a command can.
+function recordChangeLines(projectDir: string, context: DiagnosticsMutationContext): string[] {
+  if (canonical(context.previous) === canonical(context.next)) return [];
+  const file = `${context.harnessDir}/tools/data/harness.json`;
+  const command = (args: string[]): string =>
+    `${configInvocationFor(projectDir)} config ${context.section} ${
+      args.map((arg) => quoteCommandArgument(arg)).join(" ")
+    } --yes${projectTarget(projectDir)}`;
+  if (context.previous === null) {
+    return [`Recorded the ${context.section} answer in ${file}. To undo: ${command(["--reset"])}`];
+  }
+  if (context.section === "providers") {
+    const earlier = context.previous as ProvidersRecord;
+    if (earlier.provider) {
+      return [`Changed the providers answer in ${file}. To undo: ${command([
+        "--provider",
+        earlier.provider === "builtin" ? "current" : earlier.provider,
+        ...(earlier.region ? ["--region", earlier.region] : []),
+        ...(earlier.profile ? ["--profile", earlier.profile] : []),
+        ...(earlier.opencodeDefault === undefined ? [] : ["--opencode-default", earlier.opencodeDefault ? "yes" : "no"]),
+        ...(earlier.acknowledged ? ["--acknowledge"] : []),
+        ...(earlier.pendingActions ?? []).filter((item) => item.status === "done").flatMap((item) => ["--mark-done", item.id]),
+      ])}`];
+    }
+  }
+  if (context.next === null && context.section === "trust") {
+    return [`Cleared the trust answer in ${file}. To undo: ${command(["--acknowledge"])}`];
+  }
+  if (context.next === null && context.section === "runtime") {
+    return [`Cleared the recorded runtime paths in ${file}. To record them again: ${command(["--record-paths"])}`];
+  }
+  return [`Changed the ${context.section} answer in ${file}.`];
+}
+
+// Who picks a recorded setting up, said once after it is written.
+function openWorkflowLine(projectDir: string, mutation: SettingsMutation | undefined): string | null {
+  const open = activeWorkflowDescriptions(projectDir);
+  if (open.length === 0) return null;
+  const who = `${open.length} open workflow${open.length === 1 ? "" : "s"} (${open.join(", ")})`;
+  const verb = (word: string): string => `${word}${open.length === 1 ? "s" : ""}`;
+  const was = settingLeaves(mutation?.previous ?? null);
+  const now = settingLeaves(mutation?.next ?? null);
+  const changed = [...new Set([...was.keys(), ...now.keys()])].filter((id) => was.get(id)?.value !== now.get(id)?.value);
+  // A guard reads its bypass every time it checks, so a switch applies at the
+  // very next check, a retry in the same step included.
+  const bypasses = (file: AidlcSettingsFile | null | undefined): string =>
+    canonical([...(file?.flags?.bypasses ?? [])].sort());
+  const switched = bypasses(mutation?.previous) !== bypasses(mutation?.next);
+  const scope = changed.includes("flags.defaultScope");
+  const settings = changed.some((id) => id !== "flags.defaultScope");
+  const later = "a step already running keeps what it started with";
+  const scopeNote = "the default scope applies to new work only";
+  if (switched && settings) {
+    return `${who} ${verb("get")} the switch at the next check, with no restart, and the other settings from the next step; ${later}${scope ? `; ${scopeNote}` : ""}.`;
+  }
+  if (switched) return `${who} ${verb("pick")} this up at the next check, with no restart${scope ? `; ${scopeNote}` : ""}.`;
+  if (settings) return `${who} ${verb("pick")} this up from the next step; ${later}${scope ? `; ${scopeNote}` : ""}.`;
+  if (scope) return `The default scope applies to new work; ${who} ${verb("keep")} the scope it started with.`;
+  return null;
+}
+
+// The machine settings file lives outside the project, so its change runs as
+// its own step after the project's. When that step fails, the project files
+// have already changed: the error says which, and rerunning the same command
+// finishes the rest.
+function afterProjectSettings(
+  projectDir: string,
+  changed: readonly SettingsMutation[],
+  machineStep: () => void,
+): void {
+  try {
+    machineStep();
+  } catch (error) {
+    const files = changed
+      .filter((change) => change.target !== "global" && canonical(change.previous) !== canonical(change.next))
+      .map((change) => relative(projectDir, change.path));
+    if (files.length === 0) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${files.join(" and ")} changed, but the machine settings file did not: ${reason}. Run the same command again to finish.`,
+    );
+  }
 }
 
 function recordBypassesOnly(
@@ -8006,45 +8280,16 @@ function recordBypassesOnly(
     // changed since they were planned is a conflict, not overwritten.
     if (operations.length > 0) executePlan({ schemaVersion: 1, root: projectDir, operations });
     if (machineOperations.length > 0) {
-      executePlan({ schemaVersion: 1, root: machineTransactionRoot(), operations: machineOperations });
+      afterProjectSettings(projectDir, operations.length > 0 ? mutations : [], () =>
+        executePlan({ schemaVersion: 1, root: machineTransactionRoot(), operations: machineOperations })
+      );
     }
     const notes = excludes.flatMap((exclude) => excludeLocalSettingsFromClone(exclude) ?? []);
     for (const change of mutations) invalidateSettingsCache(change.path);
-    // What changed, and the command that undoes it.
-    const fileOf = (target: SettingsTarget): string => {
-      const path = settingsPathForTarget(projectDir, target);
-      return target === "global" ? path : relative(projectDir, path);
-    };
-    const rerun = (flag: "--bypass" | "--clear-bypass", name: string, target: SettingsTarget): string =>
-      `${configInvocationFor(projectDir)} config flags ${flag} ${name} --${target} --yes${projectTarget(projectDir)}`;
-    const changes = mutations.flatMap((change) => {
-      const before = new Set(change.previous?.flags?.bypasses ?? []);
-      const after = new Set(change.next?.flags?.bypasses ?? []);
-      return [
-        ...[...after].filter((name) => !before.has(name)).map((name) =>
-          `Recorded ${name} in ${fileOf(change.target)}. To undo: ${rerun("--clear-bypass", name, change.target)}`
-        ),
-        ...[...before].filter((name) => !after.has(name)).map((name) =>
-          `Cleared ${name} from ${fileOf(change.target)}. To undo: ${rerun("--bypass", name, change.target)}`
-        ),
-      ];
-    });
-    // A clear aimed at one layer leaves the switch on where another records it:
-    // say so, with the command that clears it there. The section's own flags
-    // are not in `argv` here, so the names are the ones a layer gave up.
-    const cleared = mutations.flatMap((change) => {
-      const after = new Set(change.next?.flags?.bypasses ?? []);
-      return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
-    });
-    for (const name of new Set(cleared)) {
-      for (const layer of layersRecordingBypass(projectDir, name)) {
-        changes.push(
-          `${name} is still recorded in ${fileOf(layer)}, so it stays on. To clear it there: ${
-            rerun("--clear-bypass", name, layer)
-          }`,
-        );
-      }
-    }
+    // What changed, the command that undoes it, and who picks it up.
+    const changes = settingsChangeLines(projectDir, mutations);
+    const open = openWorkflowLine(projectDir, mutation);
+    if (open) changes.push(open);
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);
       writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
@@ -8691,8 +8936,10 @@ export async function main(
     // A dry run prints the transaction plan and writes nothing, so the
     // active-workflow refusal does not apply to it: the apply path keeps its
     // own assertRefreshSafe inside the audit lock, which is what actually
-    // stops a refresh from moving project files under a live workflow.
-    if (existing.distribution && !argv.includes("--dry-run")) {
+    // stops a refresh from moving project files under a live workflow. A
+    // settings change read from the project's own files brings nothing in, so
+    // it is the person's to make whenever they ask.
+    if (existing.distribution && !argv.includes("--dry-run") && !recordOnly) {
       assertRefreshSafe(projectDir);
     }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
@@ -9036,7 +9283,7 @@ export async function main(
       withAuditLock(
         projectDir,
         () => {
-          assertRefreshSafe(projectDir);
+          if (!recordOnly) assertRefreshSafe(projectDir);
           executeSettingsAndProjectMutation(settingsMutation, plan);
         },
         undefined,
@@ -9099,6 +9346,21 @@ export async function main(
       writeMenuLines("", choicesContext.summaryLines);
       writeMenuLines("", choicesContext.notes.map((note) => `  Note: ${note}`));
     }
+    // What a recorded setting changed, the command that undoes it, and who
+    // picks it up.
+    const changes = [
+      ...(settingsMutation ? settingsChangeLines(projectDir, [settingsMutation]) : []),
+      ...(diagnosticsContext ? recordChangeLines(projectDir, diagnosticsContext) : []),
+    ];
+    // A model policy reaches running work only through the agent files it
+    // rewrites; a harness whose agents inherit the session says so in a note.
+    const reachesWork = Boolean(settingsMutation) && (
+      !modelsContext ||
+      actions.some((item) => item.path.startsWith(`${descriptor.harnessDir}/agents/`) && item.action !== "preserve")
+    );
+    const openLine = recordOnly && reachesWork ? openWorkflowLine(projectDir, settingsMutation) : null;
+    if (openLine) changes.push(openLine);
+    if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
     // and a Cursor already open on it has to restart to load the hooks.
@@ -9157,6 +9419,7 @@ export async function main(
         actions,
         planToken,
         notes: prepared.notes,
+        ...(changes.length > 0 ? { changes } : {}),
         outstandingActions,
         ...(modelsContext
           ? {
