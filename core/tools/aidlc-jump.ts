@@ -165,7 +165,11 @@ function parseFlags(
 // --- Subcommand: resolve ---
 
 function handleResolve(args: string[]): void {
-  const flags = parseFlags(args);
+  // --allow-skipped: resolve a --stage target the plan skips instead of
+  // refusing it, marked target_skipped, so the engine can put it back on the
+  // plan before the jump (the person asked for that stage by name).
+  const allowSkipped = args.includes("--allow-skipped");
+  const flags = parseFlags(args.filter((arg) => arg !== "--allow-skipped"));
   const pd = resolveProjectDir(projectDir);
   const content = readStateFile(pd);
 
@@ -191,6 +195,7 @@ function handleResolve(args: string[]): void {
 
   // Resolve target
   let targetStage: StageEntry | null = null;
+  let targetSkipped = false;
 
   if (flags.stage) {
     targetStage = resolveStage(flags.stage) || null;
@@ -198,9 +203,12 @@ function handleResolve(args: string[]): void {
 
     // Check if target is on the EFFECTIVE plan (suffix override wins).
     if (effectiveAction(suffixes, scopeMapping, targetStage.slug) === "SKIP") {
-      error(
-        `Stage "${targetStage.slug}" is skipped for scope "${scope}". Choose a different stage or change scope.`
-      );
+      if (!allowSkipped) {
+        error(
+          `Stage "${targetStage.slug}" is skipped for scope "${scope}". Use \`next --stage ${targetStage.slug}\`, which handles a stage the plan skips.`
+        );
+      }
+      targetSkipped = true;
     }
   } else if (flags.phase) {
     const phaseInput = flags.phase.toLowerCase();
@@ -227,7 +235,7 @@ function handleResolve(args: string[]): void {
       );
     }
   } else {
-    error("Usage: resolve --stage <slug|#> or --phase <name|#> [--scope <scope>]");
+    error("Usage: resolve --stage <slug|#> [--allow-skipped] or --phase <name|#> [--scope <scope>]");
   }
 
   // Determine direction
@@ -270,6 +278,7 @@ function handleResolve(args: string[]): void {
       current_number: currentStage.number,
       direction,
       affected_stages: affectedSlugs,
+      ...(targetSkipped ? { target_skipped: true } : {}),
       valid: true,
     })
   );
@@ -315,7 +324,7 @@ function handleExecute(args: string[]): void {
   // workflow on a stage the plan says should be skipped.
   if (effectiveAction(suffixes, scopeMapping, targetSlug) === "SKIP") {
     error(
-      `Stage "${targetSlug}" is skipped for scope "${scope}". Choose a different target or change scope.`
+      `Stage "${targetSlug}" is skipped for scope "${scope}". Use \`next --stage ${targetSlug}\`, which handles a stage the plan skips.`
     );
   }
 
