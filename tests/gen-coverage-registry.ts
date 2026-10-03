@@ -763,6 +763,8 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
  *    - spawns `tui-drive.ts` .... adds `tui` (the painted-terminal driver)
  *    - `runOrchestrateNext(` .... adds `cli` (shared spawned-engine driver)
  *    - `runMergeTool(` .......... adds `cli` (the t326 fixture's traced tool spawn)
+ *    - `runCheckpointTool(` ..... adds `cli` (the t344 fixture's tool spawn)
+ *    - `runChangeControlTool(` .. adds `cli` (the t334 fixture's tool and hook spawn)
  *    - shipped-surface spawn .... adds `cli` (the literal shipped binary): `claude -p`,
  *                                 a runtime (`BUN`/`process.execPath`/`"bun"`/`"node"`)
  *                                 spawn whose argv targets an `aidlc-*.ts` tool, or a
@@ -794,10 +796,12 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
   if (/tui-drive\.ts/.test(code)) found.add("tui");
   // cli — driving a shipped binary as a subprocess (claude -p, an aidlc-*.ts tool
   // under the bun/node runtime, run-tests.sh under bash, or a shared harness
-  // helper that spawns one: runOrchestrateNext, or runMergeTool from
-  // tests/harness/team-unit-merge.ts). See drivesCliSurface.
+  // helper that spawns one: runOrchestrateNext, runMergeTool from
+  // tests/harness/team-unit-merge.ts, runCheckpointTool from
+  // tests/harness/swarm-checkpoint.ts, or runChangeControlTool from
+  // tests/harness/change-control-plan-approval.ts). See drivesCliSurface.
   if (
-    /\b(?:runOrchestrateNext|runMergeTool)\s*\(/.test(code) ||
+    /\b(?:runOrchestrateNext|runMergeTool|runCheckpointTool|runChangeControlTool)\s*\(/.test(code) ||
     drivesCliSurface(code)
   ) {
     found.add("cli");
@@ -1386,8 +1390,22 @@ function writeAll(rows: RegistryRow[]): void {
   writeFileSync(REGISTRY_PATH, registryJson(rows));
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  // Units are read from dist/claude. Packaged from other sources than this
+  // checkout, it would describe old code, so refuse and name the fix. The
+  // AIDLC_COVERAGE_* seams point at temp trees that carry dist/ but no core/.
+  // Loaded here so modules that import this file's helpers (the runner, the
+  // live filter) never need the packager's module.
+  if (existsSync(join(REPO_ROOT, "core"))) {
+    const { stalePackageMessage } = await import("../scripts/package-sources.ts");
+    const stale = stalePackageMessage(REPO_ROOT, "claude");
+    if (stale) {
+      console.error(`coverage registry: ${stale}`);
+      process.exit(1);
+    }
+  }
 
   if (args.includes("--check")) {
     const r = runCheck();
@@ -1439,4 +1457,4 @@ function main(): void {
   console.log(`  ${"TOTAL".padEnd(11)} ${rows.filter((r) => r.status === "covered").length}/${rows.length}`);
 }
 
-if (import.meta.main) main();
+if (import.meta.main) await main();

@@ -44,7 +44,32 @@ export interface StoredQuestion {
   newWork?: true;
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
+  /**
+   * For a routing question shown about an active workflow: that workflow's
+   * state digest when it was asked. A reply that only names one of its options
+   * answers it while that work has not moved.
+   */
+  stateSha256?: string;
+  /**
+   * For a routing question: the settings typed with the request, as `next`
+   * flags, for an answer that starts new work and for one that acts on the
+   * work it names. A reply that only names an option replays them.
+   */
+  settings?: QuestionSettings;
   createdAt: string;
+}
+
+export interface QuestionSettings {
+  newWork: string[];
+  existingWork: string[];
+}
+
+// Flag names and their one-word values only: `next`'s own parser reads them
+// back and checks each value.
+const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9-]*$/;
+
+function isSettingTokens(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((token) => typeof token === "string" && SETTING_TOKEN.test(token));
 }
 
 export const QUESTION_UNAVAILABLE =
@@ -93,7 +118,11 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
         isTargetList(question.askedAbout.targets))) &&
-    (question.newWork === undefined || question.newWork === true)
+    (question.newWork === undefined || question.newWork === true) &&
+    (question.stateSha256 === undefined ||
+      (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256))) &&
+    (question.settings === undefined ||
+      (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork)))
   ) {
     return question as StoredQuestion;
   }
@@ -210,6 +239,31 @@ export function latestFrontQuestionId(projectDir: string, withinMs: number): str
 }
 
 /**
+ * The question stored most recently, of any origin (a `compose` entry
+ * included), unexpired: the one a reply that only names an option is about.
+ */
+export function latestQuestion(projectDir: string): StoredQuestion | null {
+  let names: string[];
+  try {
+    names = readdirSync(recordFileTargetOrThrow(projectDir, questionRel(projectDir)));
+  } catch {
+    return null;
+  }
+  let latest: { question: StoredQuestion; at: number } | null = null;
+  for (const name of names) {
+    const id = name.endsWith(".json") ? name.slice(0, -".json".length) : "";
+    if (!QUESTION_ID.test(id)) continue;
+    const question = readStoredQuestion(projectDir, id);
+    const at = Date.parse(question?.createdAt ?? "");
+    if (question === null || Number.isNaN(at)) continue;
+    if (latest === null || at > latest.at) latest = { question, at };
+  }
+  if (latest === null) return null;
+  const { question } = latest;
+  return question.origin === "compose" ? readComposeEntry(projectDir, question.id) : readQuestion(projectDir, question.id);
+}
+
+/**
  * The first new-work question asked at or after `since` and within `withinMs`
  * of it: the request described right after words said before any was open. A
  * `compose` entry counts, so words said just before a composition answer it.
@@ -271,6 +325,8 @@ export function saveQuestion(
   askedAbout?: { space: string; targets: QuestionTarget[] },
   newWork = false,
   composedFrom?: string,
+  stateSha256?: string,
+  settings?: QuestionSettings,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -281,6 +337,8 @@ export function saveQuestion(
     ...(askedAbout ? { askedAbout } : {}),
     ...(newWork ? { newWork: true as const } : {}),
     ...(composedFrom ? { composedFrom } : {}),
+    ...(stateSha256 ? { stateSha256 } : {}),
+    ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

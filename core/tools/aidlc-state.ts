@@ -6659,10 +6659,15 @@ function handleSkip(args: string[]): void {
   if (!reason) {
     error("aidlc-state.ts skip --route requires a nonblank --reason <text>.");
   }
+  // A stage waiting at its approval gate may be skipped only once its plan
+  // row says SKIP: the person decided it no longer applies (they said the
+  // work is a new project), so the gate closes as skipped, not approved.
+  const planSkips = parseStateStageSuffixes(content).get(slug) === "SKIP";
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
     "skipped",
+    ...(planSkips ? ["awaiting-approval" as const] : []),
   ]);
   const currentStage = getField(content, "Current Stage");
   if (currentStage !== slug) {

@@ -27,7 +27,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent; your next message should then be recorded, and if it is not, `/aidlc --doctor` shows why. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's v2 engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
-| Audit log too large | Rename to `audit-YYYY-MM.md`; a fresh one is created automatically |
+| Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
 | Hooks appear to hang | Diagnose lock ownership with `/aidlc --doctor`; see [Lock Files Left Behind](#lock-files-left-behind) |
 | Statusline shows "ready" | Check `aidlc-state.md` has a `**Lifecycle Phase**` field |
 | Statusline not appearing | Run `aidlc doctor`; for a copy install, verify `bun` is on PATH |
@@ -68,7 +68,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | `predates shared onboarding` | The named installed harness is older than the selected release (or has no valid recorded version) and its block is not shared. A preview sorts before the stable release with the same base version. Try refreshing it with `aidlc config --harness <name>` before adding another harness that shares the neutral `AGENTS.md` block. This is a hint for an older sibling: if it still refuses afterwards, its block is exclusive and they cannot coexist in one project. Copilot's block stays exclusive after refresh. Current exclusive blocks instead report `cannot coexist in one project`. `--force` does not bypass this compatibility check. |
 | `refusing to refresh <harness> from a release whose AGENTS.md is not shared` | Another installed harness shares the neutral root block, but the selected refresh source does not declare it shared. Use a release that declares `AGENTS.md` shared; `--force` does not bypass this guard, and no project files are changed. |
 | `shared block is owned by <harness> from a different release` | The shared `AGENTS.md` block matches the named sibling's baseline, not the selected release. Follow the refresh order in the error: refresh the selected harness from the same release as its sibling, or refresh the sibling from the selected release first. No project files are changed by the refused refresh. |
-| `multiple project harnesses are present; pass one --harness <name>` | Every `aidlc config` on a multi-harness project must name the target with `--harness <name>`. |
+| `multiple project harnesses are present; pass one --harness <name>` | Every `aidlc config` on a multi-harness project must name the target with `--harness <name>`, except recording or clearing a bypass (`aidlc config flags --bypass <NAME>` or `--clear-bypass <NAME>` with nothing else to change), which belongs to the project and needs no harness. |
 | `.gitignore` shows `preserve (owned by <harness>)` (`action: "preserve"`, `detail: "owned by <harness>"` in `aidlc config --dry-run --json`) | This fallback appears when the owning harness was installed by a release without `tools/data/root-blocks/`. Run `aidlc config --harness <owner>` to refresh it, after which both harnesses converge on one combined block. |
 | `managed block has no ownership baseline` | The block was written by an install that no longer exists or has no baseline, for example a removed harness tree. Review `aidlc config --dry-run --json`, then use `--force` to replace it with the current shipped block (the combined entries for a shared `.gitignore`). |
 | `has no readable projection descriptor` or `has lost its projection descriptor and ownership baseline` | Repair the named installed harness with `aidlc config --harness <name>` before adding another harness. For co-owned blocks, a same-release refresh is allowed when the source declares the block shared and leaves the current block unchanged, matching the sibling's baseline, even when that sibling's descriptor is missing; this allows both missing descriptors to be repaired one harness at a time. Otherwise, a `co-owns AGENTS.md` refusal requires restoring the named sibling's descriptor first; `--force` cannot bypass this guard. A stamped sibling (`aidlc-stamp.json` present) that has lost both its descriptor and its baseline blocks a refresh that would change a non-union managed block with `has lost its projection descriptor and ownership baseline`; restore that sibling first. A same-release refresh that leaves the current block unchanged is still allowed, but `--force` cannot permit a block-changing refresh. Legacy trees without a stamp and without baseline evidence of co-ownership can still be adopted one harness at a time. |
@@ -174,10 +174,17 @@ npm install -g bun
 bun --version
 ```
 
-For a source-generated `dist/` install, ensure `bun` is on the PATH inherited by the host, such as
-`~/.zshenv` for zsh or `~/.bashrc` for bash and Git Bash, not only an
-interactive-shell file. On native Windows PowerShell, the system PATH entry
-set by `npm install -g bun` is sufficient.
+For a source-generated `dist/` install, `bun` must be on the PATH the harness
+hands its hooks. A harness started from a terminal hands them that terminal's
+PATH, so `bun --version` working there is enough. A harness started from the
+dock, a desktop icon, or a service does not get that PATH. If its hooks do not
+run, open a terminal where `bun --version` works and run
+`bun <harness-dir>/tools/aidlc.ts doctor` there (for example
+`bun .kiro/tools/aidlc.ts doctor`): its `Runtime hook PATH` row names the
+directory to add and where. Restart the harness afterwards. Until then, start
+it from that terminal. On native
+Windows PowerShell, the system PATH entry set by `npm install -g bun` is
+sufficient.
 
 ### Kiro IDE hooks not running
 
@@ -225,6 +232,26 @@ These behaviours were measured on Kiro CLI 2.21.1, and a later Kiro CLI may
 change them. After you switch, send a message and run `/aidlc --doctor`. On
 the `kiro` distribution, doctor can confirm the hooks only after the first
 workflow stage; before that it reports the heartbeats as not yet fired.
+
+### GitHub Copilot hooks not running
+
+VS Code runs a project's hooks only in a trusted workspace with the **Chat: Use
+Hooks** setting (`chat.useHooks`) on, and your organization can switch that
+setting off. The Copilot CLI runs them only in a folder it trusts. Neither says
+anything in the chat when it skips them, so AI-DLC does: once a stage has
+started with no hook run, the agent tells you once, and approvals cannot be
+recorded until the hooks run. Before your first Copilot chat in the folder,
+doctor warns "AIDLC hooks have not run in this project yet"; that is expected
+until a chat has started.
+
+1. In VS Code, trust the folder (Workspace Trust) and check that Chat: Use Hooks
+   is on. If your organization's policy has switched it off, only your
+   administrator can turn it back on.
+2. In the Copilot CLI, trust the folder when it asks. A headless `copilot -p`
+   run also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` in its environment.
+3. Start a new chat in the folder and carry on.
+
+See [GitHub Copilot](harnesses/copilot.md) for the folder trust details.
 
 ### Claude managed policy blocks project hooks
 
@@ -713,24 +740,31 @@ Run `/aidlc` after compaction. The framework:
 
 If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to safely re-execute the stage that was in progress during compaction.
 
+### The build stops after a compaction
+
+**Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
+
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
+
 ---
 
 ## Audit Log Growing Too Large
 
 **Symptom**: this clone's audit shard has grown to thousands of lines over a long project.
 
-### How to archive
-
-```bash
-# from the intent's record dir; <host>-<clone>.md is this clone's shard
-mv audit/<host>-<clone>.md audit-archive/<host>-<clone>-2026-02.md
-```
-
-Run this from your own terminal, not through the agent: the PreToolUse guard refuses the agent's file and shell tools any write into `audit/`. The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive: the engine does not read the `audit/` shards for routing decisions.
+A long project's shard is large by design; leave it where it is. The engine reads every shard in `audit/` to know which stages you approved and which Units you finished, so moving one out of `audit/` makes that work count as not done and the engine hands it out again. (The PreToolUse guard refuses the agent's file and shell tools any write into `audit/`.)
 
 ### Git considerations
 
-The `audit/` shards are committed (not gitignored) — see [What to Commit vs. Gitignore](14-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict; consider archiving (see above) before commits to keep diffs manageable.
+The `audit/` shards are committed (not gitignored), see [What to Commit vs. Gitignore](14-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict.
+
+### Moved, copied, or synced projects
+
+`aidlc/.aidlc-clone-id` records this clone's token and the host name it was first used on, so the shard name stays the same when the machine's name changes or the folder is copied or synced to another laptop: the work continues in one shard. A fresh `git clone` gets its own token and shard. Two copies of one folder are one clone, so if two people (or two laptops) work at the same time, give each its own `git clone`. If a sync tool leaves a conflict copy such as `<host>-<clone> 2.md`, AI-DLC reads the rows it shares with the original once, so finished work keeps counting and the copy can stay. With team Unit ownership, landing a Unit still stops on any file it did not expect, a copy included: it names the file (`Unit landing requires a clean source worktree; commit or stash: ...`).
+
+If such a copy was already in your project on an earlier release and you kept working, Units you finished while the copy sat there may be handed out once more after you upgrade (the Units you finished before the copy count again). Nothing is deleted: the Unit's files are still there, so for most stages finishing it again only records it; a Code Generation Unit may ask you to approve its plan once more and build again from the code already in your branch. It happens once and never repeats, and a planned follow-up removes even that.
+
+One narrow case: a Code Generation Unit built in its own worktree that had finished but was not yet merged when you upgraded. Building it again stops with `Worktree directory already exists`, or `resume requires the completed, merged prior Bolt`. Run `aidlc engine worktree discard --slug <unit>`: it sets the earlier attempt's files aside before it removes that worktree, then the next `/aidlc` builds the Unit again, and `aidlc engine worktree restore --slug <unit>` brings the earlier files back into a separate checkout whenever you want them.
 
 ---
 
@@ -798,9 +832,9 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 /aidlc --doctor
 ```
 
-It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 17 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan — a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while an `[advisory]` drop (an expected/benign condition) is a passing row. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires (all 17 framework hooks) must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), hooks-not-globally-disabled (a resolved `disableAllHooks: true` in any Claude Code settings layer fails loudly), managed project-hook policy (`allowManagedHooksOnly: true`), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency (the workflow Status against a recorded `WORKFLOW_COMPLETED`, and each Stage Progress checkbox against the stage starts and completions the audit recorded for the current attempt. A stage the audit shows as started whose checkbox still reads `[ ]` is what makes the workflow refuse to finish it, and the warning names the exact line to change. Under team Unit Ownership the per-unit Construction checkboxes are derived from Unit Progress, so they are not compared), hook heartbeats, graph integrity (no cycles, every graph entry has a file), the **Composed plugin surface** (enabled plugin stages are compiled; contribution sidecars and targets are valid; recorded structural additions and prose fragments remain present and unchanged), selection-aware plugin-authored checks, scope validation across all 11 scopes, **Composed scope durability** (every composer-authored scope resolves to a real plan: a scope file with no grid column, a durable `aidlc/scopes/<name>.md` record not yet projected, or a runnable workflow naming an unresolvable scope all fail, with `graph compile` as the remedy wherever compile can reach the cause; a missing column with no record behind it is reported apart, since compile emits a column only for a scope some stage declares), stage schema + graph references, and keyword overlap across scopes. Passing advisory rows include **Duplicate producers** for consumed artifacts whose producer is ambiguous by graph load order, **Rule drift** (with lifecycle-stale overlaps reported separately as stale-suppressed), **Paired sensor coverage**, stage/gate ledgers with no `HUMAN_TURN`, approval gates waiting for a human for more than 24 hours, plugin advisory checks, uncommitted workspace records, fresh in-flight compose/background-subagent state, and, when `repos.json` exists, declared-repo and managed-`.gitignore` drift. A compose marker older than 24 hours or background-subagent entry older than 2 hours fails with the exact `rm aidlc/.aidlc-*` remediation; doctor never deletes either surface. **Hook drops** is conditional: a hook that silently degraded (e.g. a plugin compose that could not apply a contribution, or a failed recompile) records a severity-tagged line to `<hooks-health>/<hook>.drops`; a `[degraded]` drop **fails** doctor (so a CI gate catches a half-applied plugin), while any other drop is a passing row naming each hook's most frequent reasons (each up to its first colon; the detail stays in the file), raised to a `Hook failures, the latest within the last day` warning while the hook's latest failure is under 24 hours old (it clears a day later or when you delete the file; an `[advisory]` line never raises it). A hook's normal decisions, such as the Stop hook letting a turn end because you have to answer first, go to `<hook>.trace` and are never counted. The plugin compose hook rewrites its drops file each run, so fixing the cause and re-composing self-clears it. Clean and warnings-only reports exit 0; any failed check exits 1. Healthy rows collapse by section unless `--verbose` is present, while every warning and failure remains visible. The report writes to stdout either way. Core checks are **read-only**: on a fresh shell with no intent yet they create nothing, so the command is safe to run before the first intent is created. Plugin checks execute installed plugin code that is required by convention to be read-only, but the runtime cannot enforce that property. Once an intent exists doctor records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
-On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). It also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
+On Kiro IDE, it also checks each ignore source independently for rules hiding `.kiro/`, naming the file and line. Global-source matches fail; workspace-source matches warn because `kiroAgent.agentIgnoreFiles` governs whether they apply. See [Kiro IDE Read Denials](#kiro-ide-read-denials). On Kiro IDE and GitHub Copilot it also warns "AIDLC hooks have not run in this project yet" when no AI-DLC hook has run in the project. That is expected before your first chat message; after one, see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running) or [GitHub Copilot hooks not running](#github-copilot-hooks-not-running). On Kiro CLI, a workflow whose hooks never ran fails "Hooks have never executed" with the engine its hooks need; see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running).
 
 The **Workspace record visibility** advisory, beside the uncommitted-records
 row, catches user ignore rules added after config. It names the rule's file,

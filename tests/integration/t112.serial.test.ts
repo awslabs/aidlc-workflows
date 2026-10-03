@@ -59,6 +59,7 @@ const REAL_PROFILE = join(import.meta.dir, "..", "harness", "runner-profile.ts")
 const REAL_BUDGET = join(import.meta.dir, "..", "harness", "test-budget.ts");
 const REAL_GLUE = join(import.meta.dir, "..", "lib", "bun-junit-to-meta.ts");
 const REAL_SHARDING = join(import.meta.dir, "..", "lib", "test-sharding.ts");
+const REAL_FILE_RETRY = join(import.meta.dir, "..", "lib", "file-retry.ts");
 const REAL_PLAN = join(import.meta.dir, "..", "lib", "e2e-plan.ts");
 const REAL_REGISTRY = join(import.meta.dir, "..", "gen-coverage-registry.ts");
 const REAL_PROCESS = join(import.meta.dir, "..", "lib", "e2e-process.ts");
@@ -123,6 +124,7 @@ function driveRunner(
   copyFileSync(REAL_BUDGET, join(harnessDir, "test-budget.ts"));
   copyFileSync(REAL_GLUE, join(libDir, "bun-junit-to-meta.ts"));
   copyFileSync(REAL_SHARDING, join(libDir, "test-sharding.ts"));
+  copyFileSync(REAL_FILE_RETRY, join(libDir, "file-retry.ts"));
   copyFileSync(REAL_PLAN, join(libDir, "e2e-plan.ts"));
   copyFileSync(REAL_REGISTRY, join(testsDir, "gen-coverage-registry.ts"));
   copyFileSync(REAL_PROCESS, join(libDir, "e2e-process.ts"));

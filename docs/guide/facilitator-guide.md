@@ -41,7 +41,9 @@ less.
 2. **Check the install.** Run `aidlc doctor`.
    - Pass: the summary line reads `0 problems`.
    - Read every warning. A `Runtime hook PATH` warning means the host may
-     start the hooks without finding `aidlc`: fix it first.
+     start the hooks without finding `aidlc`: fix it first. On GitHub Copilot
+     and Kiro IDE, `AIDLC hooks have not run in this project yet` is expected
+     before the first chat in the folder; step 4 shows whether they run.
 3. **Run one stage.** Open the harness in the same folder and start a
    throwaway workflow, for example:
 
@@ -53,7 +55,9 @@ less.
    the first real stage asks you something (a question or an approval),
    answer it the way the harness shows it: pick an option where a picker
    appears (Claude Code, Codex CLI), or type the number or your answer in the
-   chat where the options are numbered (GitHub Copilot and the others).
+   chat where the options are numbered (GitHub Copilot and the others). On
+   GitHub Copilot, if the agent says AI-DLC's hooks have not run in this
+   project, fix the switches it names before the workshop.
 4. **Check the hooks fired.** Back in the terminal, run
    `aidlc doctor --verbose`.
    - Pass: a row `Hooks last fired:` lists hook names with current times,
@@ -62,6 +66,9 @@ less.
      or a `Hook heartbeat data` row saying no hook has ever fired, means the
      host is not running AI-DLC's hooks on this machine. Fix it before the
      workshop.
+   - Not ready: a `Hook failures, the latest within the last day` warning
+     means a hook ran into a failure it could not report at the time; the row
+     names the reasons.
    - Not ready, although it is marked `ok`: a row reading
      `Human-turn receipts: 0 HUMAN_TURN rows ... (advisory)` means your
      answers are not being recorded, so approvals will be refused later.
@@ -203,11 +210,25 @@ it before anything else.
 
 ### Last resort: switch the Plan Approval check off
 
-`AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` turns off the check that refuses work
-during Code Generation, for every workflow in a harness started with it. Use
-it only while a person is watching the session, and only to get past a
-refusal that is wrong. The hooks read it from the environment the harness
-starts with, so set it before you start the harness:
+`AIDLC_DISABLE_PLAN_APPROVAL_GUARD` turns off the check that refuses work
+during Code Generation. Use it only while a person is watching the session,
+and only to get past a refusal that is wrong.
+
+The quickest way needs no restart. Run this yourself in a terminal in the
+project folder, not through the agent:
+
+```bash
+aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes
+```
+
+It works while the workflow is running, and the check is off from the agent's
+next action, for every workflow in this project on this machine. As soon as
+the team is past the problem, run the same command with `--clear-bypass` in
+place of `--bypass` to turn the check back on.
+
+Or set `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` in the environment the harness
+starts with, for every workflow in a harness started with it. The hooks read
+it from that environment, so set it before you start the harness:
 
 - Close every window of the harness first.
 - On Windows PowerShell with VS Code:
@@ -220,12 +241,11 @@ starts with, so set it before you start the harness:
 - On macOS or Linux: `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 code /path/to/project`
   (or the harness's own command instead of `code`).
 
-While it is set, the workflow's audit trail records that the check was off
-(`GUARD_DISABLED`). Start the harness again without the variable as soon as
-the team is past the problem.
+Start the harness again without the variable as soon as the team is past the
+problem.
 
-Recording the switch with `aidlc config flags --bypass` does not help here:
-`aidlc config flags` refuses to record it while a workflow is running.
+While the check is off either way, the workflow's audit trail records that it
+was off (`GUARD_DISABLED`).
 
 ### When to pivot
 
@@ -247,7 +267,7 @@ following its instructions, and a failure is easier to miss.
 |---|---|---|---|---|---|
 | Claude Code | Native picker; picker answers count as your turn | Yes, every check | Keeps the workflow going until the step is reported | Project hooks are approved with `/hooks` and Claude Code restarted; an organization policy can block them (the doctor checks) | None noted |
 | Codex CLI | Picker, with numbered prose as the fallback; picker answers count | Yes, every check | Keeps the workflow going | The project's hooks are trusted (one interactive trust pass, or the shipped trust seed) | No custom status line |
-| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor cannot tell whether VS Code runs the hooks until a stage has run |
+| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | In VS Code, the workspace is trusted and Chat: Use Hooks is on (an organization can switch it off). For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor warns until a Copilot chat has started in the folder, and once a stage starts with no hook run, the chat says so; a real stage and your reply are still the full readiness check |
 | Cursor | Numbered prose | Yes | Cannot hold the turn; the reminder arrives as a follow-up message | The project is in a git repository and the folder is trusted (the doctor checks the repository) | Headless `agent -p` runs cannot pass approval gates. No status line |
 | Kiro CLI | Numbered prose | Yes | Keeps the workflow going in interactive sessions, not in `--no-interactive` runs | The `aidlc` agent is active | No status line; no session-end or pre-compaction hooks |
 | Kiro IDE | Numbered prose | Partly: the approval floor, Plan Approval, and the terminal command check. No reviewer read-scope, state-transition, or review-freeze check | Cannot hold the turn; the agent's own instructions keep the workflow going | The folder is trusted, the window was reloaded, and the `aidlc` agent is chosen (the doctor warns until hooks have run) | No status line |

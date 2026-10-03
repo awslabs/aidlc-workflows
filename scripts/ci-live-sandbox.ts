@@ -23,6 +23,8 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       GIT_CONFIG_GLOBAL: join(home, ".gitconfig"), GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0",
       SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", ComSpec: "C:\\Windows\\System32\\cmd.exe",
       PATHEXT: ".COM;.EXE;.BAT;.CMD",
+      // Windows live legs only: the runner binds AIDLC_HOOK_TRACE_DIR per test file.
+      AIDLC_TEST_HOOK_TRACE: "1",
     });
     if (family === "codex" && source.AIDLC_CODEX_BIN !== undefined) {
       const managed = win32.join(win32.dirname(home), "tools", "codex-managed.exe");

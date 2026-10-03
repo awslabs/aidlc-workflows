@@ -3,8 +3,7 @@
 // a canonical audit event.
 //
 // Receives JSON on stdin with subagent info. No-op unless a workflow is running.
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   workflowParticipation,
@@ -13,6 +12,7 @@ import {
   errorMessage,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
@@ -74,8 +74,7 @@ export async function run(input: string): Promise<number> {
 
   // Write health heartbeat
   const healthDir = hooksHealthDir(projectDir, intent, space);
-  mkdirSync(healthDir, { recursive: true });
-  writeFileSync(join(healthDir, "log-subagent.last"), isoTimestamp(), "utf-8");
+  writeHookStatusFile(healthDir, "log-subagent.last", isoTimestamp());
 
   if (completionError) {
     recordHookDrop(

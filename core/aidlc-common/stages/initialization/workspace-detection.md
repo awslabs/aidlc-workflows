@@ -85,7 +85,11 @@ Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs,
 
 ### Step 4: Verify Classification
 
-The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or, after cleaning up, choose **Start fresh** from the resume menu so the new intent runs Workspace Detection again.
+The deterministic scanner applies the rules in Step 3 directly. The person's word on what the work is wins over the scan, and `Project Type Source` records who decided (`workspace scan` or `you`):
+
+- At the start, `/aidlc --project-type brownfield` (or `greenfield`) with the request sets the type; the scan still fills in languages, frameworks, and build system.
+- Later, when the person says in their own words that the work is on existing code, or is a new project (for example a `create-next-app` scaffold they intend to treat as new), run `{{INVOKE}} engine orchestrate next --project-type brownfield` (or `greenfield`). The engine scans the folder again, records the type as theirs, refreshes Workspace State, and for existing code records repos added since creation and puts Reverse Engineering back on the plan; when the workflow is already past it, Reverse Engineering runs next and the workflow then returns to the stage the person was on. Never edit `Project Type` by hand.
+- When the scan set the work up as a new project and the folder gains code before Construction, `next` asks the person once which it is. Either answer is recorded as theirs, so it is not asked again.
 
 ### Step 5: Identify Technology Stack
 

@@ -50,8 +50,7 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookOutsideGate,
@@ -72,6 +71,7 @@ import {
   guardRefusalOutput,
   humanAuthorityState,
   hooksHealthDir,
+  writeHookStatusFile,
   intentRepos,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -233,8 +233,7 @@ export async function run(input: string): Promise<number> {
 async function checkFreeze(input: string, projectDir: string): Promise<number> {
   try {
     const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }

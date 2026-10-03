@@ -76,6 +76,7 @@ import {
   workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
+  unmergedRootSettingsNotices,
   workspaceSourceState,
   worktreePath,
   worktreesDir,
@@ -3033,6 +3034,10 @@ function handleMerge(args: string[]): void {
     }
   }
   assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
+  // A setting changed in the worktree did not land and goes with it: say so
+  // before the checkout is reset.
+  const notices = sourceRecord?.kind === "bound" ? unmergedRootSettingsNotices(wtPath) : [];
+  for (const notice of notices) process.stderr.write(`note: ${notice}\n`);
   // A swarm snapshot does not move the Bolt branch, so reviewed application
   // files may still be modified/untracked in this disposable checkout. Once
   // that immutable source has landed, align the checkout to it before forced
@@ -3173,6 +3178,7 @@ function handleMerge(args: string[]): void {
       strategy,
       commit_sha: commitSha,
       audit_timestamp: auditTs,
+      ...(notices.length > 0 ? { notices } : {}),
     })
   );
 }
