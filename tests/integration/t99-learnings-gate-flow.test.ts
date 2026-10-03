@@ -582,9 +582,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   }, TIMEOUT);
 
   test("Glue: a selection keyed by surface's own `id` persists", () => {
-    // surface prints `id`, and stage-protocol 13 step 3 correlates a kept label
-    // back to that `id`. Feeding it straight back must not be rejected for
-    // naming the field the producer used.
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
