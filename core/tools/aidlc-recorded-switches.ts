@@ -10,7 +10,7 @@
 // the clone's protected runtime directory, and every read or write of it
 // fails open: it can only ever change a sentence.
 import { existsSync, mkdirSync, statSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import {
   assertNoSymlinkInChainOrThrow,
   delegatedWorktreeIntent,
@@ -19,6 +19,7 @@ import {
   personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
   sessionsDir,
+  shellArg,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
@@ -27,6 +28,7 @@ import {
   PERSON_CHECK_SWITCH_LABELS,
   PERSON_CHECK_SWITCHES,
   type RecordableProjectBypass,
+  readSettingsTarget,
   resolveAidlcSettings,
   settingsPathForTarget,
   type SettingsTarget,
@@ -52,6 +54,9 @@ export interface SwitchOff {
   target: SettingsTarget;
   entry: RecordedSwitch | null;
   settingsPath: string;
+  // The project the switch belongs to, so the way back names it when the
+  // command printing it ran from somewhere else.
+  projectDir?: string;
 }
 
 // A delegated Bolt worktree has no runtime directory of its own for this: the
@@ -109,25 +114,37 @@ function writeRecord(projectDir: string, switches: RecordedSwitch[]): void {
  */
 export function switchesOff(projectDir: string, env: NodeJS.ProcessEnv = process.env): SwitchOff[] {
   let bypasses: readonly string[];
-  let layer: string | undefined;
   try {
-    const resolved = resolveAidlcSettings(projectDir);
-    bypasses = resolved.flags?.bypasses ?? [];
-    layer = resolved.sources["flags.bypasses"];
+    bypasses = resolveAidlcSettings(projectDir).flags?.bypasses ?? [];
   } catch {
     return [];
   }
-  if (layer !== "machine" && layer !== "project" && layer !== "local") return [];
-  const target: SettingsTarget = layer === "machine" ? "global" : layer;
+  // The file a switch is turned back on in: the nearest one that records it.
+  const holder = (name: string): SettingsTarget | null => {
+    for (const target of ["local", "project", "global"] as const) {
+      try {
+        if ((readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass)) {
+          return target;
+        }
+      } catch {
+        // An unreadable file names no switch.
+      }
+    }
+    return null;
+  };
   const record = readRecord(projectDir);
   return PERSON_CHECK_SWITCHES
     .filter((name) => bypasses.includes(name) && !Object.hasOwn(env, name))
-    .map((name) => ({
-      name,
-      target,
-      entry: record.find((entry) => entry.name === name && entry.target === target) ?? null,
-      settingsPath: settingsPathForTarget(projectDir, target),
-    }));
+    .flatMap((name) => {
+      const target = holder(name);
+      return target === null ? [] : [{
+        name,
+        target,
+        entry: record.find((entry) => entry.name === name && entry.target === target) ?? null,
+        settingsPath: settingsPathForTarget(projectDir, target),
+        projectDir,
+      }];
+    });
 }
 
 function fileTime(path: string): string {
@@ -157,8 +174,16 @@ function where(target: SettingsTarget): string {
   return target === "global" ? "on this machine" : "for this project";
 }
 
-export function clearSwitchCommand(name: RecordableProjectBypass, target: SettingsTarget): string {
-  return `${aidlcInvocation()} config flags --clear-bypass ${name} --${target} --yes`;
+export function clearSwitchCommand(
+  name: RecordableProjectBypass,
+  target: SettingsTarget,
+  projectDir?: string,
+): string {
+  const elsewhere = projectDir !== undefined && target !== "global" &&
+    resolve(projectDir) !== resolve(process.cwd());
+  return `${aidlcInvocation()} config flags --clear-bypass ${name} --${target} --yes${
+    elsewhere ? ` --project-dir ${shellArg(projectDir)}` : ""
+  }`;
 }
 
 /** The one line the person hears while a switch is off. */
@@ -171,7 +196,7 @@ export function switchOffLine(off: SwitchOff, now: Date = new Date()): string {
     ? `because you said: "${quoted(off.entry.words)}"`
     : "set after your last message in the chat";
   return `The ${label} is off ${where(off.target)} since ${since}, ${how}. ` +
-    `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.target)}).`;
+    `Say "turn it back on" to restore it (${clearSwitchCommand(off.name, off.target, off.projectDir)}).`;
 }
 
 /** Every switch still off, worded: for session start, --show, and doctor. */
@@ -264,7 +289,7 @@ export function recordSwitchChange(
       const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
       lines.push(
         `The ${label} is still off: ${file} also records it. ` +
-          `Say "turn it back on" to restore it (${clearSwitchCommand(name, still.target)}).`,
+          `Say "turn it back on" to restore it (${clearSwitchCommand(name, still.target, projectDir)}).`,
       );
     } else {
       lines.push(`The ${label} is on again ${where(target)}.`);

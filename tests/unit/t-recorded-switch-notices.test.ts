@@ -146,8 +146,9 @@ function flags(proj: string, ...args: string[]) {
   return result;
 }
 
+// `next` as the agent runs it: from the project.
 function notices(proj: string, extra: Record<string, string | undefined> = {}): string[] {
-  const result = runOrchestrateNext(ORCHESTRATE, proj, [], { env: quietEnv(extra) });
+  const result = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: quietEnv(extra) });
   expect(result.status, result.out).toBe(0);
   expect(result.directive, result.out).not.toBeNull();
   return ((result.directive as { change_notices?: string[] }).change_notices ?? [])
@@ -206,7 +207,11 @@ describe("a check switched off for the project is always said, never refused", (
     const show = flags(proj, "--show");
     expect(show.stdout).toContain(FROM_CHAT);
     const shown = JSON.parse(flags(proj, "--show", "--json").stdout) as { data: { switches: string[] } };
-    expect(shown.data.switches).toEqual(switchesOffLines(proj, NONE));
+    expect(shown.data.switches).toHaveLength(1);
+    expect(shown.data.switches[0]).toContain(FROM_CHAT);
+    expect(shown.data.switches[0]).not.toContain("--project-dir");
+    // Printed from somewhere else, the way back names the project.
+    expect(switchesOffLines(proj, NONE)[0]).toContain(`--local --yes --project-dir ${proj})`);
     const row = flagsDoctorCheck(proj, ".claude", switchesOffLines(proj, NONE));
     expect(row).toMatchObject({ pass: false, severity: "warn", label: "Flags: 1 check switched off" });
     expect(row.fix).toContain(FROM_CHAT);
@@ -356,7 +361,7 @@ describe("the line reaches the person on every harness", () => {
       cpSync(join(REPO_ROOT, "dist", harness.name, harness.dir), join(proj, harness.dir), { recursive: true });
       writeLocal(proj, [NAME]);
       const engine = join(proj, harness.dir, "tools", "aidlc-orchestrate.ts");
-      const next = runOrchestrateNext(engine, proj, [], { env: quietEnv() });
+      const next = runOrchestrateNext(engine, proj, [], { cwd: proj, env: quietEnv() });
       expect(next.status, next.out).toBe(0);
       const carried = (next.directive as { change_notices?: string[] } | null)?.change_notices ?? [];
       expect(carried.some((line) => line.startsWith(OFF) && line.includes(NOT_FROM_CHAT)), next.out).toBe(true);
