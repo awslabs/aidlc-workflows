@@ -2821,6 +2821,34 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(unixInstaller).toContain("AIDLC_GH_BIN");
   });
 
+  test("release lifecycle jobs follow setup's git init advice for the Cursor project before doctor", () => {
+    // Doctor fails a Cursor project outside git, and setup says to run
+    // `git init`; the job runs it after config so setup still finishes outside git.
+    for (const path of [RELEASE_WORKFLOW, PREVIEW_RELEASE_WORKFLOW]) {
+      const workflow = readFileSync(path, "utf-8");
+      for (const [job, config, gitInit, doctor] of [
+        [
+          "windows-lifecycle",
+          "& $command config --project-dir $project --harness $harness --mcp none --quiet",
+          "if ($harness -eq 'cursor') {\n              git init --quiet $project\n" +
+            "              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n            }",
+          "& $command doctor --project-dir $project --quiet",
+        ],
+        [
+          "unix-lifecycle",
+          '--project-dir "$project" --harness "$harness" --mcp none --quiet',
+          'if [ "$harness" = cursor ]; then\n              git init --quiet "$project"\n            fi',
+          'env PATH="/usr/bin:/bin" "$command" doctor',
+        ],
+      ] as const) {
+        const text = workflowJob(workflow, job);
+        const at = [config, gitInit, doctor].map((line) => text.indexOf(line));
+        expect(at.every((index) => index >= 0), `${path} ${job}`).toBe(true);
+        expect(at[0] < at[1] && at[1] < at[2], `${path} ${job} order`).toBe(true);
+      }
+    }
+  });
+
   test("release lifecycle verifier fixtures reject every missing binding", () => {
     const workflow = readFileSync(RELEASE_WORKFLOW, "utf-8");
     const root = temp("aidlc-t244-verifier-fixture-");
