@@ -678,14 +678,16 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     recordHookDrop(p, "write-audit-log", "audit emission failed: EACCES");
     const r = doctorDefault(p);
     // Plain doctor shows it: a person need not know about --verbose.
-    expect(r.out).toContain("warn  Hook failures in the last day:");
+    expect(r.out).toContain("warn  Hook failures, the latest within the last day:");
     // Count is exact; the timestamp is whatever isoTimestamp() minted, so pin
     // the shape (the probe's own timestamp gate) rather than a literal value.
     // The most frequent reason comes first.
     expect(r.out).toMatch(
       /write-audit-log x3 \(last \d{4}-\d{2}-\d{2}T[\d:]+Z\), top reasons: 2x "audit emission failed: EACCES", 1x "audit emission failed: disk full"/,
     );
-    expect(r.out).toContain("this warning clears 24 hours after the last failure, or when you delete the file");
+    expect(r.out).toContain("this warning clears 24 hours after the latest failure, or when you delete the file");
+    // Outcome-neutral: some producers record a drop while their block still held.
+    expect(r.out).not.toContain("let your action through");
     expect(r.out).not.toContain("Hook drops recorded (advisory)");
     expect(r.out).not.toContain("Hook drops: none recorded");
     // A warning never flips doctor's exit code - compare against the same
@@ -709,7 +711,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.out).toContain(
       'Hook drops recorded (advisory): continue-workflow x2 (last 2020-01-01T11:00:00Z), top reasons: 2x "engine next returned no parseable directive; allowing stop"',
     );
-    expect(r.out).not.toContain("Hook failures in the last day");
+    expect(r.out).not.toContain("Hook failures, the latest within the last day");
   });
 
   test("18g: an upgraded record's old Stop-hook waits in .drops are not reported as failures", () => {
@@ -730,7 +732,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     );
     const r = doctorDefault(p);
     expect(r.out).toMatch(
-      /Hook failures in the last day: continue-workflow x1 \(last [^)]+\), top reasons: 1x "engine next returned no parseable directive; allowing stop"/,
+      /Hook failures, the latest within the last day: continue-workflow x1 \(last [^)]+\), top reasons: 1x "engine next returned no parseable directive; allowing stop"/,
     );
     expect(r.out).not.toContain("carve-out");
     // Only the old waits: nothing to report at all.
@@ -741,7 +743,48 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     );
     const quiet = doctor(p);
     expect(quiet.out).toContain("Hook drops: none recorded");
-    expect(quiet.out).not.toContain("Hook failures in the last day");
+    expect(quiet.out).not.toContain("Hook failures, the latest within the last day");
+  });
+
+  test("18h: a reason doctor shows has its secrets redacted and control characters removed", () => {
+    const p = track(createTestProject());
+    // Built at runtime so the source carries no key-shaped literal.
+    const tokenValue = "e5".repeat(8);
+    const awsKey = `AKIA${"D4".repeat(8)}`;
+    recordHookDrop(p, "write-audit-log", `audit emission failed: token=${tokenValue} key ${awsKey} \u001b[31mred`);
+    const r = doctorDefault(p);
+    expect(r.out).toContain("Hook failures, the latest within the last day:");
+    expect(r.out).not.toContain(tokenValue);
+    expect(r.out).not.toContain(awsKey);
+    expect(r.out).toContain("token=<redacted>");
+    expect(r.out).not.toContain("\u001b");
+  });
+
+  test("18i: every failure is counted when the latest is recent, and a torn newest line still warns", () => {
+    const p = track(createTestProject());
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(healthDir, { recursive: true });
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(
+      join(healthDir, "continue-workflow.drops"),
+      "2020-01-01T10:00:00Z\tengine next returned no parseable directive; allowing stop\n" +
+        "2020-01-01T11:00:00Z\tengine next returned no parseable directive; allowing stop\n" +
+        `${now}\tactive-directive lock contended while reading Copilot Stop evidence; allowing stop\n`,
+      "utf-8",
+    );
+    const mixed = doctorDefault(p);
+    expect(mixed.out).toMatch(
+      /Hook failures, the latest within the last day: continue-workflow x3 \(last [^)]+\), top reasons: 2x "engine next returned no parseable directive; allowing stop", 1x "active-directive lock contended/,
+    );
+    // The newest line torn mid-write in a file written just now: still a warning.
+    writeFileSync(
+      join(healthDir, "run-sensors.drops"),
+      "2020-01-01T10:00:00Z\tsensor dispatch failed\nsensor dispatch failed: ENOSP",
+      "utf-8",
+    );
+    const torn = doctorDefault(p);
+    expect(torn.out).toContain("run-sensors x2 (last unparseable line)");
+    expect(torn.out).toMatch(/Hook failures, the latest within the last day: [^\n]*run-sensors x2/);
   });
 
   test("18f: the Stop hook's normal decisions are trace, never counted as drops", () => {

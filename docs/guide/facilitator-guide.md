@@ -54,8 +54,9 @@ less.
      or a `Hook heartbeat data` row saying no hook has ever fired, means the
      host is not running AI-DLC's hooks on this machine. Fix it before the
      workshop.
-   - Not ready: a `Hook failures in the last day` warning means a hook ran
-     but failed and let the action through; the row names the reasons.
+   - Not ready: a `Hook failures, the latest within the last day` warning
+     means a hook ran into a failure it could not report at the time; the row
+     names the reasons.
    - Not ready, although it is marked `ok`: a row reading
      `Human-turn receipts: 0 HUMAN_TURN rows ... (advisory)` means your
      answers are not being recorded, so approvals will be refused later.

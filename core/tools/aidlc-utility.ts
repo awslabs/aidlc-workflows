@@ -3290,6 +3290,14 @@ function legacyStopHookTraceLine(hook: string, line: string): boolean {
     LEGACY_STOP_HOOK_TRACE_FRAGMENTS.some((fragment) => trimmed.includes(fragment));
 }
 
+// A drop reason as doctor shows it: the hook's own text can carry an error
+// message or captured stderr, so it is passed through the export bundle's
+// secret redaction and stripped of control characters first; the raw line
+// stays only in the machine-local .drops file.
+function shownHookReason(reason: string, max: number): string {
+  return redactSecretPatterns(reason).replace(/\p{Cc}/gu, " ").slice(0, max);
+}
+
 // A drop line's timestamp (its first TAB field), or NaN for a torn line.
 function hookDropStamp(line: string): number {
   const token = line.split("\t")[0].trim();
@@ -3312,7 +3320,7 @@ function hookDropEntry(hook: string, lines: readonly string[]): string {
   const top = [...counts.entries()]
     .sort(([, a], [, b]) => b.count - a.count || b.newest - a.newest)
     .slice(0, 3)
-    .map(([reason, { count }]) => `${count}x "${reason.slice(0, 120)}"`);
+    .map(([reason, { count }]) => `${count}x "${shownHookReason(reason, 120)}"`);
   return `${hook} x${lines.length} (last ${lastTs})${top.length > 0 ? `, top reasons: ${top.join(", ")}` : ""}`;
 }
 
@@ -4676,11 +4684,13 @@ export async function collectDoctorReport(
   // first token is shown, else a placeholder. Unlike the sibling probes this
   // one does NOT absorb read errors into the clean row: EACCES is exactly the
   // environment that produces drops, so an unreadable dir/file is named
-  // rather than reported "none recorded". Each hook's entry names its most
-  // frequent reasons, and a hook whose last failure is under a day old is a
-  // warning, so the person who runs doctor because something went wrong today
-  // sees it without --verbose; it clears itself a day later or when the file is
-  // deleted. A hook's normal decisions are in its .trace file, never counted.
+  // rather than reported "none recorded". Each hook's entry counts every
+  // failure and names its most frequent reasons, and a hook whose latest
+  // failure is under a day old (or whose newest line is torn in a file written
+  // that recently) is a warning, so the person who runs doctor because
+  // something went wrong today sees it without --verbose; it clears itself a
+  // day later or when the file is deleted. A hook's normal decisions are in its
+  // .trace file, never counted.
   const advisoryEntries: string[] = [];
   const recentEntries: string[] = [];
   const recentFiles: string[] = [];
@@ -4699,17 +4709,20 @@ export async function collectDoctorReport(
           const reasons = lines.map((l) => l.split("\t").slice(1).join(" "));
           const degraded = reasons.filter((r) => r.includes("[degraded]"));
           if (degraded.length > 0) {
-            const last = reasons[reasons.length - 1].slice(0, 160);
+            const last = shownHookReason(reasons[reasons.length - 1], 160);
             results.push({
               pass: false,
               label: `Hook drops (${hook}): ${degraded.length} degraded of ${lines.length}`,
               fix: `${hook} degraded silently - read ${join(healthDir, f)} (latest: ${last}); fix the cause and re-compose (the file self-clears on a clean run)`,
             });
           } else {
-            const recent = lines.filter((line) => hookDropStamp(line) >= recentSinceMs);
-            if (recent.length > 0) {
-              recentEntries.push(hookDropEntry(hook, recent));
-              recentFiles.push(join(healthDir, f));
+            const dropFile = join(healthDir, f);
+            const newestTorn = !Number.isFinite(hookDropStamp(lines[lines.length - 1]));
+            const recent = lines.some((line) => hookDropStamp(line) >= recentSinceMs) ||
+              (newestTorn && statSync(dropFile).mtimeMs >= recentSinceMs);
+            if (recent) {
+              recentEntries.push(hookDropEntry(hook, lines));
+              recentFiles.push(dropFile);
             } else {
               advisoryEntries.push(hookDropEntry(hook, lines));
             }
@@ -4745,11 +4758,11 @@ export async function collectDoctorReport(
     results.push({
       pass: false,
       severity: "warn",
-      label: `Hook failures in the last day: ${recentEntries.join("; ")}`,
+      label: `Hook failures, the latest within the last day: ${recentEntries.join("; ")}`,
       fix:
-        "each one let your action through without AI-DLC's check. Read " +
+        "a hook hit a failure it could not report at the time and carried on. Read " +
         `${recentFiles.join(", ")} for every line and fix the cause; this warning clears 24 hours ` +
-        `after the last failure, or when you delete ${recentFiles.length === 1 ? "the file" : "the files"}`,
+        `after the latest failure, or when you delete ${recentFiles.length === 1 ? "the file" : "the files"}`,
     });
   }
 
