@@ -154,6 +154,8 @@ describe("t339 on-demand autonomy preserves protected stage approvals", () => {
     ]);
     expect(JSON.parse(reportRefused.stdout).kind).toBe("error");
     expect(reportRefused.output).toContain("names no choice");
+    // No reply is on record yet, so the gate waits for one.
+    expect(reportRefused.output).toContain("No reply from the person is on record since the gate was shown");
     const refused = run("state", [
       "approve", "nfr-requirements", "--user-input", "Approve",
     ]);

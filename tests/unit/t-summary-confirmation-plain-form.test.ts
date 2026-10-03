@@ -150,8 +150,11 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(result.error).toContain("--details 'Looks correct'");
   });
 
-  test("a plain answer to a plain summary question asks again, and the command waits for the new reply", () => {
-    const { proj } = project();
+  // The summary was asked in the plain form and the person answered it: the
+  // agent records it with its checkpoint, and that reply answers it, so the
+  // person is never asked again.
+  test("a plain answer to a plain summary question is recorded from the reply already given", () => {
+    const { proj, questions } = project();
     appendAuditEntry("DECISION_RECORDED", {
       Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
     }, proj);
@@ -160,10 +163,45 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     const result = run(["answer", "--stage", STAGE, "--details", words], proj);
     expect(result.status).toBe(1);
     expect(result.error).toContain("log.ts decision --checkpoint summary-confirmation");
-    expect(result.error).toContain("end the turn");
-    expect(result.error).toContain(`--details ${quoteCommandArgument("<their choice>")}`);
-    expect(result.error).toContain("the choice they made in place of <their choice>");
+    expect(result.error).toContain("without asking them again");
+    expect(result.error).not.toContain("end the turn");
     expect(result.error).not.toContain("the date is wrong");
+    const turns = rows(proj, "HUMAN_TURN").length;
+    const decision = run(
+      ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
+        "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
+      proj,
+    );
+    expect(decision.status, decision.stderr).toBe(0);
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Request changes\n"));
+    const recorded = run(
+      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
+        "--details", `Request changes: ${words}`],
+      proj,
+    );
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
+    expect(rows(proj, "HUMAN_TURN")).toHaveLength(turns);
+  });
+
+  test("a summary recorded with its checkpoint after an unrelated reply still waits for the person", () => {
+    const { proj, questions } = project();
+    // A reply before any summary question is not an answer to it.
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const decision = run(
+      ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
+        "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
+      proj,
+    );
+    expect(decision.status, decision.stderr).toBe(0);
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Looks correct\n"));
+    const early = run(
+      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
+        "--details", "Looks correct"],
+      proj,
+    );
+    expect(early.status).toBe(1);
+    expect(early.error).toContain("no human reply has arrived after this question");
   });
 
   test("a plain answer of Request changes carries that choice into the command", () => {

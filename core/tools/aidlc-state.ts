@@ -98,6 +98,8 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
+  hookActivation,
   fenceSwitchSentence,
   decideFence,
   guardStoodAsideLine,
@@ -2041,11 +2043,23 @@ export interface ParkResult {
 
 // A park the person asked for, in their own words, is theirs: when a person
 // has typed since the last gate resolution, the stop wins over the autonomous
-// grant and is recorded as theirs. A park no person stands behind still never
-// stops an unattended autonomous run.
+// grant and is recorded as theirs. On a host whose hooks can miss a reply
+// (its hookActivation names that), an attended session's stop under the
+// autonomous grant is theirs too, with a note that no reply was on record. A
+// park no person stands behind still never stops an unattended autonomous run.
 function handlePark(_args: string[]): void {
   const pd = resolveProjectDir(projectDir);
-  console.log(JSON.stringify(parkWorkflow(pd, { attended: humanActedSinceGate(pd) })));
+  const replied = humanActedSinceGate(pd);
+  const missedReply = !replied && humanTurnMintAllowed() && hookActivation()?.missedReply !== undefined &&
+    getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  const result = parkWorkflow(pd, { attended: replied || missedReply });
+  console.log(JSON.stringify(missedReply
+    ? {
+      ...result,
+      note: "No reply from the person was on record (this host can miss one), so this stop is recorded as theirs. " +
+        "Tell them in one line that the work is parked and resumes when they ask.",
+    }
+    : result));
 }
 
 export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
@@ -2056,8 +2070,9 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
       "autonomous"
   ) {
     error(
-      "Refusing to park: Construction Autonomy Mode is autonomous. An unattended " +
-        "autonomous run has no human to resume it and must keep moving - do not park it.",
+      "Refusing to park: Construction Autonomy Mode is autonomous and no reply from the person is on record " +
+        "since the last decision, so the run keeps moving. When the person asks to stop, park then: their " +
+        "stop wins over the autonomous grant.",
     );
   }
   const scopeStamp = validateLiveUnitScope(pd);

@@ -419,6 +419,44 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(grouped).toContain('--units "<unit>,<unit>"');
   });
 
+  // When the person asks to change a check or the Guard Policy, the agent runs
+  // the setter; no copy tells them to type a switch, and none still says a
+  // tool reads the meaning of their words.
+  test("no protocol, doc, tool or SKILL has the person type a setter the agent runs", () => {
+    const stale = [
+      /raise or lower by typing/i,
+      /ask(ing)? the person to type that switch themselves/,
+      /have the person type/,
+      /Ask the user to type/,
+      /types the lowering switch/,
+      /infers the person's meaning/,
+    ];
+    const roots = ["core/aidlc-common", "core/tools", "core/hooks", "core/agents", "core/knowledge", "core/templates", "docs", "harness"];
+    const found: string[] = [];
+    const walk = (rel: string): void => {
+      for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+        const child = `${rel}/${entry.name}`;
+        if (entry.isDirectory()) walk(child);
+        else if (/\.(md|ts)$/.test(entry.name)) {
+          const body = readFileSync(join(REPO_ROOT, child), "utf-8").replace(/(\s|\/\/|\*)+/g, " ");
+          for (const pattern of stale) if (pattern.test(body)) found.push(`${child}  still says: ${pattern}`);
+        }
+      }
+    };
+    for (const root of roots) walk(root);
+    expect(found).toEqual([]);
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const setter of [
+        "run `{{INVOKE}} engine config set guard-policy <value>` yourself",
+        "running `{{INVOKE}} engine config set summary-confirmation off` yourself",
+      ]) {
+        if (!body.includes(setter)) found.push(`${rel}  missing: ${setter}`);
+      }
+    }
+    expect(found).toEqual([]);
+  });
+
   // The person's own words never reach a shell inside double quotes, where a
   // $(...), a backtick, or $NAME they typed would run.
   test("every shipped conductor SKILL and the protocol single-quote the person's words on a command line", () => {

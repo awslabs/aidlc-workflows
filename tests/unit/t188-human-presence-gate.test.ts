@@ -461,6 +461,27 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     },
   );
 
+  // A stop is the person's to make. On a host whose hooks can miss a reply,
+  // a park under autonomous Construction is theirs even with no reply on
+  // record; on other hosts, and in an unattended run, the run keeps moving.
+  test("a park under autonomous Construction with no reply on record parks on a missed-reply host only", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "an earlier answer" }, proj);
+    const claude = guarded(proj, ["park"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("no reply from the person is on record");
+    expect(claude.out).not.toContain("unattended autonomous run");
+    expect(guarded(proj, ["park"], true, KIRO_CLI_STATE).rc).not.toBe(0);
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    const kiro = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    expect(kiro.rc, kiro.out).toBe(0);
+    expect(kiro.out).toContain("this host can miss one");
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
   test("an approval that names no choice records nothing, even after the person replied", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
