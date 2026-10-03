@@ -1474,7 +1474,9 @@ project. Real environment variables take precedence over recorded config flags.
 Recording or clearing a switch changes only that settings file (the first
 `--local` record also adds the file to `.gitignore`) and refreshes no harness
 files, so it also works while a workflow is running: the next check reads it,
-with no restart. A command that also changes another flag, or adds
+with no restart. It asks nothing (`--yes` is optional), needs no `--harness` in
+a project with several harnesses, and prints what it recorded or cleared with
+the command that undoes it. A command that also changes another flag, or adds
 `--download`, is a refresh and waits for the workflow.
 
 #### `/aidlc --plan-approval` - Plan approval

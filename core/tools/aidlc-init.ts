@@ -304,6 +304,8 @@ type ChoicesMutationContext = {
   confirm?: PendingConfirm;
   section: ChoiceSection;
   distribution: string;
+  /** Several harnesses are installed and none was named: only a bypass gets here. */
+  anyHarness?: true;
   harness: ModelHarness;
   harnessDir: string;
   previous: ProjectFlagsRecord | ProjectChoicesRecord | null;
@@ -3323,11 +3325,28 @@ function prepareChoiceSection(
     return null;
   }
   const projectDir = projectDirFrom(argv);
-  const selected = selectedDiagnosticHarness(
-    projectDir,
-    valueAfter(argv, "--harness"),
-    section,
-  );
+  // A bypass belongs to the project, not to one harness, so with several
+  // harnesses installed a bypass change goes on without naming one. Any other
+  // flags change still needs the harness, checked once the change is known.
+  let harnessAmbiguity: unknown = null;
+  let selected: ReturnType<typeof selectedDiagnosticHarness>;
+  try {
+    selected = selectedDiagnosticHarness(
+      projectDir,
+      valueAfter(argv, "--harness"),
+      section,
+    );
+  } catch (error) {
+    const installed = discoverProjectHarnesses(projectDir);
+    if (
+      section !== "flags" || !hasMutationFlags || installed.length < 2 ||
+      valueAfter(argv, "--harness") !== undefined || argv.includes("--default-scope")
+    ) {
+      throw error;
+    }
+    harnessAmbiguity = error;
+    selected = { ...installed[0], harness: modelHarness(installed[0].distribution) };
+  }
   const records = readConfigDiagnosticRecords(selected.root);
   const resolved = resolveAidlcSettings(projectDir);
   if (argv.includes("--show")) {
@@ -3433,8 +3452,11 @@ function prepareChoiceSection(
     emitResult(success(`${section} configuration unchanged`), options);
     return null;
   }
+  const bypassOnly = section === "flags" && bypassOnlyRequest(argv, settings);
+  if (harnessAmbiguity !== null && !bypassOnly) throw harnessAmbiguity;
   let confirm: PendingConfirm | undefined;
-  if (!argv.includes("--dry-run") && !options.yes) {
+  // A bypass or clear-bypass is done as typed: no question and no --yes.
+  if (!argv.includes("--dry-run") && !options.yes && !bypassOnly) {
     if (!configInputIsTty()) {
       emitResult(
         usage(
@@ -3463,6 +3485,7 @@ function prepareChoiceSection(
       confirm,
       section,
       distribution: selected.distribution,
+      ...(harnessAmbiguity !== null ? { anyHarness: true as const } : {}),
       harness: selected.harness,
       harnessDir: selected.harnessDir,
       previous,
@@ -7771,6 +7794,16 @@ function changesOnlyBypasses(mutation: SettingsMutation | undefined): mutation i
   return withoutBypasses(mutation.previous) === withoutBypasses(mutation.next);
 }
 
+// The one test for "record this bypass change and refresh nothing". --download
+// asks for the release this project needs as well, which only the full path
+// fetches.
+function bypassOnlyRequest(
+  argv: readonly string[],
+  mutation: SettingsMutation | undefined,
+): mutation is SettingsMutation {
+  return !argv.includes("--download") && changesOnlyBypasses(mutation);
+}
+
 function recordBypassesOnly(
   projectDir: string,
   argv: readonly string[],
@@ -7831,7 +7864,15 @@ function recordBypassesOnly(
         `flags configuration plan for ${projectDir}: ${
           Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
         }`,
-        { projectDir, distribution: context.distribution, counts, actions, planToken, notes: [], choices },
+        {
+          projectDir,
+          ...(context.anyHarness ? {} : { distribution: context.distribution }),
+          counts,
+          actions,
+          planToken,
+          notes: [],
+          choices,
+        },
       ), options);
       return;
     }
@@ -7848,24 +7889,36 @@ function recordBypassesOnly(
       ), options);
       return;
     }
-    if (context.confirm) {
-      const answer = configPrompt(`${context.confirm.question} [y/N]:`);
-      if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
-        emitResult(usage(context.confirm.cancelled), options);
-        return;
-      }
-    }
     // Run the operations the plan token covers, so a settings file that
     // changed since they were planned is a conflict, not overwritten.
     executePlan(externalSettingsOperation
       ? { schemaVersion: 1, root: machineTransactionRoot(), operations: [externalSettingsOperation] }
       : { schemaVersion: 1, root: projectDir, operations });
     invalidateSettingsCache(mutation.path);
+    // What changed, and the command that undoes it.
+    const before = new Set(mutation.previous?.flags?.bypasses ?? []);
+    const after = new Set(mutation.next?.flags?.bypasses ?? []);
+    const file = mutation.target === "global" ? mutation.path : relative(projectDir, mutation.path);
+    const rerun = (flag: "--bypass" | "--clear-bypass", name: string): string =>
+      `${configInvocationFor(projectDir)} config flags ${flag} ${name} --${mutation.target} --yes${
+        projectTarget(projectDir)
+      }`;
+    const changes = [
+      ...[...after].filter((name) => !before.has(name)).map((name) =>
+        `Recorded ${name} in ${file}. To undo: ${rerun("--clear-bypass", name)}`
+      ),
+      ...[...before].filter((name) => !after.has(name)).map((name) =>
+        `Cleared ${name} from ${file}. To undo: ${rerun("--bypass", name)}`
+      ),
+    ];
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);
       writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", changes.map((line) => `  ${line}`));
     }
-    const outstandingActions = setupWalkChild
+    // With several harnesses and none named, no one harness's setup is the
+    // person's to finish here.
+    const outstandingActions = setupWalkChild || context.anyHarness
       ? []
       : postApplyOutstandingActions(projectDir, context.harnessDir, context.harness);
     const completion = configCompletionMessage(
@@ -7877,11 +7930,12 @@ function recordBypassesOnly(
       options.mode === "human" ? menuText(completion) : completion,
       {
         projectDir,
-        distribution: context.distribution,
+        ...(context.anyHarness ? {} : { distribution: context.distribution }),
         counts,
         actions,
         planToken,
         notes: [],
+        changes,
         outstandingActions,
         choices,
       },
@@ -8042,12 +8096,9 @@ export async function main(
       return;
     }
   }
-  // --download asks for the release this project needs as well, which only the
-  // full path below fetches.
   if (
     choicesContext?.section === "flags" &&
-    !argv.includes("--download") &&
-    changesOnlyBypasses(choicesContext.settings)
+    bypassOnlyRequest(argv, choicesContext.settings)
   ) {
     recordBypassesOnly(
       projectDirFrom(argv),

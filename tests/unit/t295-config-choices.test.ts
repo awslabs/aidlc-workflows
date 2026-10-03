@@ -572,11 +572,12 @@ describe("t295 flags section", () => {
       "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
     );
     const name = "AIDLC_DISABLE_PLAN_APPROVAL_GUARD";
-    const flags = (...args: string[]) => run(
+    const flagsWith = (env: NodeJS.ProcessEnv, ...args: string[]) => run(
       ["config", "flags", "--project-dir", project, "--local", ...args],
       project,
-      runtimeEnv(),
+      runtimeEnv(env),
     );
+    const flags = (...args: string[]) => flagsWith({}, ...args);
     const files = (): Map<string, string> => new Map(
       (readdirSync(project, { recursive: true }) as string[])
         .map((rel) => rel.replaceAll("\\", "/"))
@@ -600,17 +601,28 @@ describe("t295 flags section", () => {
     const recorded = flags("--bypass", name, "--plan-token", planToken, "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain(`configured flags settings for ${project}`);
+    // It says what happened and how to undo it.
+    expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
     expect(changedSince(before)).toEqual([".gitignore", "aidlc.settings.local.json"]);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     // What the plan-approval guard reads on its next check.
     expect(resolveProjectFlag(name, {}, project)).toBe("1");
 
+    // Typed without --yes, it is done as asked, with no question.
     before = files();
-    const cleared = flags("--clear-bypass", name, "--yes");
+    const cleared = flags("--clear-bypass", name);
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain(`Cleared ${name} from aidlc.settings.local.json. To undo: `);
+    expect(cleared.stdout).toContain(`config flags --bypass ${name} --local --yes`);
     expect(changedSince(before)).toEqual(["aidlc.settings.local.json"]);
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
     expect(resolveProjectFlag(name, {}, project)).toBeUndefined();
+    const atTerminal = flagsWith({ AIDLC_TEST_CONFIG_TTY: "1" }, "--bypass", name);
+    expect(atTerminal.status, atTerminal.stdout + atTerminal.stderr).toBe(0);
+    expect(atTerminal.stdout).not.toContain("[y/N]");
+    expect(resolvedFlags(project)?.bypasses).toEqual([name]);
+    expect(flags("--clear-bypass", name).status).toBe(0);
 
     // Any other flag, or --download, still needs the refresh, which waits for
     // the workflow.
@@ -638,6 +650,39 @@ describe("t295 flags section", () => {
       schemaVersion: 1,
       flags: { schemaVersion: 1 },
     });
+  });
+
+  test("with several harnesses a bypass records without naming one, and other flags still ask which", () => {
+    const project = install("kiro");
+    const addClaude = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--mcp",
+      "none",
+      "--yes",
+    ], project);
+    expect(addClaude.status, addClaude.stdout + addClaude.stderr).toBe(0);
+    const name = "AIDLC_DISABLE_SENSORS";
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, "--local", ...args],
+      project,
+      runtimeEnv(),
+    );
+    const recorded = flags("--bypass", name, "--yes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
+    expect(resolvedFlags(project)?.bypasses).toEqual([name]);
+    const other = flags("--hook-debug", "on", "--yes");
+    expect(other.status).toBe(2);
+    expect(other.stdout + other.stderr).toContain(
+      "multiple project harnesses are present; pass one --harness <name>",
+    );
+    expect(resolvedFlags(project)?.hookDebug).toBeUndefined();
   });
 });
 
