@@ -7706,7 +7706,7 @@ function handleIntentCreateStateBuild(
         process.stderr.write(
           `Note: scope "${scope}" usually targets existing code, but the workspace scanned as Greenfield ` +
             `so Reverse Engineering will be skipped. If this project has a codebase the scanner missed, ` +
-            `say so (or run /aidlc --project-type brownfield) and AI-DLC scans again and reverse-engineers it.\n`,
+            `say so (or run /aidlc --project-type brownfield) and I'll scan again and reverse-engineer it.\n`,
         );
       }
     }
@@ -9467,7 +9467,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         ? `Project type is now ${declared}, as you said (it was ${previous}, ${yours ? "as you said earlier" : "from the workspace scan"}).`
         : yours
           ? `Project type is already ${declared}, as you said.`
-          : `Project type is ${declared}, now recorded as yours, so AI-DLC will not ask about it again for this piece of work.`,
+          : `Project type is ${declared}, now recorded as yours, so I won't ask about it again for this piece of work.`,
       scan.projectType === "Brownfield"
         ? `Found: ${scanSummary(scan)}.`
         : declared === "Brownfield" ? NO_CODE_FOUND_YET : "Found: no code in this folder.",
@@ -9475,11 +9475,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     if (reposRecorded) lines.push(`Repos recorded for this piece of work: ${repos.join(", ")}.`);
     const reNow = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
     if (finished) {
-      lines.push("This piece of work is finished, so its plan stays as it is; the next piece of work scans the folder again.");
+      lines.push("This piece of work is finished, so its plan stays as it is; I'll scan the folder again for the next piece of work.");
     } else if (declared === "Brownfield") {
       if (reverseEngineeringOwedBehindCursor(content)) {
         lines.push(
-          "Reverse Engineering runs next to document the existing code; then the workflow returns to " +
+          "Next I'll run Reverse Engineering to document the existing code, then we're back at " +
             `${stageNames([getField(content, "Current Stage") ?? ""])}.`,
         );
         const doneWithoutCode = parseCheckboxes(content)
@@ -9495,13 +9495,13 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           );
         }
       } else if (planChange === "reopened") {
-        lines.push("Reverse Engineering is back on the plan; it runs when the workflow reaches it.");
+        lines.push("Reverse Engineering is back on the plan; it runs when we reach it.");
       } else if (reAction !== "EXECUTE" && !skippedAsNew) {
         lines.push("This plan does not include Reverse Engineering.");
       } else if (started && reNow !== "completed") {
         lines.push(
-          "Construction has started, so the plan stays as it is. To document the existing code now, run Reverse " +
-            `Engineering on its own: ${entrySkillInvocation()} --stage reverse-engineering --single`,
+          "Construction has started, so I'm keeping the plan as it is. To document the existing code now, ask me to run " +
+            `Reverse Engineering on its own (${entrySkillInvocation()} --stage reverse-engineering --single).`,
         );
       }
     } else if (planChange === "skipped") {

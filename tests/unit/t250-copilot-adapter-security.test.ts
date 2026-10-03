@@ -1788,6 +1788,33 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("27j: a project-type change runs click-free only once the person has spoken since the last gate", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, acted: boolean) =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command), { T250_HUMAN_ACTED: acted ? "1" : undefined })).hookSpecificOutput?.permissionDecision;
+      for (const command of [
+        "aidlc engine workspace reclassify --project-type brownfield",
+        "aidlc engine workspace reclassify --project-type greenfield --intent 261003-tooltip --space default",
+        "bun .aidlc/tools/aidlc.ts engine workspace reclassify --project-type brownfield",
+      ]) {
+        // The person answered the question or said it: no second confirmation.
+        expect(decision(command, true), command).toBe("allow");
+        // The agent reclassifying with no word from the person keeps the prompt.
+        expect(decision(command, false), command).toBeUndefined();
+      }
+      // The utility called directly (never what the engine names) always keeps it.
+      const direct = "bun .aidlc/tools/aidlc-utility.ts reclassify --project-type brownfield";
+      expect(decision(direct, true)).toBeUndefined();
+      expect(decision(direct, false)).toBeUndefined();
+      // The read-only scan stays click-free either way.
+      expect(decision("aidlc engine workspace detect --json", false)).toBe("allow");
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("27i: a Construction checkpoints change the person already chose runs click-free; autonomy keeps the prompt", () => {
     const s = scratch();
     try {

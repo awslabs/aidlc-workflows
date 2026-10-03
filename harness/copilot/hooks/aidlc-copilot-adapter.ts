@@ -544,6 +544,10 @@ export async function run(
       case "top-recompose": return !personActedSinceGate();
       case "jump": return verb === "execute";
       case "scope": return verb === "change";
+      // The person's word on new project vs existing code runs click-free once
+      // they have typed since the last gate (they answered the question or
+      // said so); the agent reclassifying on its own keeps the prompt.
+      case "workspace": return verb === "reclassify" && !personActedSinceGate();
       // Switching the active intent or space redirects the work that follows.
       case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
       case "space": return !["", "list", "create"].includes(verb);

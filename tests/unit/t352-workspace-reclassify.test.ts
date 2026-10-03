@@ -226,7 +226,7 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     const stages = (d: Record<string, unknown>) => Number(/\((\d+) of \d+ stages/.exec(String(d.message))?.[1]);
     expect(stages(declared)).toBe(stages(plain) + 1);
     // An empty folder starts as a new project, said while it can be corrected.
-    expect(String(plain.narration)).toContain("starts as a new project without Reverse Engineering");
+    expect(String(plain.narration)).toContain("starting this as a new project without Reverse Engineering");
     expect(String(declared.narration)).not.toContain("new project");
   });
 
@@ -289,7 +289,7 @@ describe("t352 a folder set up as new gains code", () => {
     expect(ask.ask_type).toBe("project-type");
     expect(ask.response_route).toBe("command");
     expect(String(ask.question)).toContain("This folder now has code (TypeScript; React; npm (package.json) in ui-repo)");
-    expect(String(ask.question)).toContain("then you continue at Practices Discovery");
+    expect(String(ask.question)).toContain("then we continue at Practices Discovery");
     const dir = recordDir(proj).split(/[\\/]/).at(-1) ?? "";
     expect(String(ask.existing_code_command))
       .toMatch(new RegExp(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default$`));
@@ -318,7 +318,7 @@ describe("t352 a folder set up as new gains code", () => {
     addRepo(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Project type is Greenfield, now recorded as yours");
+    expect(r.stdout).toContain("Project type is Greenfield, now recorded as yours, so I won't ask");
     expect(field(state(proj), "Project Type Source")).toBe("you");
     expect(next(proj).ask_type).not.toBe("project-type");
     expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
@@ -348,7 +348,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(r.stdout).toContain("Project type is now Brownfield, as you said (it was Greenfield, from the workspace scan).");
     expect(r.stdout).toContain("Found: TypeScript; React; npm (package.json) in ui-repo.");
     expect(r.stdout).toContain("Repos recorded for this piece of work: ui-repo.");
-    expect(r.stdout).toContain("Reverse Engineering runs next to document the existing code; then the workflow returns to Practices Discovery.");
+    expect(r.stdout).toContain("Next I'll run Reverse Engineering to document the existing code, then we're back at Practices Discovery.");
     expect(r.stdout).toContain("To undo, say it is a new project (");
 
     const s = state(proj);
@@ -395,7 +395,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     addRepo(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("then the workflow returns to Requirements Analysis.");
+    expect(r.stdout).toContain("then we're back at Requirements Analysis.");
     expect(r.stdout).toContain("Finished before the code was known: Practices Discovery. Ask to redo one");
   });
 
@@ -406,7 +406,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(NO_CODE_LINE);
-    expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when the workflow reaches it.");
+    expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
     expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(false);
     expect(registryRow(proj)?.repos).toBeUndefined();
   });
@@ -419,7 +419,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     const before = state(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Construction has started, so the plan stays as it is.");
+    expect(r.stdout).toContain("Construction has started, so I'm keeping the plan as it is.");
     expect(r.stdout).toContain("--stage reverse-engineering --single");
     const after = state(proj);
     expect(field(after, "Project Type")).toBe("Brownfield");

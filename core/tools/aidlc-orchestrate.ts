@@ -1761,16 +1761,16 @@ function projectTypeAskDirective(
   const leftOut = (getField(stateContent, "Stages to Skip") ?? "").includes(GREENFIELD_RE_SKIP_LABEL);
   const current = nodeForSlug(currentSlug)?.name ?? currentSlug;
   const yes = leftOut
-    ? `Yes: AI-DLC scans it and documents it with Reverse Engineering${behind ? `, then you continue at ${current}` : " when the workflow reaches it"}.`
-    : "Yes: AI-DLC records it as existing code, so the stages ahead build on it.";
+    ? `Yes: I'll scan it and document it with Reverse Engineering${behind ? `, then we continue at ${current}` : " when we reach that step"}.`
+    : "Yes: I'll treat it as existing code, so the stages ahead build on it.";
   return {
     kind: "ask",
     ask_type: "project-type",
     response_route: "command",
     question:
-      `This folder now has code (${scanSummary(scan)}). This work started as a new project because the ` +
-        `folder had no code then${leftOut ? ", so Reverse Engineering was left out" : ""}. Is it existing code to work on? ` +
-        `${yes} No: it stays a new project and AI-DLC will not ask again.`,
+      `This folder now has code (${scanSummary(scan)}). We started this as a new project because the ` +
+        `folder had no code then${leftOut ? ", so I left out Reverse Engineering" : ""}. Is it existing code to work on? ` +
+        `${yes} No: it stays a new project and I won't ask again.`,
     existing_code_command: reclassifyCommand(projectDir, "brownfield"),
     new_project_command: reclassifyCommand(projectDir, "greenfield"),
   };
@@ -2905,7 +2905,7 @@ function createPrintDirective(
   // new project, which drops Reverse Engineering from the plan.
   if (!flags.projectType && newProjectDropsReverseEngineering(scope, projectDir, flags.planChanges)) {
     directive.narration +=
-      " The folder has no code yet, so this starts as a new project without Reverse Engineering. If the work is on existing code, say so.";
+      " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
   return directive;
 }
