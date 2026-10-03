@@ -197,6 +197,22 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(auditBlockField(approved[0].block, "Person Reply")).toBe("looks fine but rename the handler");
   });
 
+  // From a live Codex CLI run at a stage gate: an approval that also asks for
+  // the next step was refused as "approved and asked for a change", and the
+  // person was asked again. The agent's reading records it; the skip it asks
+  // for is the agent's next command.
+  test("\"approve, and skip the deployment stuff\" records the approval with their words and asks nothing again", () => {
+    const words = "approve, and skip the deployment stuff, there is nothing to deploy for this fix";
+    says(proj, words);
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(JSON.stringify(done)).not.toContain("nothing was recorded");
+    expect(JSON.stringify(done)).not.toContain("asked for a change in the same reply");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe(words);
+  });
+
   test("the receipt carries the person's words, never the agent's text", () => {
     says(proj, "lgtm");
     report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve, the person said so"]);
