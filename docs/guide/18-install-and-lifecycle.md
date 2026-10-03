@@ -911,12 +911,15 @@ replace or remove as a conflict, and is refused while a workflow is active.
 Switching to `kiro-ide` names every `.kiro/hooks/*.json` file AI-DLC does not
 own: Kiro runs those on its v3 engine, which the switch pins in
 `.kiro/settings/cli.json`, and in Kiro IDE. When there is one, the switch applies
-only with your approval of those exact files: answer the prompt in a terminal,
-or run the switch with `--dry-run`, review the files, and apply it with the
-`--plan-token` that dry run prints. A file changed after that review stops the
-switch. It needs that baseline (`.kiro/tools/data/aidlc-manifest.json`); without
-a usable one, move a damaged file aside and refresh the installed row from the
-release it was installed from with `aidlc config --harness <installed>` first. A release passed with `--from`
+only with your approval of that exact set of files: answer the prompt in a
+terminal, or run the switch with `--dry-run`, review the files, and apply it with
+the `--plan-token` that dry run prints. A hook file added, removed, renamed, or
+changed after that review stops the switch, including one that appears just
+before the switch writes. It needs that baseline
+(`.kiro/tools/data/aidlc-manifest.json`). Without one, refresh the installed row
+from the release it was installed from with `aidlc config --harness <installed>`
+first. A damaged one is moved aside to `aidlc-manifest.json.unusable-<time>` in
+the same folder (a dry run moves nothing), after which that refresh is enough. A release passed with `--from`
 and no `--harness` never switches the row. OpenCode and Copilot are not switched
 this way. For an older installed harness whose root block
 is not shared, the `predates shared onboarding` error suggests refreshing it with
