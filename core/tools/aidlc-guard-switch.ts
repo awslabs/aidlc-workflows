@@ -516,6 +516,10 @@ export function isTypedGuardSwitchPrompt(prompt: string): boolean {
   return parseTypedGuardSwitchRequest(prompt).switches.length > 0;
 }
 
+export function isTypedGuardSwitchQuestion(prompt: string): boolean {
+  return parseTypedGuardSwitchRequest(prompt).asked === true;
+}
+
 export function applyTypedGuardSwitchPrompt(
   projectDir: string,
   sessionId: string,
