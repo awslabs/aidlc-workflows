@@ -968,7 +968,8 @@ before the switch writes. A hook file that is a link is bound with the file it
 points at. It needs that baseline
 (`.kiro/tools/data/aidlc-manifest.json`). Without one, refresh the installed row
 from the release it was installed from with `aidlc config --harness <installed>`
-first. A damaged one is moved aside to `aidlc-manifest.json.unusable-<time>` in
+first; the same holds for a baseline recorded before AI-DLC listed only the
+files it ships there, which a refresh brings up to date. A damaged one is moved aside to `aidlc-manifest.json.unusable-<time>` in
 the same folder (a dry run moves nothing, and nothing moves while a workflow is
 active), after which that refresh is enough. A release passed with `--from`
 and no `--harness` never switches the row. OpenCode and Copilot are not switched

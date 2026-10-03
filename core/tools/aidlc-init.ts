@@ -3577,6 +3577,7 @@ function baselineShapeProblem(value: Baseline): string | null {
   if (typeof value.frameworkVersion !== "string") return "frameworkVersion is not a string";
   if (typeof value.distribution !== "string") return "distribution is not a string";
   if (typeof value.harnessDir !== "string") return "harnessDir is not a string";
+  if (value.shippedOnly !== undefined && value.shippedOnly !== true) return "shippedOnly is not true";
   if (value.mcpMode !== "defaults" && value.mcpMode !== "none") return "mcpMode is not defaults or none";
   if (!isStringMap(value.files)) return "files is not a map of hashes";
   if (value.entries !== undefined && !(isRecord(value.entries) && Object.values(value.entries).every(isStringMap))) {
@@ -3640,6 +3641,16 @@ function assertSwitchBaseline(
       (baseline.distribution !== occupant.distribution || baseline.harnessDir !== occupant.harnessDir
         ? `it names ${baseline.distribution} in ${baseline.harnessDir}`
         : null);
+    // A baseline from before it held only shipped paths may also list the
+    // project's own files, so the refresh planner keeps every file it names.
+    // A switch would then leave the installed row's files behind; a refresh of
+    // that row records the shipped-only baseline first.
+    if (problem === null && baseline.shippedOnly !== true) {
+      throw new SwitchRefusal(
+        `${lead} has an ownership baseline recorded before it listed only shipped files (${rel}); ${refresh}`,
+        { kind: "refresh", harness: occupant.distribution },
+      );
+    }
   } catch (error) {
     if (error instanceof SwitchRefusal) throw error;
     problem = (error instanceof Error ? error.message : String(error)).replace(/^cannot refresh from [^:]+: /, "");

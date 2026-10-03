@@ -878,6 +878,8 @@ describe("t243 project initialization", () => {
     writeFileSync(memoryNote, `${readFileSync(memoryNote, "utf-8")}\n- Project-owned note.\n`);
     const ownSteering = join(project, ".kiro", "steering", "team-notes.md");
     writeFileSync(ownSteering, "# Team notes\n");
+    const ownAgent = join(project, ".kiro", "agents", "my-agent.json");
+    writeFileSync(ownAgent, "{\"name\":\"my-agent\"}\n");
     const ownHook = join(project, ".kiro", "hooks", "my-hook.json");
     writeFileSync(ownHook, "{}\n");
     const stamp = () =>
@@ -925,6 +927,7 @@ describe("t243 project initialization", () => {
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.kiro.hook"))).toBe(false);
     expect(readFileSync(memoryNote, "utf-8")).toContain("- Project-owned note.");
     expect(readFileSync(ownSteering, "utf-8")).toBe("# Team notes\n");
+    expect(readFileSync(ownAgent, "utf-8")).toBe("{\"name\":\"my-agent\"}\n");
     expect(readFileSync(ownHook, "utf-8")).toBe("{}\n");
 
     const back = run(INIT, [
@@ -940,6 +943,7 @@ describe("t243 project initialization", () => {
     expect(existsSync(join(project, ".kiro", "hooks", "aidlc-record-human-turn.json"))).toBe(false);
     expect(readFileSync(memoryNote, "utf-8")).toContain("- Project-owned note.");
     expect(readFileSync(ownSteering, "utf-8")).toBe("# Team notes\n");
+    expect(readFileSync(ownAgent, "utf-8")).toBe("{\"name\":\"my-agent\"}\n");
     expect(readFileSync(ownHook, "utf-8")).toBe("{}\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1247,6 +1251,38 @@ describe("t243 project initialization", () => {
     expect(told.stdout).toMatch(
       /had an unusable ownership baseline \(\.kiro\/tools\/data\/aidlc-manifest\.json: JSON Parse error[^)]*\); moved it to \.kiro\/tools\/data\/aidlc-manifest\.json\.unusable-[0-9TZ-]+; refresh it from the release it was installed from first/,
     );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch asks for a refresh when the baseline predates shipped-only recording", () => {
+    const project = temp("aidlc-t243-kiro-switch-legacy-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const manifest = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+    const legacy = JSON.parse(readFileSync(manifest, "utf-8"));
+    delete legacy.shippedOnly;
+    writeFileSync(manifest, `${JSON.stringify(legacy, null, 2)}\n`);
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ];
+    const elsewhere = temp("aidlc-t243-kiro-switch-legacy-elsewhere-");
+    const before = transactionSourceHash(project);
+    const refused = run(INIT, switchArgs, elsewhere);
+    expect(refused.status).toBe(4);
+    expect(refused.stdout).toContain(
+      "installed kiro has an ownership baseline recorded before it listed only shipped files (.kiro/tools/data/aidlc-manifest.json); refresh it from the release it was installed from first",
+    );
+    expect(transactionSourceHash(project)).toBe(before);
+    const printed = refused.stdout.trim().split("\n").at(-1)?.replace(/^fix: /, "") ?? "";
+    const recorded = runPrinted(printed, elsewhere);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(manifest, "utf-8")).shippedOnly).toBe(true);
+    const switched = run(INIT, switchArgs, elsewhere);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc-developer-agent.json"))).toBe(false);
+    expect(existsSync(join(project, ".kiro", "agents", "aidlc.json"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch does not carry the trust acknowledgement to the other row", () => {
