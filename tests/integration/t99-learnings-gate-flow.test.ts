@@ -582,29 +582,70 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(c.default_scope).toBe("project");
   }, TIMEOUT);
 
-  test("Glue: a selection keyed by surface's own `id` persists", () => {
-    const pd = mkproj();
-    seedMemoryMixed(pd);
-    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = join(pd, "sel-id-alias.json");
+  function keyedSelection(pd: string, name: string, keys: Record<string, string>, text: string): string {
+    const sel = join(pd, `${name}.json`);
     writeJson(sel, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
       selections: [
         {
-          id: candidate.id,
+          ...keys,
           type: "learning",
           scope: "project",
           heading: "Corrections",
-          text: candidate.summary,
+          text,
           source: "orchestrator",
         },
       ],
     });
+    return sel;
+  }
+
+  test("Glue: a selection keyed by surface's own `id` persists", () => {
+    const pd = mkproj();
+    seedMemoryMixed(pd);
+    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
+    const sel = keyedSelection(pd, "sel-id-alias", { id: candidate.id }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
     expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
+    expect(readAudit(pd)).toContain(`**Candidate-ID**: ${candidate.id}`);
+  }, TIMEOUT);
+
+  test("Glue: a selection carrying `candidate_id` and `id` with the same value persists", () => {
+    const pd = mkproj();
+    seedMemoryMixed(pd);
+    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
+    const sel = keyedSelection(pd, "sel-both-same", { candidate_id: candidate.id, id: candidate.id }, candidate.summary);
+    const r = persist(pd, sel);
+    expect(r.status, r.stderr).toBe(0);
+    expect(ruleLearnedRows(pd)).toBe(1);
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
+  }, TIMEOUT);
+
+  test("Glue: a selection whose `candidate_id` and `id` differ fails, names both, and writes nothing", () => {
+    const pd = mkproj();
+    seedMemoryMixed(pd);
+    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
+    const sel = keyedSelection(pd, "sel-both-differ", { candidate_id: candidate.id, id: "c99" }, candidate.summary);
+    const r = persist(pd, sel);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`candidate_id "${candidate.id}" and id "c99"`);
+    expect(ruleLearnedRows(pd)).toBe(0);
+    expect(countLines(projectPractices(pd), candidate.summary)).toBe(0);
+  }, TIMEOUT);
+
+  test("Glue: a selection carrying neither `candidate_id` nor `id` fails and writes nothing", () => {
+    const pd = mkproj();
+    seedMemoryMixed(pd);
+    const candidate = JSON.parse(surface(pd).stdout).candidates[0];
+    const sel = keyedSelection(pd, "sel-no-key", {}, candidate.summary);
+    const r = persist(pd, sel);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("selection missing candidate_id");
+    expect(ruleLearnedRows(pd)).toBe(0);
+    expect(countLines(projectPractices(pd), candidate.summary)).toBe(0);
   }, TIMEOUT);
 
 });

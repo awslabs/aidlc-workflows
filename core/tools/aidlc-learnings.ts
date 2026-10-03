@@ -482,7 +482,15 @@ function narrowSelection(raw: unknown): Selection {
   if (!isRecord(raw)) {
     fail("selections-json malformed: each selection must be an object", 1);
   }
-  const candidateId = str(raw.candidate_id) ?? str(raw.id);
+  const namedCandidateId = str(raw.candidate_id);
+  const aliasId = str(raw.id);
+  if (namedCandidateId !== undefined && aliasId !== undefined && namedCandidateId !== aliasId) {
+    fail(
+      `selections-json malformed: selection has candidate_id ${JSON.stringify(namedCandidateId)} and id ${JSON.stringify(aliasId)}; id is an alias for candidate_id, so give one key or the same value`,
+      1,
+    );
+  }
+  const candidateId = namedCandidateId ?? aliasId;
   if (candidateId === undefined) {
     fail("selections-json malformed: selection missing candidate_id (surface emits it as `id`)", 1);
   }
