@@ -609,6 +609,140 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(next.ask_type).toBe("new-work-routing");
   });
 
+  // Settings typed with a new description beside other work go with the work
+  // the person picks on the routing question, and the description is kept.
+  const runEmitted = (command: string): Record<string, unknown> =>
+    directiveOf(runNext(proj, command.slice(command.indexOf(" next ") + 6).split(" ")).out);
+
+  test("a setting typed with a new description beside active work asks first and goes with the answer", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const ask = directiveOf(runNext(proj, [
+      "--depth", "minimal", "--learnings", "off", "Fix the login crash when the session expires",
+    ]).out);
+    // Not "config set": the description is asked about, never dropped.
+    expect(ask.ask_type).toBe("new-work-routing");
+    expect(ask.new_work_description).toBe("Fix the login crash when the session expires");
+    const commands = [
+      String(ask.new_intent_command),
+      String(ask.continue_command),
+      String(ask.compose_command),
+      ...(ask.scope_commands as Array<{ command: string }>).map((entry) => entry.command),
+    ];
+    for (const command of commands) expect(command).toContain("--depth minimal --learnings off");
+    const created = runEmitted(String(ask.new_intent_command));
+    expect(created.kind).toBe("print");
+    expect(String(created.message)).toContain("intent create --scope bugfix");
+    expect(String(created.message)).toContain("--depth minimal --learnings off");
+    expect(String(created.message)).toContain("to start the new intent");
+    const kept = runEmitted(String(ask.continue_command));
+    expect(kept.kind).toBe("print");
+    expect(String(kept.message)).toContain("config set depth minimal --learnings off` to update the configuration");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    // A setting typed alone is still for the active work.
+    const alone = directiveOf(runNext(proj, ["--learnings", "off"]).out);
+    expect(String(alone.message)).toContain("config set learnings off` to update the configuration");
+  });
+
+  test("the reshape answer applies the typed settings to the active work first, then composes", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, [
+      "--review", "none", "--learnings", "off", "Drop the documentation stages from the plan",
+    ]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    const compose = String(ask.compose_command);
+    expect(compose).toContain("--learnings off --review none");
+    const first = runEmitted(compose);
+    expect(first.kind).toBe("print");
+    const message = String(first.message);
+    expect(message).toContain("config set review none --learnings off` to apply the settings typed with this request to the work being reshaped");
+    const then = /then run `([^`]+)` and follow what it returns/.exec(message)?.[1];
+    expect(then, message).toBeDefined();
+    expect(then).not.toContain("--learnings");
+    const dispatch = runEmitted(then as string);
+    expect(String(dispatch.message)).toContain("mode in-flight");
+  });
+
+  test("a review level and a raised Guard Policy typed with new work apply to it once it exists", () => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const ask = directiveOf(runNext(proj, [
+      "--review", "none", "--guard-policy", "strict", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    expect(String(ask.new_intent_command)).toContain("--review none --guard-policy strict");
+    expect(String(ask.continue_command)).toContain("--review none --guard-policy strict");
+    const created = runEmitted(String(ask.new_intent_command));
+    const message = String(created.message);
+    const create = /Run `([^`]+)` to start the new intent/.exec(message)?.[1] ?? "";
+    expect(create).toContain("intent create --scope bugfix");
+    expect(create).not.toContain("--review");
+    expect(create).not.toContain("--guard-policy");
+    expect(message).toContain(
+      "config set review none --guard-policy strict` so it starts with the settings typed with the request",
+    );
+    // Run both steps: the setting lands on the new work, the active work keeps its own.
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const requestId = /--request (\S+)/.exec(create)?.[1] as string;
+    expect(runUtility(proj, ["intent-create", "--scope", "bugfix", "--request", requestId, "--label", "login-crash"]).rc).toBe(0);
+    const applied = runUtility(proj, ["config-change", "--review", "none", "--guard-policy", "strict"]);
+    expect(applied.rc, applied.out).toBe(0);
+    const intents = intentsDirOf(proj);
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(record).toContain("login-crash");
+    const state = readFileSync(join(intents, record, "aidlc-state.md"), "utf-8");
+    expect(state).toMatch(/- \*\*Review Override\*\*: none/);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test.each([
+    ["is on for the active work", "- **Guard Policy**: relaxed (set by you)",
+      "Guard Policy relaxed is on for \"Test widget feature for e-commerce platform\" (you typed it with the request); " +
+        "the new work starts at the default. Say 'relax the guard policy here too' to change it."],
+    ["did not land", "- **Change Control**: strict (from scope feature)",
+      "The new work starts at the default Guard Policy, not the relaxed you typed with the request. " +
+        "Say 'relax the guard policy' to change it."],
+  ])("a lowered Guard Policy typed with new work is never tried on it: the person hears where it %s", (_label, line, note) => {
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8").replace("- **Change Control**: strict (from scope feature)", line));
+    const ask = directiveOf(runNext(proj, [
+      "--guard-policy", "relaxed", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    expect(String(ask.new_intent_command)).toContain("--guard-policy relaxed");
+    // The person's words already set it on the active work.
+    expect(String(ask.continue_command)).not.toContain("--guard-policy");
+    expect(String(ask.compose_command)).not.toContain("--guard-policy");
+    const created = runEmitted(String(ask.new_intent_command));
+    expect(String(created.message)).not.toContain("--guard-policy");
+    expect(String(created.message)).not.toContain("config set");
+    expect(String(created.narration)).toContain(note);
+  });
+
+  test("in an unselected workspace the typed settings ride the new-work and reshape answers", () => {
+    seedTwoRecordsNoneSelected();
+    const ask = directiveOf(runNext(proj, [
+      "--scope", "bugfix", "--learnings", "off", "Fix the login crash when the session expires",
+    ]).out);
+    expect(ask.ask_type).toBe("new-work-routing");
+    expect(String(ask.new_intent_command)).toContain("--learnings off");
+    const reshape = (ask.reshape_commands as Array<{ selector: string; command: string }>)[0];
+    expect(reshape.command).toContain("--learnings off");
+    const switched = runEmitted(reshape.command);
+    expect(String(switched.message)).toContain(`To reshape ${reshape.selector}, run`);
+    const then = /then run `([^`]+)` and follow what it returns/.exec(String(switched.message))?.[1];
+    expect(then).toContain("next compose --request");
+    expect(then).toContain("--learnings off");
+  });
+
   // Work in progress that is archived or parked never blocks the new work the
   // person asked for, compose answer included.
   test.each([

@@ -1591,6 +1591,58 @@ function carriedCreationFlags(flags: ParsedFlags): string {
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
+// Every setting typed with a command, in the config setter's words ("depth
+// minimal", "review none"): the one list a config change applies.
+function typedSettingModifiers(flags: ParsedFlags): string[] {
+  const modifiers: string[] = [];
+  if (flags.depth) modifiers.push(`depth ${flags.depth}`);
+  if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
+  if (flags.review) modifiers.push(`review ${flags.review}`);
+  if (flags.changeControl) modifiers.push(`guard-policy ${flags.changeControl}`);
+  for (const key of CEREMONY_KEYS) {
+    if (flags.ceremony?.[key]) {
+      modifiers.push(`${CEREMONY_FLAGS[key].slice(2)} ${flags.ceremony[key]}`);
+    }
+  }
+  return modifiers;
+}
+
+function configSetCommand(modifiers: string[]): string {
+  return [
+    aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
+    ...modifiers.slice(1).map((modifier) => `--${modifier}`),
+  ].join(" ");
+}
+
+// Settings typed with a description while other work exists ride on each
+// answer to the routing question, so they land on the work the person picks.
+// New work also takes the review level and Guard Policy, which apply to it
+// once it exists. A lowered Guard Policy rides only to the new-work answers,
+// which never try it there: the person's own words already set it on the
+// active work as they sent the message, and the creation says where it landed.
+interface RoutingCarried {
+  /** What a plan offer carries: the composer plans new work with these. */
+  creation: string;
+  newWork: string;
+  existingWork: string;
+}
+
+function guardPolicyLowered(flags: ParsedFlags): boolean {
+  return flags.changeControl !== undefined && flags.changeControl !== "strict";
+}
+
+function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
+  const extra: string[] = [];
+  if (flags.review) extra.push(`--review ${flags.review}`);
+  if (flags.changeControl && !guardPolicyLowered(flags)) extra.push(`--guard-policy ${flags.changeControl}`);
+  const existingWork = `${carriedCreationFlags(flags)}${extra.length > 0 ? ` ${extra.join(" ")}` : ""}`;
+  return {
+    creation: carriedCreationFlags(flags),
+    newWork: `${existingWork}${guardPolicyLowered(flags) ? ` --guard-policy ${flags.changeControl}` : ""}`,
+    existingWork,
+  };
+}
+
 function scopeConfirmAskDirective(
   question: string,
   proposedScope: string,
@@ -1872,6 +1924,7 @@ function newWorkRoutingAskDirective(
   askedAbout: { space: string; targets: QuestionTarget[] },
   availableIntents?: string[],
   stateSha256?: string,
+  carried: RoutingCarried = { creation: "", newWork: "", existingWork: "" },
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
@@ -1889,9 +1942,12 @@ function newWorkRoutingAskDirective(
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
     new_intent_command:
-      `${tool} next --new-intent --scope ${shellArg(proposedScope)} --request ${stored.id}`,
-    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id),
-    compose_command: `${tool} next compose --request ${stored.id}`,
+      `${tool} next --new-intent --scope ${shellArg(proposedScope)} --request ${stored.id}${carried.newWork}`,
+    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork),
+    // Beside active work this reshapes it; with records to pick it composes
+    // the new work, like a plan offer's compose answer.
+    compose_command:
+      `${tool} next compose --request ${stored.id}${availableIntents ? carried.creation : carried.existingWork}`,
     // With a record to pick, the human continues it through its select command
     // and reshapes it through its reshape command; otherwise the question named
     // the active workflow.
@@ -1901,10 +1957,10 @@ function newWorkRoutingAskDirective(
         select_commands: selectCommands(availableIntents),
         reshape_commands: availableIntents.map((selector) => ({
           selector,
-          command: `${tool} next compose --request ${stored.id} --record ${shellArg(selector)}`,
+          command: `${tool} next compose --request ${stored.id} --record ${shellArg(selector)}${carried.existingWork}`,
         })),
       }
-      : { continue_command: `${tool} next --continue --request ${stored.id}` }),
+      : { continue_command: `${tool} next --continue --request ${stored.id}${carried.existingWork}` }),
   };
 }
 
@@ -3001,6 +3057,7 @@ function freshWorkRoute(flags: ParsedFlags, description: string, pd: string): Di
     const pick = intentPickPromptIfRecordsExist(pd, {
       description,
       proposedScope: inferred.scope,
+      carried: carriedRoutingFlags(flags),
     });
     if (pick) return pick;
   }
@@ -3022,6 +3079,10 @@ function createPrintDirective(
   flags: ParsedFlags,
   projectDir: string,
   description?: string,
+  // New work picked on a routing question takes its review level and Guard
+  // Policy through the config setter once it exists, and the person hears
+  // where a lowered Guard Policy landed.
+  afterCreation?: { settings: string[]; note: string },
 ): PrintDirective {
   const cmd = [`--scope ${shellArg(scope)}`];
   let labelHint = "";
@@ -3043,8 +3104,8 @@ function createPrintDirective(
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.projectType) cmd.push(`--project-type ${flags.projectType}`);
-  if (flags.review) cmd.push(`--review ${flags.review}`);
-  if (flags.changeControl) cmd.push(`--guard-policy ${flags.changeControl}`);
+  if (flags.review && !afterCreation) cmd.push(`--review ${flags.review}`);
+  if (flags.changeControl && !afterCreation) cmd.push(`--guard-policy ${flags.changeControl}`);
   for (const key of CEREMONY_KEYS) {
     if (flags.ceremony?.[key]) cmd.push(`${CEREMONY_FLAGS[key]} ${flags.ceremony[key]}`);
   }
@@ -3058,15 +3119,18 @@ function createPrintDirective(
   );
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
+  const settingsStep = afterCreation && afterCreation.settings.length > 0
+    ? `, then run \`${configSetCommand(afterCreation.settings)}\` so it starts with the settings typed with the request`
+    : "";
   const directive = flags.newIntent
     ? printDirective(
-      `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
+      `${runCmd} to start the new intent${cost}${settingsStep}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
         `This is a NEW, unrelated intent, and the current session still carries the previous intent's context. ` +
         `Tell the user to start a fresh session using this harness's reset or restart flow, then invoke its AI-DLC entry skill to begin the new intent with a clean slate. ` +
         `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
       )
     : printDirective(
-      `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
+      `${runCmd} to start the workflow${cost}${settingsStep}, then re-run \`next\` to continue.${labelHint}`,
     );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -3080,6 +3144,7 @@ function createPrintDirective(
     directive.narration +=
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
+  if (afterCreation?.note) directive.narration += ` ${afterCreation.note}`;
   return directive;
 }
 
@@ -3091,6 +3156,42 @@ function newProjectDropsReverseEngineering(
   const planned = planChanges ? planWithChanges(scope, planChanges) : null;
   const stages = planned && planned.errors.length === 0 ? planned.stages : loadScopeMapping()[scope]?.stages;
   return stages?.["reverse-engineering"] === "EXECUTE" && detectedProjectType(projectDir) === "greenfield";
+}
+
+// How a routing question names the work already in progress.
+function activeWorkLabel(stateContent: string): string {
+  return (getField(stateContent, "Project") ?? "").trim() ||
+    (getField(stateContent, "Current Stage") ?? "").trim() ||
+    "the active workflow";
+}
+
+// New work picked on a routing question: its review level and a raised Guard
+// Policy apply once it exists. A lowered Guard Policy typed with the request
+// is never tried on it; the person hears where it landed instead.
+function routedNewWorkSettings(
+  flags: ParsedFlags,
+  projectDir: string,
+  stateContent: string | null,
+): { settings: string[]; note: string } {
+  const settings: string[] = [];
+  if (flags.review) settings.push(`review ${flags.review}`);
+  if (flags.changeControl && !guardPolicyLowered(flags)) settings.push(`guard-policy ${flags.changeControl}`);
+  if (!guardPolicyLowered(flags)) return { settings, note: "" };
+  const value = flags.changeControl as string;
+  const words = value === "off" ? "turn the guard policy off" : "relax the guard policy";
+  let activeValue: string | null = null;
+  if (stateContent !== null) {
+    try {
+      activeValue = resolveGuardPolicy(projectDir, stateContent, { tolerateInvalidState: true }).value;
+    } catch {
+      activeValue = null;
+    }
+  }
+  const note = stateContent !== null && activeValue === value
+    ? `Guard Policy ${value} is on for "${activeWorkLabel(stateContent)}" (you typed it with the request); ` +
+      `the new work starts at the default. Say '${words} here too' to change it.`
+    : `The new work starts at the default Guard Policy, not the ${value} you typed with the request. Say '${words}' to change it.`;
+  return { settings, note };
 }
 
 // The composer-dispatch print for a compose request (the adaptive-workflows
@@ -3234,7 +3335,7 @@ function composeDispatchDirective(
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string },
+  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried },
 ): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
@@ -3357,6 +3458,8 @@ function intentPickPromptIfRecordsExist(
         targets: selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
       },
       selectors,
+      undefined,
+      pendingWork.carried,
     );
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
@@ -5522,6 +5625,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
   }
 
+  // A routing question's compose answer carries the settings typed with its
+  // request: the compose branch applies them to the work it reshapes first.
+  const routingCompose = flags.compose === true && question?.origin === "routing";
   // Review changes mutate workflow configuration. Compound modes that return
   // before the config branch cannot silently discard the flag; require callers
   // to apply the override first, then invoke the other mode separately.
@@ -5532,7 +5638,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.config ||
       flags.workspaceCommand ||
       flags.orchestratorVerb ||
-      flags.compose ||
+      (flags.compose && !routingCompose) ||
       flags.newScope ||
       flags.report ||
       flags.single ||
@@ -5551,7 +5657,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const offerCompose = flags.compose === true && question?.origin === "front";
   if (
     flags.ceremony &&
-    (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose) ||
+    (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose && !routingCompose) ||
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
     emit(errorDirective(
@@ -5876,7 +5982,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (!(selection.space === question.askedAbout.space && selection.intent === flags.record)) {
       emit(printDirective(
         `To reshape ${flags.record}, run \`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
+          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
       ));
       return;
     }
@@ -5904,6 +6010,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         const again = intentPickPromptIfRecordsExist(pd, {
           description: question.text,
           proposedScope: question.proposedScope,
+          carried: carriedRoutingFlags(flags),
         });
         if (again) {
           emit(again);
@@ -6183,6 +6290,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // when other work became active meanwhile; only a routing question's
     // reshape (or a plain `next compose`) re-shapes the running workflow.
     const inFlight = stateContent !== null && question?.origin !== "front";
+    // Settings typed with the request land on the work being reshaped first,
+    // through the config setter, then the reshape is composed.
+    const reshapeSettings = routingCompose && inFlight ? typedSettingModifiers(flags) : [];
+    if (reshapeSettings.length > 0 && question) {
+      emit(printDirective(
+        `Run \`${configSetCommand(reshapeSettings)}\` to apply the settings typed with this request to the work being reshaped, ` +
+          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
+      ));
+      return;
+    }
     // Only a front composition continues into creation, which needs the
     // request by id; an in-flight reshape carries its text in the dispatch.
     if (flags.intent && !flags.request && !inFlight) {
@@ -6233,7 +6350,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // Use the EXPLICIT --scope, not the precedence-ladder `scope`, which lets
     // the ACTIVE intent's state scope win: the offer confirmed a scope for the
     // NEW work, independent of what's in flight. Branch 3b already validated it.
-    emit(createPrintDirective(flags.scope, flags, pd, description));
+    emit(createPrintDirective(
+      flags.scope,
+      flags,
+      pd,
+      description,
+      question?.origin === "routing" ? routedNewWorkSettings(flags, pd, stateContent) : undefined,
+    ));
     return;
   }
 
@@ -6319,16 +6442,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // the person named the stages, so no approval re-asks it. Any scope or
     // setting change in the same command runs first.
     const planChanges = flags.planChanges;
-    const modifiers: string[] = [];
-    if (flags.depth) modifiers.push(`depth ${flags.depth}`);
-    if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
-    if (flags.review) modifiers.push(`review ${flags.review}`);
-    if (flags.changeControl) modifiers.push(`guard-policy ${flags.changeControl}`);
-    for (const key of CEREMONY_KEYS) {
-      if (flags.ceremony?.[key]) {
-        modifiers.push(`${CEREMONY_FLAGS[key].slice(2)} ${flags.ceremony[key]}`);
-      }
-    }
+    const modifiers = typedSettingModifiers(flags);
     // A scope-change requires a VALID --scope that DIFFERS from the active
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
@@ -6347,13 +6461,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // Settings typed with a new description are for the work it turns out to
+    // be: Branch 9c asks, and its answers carry them there. Changing the active
+    // work here would drop the description.
+    const describedWork = Boolean(flags.intent) && !planChanges && !flags.positionalScope && !flags.resume;
     // Every setting belongs to one atomic config-change, including a
     // same-as-current --scope: no sibling modifier may be silently discarded.
-    if (modifiers.length > 0) {
-      const command = [aidlcDispatcherInvocation(`config set ${modifiers[0]}`)];
-      for (let i = 1; i < modifiers.length; i++) command.push(`--${modifiers[i]}`);
-      emit(planChanges ? planChangeDirective(planChanges, command.join(" "), plan) : printDirective(
-        `Run \`${command.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
+    if (modifiers.length > 0 && !describedWork) {
+      const command = configSetCommand(modifiers);
+      emit(planChanges ? planChangeDirective(planChanges, command, plan) : printDirective(
+        `Run \`${command}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -6399,6 +6516,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         ? {
             description: flags.intent,
             proposedScope: flags.positionalScope,
+            carried: carriedRoutingFlags(flags),
           }
         : undefined,
     );
@@ -6465,6 +6583,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
           ? {
               description: flags.intent,
               proposedScope: scope,
+              carried: carriedRoutingFlags(flags),
             }
           : undefined,
       );
@@ -6553,10 +6672,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     !flags.positionalScope &&
     !flags.resume
   ) {
-    const activeLabel =
-      (getField(stateContent, "Project") ?? "").trim() ||
-      (getField(stateContent, "Current Stage") ?? "").trim() ||
-      "the active workflow";
+    const activeLabel = activeWorkLabel(stateContent);
     // Name the scope a confirmed new intent would get (the same pure
     // inference Branch 8 uses) so the single ask carries everything the offer
     // needs: active work, the new text, the proposed scope, and a "Yes"-led
@@ -6584,6 +6700,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       { space: selection.space, targets: routingTargets() },
       undefined,
       stateDigest(stateContent),
+      carriedRoutingFlags(flags),
     ));
     return;
   }

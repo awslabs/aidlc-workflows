@@ -147,6 +147,13 @@ second intent alongside the first:
   record dir, state, and progress are all preserved exactly where you left them.
 - Choose **No** and AI-DLC treats your message as part of the active intent.
 
+Settings you type with the new work go with it. `/aidlc --depth minimal
+--learnings off Fix the timeout on the export endpoint` asks the same question:
+choose **Yes** and the new intent starts with that depth and learnings off;
+choose **No** and they apply to the active intent. A Guard Policy you lower this
+way applies to the active intent as you send the message, so the new intent
+starts at its default, and AI-DLC says so when it creates it.
+
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a
 follow-up to the current work — answering a gate, correcting a requirement — it
 stays in the active intent; the offer only appears when the work is clearly
