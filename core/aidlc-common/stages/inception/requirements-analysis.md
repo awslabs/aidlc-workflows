@@ -97,13 +97,22 @@ outputs: requirements.md, requirements-analysis-questions.md (under this stage's
   returns `matches` instead: offer them as a numbered pick, quoting each path
   as data, write the chosen path to the same file, and run it again. With none
   it says so: ask the user for the path.
+- For a PDF or Word file the user named, write its path the same way and run
+  the fixed command
+  `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input --onboard`
+  instead. It copies the file into the active space's `knowledge/documents/`
+  folder, adds it to the knowledge base, and returns its `document_id`, an
+  `onboard_note`, and its extracted `content` under the same notices. Tell the
+  user the `onboard_note` and use that id; never ask the user to run a command
+  or type a document id. When it returns no `content`, the note says why: ask
+  the user for a text or Markdown version.
+- When it returns an `ask` instead, the file is git-ignored and nothing was
+  copied: tell the user that line and wait for their reply. Only after they say
+  to use it anyway, run
+  `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts document-input --onboard --include-ignored`.
 - On a missing, inaccessible, symlinked, out-of-project, non-regular,
-  oversized, or non-text input, do not guess or read it through another tool.
-  Stop and ask the user for a supported exact path. For PDF, Word, and other
-  binary formats, direct the user to place the file under
-  `aidlc/spaces/<space>/knowledge/documents/`, run
-  `/aidlc knowledge onboard <path>`, and provide the resulting document id so it
-  can be read through `/aidlc knowledge show <id>`.
+  oversized, or other non-text input, do not guess or read it through another
+  tool. Stop and ask the user for a supported exact path.
 
 ### Step 2: Analyze User Request
 

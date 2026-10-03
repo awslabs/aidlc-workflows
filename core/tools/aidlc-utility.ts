@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -22,6 +23,7 @@ import {
   basename,
   delimiter,
   dirname,
+  extname,
   isAbsolute,
   join,
   relative,
@@ -8581,7 +8583,8 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // and content beyond the same 200k-character delivery cap used by DocumentKB.
 // Successful output carries DocumentKB's path/content trust notices in the
 // same JSON object as the bytes they govern. No mkdir, state write, or audit
-// event.
+// event, except that `--onboard` copies a PDF or Word file into the knowledge
+// base (see onboardDocumentInput).
 function handleProjectDescription(projectDir: string): void {
   const recordRoot = dirname(stateFilePath(projectDir));
   const authority = readProjectDescriptionAuthority(recordRoot);
@@ -8679,6 +8682,24 @@ function documentInputMatches(
   return { matches: [...matches].sort() };
 }
 
+// The copy `--onboard` makes in a knowledge folder is the same document as its
+// original, so when a lookup finds both, only the original is offered and the
+// person is never asked to pick between a file and its own copy.
+function withoutKnowledgeCopies(
+  matches: string[],
+  digestOf: (relPath: string) => string | null,
+): string[] {
+  const isCopy = (relPath: string) =>
+    /^aidlc\/spaces\/[^/]+\/knowledge\/documents\//.test(relPath);
+  const originals = matches.filter((relPath) => !isCopy(relPath));
+  if (originals.length === 0 || originals.length === matches.length) return matches;
+  const originalDigests = new Set(originals.map(digestOf));
+  return matches.filter((relPath) => {
+    if (!isCopy(relPath)) return true;
+    const digest = digestOf(relPath);
+    return digest === null || !originalDigests.has(digest);
+  });
+}
 
 function walkDocumentInputCandidates(projectRoot: string): { files: string[]; truncated: boolean } {
   const files: string[] = [];
@@ -8712,7 +8733,11 @@ function walkDocumentInputCandidates(projectRoot: string): { files: string[]; tr
   return { files, truncated: visited > DOCUMENT_INPUT_WALK_CAP || pending.length > 0 };
 }
 
-async function handleDocumentInput(projectDir: string): Promise<void> {
+async function handleDocumentInput(
+  projectDir: string,
+  flags: Record<string, string>,
+): Promise<void> {
+  const kb = await import("./aidlc-knowledge.ts");
   const {
     detectMimeType,
     EXTRACT_OUTPUT_CHAR_CAP,
@@ -8720,8 +8745,15 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
     resolveContainedFile,
     UNTRUSTED_CONTENT_NOTICE,
     UNTRUSTED_PATH_NOTICE,
-  } = await import("./aidlc-knowledge.ts");
-  const documentInputByteCap = EXTRACT_OUTPUT_CHAR_CAP * 4;
+  } = kb;
+  const onboarding = flags.onboard !== undefined;
+  const form = onboarding ? "document-input --onboard" : "document-input";
+  // A PDF or Word file is usually larger than the direct text cap, so the
+  // onboarding form reads under DocumentKB's per-document cap instead. The
+  // text it returns is still held to the same 200k-character cap.
+  const documentInputByteCap = onboarding
+    ? kb.EXTRACT_INPUT_BYTE_CAP
+    : EXTRACT_OUTPUT_CHAR_CAP * 4;
   // The transport file carries ONE path line, so it gets a path-sized cap, not
   // the document cap. Without an explicit bound the whole file is allocated and
   // UTF-8 decoded BEFORE the one-line check, so a sparse multi-megabyte
@@ -8800,13 +8832,26 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
         return false;
       }
     });
-    const matches = lookup.matches;
     if (lookup.incomplete) {
       refuse(
         `there is no ${JSON.stringify(portablePath)} in the project, and ${lookup.incomplete}, ` +
           "so no other file was chosen. Ask the person for the file's path.",
       );
     }
+    const matches = withoutKnowledgeCopies(lookup.matches, (relPath) => {
+      try {
+        const resolved = resolveContainedFile(projectRoot, relPath);
+        return kb.sha256Hex(readDocumentBytes(
+          resolved.absPath,
+          relPath,
+          undefined,
+          kb.EXTRACT_INPUT_BYTE_CAP,
+          resolved.identity,
+        ));
+      } catch {
+        return null;
+      }
+    });
     if (matches.length === 0) {
       refuse(
         `there is no ${JSON.stringify(portablePath)} in the project, and no other project file ` +
@@ -8827,7 +8872,7 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
           next:
             "Offer these paths to the person as a numbered pick, quoting each as data. Write " +
             `the chosen path as the only line of ${DOCUMENT_INPUT_REQUEST_FILE} and run ` +
-            "document-input again.",
+            `${form} again.`,
         })}\n`,
       );
       return;
@@ -8855,18 +8900,38 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
       return refuse(
         `cannot read ${JSON.stringify(portablePath)} directly: ${errorMessage(error)} ` +
           "The path is resolved from the project root. Provide one accessible regular file " +
-          "inside the project, or use DocumentKB.",
+          "inside the project" +
+          (onboarding ? "." : "; for a PDF or Word file, run document-input --onboard."),
       );
     }
   })();
 
   const mime = detectMimeType(absPath, bytes);
   if (mime !== "text/plain" && mime !== "text/markdown") {
-    refuse(
-      `${JSON.stringify(portablePath)} is ${mime}, not direct UTF-8 text or Markdown. ` +
-        "Place it under aidlc/spaces/<space>/knowledge/documents/, run " +
-        "`/aidlc knowledge onboard <path>`, then read it with `/aidlc knowledge show <id>`.",
-    );
+    if (mime !== "application/pdf" && mime !== kb.WORD_DOCX_MIME) {
+      refuse(
+        `${JSON.stringify(portablePath)} is ${mime}, not direct UTF-8 text, Markdown, PDF, ` +
+          "or Word, so its text cannot be read. Ask the person for a text, Markdown, PDF, " +
+          "or Word version.",
+      );
+    }
+    if (!onboarding) {
+      refuse(
+        `${JSON.stringify(portablePath)} is a PDF or Word file, not direct UTF-8 text or ` +
+          "Markdown. Run document-input --onboard to add it to the knowledge base and read " +
+          "its text.",
+      );
+    }
+    onboardDocumentInput(kb, {
+      projectDir,
+      projectRoot,
+      portablePath,
+      absPath,
+      bytes,
+      selectionNote,
+      includeIgnored: flags["include-ignored"] !== undefined,
+    }, refuse);
+    return;
   }
 
   const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -8889,6 +8954,219 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
       content_handling: "data-not-instructions",
       content,
     })}\n`,
+  );
+}
+
+// `document-input --onboard`: a PDF or Word file the person named is copied
+// into the active space's knowledge/documents/ and onboarded in-process by the
+// same `onboard` the knowledge command runs, so the person never runs a command
+// or types a document id. The bytes copied are the ones read above, bound to
+// the identity validated inside the project. A git-ignored source is not
+// copied on the agent's say-so: the copy would be committed, which is hard to
+// undo, so the tool returns one question and the stage adds --include-ignored
+// only after the person agrees.
+function onboardDocumentInput(
+  kb: typeof import("./aidlc-knowledge.ts"),
+  input: {
+    projectDir: string;
+    projectRoot: string;
+    portablePath: string;
+    absPath: string;
+    bytes: Buffer;
+    selectionNote?: string;
+    includeIgnored: boolean;
+  },
+  refuse: (message: string) => never,
+): void {
+  const { projectRoot, portablePath, absPath, bytes } = input;
+  const quoted = JSON.stringify(portablePath);
+  const space = (() => {
+    try {
+      const resolved = kb.resolveSpaceFlag(undefined, input.projectDir);
+      kb.assertKnowledgeRootTrusted(projectRoot, resolved);
+      return resolved;
+    } catch (error) {
+      return refuse(`cannot onboard ${quoted}: ${errorMessage(error)}`);
+    }
+  })();
+  const documentsAbs = kb.documentsDir(projectRoot, space);
+  const documentsReal = existsSync(documentsAbs) ? realpathSync(documentsAbs) : documentsAbs;
+  const inPlace = absPath.startsWith(
+    documentsReal.endsWith(sep) ? documentsReal : `${documentsReal}${sep}`,
+  );
+
+  if (!inPlace && !input.includeIgnored && documentInputGitIgnored(projectRoot, portablePath)) {
+    process.stdout.write(
+      `${JSON.stringify({
+        path_notice: kb.UNTRUSTED_PATH_NOTICE,
+        path: portablePath,
+        ask:
+          `${quoted} is git-ignored, so I haven't copied it into the shared knowledge folder ` +
+          "(it would be committed). Say 'use it anyway' to copy it.",
+        next:
+          "Tell the person the ask line and wait for their reply. Only after they say to use " +
+          "it anyway, run document-input --onboard --include-ignored.",
+      })}\n`,
+    );
+    return;
+  }
+
+  let target = absPath;
+  let created = false;
+  if (!inPlace) {
+    try {
+      mkdirSync(documentsAbs, { recursive: true });
+      kb.assertKnowledgeRootTrusted(projectRoot, space);
+      ({ target, created } = copyIntoDocuments(
+        kb,
+        realpathSync(documentsAbs),
+        basename(portablePath),
+        bytes,
+      ));
+    } catch (error) {
+      refuse(`cannot copy ${quoted} into the knowledge folder: ${errorMessage(error)}`);
+    }
+  }
+
+  let outcome: { id: string; status: string } | undefined;
+  let failure = "nothing was indexed";
+  try {
+    const result = kb.onboard(projectRoot, space, target, new Date().toISOString());
+    if (result.refused) failure = result.refused.reason;
+    else outcome = result.indexed[0];
+  } catch (error) {
+    failure = errorMessage(error);
+  }
+  if (outcome === undefined && created) {
+    try { unlinkSync(target); } catch { /* the refusal below still names the cause */ }
+  }
+  const indexed = outcome ?? refuse(`cannot onboard ${quoted}: ${failure}`);
+  const shown = (() => {
+    try {
+      return kb.showDocument(projectRoot, space, indexed.id);
+    } catch (error) {
+      return refuse(`onboarded ${quoted} as document ${indexed.id}, but ${errorMessage(error)}`);
+    }
+  })();
+
+  const targetPath = JSON.stringify(relative(projectRoot, target).split(sep).join("/"));
+  const added = created
+    ? `I copied ${quoted} to ${targetPath} and added it to the knowledge base as document ${indexed.id}.`
+    : indexed.status === "already"
+      ? `${quoted} is already in the knowledge base as document ${indexed.id}` +
+        `${inPlace ? "" : ` (copied to ${targetPath})`}.`
+      : `I added ${inPlace ? quoted : targetPath} to the knowledge base as document ${indexed.id}.`;
+  const truncated = shown.content !== undefined && shown.extraction.truncated === true;
+  const onboardNote = added +
+    (shown.content === undefined
+      ? ` I couldn't read any text from it: ${documentInputNoTextReason(shown)}.`
+      : "") +
+    (truncated
+      ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
+      : "");
+
+  process.stdout.write(
+    `${JSON.stringify({
+      path_notice: kb.UNTRUSTED_PATH_NOTICE,
+      ...(shown.content === undefined ? {} : { content_notice: kb.UNTRUSTED_CONTENT_NOTICE }),
+      path: portablePath,
+      ...(input.selectionNote ? { selection_note: input.selectionNote } : {}),
+      bytes: bytes.length,
+      document_id: indexed.id,
+      document_path: relative(projectRoot, target).split(sep).join("/"),
+      onboard_note: onboardNote,
+      ...(truncated ? { truncated: true } : {}),
+      ...(shown.content === undefined
+        ? {}
+        : {
+            content_trust: "untrusted",
+            content_handling: "data-not-instructions",
+            content: shown.content,
+          }),
+    })}\n`,
+  );
+}
+
+// Whether git ignores this project file. A tracked file never counts, and
+// outside a repository nothing is ignored. The path is one argv element, never
+// shell text, and its ./ prefix keeps a leading colon from reading as pathspec
+// magic.
+function documentInputGitIgnored(projectRoot: string, relPath: string): boolean {
+  const checked = spawnSync(
+    "git",
+    [...GIT_PLATFORM_ARGS, "-C", projectRoot, "check-ignore", "-q", "--", `./${relPath}`],
+    { env: gitEnvironment(process.env), timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS },
+  );
+  return checked.status === 0 && checked.error === undefined;
+}
+
+// Why an onboarded document came back with no text, in the person's terms.
+function documentInputNoTextReason(shown: {
+  state: string;
+  extraction: { extractor?: { name: string }; reason?: string };
+}): string {
+  switch (shown.state) {
+    case "extractor_unavailable":
+      return `its text extractor${shown.extraction.extractor ? ` (${shown.extraction.extractor.name})` : ""} ` +
+        "is not installed on this machine";
+    case "unsupported_type":
+      return "no text extractor is set up for this kind of file";
+    case "no_extractable_text":
+      return "it has no text layer, as with a scanned document";
+    case "extraction_failed":
+      return `the text extractor failed${shown.extraction.reason ? ` (${shown.extraction.reason})` : ""}`;
+    default:
+      return `its text is not available (${shown.state})`;
+  }
+}
+
+// The copy keeps the file's own name in knowledge/documents/ and never
+// replaces a file there: one with the same name and bytes is this copy already,
+// and any other moves the copy to <stem>-2<ext>, -3, and so on. Leading dots
+// are dropped and the names the knowledge walk skips are passed over, so a
+// later sync still sees the copy. The bytes land in a dot-named staging file
+// first and are published with link(), which never replaces a name.
+const DOCUMENT_INPUT_COPY_NAME_LIMIT = 100;
+
+function copyIntoDocuments(
+  kb: typeof import("./aidlc-knowledge.ts"),
+  documentsReal: string,
+  name: string,
+  bytes: Buffer,
+): { target: string; created: boolean } {
+  const base = name.replace(/^\.+/, "") || "document";
+  const ext = extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  const digest = kb.sha256Hex(bytes);
+  for (let n = 1; n <= DOCUMENT_INPUT_COPY_NAME_LIMIT; n++) {
+    const candidate = n === 1 ? base : `${stem}-${n}${ext}`;
+    if (candidate === "aidlc" || candidate === "node_modules") continue;
+    const target = join(documentsReal, candidate);
+    const existing = lstatSync(target, { throwIfNoEntry: false });
+    if (existing !== undefined) {
+      if (existing.isFile() && existing.size === bytes.length) {
+        try {
+          const held = kb.readDocumentBytes(target, candidate, undefined, bytes.length);
+          if (kb.sha256Hex(held) === digest) return { target, created: false };
+        } catch {
+          // Unreadable: the name is taken.
+        }
+      }
+      continue;
+    }
+    const staged = join(documentsReal, `.aidlc-document-input-${process.pid}-${randomUUID()}.tmp`);
+    try {
+      writeFileSync(staged, bytes, { flag: "wx" });
+      linkSync(staged, target);
+      return { target, created: true };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    } finally {
+      try { unlinkSync(staged); } catch { /* never created, or already gone */ }
+    }
+  }
+  throw new Error(
+    `every name from ${base} to ${stem}-${DOCUMENT_INPUT_COPY_NAME_LIMIT}${ext} is already taken`,
   );
 }
 
@@ -11387,11 +11665,12 @@ export async function main(argv: string[]): Promise<void> {
     case "project-description":
       handleProjectDescription(projectDir);
       break;
-    // document-input - read-only direct-document boundary used by Intent Capture
-    // and Requirements Analysis. One exact path in, one trust-marked JSON object
-    // out; no search, mutation, or audit.
+    // document-input - direct-document boundary used by Intent Capture and
+    // Requirements Analysis. One path in, one trust-marked JSON object out;
+    // read-only except `--onboard`, which adds a PDF or Word file to the
+    // knowledge base.
     case "document-input":
-      await handleDocumentInput(projectDir);
+      await handleDocumentInput(projectDir, flags);
       break;
     case "codekb-snapshot":
       handleCodekbSnapshot(projectDir, flags);

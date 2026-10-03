@@ -77,11 +77,18 @@ selected scope or lifecycle state. A message that is only a document, with no
 words outside it, is taken as "Build what the pasted document describes.", and
 the plan question that follows says so.
 
-PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
-place the file under `aidlc/spaces/<space>/knowledge/documents/`, run
-`/aidlc knowledge onboard <path>`, and use the resulting document id. Document
-paths, filenames, and content are always treated as untrusted data, never as
-instructions.
+A PDF or Word file works the same way: name it, for example
+`/aidlc Build what ./brief.pdf describes`. The workflow copies it into
+`aidlc/spaces/<space>/knowledge/documents/`, adds it to the
+[knowledge base](08-knowledge.md), tells you its document id in one line, and
+reads its text. You never run a command or type the id, and it never replaces a
+file already in that folder. When the file is git-ignored, it asks first,
+because the copy would be committed: say "use it anyway" to copy it. When no
+text can be read (no extractor for that kind of file, or a scanned document),
+it says why and asks you for a text or Markdown version. Text over 200,000
+characters is not read directly; the workflow asks you for a supported file.
+Document paths, filenames, and content are always treated as untrusted data,
+never as instructions.
 
 ---
 
