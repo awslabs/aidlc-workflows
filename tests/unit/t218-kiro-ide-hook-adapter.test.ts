@@ -365,7 +365,7 @@ function runIdeStdin(
 }
 
 const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
-const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off, update Kiro IDE and type `/aidlc config set summary-confirmation off` yourself. Once every piece of work in this project is complete, you can instead run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal to turn it off for all work in this project (run it again with `--clear-bypass` in place of `--bypass` to turn it back on).";
+const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off, update Kiro IDE and type `/aidlc config set summary-confirmation off` yourself. You can instead run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal to turn it off for all work in this project, including the work running now (run it again with `--clear-bypass` in place of `--bypass` to turn it back on).";
 const KIRO_PLAN_APPROVAL_WAY_OUT = "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
 const KIRO_PLAN_APPROVAL_SWITCH_REFUSAL = `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_PLAN_APPROVAL_WAY_OUT}`;
 const KIRO_SUMMARY_SWITCH_REFUSAL = `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_SUMMARY_WAY_OUT}`;
@@ -1250,12 +1250,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d1b: the terminal command the summary refusal names waits for complete work, then turns the check off and back on", () => {
+  test("8d1b: the terminal command the summary refusal names turns the check off and back on while the work runs", () => {
     const dir = scratchProject(true);
     const statePath = seededStateFile(dir);
-    const running = readFileSync(statePath, "utf-8");
-    const setStatus = (status: string) =>
-      writeFileSync(statePath, running.replace("- **Status**: Running", `- **Status**: ${status}`));
+    expect(readFileSync(statePath, "utf-8")).toContain("- **Status**: Running");
     const machine = mkdtempSync(join(tmpdir(), "t218-machine-"));
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -1275,20 +1273,13 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     try {
       const named = /run `([^`]+)` in a terminal/.exec(KIRO_SUMMARY_WAY_OUT)?.[1] ?? "";
       expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
-      // While the work runs, config refuses, which is why the message waits
-      // for complete work.
-      const early = run(named.split(" "));
-      expect(early.status).not.toBe(0);
-      expect(early.stdout + early.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
-      setStatus("Completed");
+      // Recording the switch refreshes no project files, so the running work
+      // does not hold it back and picks it up at once.
       const bypass = run(named.split(" "));
       expect(bypass.status, bypass.stdout + bypass.stderr).toBe(0);
-      setStatus("Running");
       expect(summaryLine()).toBe("Summary Confirmation: off (from env AIDLC_DISABLE_SUMMARY_CONFIRMATION)");
-      setStatus("Completed");
       const cleared = run(named.replace("--bypass", "--clear-bypass").split(" "));
       expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
-      setStatus("Running");
       expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
       expect(readdirSync(machine)).toEqual([]);
     } finally {

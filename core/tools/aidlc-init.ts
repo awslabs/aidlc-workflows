@@ -303,6 +303,7 @@ type DiagnosticsMutationContext = {
 type ChoicesMutationContext = {
   confirm?: PendingConfirm;
   section: ChoiceSection;
+  distribution: string;
   harness: ModelHarness;
   harnessDir: string;
   previous: ProjectFlagsRecord | ProjectChoicesRecord | null;
@@ -3461,6 +3462,7 @@ function prepareChoiceSection(
     context: {
       confirm,
       section,
+      distribution: selected.distribution,
       harness: selected.harness,
       harnessDir: selected.harnessDir,
       previous,
@@ -7754,6 +7756,144 @@ function handleSettingsOnlySection(
   return true;
 }
 
+// No project file carries a bypass: every guard reads it from its settings
+// file each time it checks. So a flags change that only adds or removes
+// bypasses writes that file and refreshes nothing, and a running workflow does
+// not hold it back. That is when a person needs a bypass, to end a refusal.
+function changesOnlyBypasses(mutation: SettingsMutation | undefined): mutation is SettingsMutation {
+  if (!mutation) return false;
+  const withoutBypasses = (file: AidlcSettingsFile | null): string => {
+    const { flags, ...rest } = file ?? { schemaVersion: 1 };
+    const { bypasses: _bypasses, ...otherFlags } = flags ?? { schemaVersion: 1 };
+    return canonical({ ...rest, flags: otherFlags });
+  };
+  return withoutBypasses(mutation.previous) === withoutBypasses(mutation.next);
+}
+
+function recordBypassesOnly(
+  projectDir: string,
+  argv: readonly string[],
+  context: ChoicesMutationContext,
+  mutation: SettingsMutation,
+  options: ReturnType<typeof globalOptions>,
+  setupWalkChild: boolean,
+): void {
+  try {
+    const operations: TransactionOperation[] = [];
+    const actions: PlannedAction[] = [];
+    planProjectSettingsMutation(projectDir, mutation, operations, actions);
+    const externalSettingsOperation = globalSettingsOperation(mutation);
+    if (externalSettingsOperation) {
+      actions.push({
+        path: mutation.path,
+        action: mutation.next === null
+          ? "remove"
+          : pathPresent(mutation.path)
+          ? "update"
+          : "create",
+      });
+    }
+    const counts = Object.fromEntries(
+      ["create", "update", "merge", "preserve", "remove", "conflict"].map((name) => [
+        name,
+        actions.filter((item) => item.action === name).length,
+      ]),
+    );
+    const planToken = sha256Bytes(canonical({
+      schemaVersion: 1,
+      root: projectDir,
+      operations,
+      ...(externalSettingsOperation
+        ? {
+            externalSettings: {
+              root: machineTransactionRoot(),
+              operation: externalSettingsOperation,
+            },
+          }
+        : {}),
+    }));
+    const choices = {
+      section: context.section,
+      previous: context.previous,
+      next: context.next,
+      previousPlugins: context.previousPlugins,
+      nextPlugins: context.nextPlugins,
+      summaries: context.summaryLines,
+      notes: context.notes,
+    };
+    if (argv.includes("--dry-run")) {
+      if (options.mode === "human") {
+        for (const line of context.summaryLines) process.stdout.write(`${line}\n`);
+        for (const note of context.notes) process.stdout.write(`  Note: ${note}\n`);
+      }
+      emitResult(success(
+        `flags configuration plan for ${projectDir}: ${
+          Object.entries(counts).map(([key, value]) => `${key}=${value}`).join(" ")
+        }`,
+        { projectDir, distribution: context.distribution, counts, actions, planToken, notes: [], choices },
+      ), options);
+      return;
+    }
+    const approvedToken = valueAfter(argv, "--plan-token");
+    if (argv.includes("--plan-token") && !approvedToken) {
+      emitResult(usage("--plan-token requires the token emitted by init --dry-run"), options);
+      return;
+    }
+    if (approvedToken && approvedToken !== planToken) {
+      emitResult(failure(
+        "config plan changed after approval; run aidlc config --dry-run again",
+        EXIT.integrity,
+        configCommand("--dry-run --json"),
+      ), options);
+      return;
+    }
+    if (context.confirm) {
+      const answer = configPrompt(`${context.confirm.question} [y/N]:`);
+      if (!answer || !/^y(?:es)?$/i.test(answer.trim())) {
+        emitResult(usage(context.confirm.cancelled), options);
+        return;
+      }
+    }
+    if (externalSettingsOperation) {
+      executeGlobalSettingsMutation(mutation);
+    } else {
+      executePlan({ schemaVersion: 1, root: projectDir, operations });
+      invalidateSettingsCache(mutation.path);
+    }
+    if (options.mode === "human") {
+      writeMenuLines("", context.summaryLines);
+      writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
+    }
+    const outstandingActions = setupWalkChild
+      ? []
+      : postApplyOutstandingActions(projectDir, context.harnessDir, context.harness);
+    const completion = configCompletionMessage(
+      `configured flags settings for ${projectDir}`,
+      outstandingActions,
+      options.mode,
+    );
+    emitResult(success(
+      options.mode === "human" ? menuText(completion) : completion,
+      {
+        projectDir,
+        distribution: context.distribution,
+        counts,
+        actions,
+        planToken,
+        notes: [],
+        outstandingActions,
+        choices,
+      },
+    ), options);
+  } catch (error) {
+    emitResult(failure(
+      error instanceof Error ? error.message : String(error),
+      EXIT.integrity,
+      error instanceof TransactionFilesystemError ? error.remediation : undefined,
+    ), options);
+  }
+}
+
 export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
@@ -7900,6 +8040,17 @@ export async function main(
       );
       return;
     }
+  }
+  if (choicesContext?.section === "flags" && changesOnlyBypasses(choicesContext.settings)) {
+    recordBypassesOnly(
+      projectDirFrom(argv),
+      argv,
+      choicesContext,
+      choicesContext.settings,
+      options,
+      Boolean(internal.setupWalkChild),
+    );
+    return;
   }
   if (argv.includes("--channel")) {
     emitResult(configureChannel(argv), options);

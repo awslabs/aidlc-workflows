@@ -1471,6 +1471,10 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+Recording or clearing a switch changes only that settings file and refreshes
+no project files, so it also works while a workflow is running: the next check
+reads it, with no restart. A command that also changes another flag is a
+refresh and waits for the workflow.
 
 #### `/aidlc --plan-approval` - Plan approval
 

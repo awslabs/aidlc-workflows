@@ -203,11 +203,25 @@ it before anything else.
 
 ### Last resort: switch the Plan Approval check off
 
-`AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` turns off the check that refuses work
-during Code Generation, for every workflow in a harness started with it. Use
-it only while a person is watching the session, and only to get past a
-refusal that is wrong. The hooks read it from the environment the harness
-starts with, so set it before you start the harness:
+`AIDLC_DISABLE_PLAN_APPROVAL_GUARD` turns off the check that refuses work
+during Code Generation. Use it only while a person is watching the session,
+and only to get past a refusal that is wrong.
+
+The quickest way needs no restart. Run this yourself in a terminal in the
+project folder, not through the agent:
+
+```bash
+aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes
+```
+
+It works while the workflow is running, and the check is off from the agent's
+next action, for every workflow in this project on this machine. As soon as
+the team is past the problem, run the same command with `--clear-bypass` in
+place of `--bypass` to turn the check back on.
+
+Or set `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` in the environment the harness
+starts with, for every workflow in a harness started with it. The hooks read
+it from that environment, so set it before you start the harness:
 
 - Close every window of the harness first.
 - On Windows PowerShell with VS Code:
@@ -220,12 +234,11 @@ starts with, so set it before you start the harness:
 - On macOS or Linux: `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 code /path/to/project`
   (or the harness's own command instead of `code`).
 
-While it is set, the workflow's audit trail records that the check was off
-(`GUARD_DISABLED`). Start the harness again without the variable as soon as
-the team is past the problem.
+Start the harness again without the variable as soon as the team is past the
+problem.
 
-Recording the switch with `aidlc config flags --bypass` does not help here:
-`aidlc config flags` refuses to record it while a workflow is running.
+While the check is off either way, the workflow's audit trail records that it
+was off (`GUARD_DISABLED`).
 
 ### When to pivot
 

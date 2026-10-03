@@ -6,8 +6,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,6 +29,7 @@ import {
 } from "../../core/tools/aidlc-config-diagnostics.ts";
 import {
   RECORDABLE_PROJECT_BYPASSES,
+  resolveProjectFlag,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   invalidateSettingsCache,
@@ -547,6 +550,76 @@ describe("t295 flags section", () => {
     expect(current.env.AWS_AIDLC_DEFAULT_SCOPE).toBe(
       shipped.env.AWS_AIDLC_DEFAULT_SCOPE,
     );
+  });
+
+  test("a bypass records and clears while a workflow runs, writing only its settings file", () => {
+    const project = install();
+    const dirName = "active-bypass";
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000001295",
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const name = "AIDLC_DISABLE_PLAN_APPROVAL_GUARD";
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, "--local", ...args],
+      project,
+      runtimeEnv(),
+    );
+    const files = (): Map<string, string> => new Map(
+      (readdirSync(project, { recursive: true }) as string[])
+        .map((rel) => rel.replaceAll("\\", "/"))
+        .filter((rel) => !/^\.git(?:\/|$)/.test(rel) && statSync(join(project, rel)).isFile())
+        .map((rel) => [rel, readFileSync(join(project, rel)).toString("base64")]),
+    );
+    const changedSince = (before: Map<string, string>): string[] => {
+      const after = files();
+      return [...new Set([...before.keys(), ...after.keys()])]
+        .filter((rel) => before.get(rel) !== after.get(rel))
+        .sort();
+    };
+
+    let before = files();
+    const preview = flags("--bypass", name, "--dry-run", "--json");
+    expect(preview.status, preview.stdout + preview.stderr).toBe(0);
+    const planToken = (JSON.parse(preview.stdout) as { data: { planToken: string } }).data.planToken;
+    expect(planToken).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(changedSince(before)).toEqual([]);
+
+    const recorded = flags("--bypass", name, "--plan-token", planToken, "--yes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(recorded.stdout).toContain(`configured flags settings for ${project}`);
+    expect(changedSince(before)).toEqual([".gitignore", "aidlc.settings.local.json"]);
+    expect(resolvedFlags(project)?.bypasses).toEqual([name]);
+    // What the plan-approval guard reads on its next check.
+    expect(resolveProjectFlag(name, {}, project)).toBe("1");
+
+    before = files();
+    const cleared = flags("--clear-bypass", name, "--yes");
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(changedSince(before)).toEqual(["aidlc.settings.local.json"]);
+    expect(resolvedFlags(project)?.bypasses).toBeUndefined();
+    expect(resolveProjectFlag(name, {}, project)).toBeUndefined();
+
+    // Any other flag still needs the refresh, which waits for the workflow.
+    before = files();
+    const mixed = flags("--bypass", name, "--hook-debug", "on", "--yes");
+    expect(mixed.status).toBe(4);
+    expect(mixed.stdout + mixed.stderr).toContain(
+      "refusing to refresh while 1 workflow(s) are active",
+    );
+    expect(changedSince(before)).toEqual([]);
   });
 });
 
