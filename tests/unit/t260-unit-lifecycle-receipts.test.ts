@@ -1026,6 +1026,34 @@ describe("t260 finished Units keep their receipts across a Construction policy c
     expect(floors).toEqual(["STAGE_STARTED:2026-01-03T00:00:00Z#2", "STAGE_STARTED:2026-01-03T00:00:00Z#2"]);
   });
 
+  // With checkpoints on, stage starts were never boundaries before or after an
+  // iteration change, so a same-second start in another shard stays ignored in
+  // either order and the Unit finished before it keeps its receipt.
+  test("a same-second stage start stays ignored when checkpoints were already on", () => {
+    for (const [changeShard, startShard] of [["aaaa-one.md", "zzzz-two.md"], ["zzzz-one.md", "aaaa-two.md"]]) {
+      policyProject("unit-major", "enabled");
+      writeUnitArtifacts(proj, "unit-a");
+      appendFileSync(
+        seededAuditShard(proj),
+        block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`),
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), changeShard),
+        `# AI-DLC Audit Log\n${block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: enabled\n")}`,
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), startShard),
+        `# AI-DLC Audit Log\n${block("STAGE_STARTED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n`)}`,
+      );
+      expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true, "unit-a"), changeShard).toBe(
+        "WORKFLOW_STARTED:2026-01-01T00:00:00Z#1",
+      );
+      expect(unitCompletedReceipts(proj, SLUG).has("unit-a"), changeShard).toBe(true);
+      cleanupTestProject(proj);
+      proj = "";
+    }
+  });
+
   // Swarm convergence and the Plan Approval batch context floor every stage
   // start (they pass unitMajor false), whatever the policy. A recorded change
   // must not change what they read, even for a stage start recorded while Unit

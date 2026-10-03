@@ -30295,25 +30295,29 @@ function latestMainWorkflowStageRunFloorFromRows(
 // alone), so a start reads the policy of the first change after it: a row whose
 // state write failed is corrected by the next one. A start after the last
 // change follows the caller's current unit-major flooring. A start in the same
-// second as a change recorded in another shard cannot be ordered against it, so
-// it counts, whatever the shard filenames. With no change recorded the set is
-// empty: under unit-major flooring no stage start counts, as always.
+// second as a change recorded in another shard cannot be ordered against it:
+// it is read under every order it could have, and counts unless all of them
+// agree it does not, whatever the shard filenames. With no change recorded the
+// set is empty: under unit-major flooring no stage start counts, as always.
 function stageStartsUnderStageFlooring(
   rows: readonly AuditShardEvent[],
 ): Set<AuditShardEvent> {
   const counted = new Set<AuditShardEvent>();
   const changes = sortAttemptEvents(rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET"));
   if (changes.length === 0) return counted;
+  const stageFloored = (closing: AuditShardEvent | undefined): boolean =>
+    closing !== undefined && !constructionPolicyFoundUnitMajor(closing);
   for (const start of rows) {
     if (start.event !== "STAGE_STARTED") continue;
-    if (changes.some((change) => change.timestamp === start.timestamp && change.shard !== start.shard)) {
-      counted.add(start);
-      continue;
-    }
-    const closing = changes.find((change) =>
-      change.timestamp > start.timestamp ||
-      (change.timestamp === start.timestamp && change.pos > start.pos));
-    if (closing && !constructionPolicyFoundUnitMajor(closing)) counted.add(start);
+    // The changes that may be the first one after this start: same-second
+    // changes in another shard, in either order, or the next one in order.
+    const unordered = changes.filter((change) =>
+      change.timestamp === start.timestamp && change.shard !== start.shard);
+    const next = changes.find((change) =>
+      unordered.includes(change) ? false
+        : change.timestamp > start.timestamp ||
+          (change.timestamp === start.timestamp && change.pos > start.pos));
+    if ([...unordered, next].some(stageFloored)) counted.add(start);
   }
   return counted;
 }
