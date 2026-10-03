@@ -164,6 +164,42 @@ export const HARNESS_HONESTY = Object.freeze({
 
 type HarnessHonesty = (typeof HARNESS_HONESTY)[ModelHarness];
 
+// Where a harness can pin neither an agent's model nor its effort, every agent
+// runs on the session's model and effort, and nothing AI-DLC records changes
+// that. Setup and doctor say so instead of asking for a policy.
+export function sessionSetsAgentModels(harness: ModelHarness): boolean {
+  const honesty: HarnessHonesty = HARNESS_HONESTY[harness];
+  return !honesty.model && !honesty.effort;
+}
+
+// The product each harness id names, for messages that point at the host.
+// Fixed here rather than read from the project, so a project file cannot name
+// another host.
+export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Object.freeze({
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+});
+
+// The one sentence setup and doctor show on those harnesses. A recorded policy
+// (often a team's, for teammates on other harnesses) is named so nobody reads
+// it as applied here; pass null where another installed harness applies it.
+export function sessionModelsDetail(
+  harness: ModelHarness,
+  policy: ModelPolicyRecord | null,
+): string {
+  const recorded = modelPolicyIsEmpty(policy)
+    ? ""
+    : policy?.preset
+    ? `; the recorded ${policy.preset} preset does not apply here`
+    : "; the recorded policy does not apply here";
+  return `every agent uses your ${HARNESS_PRODUCT_NAMES[harness]} session's model and effort${recorded}`;
+}
+
 export type AgentTiers = Record<string, Tier>;
 
 const POLICY_KEYS = new Set(["schemaVersion", "preset", "groups", "agents", "profiles"]);
@@ -783,9 +819,15 @@ export function modelPolicyDoctorIssues(
     .filter((name) => !(name in tiers))
     .map((name) => `orphaned agent exception: ${name}`);
   const cap = resolveTierCap(join(harnessRoot, "..", "aidlc", "spaces", "default", "memory"));
+  // Efforts (preset, group dials, per-agent) are shared by every harness, so
+  // on a harness where the session sets every agent they are someone else's
+  // policy, not a problem here. A model recorded for this harness by name
+  // still is: someone asked for exactly that.
+  const sessionSet = sessionSetsAgentModels(harness);
   for (const [name, tier] of Object.entries(tiers)) {
     const effective = resolveModelPolicy(policy, name, tier, harness, cap);
     for (const field of effective.unexpressed) {
+      if (sessionSet && field === "effort") continue;
       issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
     }
   }

@@ -1608,6 +1608,8 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(steeringReason).toMatch(/still has rules to load|delivered AIDLC rules part/);
     expect(steeringReason).toContain(`continue ${token1}`);
     expect(steeringReason).toContain("until `run-stage`");
+    // A person who asked to stop is offered park, not only the next step.
+    expect(steeringReason).toContain("If the person asked to stop here, run");
     expect(steeringReason).toContain("do not summarise or narrate rule chunks");
     expect(steeringReason).not.toContain("rules_content");
     expect(steeringReason).not.toContain("Multipart 0");
@@ -1839,6 +1841,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       session_id: oversizedSession,
     });
     expect(recovered.stdout).toContain("coordination evidence is missing or stale");
+    expect(recovered.stdout).toContain("If the person asked to stop here, run");
     expect(recovered.stdout).not.toContain("x".repeat(100));
   }, 30000);
 

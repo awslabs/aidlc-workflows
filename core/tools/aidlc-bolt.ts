@@ -54,6 +54,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   readAuditShardEvents,
+  unattendedHumanPresenceHint,
   auditBlockField,
   isTeamUnitOwnership,
   isWalkingSkeletonUnitOnMain,
@@ -1232,11 +1233,11 @@ function handleSetAutonomy(args: string[]): void {
       !humanActedSinceGate(pd)
     ) {
       error(
-        "Refusing to switch Construction to autonomous: a real human has not acted since the last " +
-          "gate resolution, and autonomous mode is granted only by the human's ladder-prompt answer " +
-          "(it waives every later gate, so the grant itself needs a fresh human turn). Ask the human " +
-          "to confirm autonomous mode in a typed message, then retry. Do not log the ladder choice " +
-          "via aidlc-log answer; the choice is recorded by set-autonomy itself.",
+        "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
+          "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
+          "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
+          "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
+          `by set-autonomy itself.${unattendedHumanPresenceHint()}`,
       );
     }
 

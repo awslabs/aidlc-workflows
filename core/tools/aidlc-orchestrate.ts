@@ -5271,7 +5271,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
     emit(errorDirective(
-      "Cannot combine --skip or --add with read-only, workspace, compose, single-stage, jump, or resume modes. They shape a new workflow's stages at creation.",
+      "Cannot combine --skip or --add with read-only, workspace, compose, single-stage, jump, or resume modes. Run the stage change on its own.",
     ));
     return;
   }
@@ -5999,16 +5999,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // runs the tool; it never mutates here. Fires only when a modifier is present
   // WITHOUT an explicit --stage/--phase jump (those take the jump path below).
   if (stateContent && !flags.stage && !flags.phase) {
-    // Stage changes to a running plan go through the reshape gate, where the
-    // person approves them, and land through recompose.
-    if (flags.planChanges) {
-      emit(errorDirective(
-        "--skip and --add shape a new workflow's stages when it is created. This workflow is already running: " +
-          `to change its remaining stages, route the request through \`${aidlcDispatcherInvocation("next")} compose "<the change>"\`, ` +
-          "which shows the change for approval before anything moves.",
-      ));
-      return;
-    }
+    // Named stage changes to a running plan land through recompose at once:
+    // the person named the stages, so no approval re-asks it. Any scope or
+    // setting change in the same command runs first.
+    const planChanges = flags.planChanges;
     const modifiers: string[] = [];
     if (flags.depth) modifiers.push(`depth ${flags.depth}`);
     if (flags.testStrategy) modifiers.push(`test-strategy ${flags.testStrategy}`);
@@ -6023,6 +6017,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
+    const plan = { scope: currentStateScope, stateContent };
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -6030,8 +6025,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ) {
       const parts = [`--scope ${flags.scope}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
-      emit(printDirective(
-        `Run \`${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}\` to change scope, then print its output verbatim and stop.`,
+      const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
+      emit(planChanges ? planChangeDirective(planChanges, command, null) : printDirective(
+        `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -6040,9 +6036,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (modifiers.length > 0) {
       const command = [aidlcDispatcherInvocation(`config set ${modifiers[0]}`)];
       for (let i = 1; i < modifiers.length; i++) command.push(`--${modifiers[i]}`);
-      emit(printDirective(
+      emit(planChanges ? planChangeDirective(planChanges, command.join(" "), plan) : printDirective(
         `Run \`${command.join(" ")}\` to update the configuration, then print its output verbatim and stop.`,
       ));
+      return;
+    }
+    if (planChanges) {
+      emit(planChangeDirective(planChanges, null, plan));
       return;
     }
   }
@@ -6051,8 +6051,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // human's jump target; the engine SUPPLIES the resolved direction by shelling
   // out to `aidlc-jump.ts resolve` (a pure read) rather than re-deriving the
   // SKILL.md:191-193 forward/backward/redo comparison by hand. resolve also
-  // owns the in-scope SKIP validation, so a jump to a stage the scope skips is
-  // relayed as its VERBATIM `Stage "..." is skipped for scope "...".` error.
+  // owns the in-scope SKIP check: it marks a skipped --stage target, which the
+  // jump puts back on the plan first (see skippedJumpDirective).
   // On success we surface the run-stage directive for the resolved target,
   // carrying resolved artifact paths (projectType feeds the conditional_on
   // filter for the jumped-to stage). An explicit target also wins when combined
@@ -6340,9 +6340,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // plan suffix is SKIP. Never turn that mismatch into permission to run the
   // stage, regardless of the graph's ALWAYS|CONDITIONAL applicability axis.
   // `next` stays read-only: name the report-owned recovery transition, which
-  // records the skip and routes to the next effective EXECUTE stage.
+  // records the skip and routes to the next effective EXECUTE stage. A scope
+  // change that skipped the current stage before it started, or at its gate,
+  // leaves it [S] with the cursor still on it: the same transition moves on.
   if (
-    currentIsInFlight &&
+    (currentIsInFlight || currentState === "skipped") &&
     effectivePlanAction(currentSlug, scope, stateContent) === "SKIP"
   ) {
     const currentNode = nodeForSlug(currentSlug);
@@ -6356,7 +6358,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    if (currentState !== "in-progress" && currentState !== "revising") {
+    if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "skipped") {
       emit(errorDirective(
         `Stage "${currentSlug}" is SKIP in the approved workflow plan but its active cursor state is ` +
           `"${currentState ?? "missing"}". Refusing to emit run-stage; repair the inconsistent state before continuing.`,
@@ -8957,14 +8959,9 @@ function emitSingleRunStage(
     emit(errorDirective(SINGLE_INIT_ERROR));
     return;
   }
-  const inScopeSlugs = new Set(subgraphForScope(scope).map((s) => s.slug));
-  if (!inScopeSlugs.has(node.slug)) {
-    emit(errorDirective(
-      `Stage "${node.slug}" is skipped for scope "${scope}". ` +
-        "Choose a different stage or change scope.",
-    ));
-    return;
-  }
+  // An isolated run never touches the plan or the cursor, so a stage the
+  // scope skips runs too when the person asks for it, with one line saying so.
+  const notInPlan = !new Set(subgraphForScope(scope).map((s) => s.slug)).has(node.slug);
   const startError = ensureSingleStageStarted(projectDir, node, scope);
   if (startError) {
     emit(errorDirective(
@@ -8991,7 +8988,91 @@ function emitSingleRunStage(
   directive.single = true;
   directive.gate = false;
   directive.next_stage = null;
-  emit(directive);
+  emit(notInPlan
+    ? withChangeNotices(directive, [
+      ...((directive as Directive).change_notices ?? []),
+      `"${node.slug}" is not part of the ${scope} plan. It runs on its own because you asked for it; ` +
+        "the plan and your workflow stay as they are.",
+    ])
+    : directive);
+}
+
+// A typed `--skip`/`--add` on a running workflow. The person named the
+// stages, so recompose applies them straight away (after any scope or setting
+// command typed with them), and one line says what changed and the opposite
+// flags that undo it. recompose refuses only a flip the plan cannot take, and
+// its refusal names what can be done instead.
+function planChangeDirective(
+  changes: PlanChanges,
+  before: string | null,
+  plan: { scope: string; stateContent: string } | null,
+): PrintDirective {
+  // A stage the plan already skips or runs is no change: it is said, not sent
+  // to recompose, so the undo line names only what changed. After a scope
+  // change (plan null) the new plan is not known here, so every flip is sent.
+  const already = (slug: string, action: "EXECUTE" | "SKIP"): boolean =>
+    plan !== null && effectivePlanAction(slug, plan.scope, plan.stateContent) === action;
+  const skip = [...new Set(changes.skip)].filter((slug) => !already(slug, "SKIP"));
+  const add = [...new Set(changes.add)].filter((slug) => !already(slug, "EXECUTE"));
+  const unchanged = [
+    ...[...new Set(changes.skip)].filter((slug) => already(slug, "SKIP")).map((slug) => `${slug} is already skipped`),
+    ...[...new Set(changes.add)].filter((slug) => already(slug, "EXECUTE")).map((slug) => `${slug} is already on the plan`),
+  ];
+  const noted = unchanged.length > 0
+    ? `${unchanged.join("; ").charAt(0).toUpperCase()}${unchanged.join("; ").slice(1)}.`
+    : "";
+  if (skip.length === 0 && add.length === 0) {
+    return printDirective(
+      `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+        `"${noted} The plan is unchanged." Then stop.`,
+    );
+  }
+  const flips = (skipped: string[], added: string[]): string => [
+    ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
+    ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
+  ].join(" ");
+  const summary = [
+    ...(skip.length > 0 ? [`skipped ${skip.join(", ")}`] : []),
+    ...(add.length > 0 ? [`added ${add.join(", ")}`] : []),
+  ].join(" and ");
+  const recompose = `${aidlcDispatcherInvocation("recompose")} ${flips(skip, add)}`;
+  return printDirective(
+    `${before ? `Run \`${before}\` and print its output verbatim, then run` : "Run"} \`${recompose}\` ` +
+      "to change this workflow's remaining stages as the person asked, and print its output verbatim. " +
+      "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
+      "instead, then stop. " +
+      `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
+      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}" Then stop.`,
+  );
+}
+
+// A jump to a stage the running plan skips. Ahead of the cursor, the jump
+// puts it back on the plan (recompose --add, with the jump as its reason) and
+// then jumps as any forward jump does; recompose refuses only a flip the plan
+// cannot take, and names what to do instead. Behind or at the cursor, going
+// back would also decide what happens to the stages after it, which only the
+// person can weigh, so the refusal names the isolated run that leaves the plan
+// and their progress as they are.
+function skippedJumpDirective(target: string, direction: string, current: string, scope: string): Directive {
+  const offPlan = `Stage "${target}" is not on this workflow's plan (the ${scope} scope skips it)`;
+  if (direction === "forward") {
+    return printDirective(
+      `${offPlan}, and the person asked to jump to it, so put it back on the plan and jump: run ` +
+        `\`${aidlcDispatcherInvocation("recompose")} --add ${target} --reason ${shellArg(`jump to ${target}`)}\`, then ` +
+        `\`${aidlcToolInvocation("jump")} execute --target ${target} --direction forward --scope ${scope}\`, ` +
+        "then re-run `next` to continue from the jump target. If recompose refuses, tell the person in plain " +
+        "words why it could not, and the way it names to do it instead, and run nothing else. After the jump, tell the person in one line: " +
+        `"${target} was not on the plan; it is now, and the workflow moved to it. To go back, type ` +
+        `\`${entrySkillInvocation()} --stage ${current}\`."`,
+    );
+  }
+  return errorDirective(
+    `${offPlan}, and ${direction === "redo"
+      ? "it is the current stage, which the plan moves past"
+      : `it comes before the current stage "${current}": going back to it would run every stage after it again`}. ` +
+      `To run it now on its own, leaving the plan and your progress as they are, type ` +
+      `\`${entrySkillInvocation()} --stage ${target} --single\`.`,
+  );
 }
 
 // Resolve an explicit --stage / --phase jump and emit the resulting directive.
@@ -9009,9 +9090,9 @@ function emitSingleRunStage(
 //
 // The conductor RELAYS the human's jump target; the engine SUPPLIES the
 // resolved facts. It shells out to `aidlc-jump.ts resolve` (a pure read) —
-// that handler both validates the target is in-scope for the scope (rejecting a
-// SKIP stage with its VERBATIM `Stage "..." is skipped for scope "...".`
-// message) AND computes the forward/backward/redo direction at
+// that handler both checks the target against the plan (a --stage target the
+// plan skips comes back marked `target_skipped`, a --phase with no planned
+// stage is refused) AND computes the forward/backward/redo direction at
 // aidlc-jump.ts:142-145. We relay a rejection verbatim and, on success, compose
 // the `execute` command with the tool's own `target_slug` + `direction`.
 // Re-deriving the SKILL.md:191-193 comparison by hand would be an LLM-shaped
@@ -9050,12 +9131,13 @@ function emitJumpDirective(
   if (hasState) {
     const resolveArgs = ["resolve", "--scope", scope, "--project-dir", projectDir];
     if (flags.phase) resolveArgs.push("--phase", flags.phase);
-    else if (flags.stage) resolveArgs.push("--stage", flags.stage);
+    else if (flags.stage) resolveArgs.push("--stage", flags.stage, "--allow-skipped");
 
     const run = runTool("aidlc-jump.ts", resolveArgs);
     if (!run.ok) {
-      // SKIP-for-scope, unknown stage/phase, etc. — relay the tool's verbatim
-      // error (it owns the wording the rest of the framework asserts on).
+      // Unknown stage/phase, a phase with no planned stage, etc.: relay the
+      // tool's verbatim error (it owns the wording the rest of the framework
+      // asserts on).
       emit(errorDirective(toolErrorMessage(run)));
       return;
     }
@@ -9072,6 +9154,10 @@ function emitJumpDirective(
     const targetNode = nodeForSlug(targetSlug);
     if (targetNode && targetNode.phase === "initialization") {
       emit(errorDirective(INIT_JUMP_ERROR));
+      return;
+    }
+    if (resolved.targetSkipped) {
+      emit(skippedJumpDirective(targetSlug, direction, resolved.currentSlug, scope));
       return;
     }
     // Committing the jump is a MUTATION — name the move (print) and let the
@@ -9129,26 +9215,23 @@ function emitJumpDirective(
     emit(errorDirective(INIT_JUMP_ERROR));
     return;
   }
-  // Scope-membership guard (Wave-1 audit finding 3). The with-state path gets
-  // SKIP validation for free from `aidlc-jump.ts resolve`, but resolve REQUIRES
-  // a state file, so this no-state branch did a bare graph lookup with no
-  // in-scope check — emitting run-stage for a stage the scope SKIPs (e.g.
-  // `next --scope bugfix --stage user-stories`). Mirror the with-state error by
-  // testing membership against the scope's EXECUTE-only sub-DAG; relay the
-  // verbatim skip wording resolve uses (aidlc-jump.ts:118) so the directive
-  // stream is identical regardless of whether state exists yet.
-  const inScopeSlugs = new Set(subgraphForScope(scope).map((s) => s.slug));
-  if (!inScopeSlugs.has(node.slug)) {
-    emit(errorDirective(
-      `Stage "${node.slug}" is skipped for scope "${scope}". ` +
-        "Choose a different stage or change scope.",
-    ));
-    return;
-  }
+  // Scope membership. resolve REQUIRES a state file, so this no-state branch
+  // tests the target against the scope's EXECUTE-only sub-DAG itself (e.g.
+  // `next --scope bugfix --stage user-stories`). With no workflow there is no
+  // plan to change, so a stage the scope skips runs as an in-scope one does,
+  // with one line saying so.
+  const notInPlan = !new Set(subgraphForScope(scope).map((s) => s.slug)).has(node.slug);
   // No-state jump: scope feeds the gate; stateContent is null (no workflow yet).
   // codekb ctx computed off the same live projectDir as the inline recordPrefix
   // (same rationale as the --phase inline site above).
-  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir)));
+  const directive = buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir));
+  emit(notInPlan
+    ? withChangeNotices(directive, [
+      ...((directive as Directive).change_notices ?? []),
+      `"${node.slug}" is not part of the ${scope} plan. It runs now because you asked for it; ` +
+        "there is no workflow yet, so no plan changes.",
+    ])
+    : directive);
 }
 
 // Pull `target_slug` AND `direction` out of `aidlc-jump.ts resolve`'s stdout
@@ -9160,7 +9243,7 @@ function emitJumpDirective(
 // than composing a half-specified jump command.
 function parseResolved(
   stdout: string,
-): { targetSlug: string; direction: string } | null {
+): { targetSlug: string; direction: string; currentSlug: string; targetSkipped: boolean } | null {
   try {
     const parsed: unknown = JSON.parse(stdout.trim());
     if (
@@ -9171,8 +9254,13 @@ function parseResolved(
       "direction" in parsed &&
       typeof (parsed as { direction: unknown }).direction === "string"
     ) {
-      const p = parsed as { target_slug: string; direction: string };
-      return { targetSlug: p.target_slug, direction: p.direction };
+      const p = parsed as { target_slug: string; direction: string; current_slug?: unknown; target_skipped?: unknown };
+      return {
+        targetSlug: p.target_slug,
+        direction: p.direction,
+        currentSlug: typeof p.current_slug === "string" ? p.current_slug : "",
+        targetSkipped: p.target_skipped === true,
+      };
     }
   } catch {
     // unparseable — fall through to null
