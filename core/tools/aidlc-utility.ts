@@ -252,6 +252,7 @@ import {
   readProjectDescriptionAuthority,
   repoDir,
   registerIntentRecord,
+  leaveCreationReceipt,
   mintIntentRecord,
   selectIntentForSession,
   resolveWorkflowSelection,
@@ -7297,6 +7298,13 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
           DEFAULT_SPACE,
           migration.intentDirName,
           "migration",
+        );
+      } else {
+        // The walk named no session (a host that cannot, or a budget spent on
+        // a loaded machine): the creating session's PostToolUse binds instead.
+        leaveCreationReceipt(
+          join(intentsDir(projectDir, DEFAULT_SPACE), migration.intentDirName),
+          migration.uuid,
         );
       }
       gitRmFlatTree(projectDir, migration.movedFrom);

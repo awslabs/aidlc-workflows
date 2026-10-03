@@ -877,6 +877,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t349-composer-scope-settings.test.ts",
     "unit/t349-engine-error-relay.test.ts",
     "unit/t351-composer-unsaved-plans.test.ts",
+    "unit/t352-hook-phase-trace.test.ts",
     "unit/t352-workflow-selector-names.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
@@ -893,6 +894,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, utility setter, and guard: who
     // turns plan approval off, and what the engine builds, are process boundaries
     "unit/t-plan-approval-switch.test.ts",
+    // spawns the real audit append, Unit verbs, and `next`: which shard a
+    // process writes, and the walk after a copied shard, are process boundaries
+    "unit/t-audit-shard-identity.test.ts",
     // spawns the real engine, human-turn hook, Kiro adapter, and worker brief: one
     // approval through the rule parts to the build is a process boundary
     "unit/t-plan-approval-stock-parts.test.ts",

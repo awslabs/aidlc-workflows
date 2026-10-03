@@ -1752,6 +1752,28 @@ and, on failure, the operation, safe relative path and exception codes. It omits
 exception messages, absolute paths and sensitive path components. An uploaded
 collection report or fallback log does not establish that a test passed.
 
+Windows live legs also keep evidence for a hook that stops making progress.
+`scripts/ci-live-sandbox.ts` sets `AIDLC_TEST_HOOK_TRACE=1` for every Windows
+live family, and the runner binds `AIDLC_HOOK_TRACE_DIR` to each file attempt's
+`e2e-artifacts/<file>/attempt-<n>/hook-trace/`, so every hook process in that
+attempt writes its phases there (see
+[Hook phase trace](06-hooks-and-tools.md#hook-phase-trace)). While a live run's
+scheduled task runs, the runner-side wait loop in
+`.github/scripts/prepare-live-runtime.ps1` checks the process table once a
+minute. When a process owned by the isolated account with `engine hook ` or
+`engine adapter ` in its command line has run 10 minutes, it writes one
+`hook-stall-<time>.json` to
+`tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with the stalled
+process's tree (its isolated-account parents and all its children) and their
+thread states, once per process. It reads process metadata only and checks
+ownership only for the stalled process and its parents. Every query is capped
+at what is left of a 60-second snapshot budget (15 seconds at most); a query
+that is skipped, fails or times out marks the snapshot `truncated`. A stalled
+process whose owner could not be checked is listed under `ownerUnknown` with
+only its id, name and start time (no command line, no children), since it
+may belong to another account. It never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
+Linux and macOS legs turn neither on.
+
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
 is blocked if sanitization fails. Full-suite and shared deterministic jobs retain
 eligible driver NDJSON, `sdk-drive*`, `tui-drive*` and `e2e-artifacts/**/traces`

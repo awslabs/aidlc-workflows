@@ -1811,6 +1811,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:auditShardHostSegment",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditShardName",
       "minMechanism": "none",
       "coveredBy": [
@@ -1820,6 +1832,10 @@
         },
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2563,6 +2579,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:cloneIdFileContent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:cloneIdPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2924,6 +2952,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:copiedAuditBlocks",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3505,6 +3545,10 @@
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3658,6 +3702,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:fileIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4701,6 +4757,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
         }
@@ -5504,6 +5564,18 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:leaveCreationReceipt",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6349,8 +6421,13 @@
       "unitClass": "function",
       "unitId": "function:parseAuditShardEvents",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7178,6 +7255,10 @@
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7227,6 +7308,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         },
         {
@@ -9024,6 +9109,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t315-plugin-build.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sameFileIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t329-document-input.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -11637,6 +11734,10 @@
         {
           "file": "tests/unit/t267-usage.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-hook-phase-trace.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -11864,6 +11965,10 @@
         },
         {
           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-hook-phase-trace.test.ts",
           "mechanism": "cli"
         }
       ],

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -46,6 +46,7 @@ import {
   PROJECT_DESCRIPTION_FILE,
   readAllAuditShards,
   readIntentRegistry,
+  readSessionBinding,
   getField,
   setField,
   setActiveIntentCursor,
@@ -1568,9 +1569,9 @@ describe("t164 doctor readiness against the shipped shell", () => {
 // Migration wiring: a flat aidlc-docs/ project migrates on first creation + git-rm
 // ============================================================
 describe("t164 migration wiring (flat → per-intent on first creation)", () => {
-  test("intent-create migrates a flat project, git-rm's the flat tree, and is a no-op re-run", () => {
-    // Seed a flat (pre-workspace) project: aidlc-docs/aidlc-state.md present, no
-    // intent record, no .migrated marker.
+  // Seed a flat (pre-workspace) project: aidlc-docs/aidlc-state.md present, no
+  // intent record, no .migrated marker. Returns the flat tree's path.
+  function seedFlatProject(): string {
     const flat = join(proj, "aidlc-docs");
     mkdirSync(flat, { recursive: true });
     writeFileSync(
@@ -1579,8 +1580,13 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
       "utf-8",
     );
     writeFileSync(join(flat, "audit.md"), "# AI-DLC Audit Log\n", "utf-8");
+    rmSync(join(proj, "aidlc", "active-space"), { force: true });
+    return flat;
+  }
+
+  test("intent-create migrates a flat project, git-rm's the flat tree, and is a no-op re-run", () => {
+    const flat = seedFlatProject();
     const cursor = join(proj, "aidlc", "active-space");
-    rmSync(cursor, { force: true });
 
     expect(
       fireHook(SESSION_START, {
@@ -1631,5 +1637,31 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
       existsSync(join(intentsDir(proj), d, "aidlc-state.md")),
     );
     expect(records2.length).toBe(2);
+  });
+
+  test("a migration the tool cannot name a session for still joins the creating session", () => {
+    seedFlatProject();
+    expect(
+      fireHook(SESSION_START, { source: "startup", session_id: "migration-session" }),
+    ).toBe(0);
+    // The tool's process-ancestry walk names no session: a host whose tool
+    // processes cannot name one, or a walk that ran out of time on a loaded
+    // machine. Only the creating session's own PostToolUse can bind it.
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "pids"), { recursive: true, force: true });
+
+    const r = util(["intent-create", "--scope", "feature"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Migrated flat workspace into intent:");
+    expect(bindCreatedSession("migration-session", r)).toBe(0);
+
+    const [migrated] = readIntentRegistry(proj);
+    expect(
+      readFileSync(join(proj, "aidlc", ".aidlc-sessions", "migration-session"), "utf-8").trim(),
+    ).toBe(migrated?.uuid);
+    expect(readSessionBinding(proj, "migration-session")).toMatchObject({
+      space: "default",
+      intent: migrated?.dirName,
+      source: "create",
+    });
   });
 });

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:document-input subcommand:aidlc-utility:project-description function:readProjectDescriptionAuthority
+// covers: subcommand:aidlc-utility:document-input subcommand:aidlc-utility:project-description function:readProjectDescriptionAuthority function:fileIdentity function:sameFileIdentity
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -36,6 +36,7 @@ import {
   readDocumentBytes,
   resolveContainedFile,
 } from "../../core/tools/aidlc-knowledge.ts";
+import { fileIdentity, sameFileIdentity } from "../../core/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -544,6 +545,33 @@ describe("t329 project-description and document-input boundaries", () => {
       ).toString("utf-8");
     }).toThrow("changed after project-containment validation");
     expect(returned).toBeUndefined();
+  });
+
+  test("file identity tells apart NTFS ids a number would round together", () => {
+    // NTFS file ids keep a sequence number in their top 16 bits, so they exceed
+    // 2^53 (this one was read from a file written on Windows). The file written
+    // next can get the id one higher.
+    const ino = 0x89_0000_0012_05f8n;
+    expect(Number(ino)).toBe(Number(ino + 1n));
+    expect(sameFileIdentity({ dev: 1n, ino }, { dev: 1n, ino: ino + 1n })).toBe(false);
+    expect(sameFileIdentity({ dev: 1n, ino }, { dev: 1n, ino })).toBe(true);
+
+    const dir = project();
+    const file = join(dir, "vision.md");
+    writeFileSync(file, "inside vision");
+    const identity = fileIdentity(file);
+    expect(typeof identity.dev).toBe("bigint");
+    expect(typeof identity.ino).toBe("bigint");
+    expect(resolveContainedFile(realpathSync(dir), "vision.md").identity).toEqual(identity);
+    expect(
+      readDocumentBytes(file, "document", undefined, 800_000, identity).toString("utf-8"),
+    ).toBe("inside vision");
+    expect(() =>
+      readDocumentBytes(file, "document", undefined, 800_000, {
+        dev: identity.dev,
+        ino: identity.ino + 1n,
+      }),
+    ).toThrow("changed after project-containment validation");
   });
 
   test("refuses binary input with DocumentKB remediation", () => {

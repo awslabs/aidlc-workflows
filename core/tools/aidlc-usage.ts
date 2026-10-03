@@ -1049,6 +1049,18 @@ const WAIT_OBJECT_0 = 0;
 const WAIT_ABANDONED = 0x80;
 const USAGE_MUTEX_WAIT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 
+// Opt-in hook phase trace; aidlc-hook-trace.ts owns the switch and the format.
+// It is loaded only when its variable is set, so a runtime tree without that
+// file folds exactly as before.
+export function usageTrace(phase: string, detail?: Record<string, unknown>): void {
+  if (!process.env.AIDLC_HOOK_TRACE_DIR) return;
+  try {
+    (require("./aidlc-hook-trace.ts") as typeof import("./aidlc-hook-trace.ts")).hookTrace(phase, detail);
+  } catch {
+    // Diagnostics only.
+  }
+}
+
 function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
   if (WIN32_USAGE_MUTEX !== null) {
     const identity = auditLockIdentity(
@@ -1062,10 +1074,13 @@ function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
     if (handle === null) {
       throw new Error("Failed to create the Windows usage-ledger mutex");
     }
+    usageTrace("usage-lock-wait", { lock: "win32-mutex", boundMs: USAGE_MUTEX_WAIT_MS });
+    const waitStarted = Date.now();
     const waitResult = WIN32_USAGE_MUTEX.symbols.WaitForSingleObject(
       handle,
       USAGE_MUTEX_WAIT_MS,
     );
+    usageTrace("usage-lock-wait-end", { result: waitResult, waitedMs: Date.now() - waitStarted });
     if (waitResult !== WAIT_OBJECT_0 && waitResult !== WAIT_ABANDONED) {
       WIN32_USAGE_MUTEX.symbols.CloseHandle(handle);
       throw new Error(
@@ -1077,16 +1092,28 @@ function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
     } finally {
       WIN32_USAGE_MUTEX.symbols.ReleaseMutex(handle);
       WIN32_USAGE_MUTEX.symbols.CloseHandle(handle);
+      usageTrace("usage-lock-released");
     }
   }
-  return withAuditLock(
-    projectDir,
-    fn,
-    USAGE_LOCK_INTENT,
-    USAGE_LOCK_SPACE,
-    Math.ceil(USAGE_MUTEX_WAIT_MS / 25),
-    25,
-  );
+  usageTrace("usage-lock-wait", { lock: "audit-lock", boundMs: USAGE_MUTEX_WAIT_MS });
+  const waitStarted = Date.now();
+  let acquired = false;
+  try {
+    return withAuditLock(
+      projectDir,
+      () => {
+        acquired = true;
+        usageTrace("usage-lock-wait-end", { waitedMs: Date.now() - waitStarted });
+        return fn();
+      },
+      USAGE_LOCK_INTENT,
+      USAGE_LOCK_SPACE,
+      Math.ceil(USAGE_MUTEX_WAIT_MS / 25),
+      25,
+    );
+  } finally {
+    usageTrace(acquired ? "usage-lock-released" : "usage-lock-not-acquired");
+  }
 }
 
 // Incrementally fold new rows into the ledger and advance the per-file cursors.

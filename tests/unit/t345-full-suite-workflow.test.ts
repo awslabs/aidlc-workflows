@@ -1164,6 +1164,9 @@ describe("t345 complete nightly coverage", () => {
       const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
         ...inherited, PATHEXT: ".UNTRUSTED",
       });
+      // The hook phase trace is on for the Windows live legs only.
+      expect(windows.AIDLC_TEST_HOOK_TRACE).toBe("1");
+      expect(env.AIDLC_TEST_HOOK_TRACE).toBeUndefined();
       // Native `where claude` needs the executable suffix list after scrubbing.
       expect(windows.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
       expect(windows.PATH).toBe("C:\\aidlc-live\\tools");
@@ -1180,6 +1183,35 @@ describe("t345 complete nightly coverage", () => {
     expect(() => sandboxEnvironment("codex", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
       ...inherited, AIDLC_CODEX_BIN: "C:\\runner\\untrusted.cmd",
     })).toThrow("sealed native Codex launcher");
+  });
+
+  test("the Windows wait loop snapshots stalled hooks for live runs only, from process metadata", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+    const snapshot = source.match(/^function Write-HookStallSnapshot\b[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(snapshot).toContain("Get-CimInstance Win32_Process");
+    // Hooks enter the dispatcher both ways; an adapter runs its core hook as a child.
+    expect(snapshot).toContain("Contains('engine hook ')");
+    expect(snapshot).toContain("Contains('engine adapter ')");
+    // Every CIM query is capped at what is left of the snapshot's budget (at
+    // most 15 seconds), so a slow provider cannot hold the wait loop; ownership
+    // is checked for the stalled processes and their parents, not every process.
+    expect(snapshot).toContain("[int]$BudgetSeconds = 60");
+    expect(snapshot).toContain("$remaining = { [int][Math]::Min(15, [Math]::Floor(($budget - [DateTime]::UtcNow).TotalSeconds)) }");
+    const cimCalls = snapshot.match(/(?:Get-CimInstance|Invoke-CimMethod)[^\n]*/g) ?? [];
+    expect(cimCalls.length).toBeGreaterThanOrEqual(3);
+    for (const call of cimCalls) expect(call).toMatch(/-OperationTimeoutSec (?:\$seconds|\(\[Math\]::Max\(1, \(& \$remaining\)\)\))/);
+    expect(snapshot).not.toMatch(/foreach \(\$process in \$processes\) \{[^}]*GetOwnerSid/);
+    // A lookup that reports a failure without throwing is unknown, not "not owned".
+    expect(snapshot).toContain("$owner.ReturnValue -ne 0 -or [string]::IsNullOrEmpty($owner.Sid)) { return $null }");
+    // Reading files the isolated run uses could add a handle to the stall.
+    expect(snapshot).not.toMatch(/Get-Content|ReadAll|OpenRead|::Open\(|Get-ChildItem/);
+    // One call site, gated to the live run's scheduled-task wait and evidence-only.
+    expect(source.match(/Write-HookStallSnapshot \$/g) ?? []).toHaveLength(1);
+    expect(source).toMatch(
+      /if \(\$Label -eq 'run' -and \[DateTime\]::UtcNow -ge \$nextStallCheck\) \{\s+\$nextStallCheck = \[DateTime\]::UtcNow\.AddMinutes\(1\)\s+try \{ Write-HookStallSnapshot \$stallDirectory \$stallSeen /,
+    );
+    // A runner-only sibling of the task's log root, collected with the launch logs.
+    expect(source).toContain("$stallDirectory = Join-Path (Join-Path $tools 'logs') ('hook-stalls-' + $id)");
   });
 
   test("Kiro and Cursor are excluded without exposing vendor API keys", () => {
