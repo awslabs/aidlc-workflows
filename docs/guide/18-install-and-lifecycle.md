@@ -416,7 +416,7 @@ interactive wizard.
 
 `aidlc config models` records model policy in the selected settings layer
 (`aidlc.settings.json` for `--project`) and applies it through the normal config
-plan, confirmation, refresh guard, and transaction. It never contacts a model
+plan, confirmation, and transaction. It never contacts a model
 provider. On Kiro CLI, choosing a session model asks Kiro CLI for your account's
 model list and that model's effort levels; with `--yes`, only `--session-model`
 does.
@@ -868,11 +868,11 @@ its extracted `runtime/` folder, or one harness root. Servers you added to
 Plugin names are discovered from the installed graph, scopes, and plugin
 sidecars. They are not hardcoded. The selection continues to use the existing
 top-level `plugins` array in `harness.json`, so graph and runner regeneration
-use the same selection seam as plugin composition. Project mutations run
-through the refresh safety guard and refuse while a workflow is active.
-Add `--dry-run` to the same command to preview its plan without changing
-project or settings files. The preview remains available during an active
-workflow; applying the change still requires completing that workflow.
+use the same selection seam as plugin composition. A project change while a
+workflow is open is done, like any refresh (see "Refresh Safety"), and says
+what changed with the command that puts the earlier choice back when one
+command can say it. Add `--dry-run` to the same command to preview its plan
+without changing project or settings files.
 
 MCP consent remains `defaults` or `none`. A non-interactive project mutation
 with no earlier consent records `none`, unless `.mcp.json` already holds a
@@ -937,25 +937,39 @@ the apply fails closed.
 
 ### Refresh Safety
 
-A settings change is done while work is open: `config models`, `flags`,
-`runtime`, `providers`, and `trust` read the project's own files and bring in
-no release (when the project is pinned to another release, the update it needs
-first is a refresh and waits). Each prints what changed and, where one command
+Any `aidlc config` you run while work is open is done, not refused, parked
+workflows included. A settings change (`config models`, `flags`, `runtime`,
+`providers`, and `trust`) reads the project's own files and brings in no
+release. Each prints what changed and, where one command
 puts the earlier value back, that command. A model or flag change also names
 the open workflows that pick it up: a bypass, hook debug, the sensor timeout,
 and question retention apply right away, with no restart; models and swarm
 apply from the next step (a step already running keeps what it started with);
 a default scope applies to new work only, and a saved model profile changes
 nothing until `--from` loads it. The runtime, providers, and trust answers
-print no workflow line. A refresh that brings in release files changes project
-engine and graph files, so config refuses it while any workflow in any space
-is not complete. Parked workflows still count as active. Complete every
-workflow named in the error, then rerun config.
+print no workflow line.
 
-The check runs once while planning and again under the workspace audit lock
-immediately before commit. `--force`, `--yes`, and `--plan-token` do not bypass
-it. `aidlc update` and `aidlc use` remain safe during a workflow because
-they only change machine state.
+A refresh that brings in release files (a plain `aidlc config`, `--from`,
+`--download`, `config project`, or the update a pinned project needs first)
+is done too, and says so:
+
+```
+  Updated. Your open work (default/add-login) carries on.
+```
+
+When the files came from another release, the next line says how to go back:
+
+```
+  To go back: `aidlc config --pin 2.9.0 --yes` (this pins the version for everyone on the project; `aidlc config --unpin` removes the pin).
+```
+
+On a project that is already pinned it gives only the `--pin` part. On a
+copied project the line names the earlier release's file instead: get
+`aidlc-copy-runtime-2.9.0.tar.gz` and its `.sha256` into one folder, then run
+`bun .claude/tools/aidlc.ts config --from <that file> --yes`. A harness
+added beside open work comes from the files you name, and its line names the
+folder it added (`Added .codex. Your open work (...) carries on.`); no command
+removes a harness, so there is no undo line.
 
 Refresh preserves:
 
@@ -1110,9 +1124,8 @@ engine's release. On a copied project each tree runs its own release, so the
 others are refreshed from the newest tree's release, its
 `aidlc-copy-runtime-<version>.tar.gz` passed with `--from`; a tree no config run has
 recorded first takes one `--download` refresh at its own release. While a
-workflow runs, config does not refresh a tree, so the warning names the tool
-whose files are on that release to continue in, and the commands to run after
-the workflow completes.
+workflow runs, the warning names the tool whose files are on that release to
+continue in, and the commands to run after the workflow completes.
 
 AI-DLC's `.gitignore` lines are its own entries only. Earlier releases also
 put a generic template (logs, `node_modules`, `dist`, editor files) at the top
@@ -1327,15 +1340,11 @@ An installed pinned release is used without asking, and files behind it are
 updated first.
 
 A pin switches the engine that serves the project at once, but the project's
-hooks and tools stay at the version they were last refreshed to, and a refresh
-waits while a workflow is active. So while a workflow runs, `config --pin` and
-`config --unpin` refuse a change that would move the engine away from that
-version: the two would run side by side and code generation would stop. The
-message names both versions. Complete the workflow, then change the pin and
-refresh the project. When every harness in the project is on the same recorded
-version, pinning to that version is also allowed. Harnesses on different
-versions, or on a release from before versions were recorded, wait for the
-workflow. `--dry-run` still previews the change and says it would be refused.
+own files stay at the version they were last refreshed to until the next
+`aidlc config`. While work is open, `config --pin` and `config --unpin` are
+done as asked; when the project's files are on another version than the one it
+now follows (or on a release from before versions were recorded), the reply
+ends with "Run `aidlc config` to finish updating this project."
 
 A fresh clone or CI runner installs the committed version before config:
 

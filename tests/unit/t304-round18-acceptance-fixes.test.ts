@@ -1082,35 +1082,17 @@ describe("t304 copied projection configuration", () => {
     writeFileSync(path, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
   }
 
-  test("a copied harness added from another release while a workflow runs is fetched at the running release", async () => {
+  test("a copied harness added from another release while a workflow runs comes from the files named", () => {
     const project = fullCopyProject();
     stampAs(project, ".claude", OTHER_VERSION);
     const workflow = startWorkflow(project);
-    const release = releaseServer(OTHER_VERSION);
-    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
-    try {
-      const refused = await runCopiedAsync(
-        project,
-        ["config", "--harness", "codex", "--yes", "--from", join(DIST, "codex")],
-        { env },
-      );
-      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-      expect(refused.stdout).toContain(
-        `error: the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (${workflow}) uses ${OTHER_VERSION}\n`,
-      );
-      const fix = fixLine(refused.stdout);
-      expect(fix).toBe("bun .claude/tools/aidlc.ts config --harness codex --yes --download");
-      expect(existsSync(join(project, ".codex"))).toBe(false);
-      const followed = await followFix(fix, project, env);
-      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
-      expect(followed.stdout).toContain(`Downloaded aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`);
-      expect(JSON.parse(
-        readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8"),
-      ).frameworkVersion).toBe(OTHER_VERSION);
-    } finally {
-      release.stop();
-    }
-  }, 180_000);
+    const added = runCopied(project, ["config", "--harness", "codex", "--yes", "--from", join(DIST, "codex")]);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(added.stdout).toContain(`Added .codex. Your open work (${workflow}) carries on.`);
+    expect(JSON.parse(
+      readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+    ).frameworkVersion).toBe(AIDLC_VERSION);
+  }, 120_000);
 
   test("natively, a harness added while a workflow runs comes from the engine's release", () => {
     const { project, machine } = configuredNativeProject();
@@ -1125,6 +1107,22 @@ describe("t304 copied projection configuration", () => {
     expect(JSON.parse(
       readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8"),
     ).frameworkVersion).toBe(AIDLC_VERSION);
+  }, 120_000);
+
+  test("natively, a refresh to another release while a workflow runs names the pin that goes back", () => {
+    const { project, machine } = configuredNativeProject();
+    const workflow = startWorkflow(project);
+    const source = temp("aidlc-t304-native-later-");
+    cpSync(join(DIST_RELEASE, "claude"), source, { recursive: true });
+    stampAs(source, ".claude", OTHER_VERSION);
+    const moved = runCopied(project, ["config", "--from", source, "--force", "--yes"], {
+      env: { ...machine, AIDLC_RUNTIME_ROOT: DIST_RELEASE },
+    });
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    expect(moved.stdout).toContain(`Updated. Your open work (${workflow}) carries on.`);
+    expect(moved.stdout).toContain(
+      `To go back: \`aidlc config --pin ${AIDLC_VERSION} --yes\` (this pins the version for everyone on the project; \`aidlc config --unpin\` removes the pin).`,
+    );
   }, 120_000);
 
   test("natively, a missing pinned release is installed and registered, then the command finishes", async () => {
@@ -1256,7 +1254,7 @@ describe("t304 copied projection configuration", () => {
     ["native", "root"],
     ["native", "project"],
   ] as const)(
-    "active-workflow preview keeps the %s command context (%s)",
+    "a refresh while work is open is done, and its preview keeps the %s command context (%s)",
     (channel, section) => {
       const tree = channel === "copy" ? DIST : DIST_RELEASE;
       const project = temp("aidlc-t304-active-preview-");
@@ -1299,16 +1297,9 @@ describe("t304 copied projection configuration", () => {
       ];
       const options = { harnessDir: ".codex", cwd: elsewhere };
       // Include nested files, directory names and modes, the caller, the source,
-      // and machine settings: neither refusal nor preview may change them.
+      // and machine settings: the preview changes none of them.
       const protectedRoots = [project, elsewhere, source, ISOLATED_MACHINE];
       const before = protectedRoots.map(transactionState);
-      const refused = runCopied(project, args, options);
-      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-      const failure = JSON.parse(refused.stdout);
-      expect(failure.message).toContain("refusing to refresh while 1 workflow(s) are active");
-      expect(protectedRoots.map(transactionState)).toEqual(before);
-
-      // Follow the advertised instruction by retaining the complete invocation.
       const preview = runCopied(project, [...args, "--dry-run"], options);
       expect(preview.status, preview.stdout + preview.stderr).toBe(0);
       const plan = JSON.parse(preview.stdout).data;
@@ -1320,9 +1311,15 @@ describe("t304 copied projection configuration", () => {
       }));
       if (section === "project") expect(plan.choices.next.mcp).toBe("none");
       expect(protectedRoots.map(transactionState)).toEqual(before);
-      expect(failure.remediation).toContain("Rerun this command with --dry-run");
-      expect(failure.remediation).toContain("without writing");
-      expectCopyChannelPurity(failure.remediation);
+
+      // Applied while the workflow runs, it is done and changes only the project.
+      const applied = runCopied(project, args, options);
+      expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+      const changes = (JSON.parse(applied.stdout).data.changes ?? []) as string[];
+      expect(changes).toContain(`Updated. Your open work (default/${dirName}) carries on.`);
+      if (channel === "copy") for (const line of changes) expectCopyChannelPurity(line);
+      expect(readFileSync(join(project, tool), "utf-8")).toContain("// candidate refresh");
+      expect([elsewhere, source, ISOLATED_MACHINE].map(transactionState)).toEqual(before.slice(1));
     },
   );
 

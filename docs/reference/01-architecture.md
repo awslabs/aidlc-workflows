@@ -529,8 +529,9 @@ otherwise higher precedence than the record.
 `aidlc config project` stores MCP and completion answers in a schema-versioned
 `project` record while continuing to store plugin selection in the established
 top-level `plugins` array. Installed plugins are discovered from graph, scope,
-and plugin sidecar data. The normal refresh guard protects all project choice
-mutations from changing a live workflow plan.
+and plugin sidecar data. A project choice changed while a workflow is open is
+done like any refresh, and its output names the open work and the command that
+puts the earlier choice back.
 
 Recorded MCP consent feeds the existing root-integration merge mode during the
 same transaction and on later plain refreshes for Claude's consent-managed

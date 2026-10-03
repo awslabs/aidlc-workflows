@@ -1,13 +1,11 @@
 // covers: none (aidlc-init config --pin has no registry unit)
 //
-// #1418: `config --pin` switched the engine that serves a project at once, while
-// the project's hooks and tools stayed at the version its harness tree was last
-// refreshed to, and the refresh that would align them is refused while a
-// workflow runs. The two then ran side by side and code generation stopped.
-// A pin or unpin that would split them now waits for the workflow; pinning to
-// the hooks' own version (the way back) and dry-run previews stay available.
-// A tree from before stamps records no version, and a project whose harnesses
-// disagree has no single version to go back to, so both wait for the workflow.
+// `config --pin` switches the engine that serves a project at once,
+// while the project's own files stay at the version its harness tree was last
+// refreshed to until the next `aidlc config`. A pin or unpin while work is
+// open is done, and when the files are on another version than the one the
+// project now follows, it says to run `aidlc config` to finish. A tree from
+// before stamps records no version, so it never counts as a match.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -92,78 +90,59 @@ function config(proj: { dir: string; installRoot: string }, args: string[]) {
 }
 
 describe("config --pin while a workflow is running (#1418)", () => {
-  test("a pin away from the hooks' version waits, naming both versions and the next step", () => {
-    const proj = project(true);
-    const refused = config(proj, ["--pin", OTHER_VERSION]);
-    expect(refused.status).toBe(1);
-    expect(refused.output).toContain(`refusing to switch this project to aidlc ${OTHER_VERSION} while 1 workflow(s) are active: default/pin-probe`);
-    expect(refused.output).toContain(`hooks and tools are from aidlc ${AIDLC_VERSION}`);
-    expect(refused.output).toContain("code generation would stop");
-    expect(refused.output).toContain(`Complete the workflow, then change the pin and refresh the project; or pin to ${AIDLC_VERSION}`);
-    expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
-  });
+  const FINISH = "config` to finish updating this project.";
 
-  test("pinning to the hooks' own version is not held back", () => {
-    const proj = project(true);
-    const result = config(proj, ["--pin", AIDLC_VERSION]);
-    expect(result.output).not.toContain("refusing to switch this project");
-  });
-
-  test("with no workflow running, a pin to another version is not held back", () => {
-    const proj = project(false);
-    const result = config(proj, ["--pin", OTHER_VERSION]);
-    expect(result.output).not.toContain("refusing to switch this project");
-  });
-
-  test("unpinning waits the same way when the machine version differs from the hooks", () => {
-    const proj = project(true);
+  // The machine follows another version, and the project is pinned to the one
+  // its files are from.
+  function pinnedAwayFromMachine(active: boolean): { dir: string; installRoot: string } {
+    const proj = project(active);
     writeFileSync(join(proj.installRoot, "active-version"), `${OTHER_VERSION}\n`);
     writeFileSync(join(proj.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const refused = config(proj, ["--unpin"]);
-    expect(refused.status).toBe(1);
-    expect(refused.output).toContain(`refusing to switch this project to aidlc ${OTHER_VERSION}`);
-    expect(readFileSync(join(proj.dir, ".aidlc-version"), "utf-8")).toBe(`${AIDLC_VERSION}\n`);
-  });
+    return proj;
+  }
 
-  test("hooks that did not record their version wait too, with no pin-back offered", () => {
-    const proj = project(true);
-    dropStamp(proj.dir);
-    const refused = config(proj, ["--pin", AIDLC_VERSION]);
-    expect(refused.status).toBe(1);
-    expect(refused.output).toContain("hooks and tools are from an earlier aidlc that did not record its version");
-    expect(refused.output).toContain("Complete the workflow, then change the pin and refresh the project.");
-    expect(refused.output).not.toContain("or pin to");
+  test("unpinning while work is open is done and says to finish the update", () => {
+    const proj = pinnedAwayFromMachine(true);
+    const result = config(proj, ["--unpin"]);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain("Removed this project's AI-DLC version pin; it now follows the active machine version.");
+    expect(result.output).toContain(FINISH);
+    expect(result.output).not.toContain("refusing");
     expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
   });
 
-  test("harnesses on different versions wait for the workflow, with no pin-back offered", () => {
-    const proj = project(true);
-    addKiro(proj.dir, OTHER_VERSION);
-    const refused = config(proj, ["--pin", AIDLC_VERSION]);
-    expect(refused.status).toBe(1);
-    expect(refused.output).toContain(`hooks and tools are from aidlc ${AIDLC_VERSION} and aidlc ${OTHER_VERSION}`);
-    expect(refused.output).toContain("Complete the workflow, then change the pin and refresh the project.");
-    expect(refused.output).not.toContain("or pin to");
-    expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
+  test("with no workflow running, an unpin says nothing more", () => {
+    const proj = pinnedAwayFromMachine(false);
+    const result = config(proj, ["--unpin"]);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).not.toContain(FINISH);
   });
 
-  test("a pin dry run answers offline for a release this machine lacks", () => {
+  test("an unpin to the version the files are from says nothing more", () => {
     const proj = project(true);
-    const preview = config(proj, ["--pin", OTHER_VERSION, "--dry-run"]);
-    expect(preview.status).toBe(0);
-    expect(preview.output).toContain(`Project pin plan for aidlc ${OTHER_VERSION}; no files were changed.`);
-    expect(preview.output).toContain("Running it now would be refused: refusing to switch this project");
-    expect(existsSync(join(proj.dir, ".aidlc-version"))).toBe(false);
-  });
-
-  test("a dry run previews and says what the real run would refuse", () => {
-    const proj = project(true);
-    writeFileSync(join(proj.installRoot, "active-version"), `${OTHER_VERSION}\n`);
+    writeFileSync(join(proj.installRoot, "active-version"), `${AIDLC_VERSION}\n`);
     writeFileSync(join(proj.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-    const preview = config(proj, ["--unpin", "--dry-run"]);
-    expect(preview.status).toBe(0);
-    expect(preview.output).toContain("Project pin removal plan; no files were changed.");
-    expect(preview.output).toContain("Running it now would be refused: refusing to switch this project");
-    expect(readFileSync(join(proj.dir, ".aidlc-version"), "utf-8")).toBe(`${AIDLC_VERSION}\n`);
+    const result = config(proj, ["--unpin"]);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).not.toContain(FINISH);
+  });
+
+  test("files that did not record their version, or harnesses on different versions, say to finish too", () => {
+    for (const prepare of [dropStamp, (dir: string) => addKiro(dir, OTHER_VERSION)]) {
+      const proj = project(true);
+      prepare(proj.dir);
+      writeFileSync(join(proj.installRoot, "active-version"), `${AIDLC_VERSION}\n`);
+      writeFileSync(join(proj.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+      const result = config(proj, ["--unpin"]);
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain(FINISH);
+    }
+  });
+
+  test("a pin while work is open is never refused, and its dry run plans it the usual way", () => {
+    const proj = project(true);
+    for (const args of [["--pin", OTHER_VERSION], ["--pin", OTHER_VERSION, "--dry-run"], ["--pin", AIDLC_VERSION]]) {
+      expect(config(proj, args).output).not.toContain("refusing to switch this project");
+    }
   });
 });

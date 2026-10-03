@@ -5516,67 +5516,6 @@ function prepareRefreshSource(
   }
 }
 
-function assertRefreshSafe(projectDir: string): void {
-  const activeWorkflows = activeWorkflowDescriptions(projectDir);
-  if (activeWorkflows.length === 0) return;
-  throw new Error(
-    `refusing to refresh while ${activeWorkflows.length} workflow(s) are active: ${
-      activeWorkflows.join(", ")
-    }. Complete the workflow before rerunning aidlc config; update and use do not modify project files.`,
-  );
-}
-
-// Each copied harness runs its own engine and hooks against the project's
-// running workflows, so a harness added under one belongs on the release the
-// installed ones are on. That release can be fetched only when they all record
-// it and it lets harnesses share a project (their .gitignore block is shared).
-function runningAddRelease(
-  projectDir: string,
-  distribution: string,
-  installed: readonly ProjectHarness[],
-): { workflows: string[]; others: ProjectHarness[]; version?: string } | null {
-  const others = installed.filter((harness) => harness.distribution !== distribution);
-  if (others.length === 0) return null;
-  const workflows = activeWorkflowDescriptions(projectDir);
-  if (workflows.length === 0) return null;
-  const versions = new Set(others.map((harness) => harness.frameworkVersion));
-  const [version] = versions;
-  const shared = others.every((harness) =>
-    siblingDescriptor(harness)?.rootIntegrations.some((integration) =>
-      integration.path === ".gitignore" && integration.shared === "union"
-    )
-  );
-  return { workflows, others, version: versions.size === 1 && shared ? version : undefined };
-}
-
-function assertHarnessAddKeepsVersion(
-  projectDir: string,
-  adding: { distribution: string; frameworkVersion: string },
-  installed: readonly ProjectHarness[],
-  fromFiles: boolean,
-): void {
-  const running = runningAddRelease(projectDir, adding.distribution, installed);
-  if (!running || running.others.every((harness) => harness.frameworkVersion === adding.frameworkVersion)) return;
-  if (running.version) {
-    throw new NeedsRelease({
-      cause: "running",
-      version: running.version,
-      distribution: adding.distribution,
-      current: fromFiles ? adding.frameworkVersion : undefined,
-      workflows: running.workflows,
-    });
-  }
-  const from = running.others.map((harness) =>
-    `${harness.distribution} ${harness.frameworkVersion ?? "(an earlier aidlc that did not record its version)"}`
-  ).join(", ");
-  throw new Error(
-    `refusing to add ${adding.distribution} ${adding.frameworkVersion} while ${running.workflows.length} workflow(s) are active: ${
-      running.workflows.join(", ")
-    }. The installed harnesses are on ${from} and cannot be refreshed until the workflow completes, so the ` +
-      "new harness's hooks would run a different version against the same workflow.",
-  );
-}
-
 // An earlier release put a generic template (node_modules, dist, editor
 // files) in AI-DLC's part of .gitignore; a refresh keeps those lines as the
 // project's own and says so once.
@@ -5806,16 +5745,13 @@ type ReleaseNeed = {
   distribution: string;
   // The project's directory for this harness, when it already has one.
   harnessDir?: string;
-  // The release those files are, when a pin or a running workflow asks for
-  // another.
+  // The release those files are, when a pin asks for another.
   current?: string;
-  cause: "pin" | "pin-missing" | "add" | "switch" | "running" | "restore" | "refresh" | "mcp" | "from";
+  cause: "pin" | "pin-missing" | "add" | "switch" | "restore" | "refresh" | "mcp" | "from";
   // For "switch": the installed row the run replaces in the same directory.
   switchingFrom?: string;
   // For "mcp": the project has no .mcp.json at all, rather than an emptied one.
   absent?: boolean;
-  // For "running": the workflows the installed harnesses are running.
-  workflows?: string[];
 };
 
 // Whether a copied project's own files can apply its project choices. Plugins
@@ -5868,12 +5804,6 @@ function releaseNeedSentence(need: ReleaseNeed): string {
       return `Adding ${need.distribution} needs the ${need.version} release files.`;
     case "switch":
       return `Switching ${dir} from ${need.switchingFrom} to ${need.distribution} needs the ${need.version} release files.`;
-    case "running": {
-      const workflows = (need.workflows ?? []).join(", ");
-      return need.current
-        ? `The files passed to --from are ${need.current}, but the workflow running in this project (${workflows}) uses ${need.version}.`
-        : `Adding ${need.distribution} while a workflow runs in this project (${workflows}) needs the ${need.version} release files it uses.`;
-    }
     case "restore":
       return `${dir} is missing aidlc/spaces/default/memory/.`;
     case "refresh":
@@ -5901,7 +5831,6 @@ function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "sta
         ? `Download and install ${need.version} from ${host}`
         : `This first downloads and installs ${need.version} from ${host}`;
     case "add":
-    case "running":
       return `${fetch} and ${add} ${need.distribution}`;
     case "switch":
       return `${fetch} and ${switchTo} ${need.harnessDir} to ${need.distribution}`;
@@ -9549,6 +9478,68 @@ function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutati
     : null;
 }
 
+// A refresh that brings in release files is done while work is open too: one
+// line says so, and when it moved the project to another release, how to go
+// back. Natively a pin brings the earlier release back; a copied project takes
+// that release's files again. A harness added beside open work has no command
+// that removes it, so its line names the folder it added.
+function refreshDoneLines(
+  projectDir: string,
+  change: { added?: string; from?: string; to: string; pinned: boolean; copyChannel: boolean; releaseBaseUrl?: string },
+): string[] {
+  const open = activeWorkflowDescriptions(projectDir);
+  if (open.length === 0) return [];
+  const carriesOn = `Your open work (${open.join(", ")}) carries on.`;
+  if (change.added) return [`Added ${change.added}. ${carriesOn}`];
+  // The earlier version is read from the project's committed manifest, so it
+  // is printed only when it is a release id.
+  if (!change.from || change.from === change.to || !VERSION_ID.test(change.from)) return [`Updated. ${carriesOn}`];
+  const command = (args: string): string => `\`${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}\``;
+  return [
+    `Updated. ${carriesOn}`,
+    change.copyChannel
+      ? `To go back: get ${copyRuntimeUrl(change.from, change.releaseBaseUrl)} and its .sha256 into one folder, then run ${
+        command("--from <that file> --yes")
+      }.`
+      : change.pinned
+      ? `To go back: ${command(`--pin ${quoteCommandArgument(change.from)} --yes`)}.`
+      : `To go back: ${command(`--pin ${quoteCommandArgument(change.from)} --yes`)} (this pins the version for everyone on the project; ${
+        command("--unpin")
+      } removes the pin).`,
+  ];
+}
+
+// What a project choice changed, with the command that puts the earlier one
+// back when one command can say it exactly.
+function projectChangeLines(projectDir: string, context: ChoicesMutationContext): string[] {
+  const before = context.previous as ProjectChoicesRecord | null;
+  const after = context.next as ProjectChoicesRecord | null;
+  const pluginsChanged = canonical(context.previousPlugins) !== canonical(context.nextPlugins);
+  if (canonical(before) === canonical(after) && !pluginsChanged) return [];
+  const file = `${context.harnessDir}/tools/data/harness.json`;
+  let undo: string[] | null = [];
+  if (before === null && context.previousPlugins === null) {
+    undo = ["--reset"];
+  } else {
+    if (pluginsChanged) {
+      undo = context.previousPlugins === null
+        ? ["--plugins", "all"]
+        : context.previousPlugins.length > 0
+        ? ["--plugins", context.previousPlugins.join(",")]
+        : null;
+    }
+    for (const [key, flag] of [["mcp", "--mcp"], ["completions", "--completions"]] as const) {
+      if (!undo || before?.[key] === after?.[key]) continue;
+      const earlier = before?.[key];
+      undo = earlier ? [...undo, flag, earlier] : null;
+    }
+  }
+  if (!undo || !printableArgs(undo)) return [`Changed the project choices in ${file}.`];
+  return [`Changed the project choices in ${file}. To undo: ${configInvocationFor(projectDir)} config project ${
+    undo.map((arg) => quoteCommandArgument(arg)).join(" ")
+  } --yes${projectTarget(projectDir)}`];
+}
+
 // The machine settings file lives outside the project, so its change runs as
 // its own step after the project's. When that step fails, the project files
 // have already changed: the error says which, and rerunning the same command
@@ -9903,7 +9894,10 @@ export async function main(
     return;
   }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
-    emitResult(await configureProjectPin(argv, { activeWorkflows: activeWorkflowDescriptions }), options);
+    emitResult(await configureProjectPin(argv, {
+      activeWorkflows: activeWorkflowDescriptions,
+      refreshCommand: (dir) => `${configInvocationFor(dir)} config${projectTarget(dir)}`,
+    }), options);
     return;
   }
   const requestedHarnesses = valuesAfter(argv, "--harness");
@@ -10031,8 +10025,6 @@ export async function main(
       // The same order as the checks after source selection.
       assertHooksDirReviewable(projectDir, `${switchOccupant.harnessDir}/hooks`, switchOccupant.harnessDir, requestedHarness);
       assertSwitchBaseline(switchOccupant, requestedHarness);
-      // Refused under an active workflow before any release is fetched for it.
-      if (!argv.includes("--dry-run")) assertRefreshSafe(projectDir);
     }
     const pinPath = join(projectDir, ".aidlc-version");
     if (pathPresent(pinPath) && !regularFile(pinPath)) {
@@ -10063,13 +10055,6 @@ export async function main(
     const pendingConfirm = modelsContext?.confirm ??
       diagnosticsContext?.confirm ??
       choicesContext?.confirm;
-    // A copied harness added while a workflow runs comes from the release the
-    // installed ones are on, as a pin would choose it.
-    // A switch replaces the installed harness rather than adding one beside it.
-    const runningAdd = copyChannel && requiredVersion === undefined && !existing.distribution &&
-        !switchOccupant && requestedHarness
-      ? runningAddRelease(projectDir, requestedHarness, projectHarnesses)
-      : null;
     let need: ReleaseNeed | null = null;
     // What this run will also do before the change itself, said in the
     // question and done only once it is answered.
@@ -10132,7 +10117,7 @@ export async function main(
           requestedHarness,
           from,
           existing.distribution,
-          requiredVersion ?? runningAdd?.version,
+          requiredVersion,
         );
       } catch (error) {
         // Natively and unpinned, a missing harness means the active runtime
@@ -10182,22 +10167,18 @@ export async function main(
           }
         }
         if (!selected && !need) {
-          const running = !harness && runningAdd?.version !== undefined && runningAdd.version !== AIDLC_VERSION;
           need = {
             version: requiredVersion ?? harness?.frameworkVersion ??
               (switchOccupant?.frameworkVersion && VERSION_ID.test(switchOccupant.frameworkVersion)
                 ? switchOccupant.frameworkVersion
                 : undefined) ??
-              runningAdd?.version ?? AIDLC_VERSION,
+              AIDLC_VERSION,
             distribution: error.distribution,
             harnessDir: harness?.harnessDir ?? switchOccupant?.harnessDir,
             current: harness?.frameworkVersion,
-            workflows: running ? runningAdd?.workflows : undefined,
             ...(switchOccupant ? { switchingFrom: switchOccupant.distribution } : {}),
             cause: !copyChannel
               ? "pin-missing"
-              : running
-              ? "running"
               : !harness && switchOccupant
               ? "switch"
               : !harness
@@ -10378,26 +10359,12 @@ export async function main(
         }
       }
     }
-    // A dry run prints the transaction plan and writes nothing, so the
-    // active-workflow refusal does not apply to it: the apply path keeps its
-    // own assertRefreshSafe inside the audit lock, which is what actually
-    // stops a refresh from moving project files under a live workflow. A
-    // settings change read from the project's own files brings nothing in, so
-    // it is the person's to make whenever they ask.
-    if (refreshing && !argv.includes("--dry-run") && !recordOnly) {
-      assertRefreshSafe(projectDir);
-    }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
       throw new MissingInstalledSource(
         `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
         stamp.distribution,
         requiredVersion,
       );
-    }
-    // Natively every harness runs the hooks of the engine serving the project,
-    // which is the release an add without --from takes its files from.
-    if (copyChannel && !refreshing && !argv.includes("--dry-run")) {
-      assertHarnessAddKeepsVersion(projectDir, stamp, installed, Boolean(from));
     }
     // Checked again just before planning: the baseline the switch plans from
     // is the one this check accepted, even after a long download.
@@ -10882,19 +10849,7 @@ export async function main(
       withAuditLock(
         projectDir,
         () => {
-          if (!recordOnly) assertRefreshSafe(projectDir);
           executeSettingsAndProjectMutation(settingsMutation, plan, hookChecks);
-        },
-        undefined,
-        undefined,
-        600,
-      );
-    } else if (copyChannel && discoverProjectHarnesses(projectDir).length > 0) {
-      withAuditLock(
-        projectDir,
-        () => {
-          assertHarnessAddKeepsVersion(projectDir, stamp, discoverProjectHarnesses(projectDir), Boolean(from));
-          executeSettingsAndProjectMutation(settingsMutation, plan);
         },
         undefined,
         undefined,
@@ -10975,10 +10930,21 @@ export async function main(
       !modelsContext ||
       actions.some((item) => item.path.startsWith(`${descriptor.harnessDir}/agents/`) && item.action !== "preserve")
     );
+    if (choicesContext?.section === "project") changes.push(...projectChangeLines(projectDir, choicesContext));
     const openLine = recordOnly && reachesWork && settingsMutation
       ? openWorkflowLine(projectDir, [settingsMutation])
       : null;
     if (openLine) changes.push(openLine);
+    if (!recordOnly) {
+      changes.push(...refreshDoneLines(projectDir, {
+        added: existing.distribution ? undefined : descriptor.harnessDir,
+        from: prior?.frameworkVersion,
+        to: stamp.frameworkVersion,
+        pinned: requiredVersion !== undefined,
+        copyChannel,
+        releaseBaseUrl: releaseSettings.baseUrl,
+      }));
+    }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -11117,8 +11083,7 @@ export async function main(
     const rawMessage = error instanceof Error ? error.message : String(error);
     const copyChannel = aidlcInvocation() !== "aidlc";
     // A pin refusing the files named by --from wants the pinned release itself,
-    // fetched instead of those files; so does a running workflow refusing them
-    // for the release its harnesses are on.
+    // fetched instead of those files.
     const pinMismatch = error instanceof MissingInstalledSource && from ? error : null;
     const needed: ReleaseNeed | null = error instanceof NeedsRelease
       ? error.need
@@ -11177,7 +11142,7 @@ export async function main(
             input,
             projectDir,
             ["--download"],
-            pinMismatch || release.cause === "running" ? ["--from"] : [],
+            pinMismatch ? ["--from"] : [],
           ),
       ), options);
       return;
@@ -11228,15 +11193,7 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
-      // The active-workflow refusal is about workflow state, not about the
-      // source or the harness. Preserve the invocation's section, project,
-      // source and policy options: a bare config --dry-run can target another
-      // project or fail to select the same source in a copied installation.
-      /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
-        ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
-        : /refusing to add \S+ \S+ while \d+ workflow\(s\) are active/.test(rawMessage)
-        ? "Complete the workflow, then add this harness; or run this command with --dry-run to preview the add without writing"
-        : error instanceof SwitchRefusal
+      error instanceof SwitchRefusal
         ? error.remedy.kind === "update"
           ? "update AI-DLC to the release that wrote this baseline, then run the switch again"
           : error.remedy.kind === "text"

@@ -140,9 +140,8 @@ aidlc config
 Config preserves managed root blocks and user-owned files, and reports local
 framework edits as conflicts. Because `opencode.json` is a whole-file
 integration, a local edit is preserved as a conflict rather than overwritten.
-A refresh from release files waits while any workflow is active; complete the
-workflow first. Settings changes (`config models`, `flags`, `providers`) do not
-wait.
+A refresh while a workflow is open is done, like a settings change (`config
+models`, `flags`, `providers`), and says your open work carries on.
 Upgrade and rollback remain safe during a workflow because they do not touch
 the project.
 

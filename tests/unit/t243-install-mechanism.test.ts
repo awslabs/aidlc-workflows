@@ -3587,7 +3587,7 @@ describe("t243 project initialization", () => {
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("refresh refuses an active workflow without changing project bytes", () => {
+  test("a refresh while a workflow runs is done and says the work carries on", () => {
     const project = temp("aidlc-t243-active-refresh-");
     mkdirSync(join(project, ".git"));
     const installed = run(INIT, [
@@ -3623,48 +3623,41 @@ describe("t243 project initialization", () => {
     const rel = join(".claude", "tools", "aidlc-command.ts");
     writeFileSync(join(newer, rel), `${readFileSync(join(newer, rel), "utf-8")}\n// active refresh marker\n`);
     const target = join(project, rel);
-    const before = readFileSync(target);
-    const rootEntries = readdirSync(project).sort();
-    const projectBefore = transactionSourceHash(project);
 
-    const refused = run(INIT, [
-      "config",
-      "--project-dir",
-      project,
-      "--from",
-      newer,
-      "--json",
-    ], project);
-    expect(refused.status).toBe(4);
-    expect(refused.stdout + refused.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
-    expect(readFileSync(target)).toEqual(before);
-    expect(readdirSync(project).sort()).toEqual(rootEntries);
-    expect(transactionSourceHash(project)).toBe(projectBefore);
-
-    writeFileSync(
-      state,
-      readFileSync(state, "utf-8").replace("Status**: Running", "Status**: Archived"),
-    );
-    const registry = JSON.parse(readFileSync(join(intentsDir, "intents.json"), "utf-8"));
-    registry[0].status = "archived";
-    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
-    const archived = run(INIT, [
+    const refreshed = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
       newer,
     ], project);
-    expect(archived.status, archived.stdout + archived.stderr).toBe(0);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(readFileSync(target, "utf-8")).toContain("// active refresh marker");
+    // The same release, so there is nothing to go back to.
+    expect(refreshed.stdout).toContain(`Updated. Your open work (default/${dirName}) carries on.`);
+    expect(refreshed.stdout).not.toContain("To go back");
+    expect(readFileSync(state, "utf-8")).toContain("Status**: Running");
+
+    // Files from another release say how to go back to the one it was on: a
+    // copied project takes that release's files again.
+    const later = temp("aidlc-t243-active-later-");
+    cpSync(CLAUDE_RELEASE, later, { recursive: true });
+    const laterStamp = join(later, ".claude", "tools", "data", "aidlc-stamp.json");
+    writeFileSync(laterStamp, `${JSON.stringify({
+      ...JSON.parse(readFileSync(laterStamp, "utf-8")),
+      frameworkVersion: NEXT_VERSION,
+    }, null, 2)}\n`);
+    const moved = run(INIT, ["config", "--project-dir", project, "--from", later, "--force", "--yes"], project);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    expect(moved.stdout).toContain(`Updated. Your open work (default/${dirName}) carries on.`);
+    expect(moved.stdout).toMatch(new RegExp(`To go back: get \\S*aidlc-copy-runtime-${AIDLC_VERSION.replaceAll(".", "\\.")}\\.tar\\.gz and its \\.sha256 into one folder, then run `));
+    expect(moved.stdout).toContain("then run `bun .claude/tools/aidlc.ts config --from <that file> --yes`.");
+    expect(moved.stdout).not.toContain("--pin");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The refusal above protects project bytes. A dry run writes none, and the
-  // workflow that cannot complete is exactly what the operator is trying to
-  // diagnose, so the preview has to stay reachable. The refusal's own
-  // remediation must likewise name a route that works from this state, not
-  // `config --harness <name>`, which re-enters the same guard.
-  test("a dry run previews the refresh under an active workflow, and the refusal names a reachable route", () => {
+  // A dry run writes nothing, and the plan token it prints applies that same
+  // refresh while the workflow runs.
+  test("a dry run previews the refresh under an active workflow, and its plan token applies it", () => {
     const project = temp("aidlc-t243-active-dry-run-");
     mkdirSync(join(project, ".git"));
     const installed = run(INIT, [
@@ -3724,9 +3717,7 @@ describe("t243 project initialization", () => {
     expect(readdirSync(project).sort()).toEqual(rootEntries);
     expect(transactionSourceHash(project)).toBe(projectBefore);
 
-    // Applying it is still refused, and the remediation is a route that does
-    // not re-enter this guard.
-    const refused = run(INIT, [
+    const applied = run(INIT, [
       "config",
       "--project-dir",
       project,
@@ -3738,13 +3729,10 @@ describe("t243 project initialization", () => {
       JSON.parse(previewed.stdout).data.planToken,
       "--json",
     ], project);
-    expect(refused.status).toBe(4);
-    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
-    expect(payload.message).toContain("refusing to refresh while 1 workflow(s) are active");
-    expect(payload.remediation ?? "").toContain("--dry-run");
-    expect(payload.remediation ?? "").not.toMatch(/config --harness/);
-    expect(readFileSync(target)).toEqual(before);
-    expect(transactionSourceHash(project)).toBe(projectBefore);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const payload = JSON.parse(applied.stdout) as { data: { changes?: string[] } };
+    expect(payload.data.changes).toEqual([`Updated. Your open work (default/${dirName}) carries on.`]);
+    expect(readFileSync(target, "utf-8")).toContain("// dry-run marker");
   }, 60_000);
 
   // Copied harnesses each run their own engine and hooks against the project's
@@ -3771,34 +3759,22 @@ describe("t243 project initialization", () => {
     return { project, stampPath, kiroStamp: JSON.parse(readFileSync(stampPath, "utf-8")) };
   }
 
-  test("a copied harness added from another release while a workflow runs is refused with the fetch of the running release", () => {
+  test("a copied harness added from another release while a workflow runs is added from the files named", () => {
     const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-split-");
-    const addClaude = (...extra: string[]) => run(INIT, [
-      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
-    ], project);
-
     writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
-    const refused = addClaude("--yes");
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
-    expect(payload.message).toContain(
-      `the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (default/260919-add-split) uses ${NEXT_VERSION}`,
-    );
-    expect(payload.message).toContain(`aidlc-copy-runtime-${NEXT_VERSION}.tar.gz`);
-    // The rerun fetches the running release instead of the files named.
-    expect(payload.remediation ?? "").toMatch(/ --download$/);
-    expect(payload.remediation ?? "").not.toContain("--from");
-    expect(existsSync(join(project, ".claude"))).toBe(false);
-    const previewed = addClaude("--dry-run");
-    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
-    expect(existsSync(join(project, ".claude"))).toBe(false);
-    writeFileSync(stampPath, `${JSON.stringify(kiroStamp, null, 2)}\n`);
-    const added = addClaude("--yes");
+    const added = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
+    ], project);
     expect(added.status, added.stdout + added.stderr).toBe(0);
-    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
+    const payload = JSON.parse(added.stdout) as { data: { changes?: string[] } };
+    // No command removes a harness, so the line names the folder it added.
+    expect(payload.data.changes).toEqual(["Added .claude. Your open work (default/260919-add-split) carries on."]);
+    expect(JSON.parse(
+      readFileSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+    ).frameworkVersion).toBe(AIDLC_VERSION);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a copied harness added beside a release that predates sharing a project waits for the workflow", () => {
+  test("a copied harness added beside a release that predates sharing a project is added, as with no open work", () => {
     const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-predates-");
     writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
     // Before harnesses could share a project, no release shared .gitignore.
@@ -3808,18 +3784,13 @@ describe("t243 project initialization", () => {
     };
     for (const integration of descriptor.rootIntegrations) delete integration.shared;
     writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
-    const refused = run(INIT, [
+    const added = run(INIT, [
       "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
     ], project);
-    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
-    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
-    expect(payload.message).toContain(
-      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
-    );
-    expect(payload.message).toContain("kiro 2.9.0");
-    expect(payload.remediation ?? "").toContain("Complete the workflow");
-    expect(payload.remediation ?? "").not.toMatch(/config --harness|--download/);
-    expect(existsSync(join(project, ".claude"))).toBe(false);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    const payload = JSON.parse(added.stdout) as { data: { changes?: string[] } };
+    expect(payload.data.changes).toEqual(["Added .claude. Your open work (default/260919-add-split) carries on."]);
+    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a pinned project's add from other files names the pinned release, not the running workflow", () => {

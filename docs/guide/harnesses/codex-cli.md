@@ -194,9 +194,9 @@ aidlc config
 ```
 
 Config preserves user-owned content and reports local framework edits as
-conflicts. It refuses refresh while any workflow is active; complete the
-workflow first. Upgrade and rollback remain safe during a workflow because
-they do not touch project files. A refresh can change Codex hook identities, so
+conflicts. A refresh while a workflow is open is done and says your open work
+carries on. Upgrade and rollback remain safe during a workflow because they do
+not touch project files. A refresh can change Codex hook identities, so
 approve the new trust dialog or replace the matching trust-seed entries after
 config when Codex requests it.
 
