@@ -14,7 +14,11 @@
 //     executes them.
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
-import { copyChannelDelegateShellDeny, shellDenyLines } from "./delegate-shell-deny.ts";
+import {
+  copyChannelDelegateShellDeny,
+  nativeDelegateShellDeny,
+  shellDenyLines,
+} from "./delegate-shell-deny.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
 const DELEGATION_AGENTS = [
@@ -260,6 +264,12 @@ const manifest: HarnessManifest = {
     file: `agents/${agent}.md`,
     lines: personaFrontmatter(agent),
   })),
+  // The native release keys the persona shell deny on the `aidlc engine`
+  // routes its conductor allow covers (delegate-shell-deny.ts).
+  nativeReplacements: [{
+    from: shellDenyLines(copyChannelDelegateShellDeny(".kiro")).join("\n"),
+    to: shellDenyLines(nativeDelegateShellDeny()).join("\n"),
+  }],
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 

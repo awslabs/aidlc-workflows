@@ -1015,6 +1015,16 @@ export function stripOrchestratorLauncherOptions(args: readonly string[]): strin
 export const WORKSPACE_NOUNS = ["intent", "space"] as const;
 export type WorkspaceNoun = (typeof WORKSPACE_NOUNS)[number];
 
+// The commands aidlc-utility.ts dispatches, as its unknown-command error lists them.
+export const UTILITY_COMMANDS = [
+  "help", "version", "status", "doctor", "intent-create", "intent", "space",
+  "space-create", "codekb-path", "codekb-snapshot", "codekb-publish", "project-description",
+  "document-input", "codekb-scope-diff", "detect", "select-plugins", "plugin-list",
+  "plugin-sync", "plugin-validate", "plugin-build", "recompose", "scope-change", "scope-save",
+  "config-change", "config-get", "config-list", "set-status", "detect-scope",
+  "resolve-env-scope", "scope-table", "stage-table", "upgrade",
+] as const;
+
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
   "switch",

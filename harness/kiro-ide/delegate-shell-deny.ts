@@ -24,7 +24,7 @@ import {
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { ROUTES, TOOLS } from "../../core/tools/aidlc.ts";
 import { trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
-import { UTILITY_COMMANDS } from "../../core/tools/aidlc-utility.ts";
+import { UTILITY_COMMANDS } from "../../core/tools/aidlc-lib.ts";
 
 export type ShellDeny = { match: string[]; exclude: string[] };
 
