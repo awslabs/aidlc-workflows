@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { extractTarGz } from "./aidlc-archive.ts";
 import {
   EXIT,
+  type CommandResult,
   emitResult,
   failure,
   globalOptions,
@@ -158,6 +159,7 @@ import {
   harnessOwnsModelAccess,
   availableScopeNames,
   completionInstruction,
+  copilotCliTrust,
   detectAwsCredentials,
   discoverInstalledPluginNames,
   effectiveProjectFlagValues,
@@ -1348,6 +1350,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         "  --acknowledge",
         "",
         "Trust is read, verified, and instructed. This section never regenerates trust seeds or permission rules.",
+        "On Copilot, the step says whether the Copilot CLI has trusted this folder and how to trust it with the CLI's own prompt; it never edits the CLI's config.",
       ];
   return [
     section === "runtime"
@@ -1982,6 +1985,32 @@ function diagnosticWizard(
     : records.trust;
 }
 
+// The Copilot trust step. Hooks in VS Code need a trusted folder and Chat: Use
+// Hooks on, which AI-DLC cannot read, so the step names them. The Copilot CLI
+// keeps its own trusted folders and asks the person itself; trusting a folder
+// lets its code run, so the step points at that prompt and never edits the
+// CLI's config on the person's behalf.
+function copilotTrustStep(projectDir: string): CommandResult {
+  writeMenuText(
+    "\n  In VS Code, hooks also need a trusted folder and Chat: Use Hooks on (your organization can switch it off); AI-DLC cannot see either.\n",
+  );
+  const trust = copilotCliTrust(projectDir);
+  if (trust.state === "unreadable") {
+    return failure(
+      `${trust.configPath} is not a Copilot CLI config AI-DLC can read, so the CLI's folder trust is unknown`,
+      EXIT.failure,
+      `repair ${trust.configPath} (valid JSON, comments allowed, trustedFolders as a list), then rerun ${configCommand("trust")}`,
+    );
+  }
+  return success(
+    trust.state === "trusted"
+      ? "The Copilot CLI already trusts this folder"
+      : trust.state === "absent"
+      ? "No Copilot CLI config on this machine yet. Before using the Copilot CLI here (headless copilot -p runs included), run copilot in this folder once and choose \"Yes, and remember this folder for future sessions\"."
+      : "The Copilot CLI has not trusted this folder. To trust it, run copilot in this folder once and choose \"Yes, and remember this folder for future sessions\".",
+  );
+}
+
 function diagnosticSummary(
   section: DiagnosticSection,
   next: RuntimeRecord | ProvidersRecord | TrustRecord | null,
@@ -2204,10 +2233,22 @@ function setupMapRows(
   const projectDetail =
     `plugins: ${pluginDetail}, MCP: ${records.project?.mcp ?? "none"}, ` +
     `completions: ${records.project?.completions ?? "none"}`;
-  const trustDetail = trust.length > 0
+  // Copilot in VS Code gates hooks on switches AI-DLC cannot read, so the row
+  // names them as the person's to check instead of reporting all trust as met.
+  const copilot = modelHarness(distribution) === "copilot";
+  const trustDetail = trust.length === 1 && trust[0].id === "copilot-folder-untrusted"
+    ? trust[0].message
+    : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
-    :
-    (records.trust?.reviewed ? "review acknowledged" : "no unmet host trust");
+    : copilot
+    ? `${
+      copilotCliTrust(projectDir).state === "absent"
+        ? "no Copilot CLI config yet (the CLI asks to trust the folder on its first run)"
+        : "no Copilot CLI trust issue"
+    }; in VS Code, check the folder is trusted and Chat: Use Hooks is on`
+    : records.trust?.reviewed
+    ? "review acknowledged"
+    : "no unmet host trust";
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
     : records.providers === null
@@ -2572,6 +2613,10 @@ function prepareDiagnosticSection(
         ),
         options,
       );
+      return null;
+    }
+    if (section === "trust" && selected.harness === "copilot") {
+      emitResult(copilotTrustStep(projectDir), options);
       return null;
     }
     next = diagnosticWizard(section, projectDir, selected, records, options);

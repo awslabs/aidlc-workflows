@@ -50,7 +50,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
     list covers (the folder itself or a folder above it). The list is in
     `config.json` under `COPILOT_HOME`, else `~/.copilot`
     (`%USERPROFILE%\.copilot` on Windows). An interactive `copilot` run asks
-    you to confirm folder trust before it takes a prompt. Headless
+    you to confirm folder trust before it takes a prompt; choose "Yes, and
+    remember this folder for future sessions" to record it. `aidlc config`
+    tells you when the list does not cover the folder. Headless
     `copilot -p` runs additionally need
     `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
   - VS Code agent mode never reads that list. Its hooks run only in a
