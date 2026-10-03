@@ -374,9 +374,9 @@ A multi-root window reads this window-scoped setting from its
 `.code-workspace` file, not from a folder's `.vscode/settings.json`. So in a
 Copilot project, `aidlc system workspace-sync` also writes
 `"settings": { "chat.agent.maxRequests": 200 }` into the `aidlc.code-workspace`
-it generates, once: only into a file that has no settings yet. Settings
-already in the file are your team's and stay as they are, including a removed
-key. When that file exists, doctor checks it too, since it is the file in
+it generates, once: only into a file that has no settings yet. The keys and
+values already in the file's settings are your team's and stay, including a
+removed key; workspace-sync rewrites the file, so comments in it are not kept. When that file exists, doctor checks it too, since it is the file in
 charge whenever you open the workspace.
 
 ## Verify

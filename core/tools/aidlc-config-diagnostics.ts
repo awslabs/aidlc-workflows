@@ -2877,9 +2877,15 @@ export function vscodeWorkspaceRequestCapDoctorCheck(
       fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
     };
   }
-  const value = settings !== null && typeof settings === "object" && !Array.isArray(settings)
-    ? (settings as Record<string, unknown>)[VSCODE_REQUEST_CAP_KEY]
-    : undefined;
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} "settings" in ${where} is not an object, so VS Code reads no settings from it`,
+      fix: `make "settings" an object, for example "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 }; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = (settings as Record<string, unknown>)[VSCODE_REQUEST_CAP_KEY];
   // workspace-sync adds the key only to a file with no settings yet, so a
   // settings object without it is the team's choice.
   if (value === undefined) {

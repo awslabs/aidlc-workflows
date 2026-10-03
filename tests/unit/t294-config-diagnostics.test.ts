@@ -867,6 +867,12 @@ describe("t294 runtime diagnostics", () => {
     expect(older?.fix).toContain("run aidlc system workspace-sync");
     // A settings object without the key is the team's choice.
     expect(check(workspace({ "editor.tabSize": 2 }))?.pass).toBe(true);
+    // A settings member that is not an object is broken, never the team's choice.
+    for (const broken of [null, [], "200", true]) {
+      const row = check(JSON.stringify({ folders: [{ path: "." }], settings: broken }));
+      expect(row, JSON.stringify(broken)).toEqual(expect.objectContaining({ pass: false, severity: "warn" }));
+      expect(row?.fix, JSON.stringify(broken)).toContain('make "settings" an object');
+    }
     expect(check("{ ,, }")?.label).toContain("could not be read as JSONC");
     // Only a Copilot project gets the row.
     const claude = temp("aidlc-t294-workspace-request-cap-claude-");
