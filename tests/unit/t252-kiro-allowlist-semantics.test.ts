@@ -301,7 +301,9 @@ function writeVerdict(agent: { allowedTools?: string[]; allowedPaths: string[] }
 }
 
 /** The glob subset the shipped paths use: `*` and `**` match any run of
- *  characters (across `/`, as observed), `[!x]` is a negated class. */
+ *  characters, `/` included, and `[!x]` is a negated class. Whether Kiro's `*`
+ *  crosses `/` does not change a verdict here: the shipped `[!.]*` and
+ *  `[!.]*` + `/**` pair allows the same paths either way. */
 function globRegExp(glob: string): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
@@ -482,6 +484,9 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
           expect(writeVerdict(settings, path), `${harness}/${agent}: should ask before writing ${path}`).toBe("ask");
         }
       }
+      // The conductor's own sensor files under `.kiro/` stay pre-approved for it alone.
+      expect(writeVerdict(writeSettings(harness, "aidlc.json"), ".kiro/sensors/aidlc-linter.md")).toBe("allow");
+      expect(writeVerdict(writeSettings(harness, "aidlc-developer-agent.json"), ".kiro/sensors/aidlc-linter.md")).toBe("ask");
       // The other personas still write only their own AI-DLC files.
       const architect = writeSettings(harness, "aidlc-architect-agent.json");
       expect(writeVerdict(architect, "web/src/filter.ts")).toBe("ask");
