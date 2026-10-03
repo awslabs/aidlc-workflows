@@ -38,7 +38,7 @@ import {
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
-import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
+import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   insertJsoncSetting,
   jsoncSettingValue,
@@ -2542,6 +2542,18 @@ describe("t243 project initialization", () => {
       expect(refresh(project).stdout).toContain(
         `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
       );
+
+      // A recorded name the shell would read is shown quoted and never pasted
+      // into the command; run from elsewhere, the command names the project.
+      const crafted = ".claude/hooks/aidlc retired $(touch pwned).ts";
+      retire([crafted]);
+      const elsewhere = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], dirname(project));
+      expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
+      expect(existsSync(join(project, crafted))).toBe(false);
+      expect(elsewhere.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
+      const undo = elsewhere.stdout.split("\n").find((line) => line.startsWith("To get it back"));
+      expect(undo).toMatch(/^To get it back, run `git -C .+ restore <path>`\.$/);
+      expect(undo).toContain(basename(project));
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {

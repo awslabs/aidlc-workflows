@@ -6949,10 +6949,12 @@ function retiredFilesReport(
     const folder = path.slice(0, path.lastIndexOf("/") + 1);
     byFolder.set(folder, [...(byFolder.get(folder) ?? []), path]);
   }
+  // Each path is shown as it would be typed, so no control character in a
+  // recorded name reaches the terminal.
   const rows = [...byFolder].flatMap(([folder, files]) =>
     folder && files.length > 1
-      ? [{ line: `${folder} (${files.length} files)`, files: files.length }]
-      : files.map((file) => ({ line: file, files: 1 }))
+      ? [{ line: `${quoteCommandArgument(folder)} (${files.length} files)`, files: files.length }]
+      : files.map((file) => ({ line: quoteCommandArgument(file), files: 1 }))
   );
   const shown = rows.length > RETIRED_LIST_LINES ? rows.slice(0, RETIRED_LIST_LINES - 1) : rows;
   const more = rows.slice(shown.length).reduce((sum, row) => sum + row.files, 0);
@@ -6964,10 +6966,15 @@ function retiredFilesReport(
     ...(more > 0 ? [`  and ${more} more files`] : []),
   ];
   if (insideGitRepository(projectDir) && gitTracksEvery(projectDir, paths)) {
+    // The command runs from the same shell, so it names the project when this
+    // did not run from it. A recorded name goes into it only when it is plain
+    // text that neither the shell nor git would read as anything else.
+    const git = ranFromProject(projectDir) ? "git" : `git -C ${quoteCommandArgument(projectDir)}`;
+    const plain = paths.length === 1 && quoteCommandArgument(paths[0]) === paths[0] && !/^[-:]/.test(paths[0]);
     lines.push(
-      paths.length === 1
-        ? `To get it back, run \`git restore ${paths[0]}\`.`
-        : "To get one back, run `git restore <path>`.",
+      plain
+        ? `To get it back, run \`${git} restore ${paths[0]}\`.`
+        : `To get ${paths.length === 1 ? "it" : "one"} back, run \`${git} restore <path>\`.`,
     );
   }
   return lines;
@@ -9120,6 +9127,10 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    // Said as soon as it is done, so no later step can leave it unsaid.
+    if (options.mode === "human") {
+      writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true));
+    }
     const excludeNote = excludeLocalSettingsFromClone(settingsExclude);
     if (excludeNote) prepared.notes.push(excludeNote);
     // The new routing is published only now that the project matches it: a
@@ -9173,7 +9184,6 @@ export async function main(
       );
     }
     if (options.mode === "human") {
-      writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true));
       writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }
     const outstandingActions = internal.setupWalkChild
