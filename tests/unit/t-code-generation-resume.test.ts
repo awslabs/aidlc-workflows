@@ -71,6 +71,7 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const POSTURE = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const GUARD = join(AIDLC_SRC, "hooks", "aidlc-plan-approval-guard.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000c0de";
 const UNIT = "unit-2";
 const STEPS = Array.from({ length: 9 }, (_, index) => `Step ${index + 1}: build part ${index + 1} in \`src/part${index + 1}.ts\``);
@@ -201,6 +202,26 @@ function reply(proj: string, prompt: string): string {
   return result.stdout ?? "";
 }
 
+// What the agent runs after reading the person's reply: the choice they made.
+function answer(proj: string, details: string): ReturnType<typeof spawnSync> {
+  return spawnSync(BUN, [
+    LOG, "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", details,
+    "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: env(proj),
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+}
+
+/** The person approves in their own words; the agent records that choice. */
+function approve(proj: string): void {
+  reply(proj, "approve");
+  const recorded = answer(proj, "Approve Plan");
+  expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+}
+
 function posture(proj: string, args: string[]): ReturnType<typeof spawnSync> {
   return spawnSync(BUN, [POSTURE, ...args, "--project-dir", proj], {
     cwd: proj,
@@ -240,7 +261,7 @@ function approvedBuild(proj: string, unit: string | null = UNIT): { build: Emitt
   const ask = next(proj);
   expect(ask.kind, JSON.stringify(ask)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
-  expect(reply(proj, "approve")).toContain("Approve Plan");
+  approve(proj);
   const build = next(proj);
   expect(build.kind).toBe("run-stage");
   expect(build.unit).toBe(unit ?? undefined);
@@ -438,7 +459,7 @@ describe("a fresh start for the steps", () => {
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8")
       .replace("- [ ] Step 9:", "- [ ] Step 10: log every part\n- [ ] Step 9:"), "utf-8");
     expect(next(proj).ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    approve(proj);
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
@@ -451,7 +472,7 @@ describe("a fresh start for the steps", () => {
     interrupted(proj, 1, 2, 3, 4);
     appendAuditEntry("STAGE_JUMPED", { Stage: "code-generation", Direction: "redo" }, proj);
     expect(next(proj).ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    approve(proj);
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
@@ -461,9 +482,13 @@ describe("a fresh start for the steps", () => {
   test("the person re-approves the plan: its build starts fresh", () => {
     const proj = project();
     interrupted(proj, 1, 2, 3, 4);
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    // The agent reads the request and records it: the plan is asked about again.
+    reply(proj, "review the plan first");
+    const review = answer(proj, "Review the plan");
+    expect(review.status, `${review.stdout}${review.stderr}`).toBe(0);
+    expect(String(review.stdout)).toContain("review the plan");
     expect(next(proj).ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    approve(proj);
     const build = next(proj);
     expect(build.plan_approval).toEqual({ status: "approved" });
     expect(build.narration ?? "").not.toContain(PICK_UP);
@@ -529,7 +554,9 @@ describe("a swarm batch keeps its own continuation rule", () => {
     expect(ask.kind).toBe("ask");
     writeActiveDirectiveMarker(pd, { kind: "ask", stage: "code-generation", ask_type: "plan-approval", units: group, state_sha256: state() });
     publishPlanApprovalAsk(pd, ask as Parameters<typeof publishPlanApprovalAsk>[1]);
-    expect(reply(pd, "approve all")).toContain("Approve Plan");
+    // "Approve all" is the question's own choice: the hook records it as typed.
+    reply(pd, "approve all");
+    for (const unit of group) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(true);
     writeActiveDirectiveMarker(pd, { ...swarm, state_sha256: state() });
     const first = brief(pd, "alpha");
     tick(pd, "alpha", 1);
