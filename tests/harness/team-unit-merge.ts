@@ -1,7 +1,8 @@
 // Shared fixture for the t326 pinned team Unit merge suites
-// (tests/integration/t326-team-unit-merge*.test.ts). The cases live in two
-// files so the integration tier can run them in parallel; one file ran for
-// about 20 minutes on a Windows runner.
+// (tests/integration/t326-team-unit-merge*.test.ts). The cases live in four
+// files so the integration tier can run them in parallel: one file ran for
+// about 20 minutes on a Windows runner, and with two the longer one still set
+// the Windows integration leg's length.
 
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
