@@ -2074,6 +2074,184 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("27l: a person's words in quotes may hold parentheses, semicolons, and spaced pipes or arrows without an Allow click", () => {
+    // The agent records answers and decisions in the person's words, which
+    // often hold "(closed range)", "Skip it; nothing else", or "A|B" options.
+    // Inside quotes those are plain text in every shell VS Code may run, and
+    // in AI-DLC's aidlc.cmd: PowerShell keeps the quotes on a value with a
+    // space, so cmd never sees a bare | & < or >.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, shell?: string) =>
+        shellDecision(runAdapter(s, "guard-tool-call", { ...shellCall(command), tool_input: { command, ...(shell ? { shell } : {}) } })).hookSpecificOutput?.permissionDecision;
+      for (const shell of [undefined, "pwsh", "C:\\Windows\\System32\\cmd.exe", "bash"]) {
+        for (const command of [
+          'aidlc engine log answer --stage requirements-analysis --details "Q1: A - both ends included (closed range)"',
+          'bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision "Q3: Keep the start boundary as-is (start date included), only fix the end?" --options "A: yes,B: no,Other"',
+          'bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision "Learnings?" --options "Keep the end-boundary note|Skip it"',
+          'aidlc engine log answer --stage requirements-analysis --details "Skip it; nothing else to add"',
+          'aidlc engine log answer --stage build-and-test --details "Minimal strategy -> no integration tests"',
+          'aidlc engine log answer --stage build-and-test --details "build & test pass"',
+          "aidlc engine log answer --stage requirements-analysis --details 'Q2: C (any time on the end day counts); keep it'",
+          // as a later run recorded them, with / and + in the words
+          'bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision "Q1,Q2,Q3,Q4" --options "Q1: Inclusive end / exclusive+day-after / inclusive-for-total-only / parameterized / Other; Q2: date-only / may-carry-time / mixed-normalize / Other; Q3: filter.ts only / review-others / broader-rework / Other; Q4: regression-test / test+manual / no-new-test / Other"',
+          'bun .aidlc/tools/aidlc.ts engine log answer --stage requirements-analysis --details "Q1: A (inclusive end); Q2: A (date-only, plain inclusive comparison); Q3: A (filter.ts only, AssetApi untouched); Q4: A (add targeted regression test, keep existing tests green)"',
+        ]) expect(decision(command, shell), `${shell}: ${command}`).toBe("allow");
+        // A workflow command with such words is claimed, rewritten, and allowed.
+        const report = shellDecision(runAdapter(s, "guard-tool-call", { ...shellCall(
+          'aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input "yes (the closed range)"',
+        ), tool_input: { command: 'aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input "yes (the closed range)"', ...(shell ? { shell } : {}) } }));
+        expect(report.hookSpecificOutput?.permissionDecision, String(shell)).toBe("allow");
+        expect(report.hookSpecificOutput?.updatedInput?.command, String(shell)).toContain(STUB_ATTEMPT);
+        for (const command of [
+          // without a space PowerShell drops the quotes before a .cmd launcher
+          'aidlc engine log answer --stage requirements-analysis --details "a|calc"',
+          'aidlc engine log answer --stage requirements-analysis --details "a&calc"',
+          'aidlc engine log answer --stage requirements-analysis --details "a>out.txt"',
+          // cmd does not treat single quotes as quotes
+          "aidlc engine log answer --stage requirements-analysis --details 'a | calc'",
+          "aidlc engine log answer --stage requirements-analysis --details 'a & calc'",
+          // outside quotes, and what PowerShell or cmd still read inside them
+          "aidlc engine log answer --stage requirements-analysis --details (calc)",
+          "aidlc engine log answer --stage requirements-analysis --details a;calc",
+          'aidlc engine log answer --stage requirements-analysis --details "a $(calc) b"',
+          'aidlc engine log answer --stage requirements-analysis --details "100% (of it)"',
+          'aidlc engine log answer --stage requirements-analysis --details "a ^& b"',
+        ]) expect(decision(command, shell), `${shell}: ${command}`).not.toBe("allow");
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27m: in a Windows terminal a single-quoted path may hold backslashes, as the engine's own review command prints it", () => {
+    // The engine tells the reviewer to record its verdict with
+    // `--project-dir 'C:\work\app'`. Single quotes keep a backslash literal
+    // in PowerShell; only one right before the closing quote keeps the prompt,
+    // because PowerShell turns a spaced value into double quotes, and bun then
+    // reads that backslash as escaping the quote.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const win = (path: string) => path.replaceAll("/", "\\");
+      const decision = (command: string, shell?: string) =>
+        shellDecision(runAdapter(s, "guard-tool-call", { ...shellCall(command), tool_input: { command, ...(shell ? { shell } : {}) } })).hookSpecificOutput?.permissionDecision;
+      const review = (dir: string) =>
+        `bun .aidlc/tools/aidlc-log.ts review --stage requirements-analysis --reviewer aidlc-product-lead-agent --iteration 1 --verdict 'READY' --project-dir '${dir}'`;
+      for (const shell of ["pwsh", "powershell.exe", "C:\\Windows\\System32\\cmd.exe", ...(process.platform === "win32" ? [undefined] : [])]) {
+        expect(decision(review(win(s.projectRoot)), shell), String(shell)).toBe("allow");
+        // the same folder with each backslash doubled, as JSON output shows it
+        expect(decision(review(win(s.projectRoot).replaceAll("\\", "\\\\")), shell), String(shell)).toBe("allow");
+        expect(decision(`bun .aidlc/tools/aidlc.ts engine log review --stage requirements-analysis --reviewer aidlc-product-lead-agent --iteration 1 --verdict READY --project-dir '${win(s.projectRoot)}'`, shell), String(shell)).toBe("allow");
+        expect(decision(`aidlc engine log answers --stage 'docs\\notes'`, shell), String(shell)).toBe("allow");
+        expect(decision(review(`${win(s.projectRoot)}\\`), shell), String(shell)).toBeUndefined();
+      }
+      // Under a POSIX shell a backslash keeps today's rule.
+      for (const shell of ["bash", ...(process.platform === "win32" ? [] : [undefined])]) {
+        expect(decision(review(win(s.projectRoot)), shell), String(shell)).toBeUndefined();
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27n: --version, --status, --help, and --doctor run without an Allow click, like version, status, help, and doctor", () => {
+    // The person asks for the version check or doctor, and the agent types the
+    // flag spelling.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string) => shellDecision(runAdapter(s, "guard-tool-call", shellCall(command))).hookSpecificOutput?.permissionDecision;
+      for (const head of ["aidlc", "bun .aidlc/tools/aidlc.ts"]) {
+        for (const args of ["--version", "--status", "--help", "--doctor", "--doctor --verbose", "--doctor --json"]) {
+          expect(decision(`${head} ${args}`), `${head} ${args}`).toBe("allow");
+        }
+        // Doctor keeps the prompt for the flags that reach the network or a
+        // place outside the project, in both spellings.
+        for (const args of ["--doctor --check-updates", "doctor --check-updates", "--doctor --output /tmp/doctor.txt"]) {
+          expect(decision(`${head} ${args}`), `${head} ${args}`).toBeUndefined();
+        }
+        // The other flag shortcuts stand for commands that change work.
+        for (const args of ["--claim U01", "--release U01", "--scope bugfix"]) {
+          expect(decision(`${head} ${args}`), `${head} ${args}`).not.toBe("allow");
+        }
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27o: AI-DLC's own checks run without an Allow click; the project's linter, type checker, and sensor fire keep it", () => {
+    // Traceability, required sections, upstream coverage, and claim sources
+    // read files and start no program. The linter and type checker run the
+    // project's own tools, and `sensor fire` runs whatever a manifest names.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string) => shellDecision(runAdapter(s, "guard-tool-call", shellCall(command))).hookSpecificOutput?.permissionDecision;
+      for (const command of [
+        "aidlc engine sensor-traceability --output-path aidlc/traceability.json --stage-slug code-generation",
+        "bun .aidlc/tools/aidlc.ts engine sensor-required-sections --output-path aidlc/plan.md --stage-slug code-generation 2>&1",
+        "aidlc engine sensor-upstream-coverage --output-path aidlc/plan.md --stage-slug code-generation",
+        "aidlc engine sensor-claim-sources --output-path aidlc/plan.md",
+      ]) expect(decision(command), command).toBe("allow");
+      for (const command of [
+        "aidlc engine sensor-linter --file-path src/a.ts",
+        "aidlc engine sensor-type-check --file-path src/a.ts --stage code-generation",
+        "aidlc engine sensor fire traceability --stage code-generation --output-path aidlc/traceability.json",
+        "aidlc engine sensor fire linter --stage code-generation --output-path src/a.ts",
+        // a path outside the project still keeps it
+        "aidlc engine sensor-traceability --output-path /tmp/traceability.json",
+      ]) expect(decision(command), command).toBeUndefined();
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27p: the copy channel's aidlc-utility.ts commands get the same answer as their engine spelling", () => {
+    // The copy channel's stage files name `bun .aidlc/tools/aidlc-utility.ts
+    // codekb-snapshot` where the native install names `aidlc engine workspace
+    // codekb-snapshot`. The script serves several engine nouns, so its verb
+    // picks the route.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, acted = false) =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command), { T250_HUMAN_ACTED: acted ? "1" : undefined })).hookSpecificOutput?.permissionDecision;
+      for (const command of [
+        "bun .aidlc/tools/aidlc-utility.ts codekb-snapshot --paths ./ --json",
+        "bun .aidlc/tools/aidlc-utility.ts codekb-publish --staged aidlc/codekb-stage --paths ./ --expect-store none",
+        "bun .aidlc/tools/aidlc-utility.ts project-description",
+        "bun .aidlc/tools/aidlc-utility.ts document-input",
+        "bun .aidlc/tools/aidlc-utility.ts codekb-path",
+        // as a later run sent them
+        "bun .aidlc/tools/aidlc-utility.ts codekb-snapshot --repo r4 --paths ./ --json",
+        'bun .aidlc/tools/aidlc-utility.ts codekb-publish --repo r4 --staged "aidlc/spaces/default/intents/261003-sales-date-filter/.aidlc-engine/codekb-stage-r4/" --paths ./ --expect-store none --expect-source git:bf3c6d5102f107691948cb63328e7a0155cb51e2 --json',
+      ]) expect(decision(command), command).toBe("allow");
+      for (const command of [
+        // the engine spelling keeps the prompt, so this one does too
+        "bun .aidlc/tools/aidlc-utility.ts set-status requirements-analysis completed",
+        "bun .aidlc/tools/aidlc-utility.ts scope-change --scope bugfix",
+        "bun .aidlc/tools/aidlc-utility.ts plugin-build plugins/test-pro",
+        // a path outside the project
+        "bun .aidlc/tools/aidlc-utility.ts codekb-snapshot --paths /tmp --json",
+        // not a verb any engine noun names
+        "bun .aidlc/tools/aidlc-utility.ts status",
+        "bun .aidlc/tools/aidlc-utility.ts bogus",
+      ]) expect(decision(command), command).toBeUndefined();
+      // The engine never names the utility for a project-type change, so the
+      // person's word lifts the prompt only on `engine workspace reclassify`
+      // (27j).
+      for (const acted of [false, true]) {
+        expect(decision("bun .aidlc/tools/aidlc-utility.ts reclassify --project-type brownfield", acted), String(acted)).toBeUndefined();
+      }
+      expect(decision("aidlc engine workspace reclassify --project-type brownfield", true)).toBe("allow");
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("28: chained, redirected, substituted, wrapped, host-only, machine, and other commands get no allow; denies are unchanged", () => {
     const s = scratch();
     try {

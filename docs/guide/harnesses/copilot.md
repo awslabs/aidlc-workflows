@@ -189,26 +189,35 @@ then use the ignored local `dist/copilot/` output.
   Code agent mode normally asks "Run command? Allow / Skip" before every
   terminal command, so each workflow step would wait for a click. The adapter
   answers `allow` for the routine commands AI-DLC runs during a stage: `next`,
-  `continue`, `report`, and `park`, the read-only `next` forms, `doctor` with
-  the flags the engine names, and the project commands in AI-DLC's own command
-  table (`engine log`, `engine state`, `engine runtime`, `engine learnings`,
-  `engine testing-posture`, `engine intent list`, and the rest), in the
-  direct, source-dispatcher, compiled, or tool-script spelling. It answers only
-  when all of these hold:
+  `continue`, `report`, and `park`, the read-only `next` forms, `doctor` (or
+  `--doctor`) with the flags the engine names, `--version`, `--status`, and
+  `--help`, AI-DLC's own checks (`engine sensor-traceability`,
+  `sensor-required-sections`, `sensor-upstream-coverage`, and
+  `sensor-claim-sources`, which only read files), and the project commands in
+  AI-DLC's own command table (`engine log`, `engine state`, `engine runtime`,
+  `engine learnings`, `engine testing-posture`, `engine intent list`, and the
+  rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
+  The copy channel's `aidlc-utility.ts <verb>` gets the same answer as its
+  `engine workspace <verb>` spelling. It answers only when all of these hold:
   - the call carries VS Code's chat session, every AI-DLC guard has passed,
     and a workflow command is matched to this session's workflow;
   - it is one plain command that PowerShell, cmd, and a POSIX shell all read
     the same way: no chaining, pipe, redirect other than one trailing `2>&1`,
     environment assignment in front, or shell expansion, and no character any
     of those shells treats specially (such as `$`, a backtick, `%`, `^`, `!`,
-    `&`, `|`, `<`, `>`, `;`, `#`, parentheses, braces, `@`, `\`, or a
-    typographic quote), even inside quotes. A quoted word may hold spaces and
-    `?`, and an apostrophe inside double quotes. Text outside plain ASCII
-    (accented letters, for example) also keeps the prompt. On Windows, where
-    VS Code's terminal is PowerShell or cmd, a backslash is a plain path
-    separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
-    without a click; only a backslash right before a double quote keeps the
-    prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
+    `#`, braces, `@`, `\`, or a typographic quote), even inside quotes. A
+    quoted word may hold spaces, `?`, parentheses, and `;`, and an apostrophe
+    inside double quotes. Double-quoted text may also hold `|`, `&`, `<`, or
+    `>` when it has a space, as in
+    `--details "Q1: A - both ends included (closed range)"` or
+    `--options "Keep the note|Skip it"`; outside quotes, in single quotes, or
+    in double quotes with no space, those keep the prompt. Text outside plain
+    ASCII (accented letters, for example) also keeps the prompt. On Windows,
+    where VS Code's terminal is PowerShell or cmd, a backslash is a plain path
+    separator, so a path such as `C:\work\app`, `.aidlc\tools\...`, or
+    `--project-dir 'C:\work\app'` (as the engine prints a project folder)
+    runs without a click; only a backslash right before a closing quote keeps
+    the prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
     PowerShell terminal one `cd` or `Set-Location` to the project folder
     itself, by its full path, may come first:
     `cd C:\work\app; aidlc engine orchestrate next` runs like
@@ -250,10 +259,11 @@ then use the ignored local `dist/copilot/` output.
   - the team `unit` commands, which share claims and approvals through your
     remote (all but `unit merge-status`);
   - commands that run code AI-DLC does not ship or rewrite its installed
-    skills: `engine sensor fire` and the `engine sensor-*` checks (they run
-    your project's linter and type checker), `engine knowledge onboard`,
-    `sync`, and `engine workspace document-input --onboard` (they run the
-    document extractor your harness names),
+    skills: `engine sensor fire` (it runs whatever a check names) and
+    `engine sensor-linter` and `sensor-type-check` (they run your project's
+    linter and type checker), `engine knowledge onboard`, `sync`, and
+    `engine workspace document-input --onboard` (they run the document
+    extractor your harness names),
     `engine plugin sync`, `select`, and `build`, `plugin build`, and
     `engine gen runners` and `runner-scopes`.
 

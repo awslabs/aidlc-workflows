@@ -413,13 +413,17 @@ export async function run(
   // The allow also needs a command every shell VS Code may run it in reads the
   // same way: POSIX shells, PowerShell, and cmd, including the %* re-read in
   // AI-DLC's aidlc.cmd. Each word is plain ASCII letters, digits, and
-  // _ . / : = , + -, and may end in one quoted part. Inside quotes, spaces and
-  // "?" are inert in all three shells, and so is an apostrophe inside double
-  // quotes; no quoted part holds a quote that could end it. Any other
-  // character ($, `, %, ^, !, &, |, <, >, ;, #, parentheses, braces, @, \, a
-  // tab or line break, a typographic quote, anything outside plain ASCII)
-  // means no decision, so the host's prompt shows the command to the person.
-  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  // _ . / : = , + -, and may end in one quoted part. Inside quotes, spaces,
+  // "?", parentheses, and ";" are inert in all three shells and on that %*
+  // line, and so is an apostrophe inside double quotes; no quoted part holds a
+  // quote that could end it. Double quotes may also hold | & < >, but only
+  // with a space: PowerShell keeps the quotes on such a value when it hands it
+  // to a .cmd launcher, so cmd never sees them bare. cmd reads no single
+  // quotes, so single-quoted text never holds them. Any other character ($, `,
+  // %, ^, !, #, braces, @, \, a tab or line break, a typographic quote,
+  // anything outside plain ASCII) means no decision, so the host's prompt
+  // shows the command to the person.
+  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>-]*"|'[A-Za-z0-9_./:=,+ ?();-]*')`;
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
@@ -443,16 +447,22 @@ export async function run(
     }
   }
   // In PowerShell and cmd a backslash is a path separator, never an escape,
-  // so a word may also hold one (`C:\work\app`, `.aidlc\tools`). bun splits
-  // the words with the Windows rule, where a backslash counts only right
-  // before a double quote, so that pair keeps the prompt.
-  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'\\\\-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  // so a word may also hold one (`C:\work\app`, `.aidlc\tools`, or
+  // `'C:\work\app'` as the engine prints a project folder). bun splits the
+  // words with the Windows rule, where a backslash counts only right before a
+  // double quote, so that pair keeps the prompt, and so does one right before
+  // a closing single quote, which PowerShell turns into a double quote when
+  // the value holds a space.
+  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>\\\\-]*"|'[A-Za-z0-9_./:=,+ ?();\\\\-]*')`;
   const WINDOWS_WORD = `(?:[A-Za-z0-9_./:=,+\\\\-]+${WINDOWS_QUOTED}?|${WINDOWS_QUOTED})`;
   const WINDOWS_COMMAND = new RegExp(`^ *${WINDOWS_WORD}(?: +${WINDOWS_WORD})* *$`);
   function plainInEveryShell(command: unknown): boolean {
     if (typeof command !== "string") return false;
     const body = command.replace(/ +2>&1 *$/, "");
-    return windowsTerminal ? WINDOWS_COMMAND.test(body) && !body.includes('\\"') : PLAIN_COMMAND.test(body);
+    const spaced = [...body.matchAll(/"([^"]*)"/g)].every(([, text]) => !/[|&<>]/.test(text) || text.includes(" "));
+    return spaced && (windowsTerminal
+      ? WINDOWS_COMMAND.test(body) && !body.includes('\\"') && !body.includes("\\'")
+      : PLAIN_COMMAND.test(body));
   }
   // A path as the terminal reads it: in a Windows terminal both slashes
   // separate, and the comparison below folds the drive letter.
@@ -525,7 +535,7 @@ export async function run(
   // Doctor also checks the machine and may refresh the update cache over the
   // network, so it qualifies only with the flags the engine itself passes.
   function engineNamedDoctor(args: readonly string[]): boolean {
-    if (args[0] !== "doctor") return false;
+    if (args[0] !== "doctor" && args[0] !== "--doctor") return false;
     for (let i = 1; i < args.length; i++) {
       if (["--verbose", "--json", "--quiet", "--export"].includes(args[i])) continue;
       const value = args[i + 1];
@@ -540,7 +550,7 @@ export async function run(
   // no network, served by the named tool script when there is one. Hook,
   // adapter, and statusline routes belong to the host, and `__` routes and
   // `--internal-*` flags are internal, so they never qualify.
-  function ownProjectRoute(argv: readonly string[], toolFile?: string): boolean {
+  function ownProjectRoute(argv: readonly string[], toolFile?: string, personMayLift = true): boolean {
     if (argv.some((arg) => arg.startsWith("--internal")) || (argv[0] === "engine" && argv[1]?.startsWith("__"))) return false;
     const route = routePolicyFor(argv);
     if (
@@ -553,12 +563,13 @@ export async function run(
     ) return false;
     // The verb is read the way the dispatcher routes it, with the global flags
     // dropped, so `unit --json land` is `unit land`. An alias head (`--scope`,
-    // `--claim`) is a shortcut for another command, never vouched for here.
+    // `--claim`) is a shortcut for another command, never vouched for here,
+    // except the read-only `--version`, `--status`, and `--help`.
     const clean = withoutProjectDirFlag(argv);
-    if (clean[0]?.startsWith("-")) return false;
+    if (clean[0]?.startsWith("-") && !["--version", "--status", "--help"].includes(clean[0])) return false;
     const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
     const rest = clean.slice(at + 2);
-    return !keepsPrompt(route.id, clean[at + 1] ?? "", rest) &&
+    return !keepsPrompt(route.id, clean[at + 1] ?? "", rest, personMayLift) &&
       !clean.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
       argumentsStayInProject(clean);
   }
@@ -591,8 +602,13 @@ export async function run(
   // code AI-DLC does not ship (project linters, host plugins). Merges of
   // AI-DLC's own state and audit records stay routine. The workflow verbs are
   // vouched for only in the exact form the coordination claim reads.
-  function keepsPrompt(routeId: string, verb: string, rest: readonly string[]): boolean {
-    if (routeId.startsWith("engine-sensor-")) return true;
+  // A spelling the engine never names for a verb (a tool script read by its
+  // verb) never takes the person's word in place of the click.
+  function keepsPrompt(routeId: string, verb: string, rest: readonly string[], personMayLift = true): boolean {
+    const personSpoke = () => personMayLift && personActedSinceGate();
+    // The linter and type checker run the project's own tools; AI-DLC's other
+    // checks read files and start no program.
+    if (routeId === "engine-sensor-linter" || routeId === "engine-sensor-type-check") return true;
     switch (routeId) {
       case "top-orchestrate":
       case "engine-orchestrate": return ["next", "continue", "report", "park"].includes(verb);
@@ -600,7 +616,7 @@ export async function run(
       // A plan reshape runs click-free once the person has typed since the
       // last gate resolved (the in-flight recompose gate they just answered);
       // the agent reshaping on its own keeps the prompt.
-      case "top-recompose": return !personActedSinceGate();
+      case "top-recompose": return !personSpoke();
       case "jump": return verb === "execute";
       case "scope": return verb === "change";
       // The person's word on new project vs existing code runs click-free once
@@ -608,7 +624,7 @@ export async function run(
       // said so); the agent reclassifying on its own keeps the prompt. A
       // document read that onboards the file it names runs the extractor.
       case "workspace":
-        return (verb === "reclassify" && !personActedSinceGate()) ||
+        return (verb === "reclassify" && !personSpoke()) ||
           (verb === "document-input" && hasFlag(rest, "--onboard"));
       // Switching the active intent or space redirects the work that follows.
       case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
@@ -645,6 +661,15 @@ export async function run(
       (candidate.kind === "noun-passthrough" || candidate.routeOnly === "tool-passthrough"));
     if (!route) return null;
     return route.namespace === "engine" ? ["engine", route.group] : route.namespace === "public" ? [route.group] : null;
+  }
+  // A script that serves several engine nouns is named by its verb, through
+  // the route's own table: `aidlc-utility.ts codekb-snapshot` is
+  // `engine workspace codekb-snapshot`. The verb must name exactly one route.
+  function toolScriptVerbRoute(file: string, verb: string): string[] | null {
+    const named = ROUTES.flatMap((route) => route.tool === file && route.kind === "noun-map" && route.namespace === "engine"
+      ? Object.entries(route.targets ?? {}).filter(([, target]) => target === verb).map(([routeVerb]) => ["engine", route.group, routeVerb])
+      : []);
+    return named.length === 1 ? named[0] : null;
   }
 
   function shellWords(command: string): string[] | null {
@@ -759,7 +784,7 @@ export async function run(
     try {
       const file = basename(resolved);
       if (!/^aidlc-[a-z0-9-]+\.ts$/.test(file) || dirname(resolved) !== realpathSync(join(projectDir, ".aidlc", "tools"))) return null;
-      return toolScriptRoute(file) ? file : null;
+      return toolScriptRoute(file) || ROUTES.some((route) => route.tool === file && route.kind === "noun-map") ? file : null;
     } catch {
       return null;
     }
@@ -775,8 +800,8 @@ export async function run(
     let file: string | null = null;
     try { file = ownToolScript(realpathSync(resolve(projectDir, terminalPath(parsed.words[cursor++] ?? "")))); }
     catch { return { status: "unrelated" }; }
-    const routePrefix = file ? toolScriptRoute(file) : null;
-    if (!file || !routePrefix) return { status: "unrelated" };
+    if (!file) return { status: "unrelated" };
+    const routePrefix = toolScriptRoute(file);
     const args: string[] = [];
     const rest = parsed.words.slice(cursor);
     for (let i = 0; i < rest.length; i++) {
@@ -785,7 +810,9 @@ export async function run(
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(rest[++i] ?? "")))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "unrelated" }; }
       catch { return { status: "unrelated" }; }
     }
-    return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
+    if (routePrefix) return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
+    const verbRoute = toolScriptVerbRoute(file, args[0] ?? "");
+    return verbRoute && ownProjectRoute([...verbRoute, ...args.slice(1)], file, false) ? { status: "terminal" } : { status: "unrelated" };
   }
 
   // Each refusal says what was not accepted and the form to run instead; the
