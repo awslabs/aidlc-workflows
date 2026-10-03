@@ -27,8 +27,9 @@ under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
 elevated installer runs, and asked to confirm. `-Yes` confirms without a prompt;
 a non-interactive run without `-Yes` (including `-Json` and `-Quiet`) stops with
-that guidance. `aidlc uninstall` gives the same warning in its confirmation, or
-in its result with `--yes`. Sessions that already hold a full administrator
+that guidance. `aidlc uninstall` gives the same warning but asks nothing: at a
+terminal it prints the warning before it removes anything, and with `--yes` the
+warning is in its result. Sessions that already hold a full administrator
 token without UAC elevation, such as the built-in Administrator on Windows
 Server, see no warning. Running PowerShell with another account's credentials
 installs for that account. There is no all-users mode.
@@ -1334,7 +1335,8 @@ check. Warnings are advisory and exit 0; any failed check exits 1.
 
 `--no-color` and `NO_COLOR` disable ANSI output. `--project-dir <path>` selects
 project context without changing the shell directory. Destructive operations
-such as `uninstall` prompt on a TTY and require `--yes` without one. `--yes` never bypasses
+such as `uninstall` ask nothing on a TTY: they print what they remove and
+keep, then do it. Without a TTY they require `--yes`. `--yes` never bypasses
 ownership, integrity, active-workflow, or release-authentication refusals.
 
 | Code | Meaning |
@@ -1535,8 +1537,9 @@ unrelated changes made afterward are preserved. An install without an
 ownership record leaves User PATH alone. `-NoModifyPath` on a later installer
 run preserves an earlier record, so that entry is still removed on uninstall.
 
-Uninstall requires confirmation and refuses filesystem, home, shared-system,
-and project roots, as well as root-owned, package-manager-owned, or
+At a terminal, uninstall says what it removes and keeps, then proceeds; without
+a terminal it needs `--yes`. It refuses filesystem, home, shared-system, and
+project roots, as well as root-owned, package-manager-owned, or
 mixed-ownership commands. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command

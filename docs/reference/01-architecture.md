@@ -913,8 +913,7 @@ tests/
 +-- run-tests.ts              # Native Bun test runner (all levels, flag-selectable)
 +-- run-tests.sh              # POSIX compatibility wrapper for run-tests.ts
 +-- gen-coverage-registry.ts  # Generates .coverage-registry.json from covers: headers
-+-- .coverage-registry.json   # Machine-checked coverage index (units x test files)
-+-- .coverage-ratchet.json    # Coverage floor the registry --check enforces
++-- .coverage-registry.json   # Machine-checked coverage index (units x test files); also the ratchet baseline
 +-- README.md                 # Discoverable suite index + quick reference
 +-- lib/
 |   +-- bun-junit-to-meta.ts  # Bun JUnit -> runner metadata glue
