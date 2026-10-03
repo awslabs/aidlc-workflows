@@ -1060,9 +1060,9 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.fix).not.toContain("effort policy");
   });
 
-  test("doctor names the session where it sets every agent, and still warns on Kiro CLI", () => {
-    // The first-run default records balanced on every harness. Where the host
-    // cannot pin an agent's model or effort, that is not a problem to fix.
+  test("doctor names the session where it sets every agent, and Kiro CLI carries the preset", () => {
+    // A preset recorded for the team (setup records none on these hosts) is
+    // not a problem to fix where the host cannot pin an agent's model or effort.
     const preset = (project: string) => {
       const settings = projectSettingsPath(project);
       writeFileSync(settings, `${JSON.stringify({
@@ -1092,9 +1092,12 @@ describe("t293 doctor model policy advisory", () => {
     const kiro = temp("aidlc-t293-doctor-session-kiro-");
     cpSync(join(DIST, "kiro"), kiro, { recursive: true });
     preset(kiro);
-    const check = modelsPolicyCheck(kiro, true);
-    expect(check.pass).toBe(false);
-    expect(check.fix).toContain("effort policy is not expressible on kiro");
+    // Kiro CLI sets the preset's one effort on the session model in the
+    // person's Kiro settings, which doctor's Session model row checks.
+    expect(modelsPolicyCheck(kiro, true)).toEqual({
+      pass: true,
+      label: "Models: recorded policy is expressible",
+    });
 
     // Beside a harness that applies the preset, the preset is not called
     // inert; each harness gets its own account, from the policy's real state.

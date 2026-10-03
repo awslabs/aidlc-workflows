@@ -538,8 +538,11 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
   drive the conductor and every agent that inherits; `aidlc config models`
   can set agent efforts (the `balanced` preset sets them to medium) and
   per-agent exceptions.
-- **Kiro CLI:** the session model (`/model`) and effort (`/effort`); see
-  [Kiro CLI](harnesses/kiro-cli.md).
+- **Kiro CLI:** the session model and its one effort. `aidlc config models`
+  saves them in your personal Kiro settings (a preset sets the effort:
+  `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
+  `/effort` change them inside Kiro. See
+  [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
 
 If your organization offers only a mid-tier model, such as a Claude Sonnet
 model, without Opus:
