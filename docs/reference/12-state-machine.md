@@ -160,6 +160,7 @@ rules.
 | `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
 | `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
 | `{Active,Revising} → Skipped` | `aidlc-orchestrate.ts report --stage <slug> --result skipped --reason <text>` | `tools/aidlc-state.ts` (internal routed-skip emitter) |
+| `AwaitingApproval -> Skipped` (plan row SKIP) | The same skipped report, only when the stage's plan row now says SKIP (the person said the work is a new project while Reverse Engineering waited at its gate); the gate closes as skipped, never as approved | `tools/aidlc-state.ts` (internal routed-skip emitter) |
 | `Pending → Skipped` | Scope composition or `aidlc-jump execute` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` |
 | `{Pending,Active,Revising} -> Skipped` (unit-major walk) | `aidlc-orchestrate.ts report --stage <directive.stage> --unit <directive.unit> --result skipped --reason <text>` once no unit owes the stage (each unit skipped or kind-vacuous) | `tools/aidlc-state.ts` (internal `skip --unit` emitter; one `UNIT_SKIPPED` per unit) |
 
@@ -173,7 +174,8 @@ state lifecycle verbs before or after reporting.
 **Routed skip.** `report --result skipped` is accepted only on the main
 workflow with an explicit nonblank `--stage` and `--reason`, when the named
 stage is declared `execution: CONDITIONAL`, equals `Current Stage`, and is
-Active or Revising. It runs before
+Active or Revising, or AwaitingApproval when its plan row now says SKIP (a
+gate the person's own decision made moot). It runs before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with
 its routing marker: the transaction preserves `[S]`, emits exactly one

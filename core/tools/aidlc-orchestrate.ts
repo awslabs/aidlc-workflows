@@ -349,6 +349,7 @@ import {
   greenfieldWorkspaceGainedCode,
   type InferResult,
   inferScopeFromText,
+  projectTypeRecordedAsPersons,
   reverseEngineeringOwedBehindCursor,
   scanSummary,
 } from "./aidlc-utility.ts";
@@ -5731,6 +5732,22 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     });
     return;
   }
+  // The person's word on new project vs existing code comes first, whatever
+  // else the request carries (a jump, a single run, compose, a setting):
+  // reclassify records it, and the same request run again finds it recorded
+  // and carries on, so nothing typed with it is dropped.
+  if (
+    stateContent &&
+    flags.projectType &&
+    !flags.newIntent &&
+    !projectTypeRecordedAsPersons(stateContent, flags.projectType)
+  ) {
+    emit(printDirective(
+      `Run \`${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${flags.projectType}\` and print its output verbatim, ` +
+        "then run the same `next` command again to carry on with the rest of the request.",
+    ));
+    return;
+  }
   // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
   // <slug>-<id8>), threaded into every run-stage directive so the conductor's
   // artifact/diary paths resolve under the active intent. null → the flat legacy
@@ -6088,27 +6105,6 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
     const plan = { scope: currentStateScope, stateContent };
-    // The person's word on new project vs existing code. Reclassify scans the
-    // folder again and records it; the next `next` then runs a Reverse
-    // Engineering it put back, so this continues rather than stops. Any
-    // setting typed with it lands right after, in the same turn.
-    if (flags.projectType) {
-      const commands = [`${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${flags.projectType}`];
-      if (flags.scope && validScopes().has(flags.scope) && flags.scope !== currentStateScope) {
-        commands.push(
-          `${aidlcDispatcherInvocation("scope change")} ${[`--scope ${flags.scope}`, ...modifiers.map((m) => `--${m}`)].join(" ")}`,
-        );
-      } else if (modifiers.length > 0) {
-        commands.push(
-          [aidlcDispatcherInvocation(`config set ${modifiers[0]}`), ...modifiers.slice(1).map((m) => `--${m}`)].join(" "),
-        );
-      }
-      emit(printDirective(
-        `Run ${commands.map((command) => `\`${command}\``).join(", then ")}, print ${commands.length > 1 ? "each output" : "its output"} verbatim, ` +
-          "then re-run `next` to continue.",
-      ));
-      return;
-    }
     if (
       flags.scope &&
       validScopes().has(flags.scope) &&
@@ -6470,7 +6466,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "skipped") {
+    if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "skipped" && currentState !== "awaiting-approval") {
       emit(errorDirective(
         `Stage "${currentSlug}" is SKIP in the approved workflow plan but its active cursor state is ` +
           `"${currentState ?? "missing"}". Refusing to emit run-stage; repair the inconsistent state before continuing.`,
@@ -10873,10 +10869,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
     }
+    // A stage at its open gate is skipped only when the plan no longer runs
+    // it (the person said the work is a new project): their decision closes
+    // the gate as skipped.
     if (
       stageCheckbox.state !== "in-progress" &&
       stageCheckbox.state !== "revising" &&
-      stageCheckbox.state !== "skipped"
+      stageCheckbox.state !== "skipped" &&
+      !(stageCheckbox.state === "awaiting-approval" && planAction === "SKIP")
     ) {
       emit(errorDirective(
         `Stage "${slug}" is ${stageCheckbox.state}; only an active, revising, or interrupted skipped stage can be routed as skipped.`,

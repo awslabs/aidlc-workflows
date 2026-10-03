@@ -274,6 +274,8 @@ import {
   intentRepos,
   discoverSiblingRepos,
   intentsRegistryPath,
+  INTENT_SELECTOR_REGEX,
+  SPACE_NAME_REGEX,
   scopeGridPath,
   scopesDir,
   composerProposalPath,
@@ -9283,6 +9285,13 @@ export function reverseEngineeringOwedBehindCursor(content: string): boolean {
     !constructionHasStarted(content);
 }
 
+// The state already holds this type as the person's word, so a request that
+// names it again has nothing to record.
+export function projectTypeRecordedAsPersons(content: string, type: string): boolean {
+  return declaredProjectType(getField(content, "Project Type") ?? "") === declaredProjectType(type) &&
+    getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON;
+}
+
 // The work was set up as a new project by the scan (nobody said so), it has
 // not reached Construction, and the folder now scans as existing code. Returns
 // that scan so the question can say what was found; null otherwise.
@@ -9295,9 +9304,20 @@ export function greenfieldWorkspaceGainedCode(projectDir: string, content: strin
 }
 
 // What the scan found, in one line: the known parts of the stack, and where.
+// Folder names come from the workspace, so they are shown as one bounded line
+// of plain text: control and line-break characters become spaces.
+const SCAN_WHERE_MAX = 120;
 export function scanSummary(scan: ScanResult): string {
   const known = [scan.languages, scan.frameworks, scan.buildSystem].filter((value) => value && value !== "Unknown");
-  return `${known.length > 0 ? known.join("; ") : "code"}${scan.nestedRoot ? ` in ${scan.nestedRoot}` : ""}`;
+  const where = Array.from(scan.nestedRoot ?? "", (char) => {
+    const code = char.codePointAt(0) ?? 0;
+    return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029 ? " " : char;
+  })
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  const shown = where.length > SCAN_WHERE_MAX ? `${where.slice(0, SCAN_WHERE_MAX - 3)}...` : where;
+  return `${known.length > 0 ? known.join("; ") : "code"}${shown ? ` in ${shown}` : ""}`;
 }
 
 function stageNames(slugs: readonly string[]): string {
@@ -9337,6 +9357,13 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       ? "reclassify requires --project-type."
       : `Unknown project type: "${flags["project-type"]}". Valid: greenfield (a new project), brownfield (existing code).`,
   );
+  // Both selectors become path segments, so they must match the name grammars.
+  if (flags.intent !== undefined && !INTENT_SELECTOR_REGEX.test(flags.intent)) {
+    usage(`reclassify --intent "${flags.intent}" is not a valid name.`);
+  }
+  if (flags.space !== undefined && !SPACE_NAME_REGEX.test(flags.space)) {
+    usage(`reclassify --space "${flags.space}" is not a valid name.`);
+  }
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
@@ -9347,12 +9374,14 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     );
   }
 
-  withAuditLock(projectDir, () => {
+  // The registry row is workspace state and the plan is the work's own: hold
+  // the workspace lock, then the work's lock, across the whole read, audit and
+  // write (intent archive's order), so no concurrent change to this work is lost.
+  withAuditLock(projectDir, () => withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, intent, space);
     const status = getField(content, "Status") ?? "";
-    if (status === "Completed" || status === "Archived") {
-      die(`This piece of work is ${status.toLowerCase()}. Start the next one with --project-type ${declared.toLowerCase()}.`);
-    }
+    // Finished work records the person's word too; only its plan is history.
+    const finished = status === "Completed" || status === "Archived";
     const scope = getField(content, "Scope") ?? "";
     const scopeDef = loadScopeMapping()[scope];
     if (!scopeDef) die(`Unknown scope in state file: ${scope || "(none)"}.`);
@@ -9369,19 +9398,27 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     // Existing code puts back a Reverse Engineering that has not run, unless
     // the plan leaves it out for another reason; a new project skips one that
     // has not finished. Construction under way keeps the plan as it is.
-    const started = constructionHasStarted(content);
+    const started = finished || constructionHasStarted(content);
     const reState = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
     const reAction = parseStateStageSuffixes(content).get("reverse-engineering") ?? scopeDef.stages["reverse-engineering"];
     const skippedAsNew = (getField(content, "Stages to Skip") ?? "").includes(GREENFIELD_RE_SKIP_LABEL);
+    // Every unfinished state has one outcome. Existing code: a stage the
+    // new-project scan took out goes back on the plan whatever its box says
+    // (a skip being recovered, or one marked [S] under the old type, returns
+    // to not started). New project: a stage not started, running, being
+    // revised, or waiting at its approval gate is skipped (next routes a
+    // current one through the skip, closing an open gate as skipped); a
+    // finished one stays.
     let planChange: "reopened" | "skipped" | null = null;
-    if (!started && declared === "Brownfield" &&
-        (reState === "pending" || (reState === "skipped" && previous.toLowerCase() === "greenfield")) &&
-        (skippedAsNew || reAction === "EXECUTE") && (reAction !== "EXECUTE" || reState === "skipped")) {
+    const takenOutAsNew = skippedAsNew ||
+      (reState === "skipped" && reAction === "EXECUTE" && previous.toLowerCase() === "greenfield");
+    if (!started && declared === "Brownfield" && takenOutAsNew && reState !== "completed") {
       content = setStageSuffix(content, "reverse-engineering", "EXECUTE");
       if (reState === "skipped") content = setCheckbox(content, "reverse-engineering", "pending");
       planChange = "reopened";
     } else if (!started && declared === "Greenfield" && reAction === "EXECUTE" &&
-        (reState === "pending" || reState === "in-progress")) {
+        (reState === "pending" || reState === "in-progress" || reState === "revising" ||
+          reState === "awaiting-approval")) {
       content = setStageSuffix(content, "reverse-engineering", "SKIP");
       planChange = "skipped";
     }
@@ -9394,10 +9431,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         (stage) => `${stage.number} ${stage.slug === "reverse-engineering" ? GREENFIELD_RE_SKIP_LABEL : `(${stage.slug})`}`,
       ).content;
     }
-    // Repos added after creation, recorded as creation would have recorded them.
+    // Repos added after creation, recorded as creation would have recorded
+    // them; only names a repo may have, since each becomes a path segment.
     const repos = declared === "Brownfield" && !started && intent !== undefined &&
         intentRepos(projectDir, intent, space).length === 0
-      ? discoverSiblingRepos(projectDir)
+      ? discoverSiblingRepos(projectDir).filter(isValidRepoName)
       : [];
     content = setField(content, "Last Updated", isoTimestamp());
 
@@ -9436,7 +9474,9 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     ];
     if (reposRecorded) lines.push(`Repos recorded for this piece of work: ${repos.join(", ")}.`);
     const reNow = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
-    if (declared === "Brownfield") {
+    if (finished) {
+      lines.push("This piece of work is finished, so its plan stays as it is; the next piece of work scans the folder again.");
+    } else if (declared === "Brownfield") {
       if (reverseEngineeringOwedBehindCursor(content)) {
         lines.push(
           "Reverse Engineering runs next to document the existing code; then the workflow returns to " +
@@ -9465,12 +9505,23 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         );
       }
     } else if (planChange === "skipped") {
-      lines.push("Reverse Engineering is skipped.");
-    } else if (reAction === "EXECUTE" && reNow !== undefined && reNow !== "pending" && reNow !== "skipped") {
+      lines.push(
+        reState === "awaiting-approval"
+          ? "Reverse Engineering is skipped, so its approval question is closed; the documents it wrote stay."
+          : "Reverse Engineering is skipped.",
+      );
+    } else if (reAction === "EXECUTE" && reNow === "completed") {
       lines.push("Reverse Engineering has already run, so the plan stays as it is.");
     }
+    if (previous.toLowerCase() !== declared.toLowerCase()) {
+      lines.push(
+        declared === "Brownfield"
+          ? `To undo, say it is a new project (${entrySkillInvocation()} --project-type greenfield).`
+          : `To undo, say it is existing code (${entrySkillInvocation()} --project-type brownfield).`,
+      );
+    }
     process.stdout.write(`${lines.join("\n")}\n`);
-  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
+  }, intent, space, WORKSPACE_MUTATION_LOCK_RETRIES), undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 // `/aidlc space create <name>` (legacy `/aidlc space-create <name>`) - seed a NEW space's memory. org.md is copied
