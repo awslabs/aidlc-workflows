@@ -1027,6 +1027,33 @@ describe("t243 project initialization", () => {
     expect(statSync(hook).nlink).toBe(2);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Creating a file symlink needs a privilege Windows runners do not grant.
+  test.skipIf(process.platform === "win32")("a Kiro switch binds what a linked hook points at and quotes a hook name it prints", () => {
+    const project = temp("aidlc-t243-kiro-switch-linked-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    const target = join(temp("aidlc-t243-kiro-switch-link-target-"), "shared-hook.json");
+    writeFileSync(target, "{\"name\":\"shared\"}\n");
+    symlinkSync(target, join(project, ".kiro", "hooks", "shared hook.json"));
+    const switchArgs = [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ];
+    const planned = run(INIT, [...switchArgs, "--dry-run"], project);
+    expect(planned.status, planned.stdout + planned.stderr).toBe(0);
+    expect(planned.stdout).toContain("AI-DLC does not own \".kiro/hooks/shared hook.json\";");
+    const token = /--plan-token (sha256:[0-9a-f]+)/.exec(planned.stdout)?.[1] ?? "";
+    expect(token).not.toBe("");
+
+    // The link's text is unchanged; what it points at is not.
+    writeFileSync(target, "{\"name\":\"shared\",\"changed\":true}\n");
+    const voided = run(INIT, [...switchArgs, "--plan-token", token], project);
+    expect(voided.status).toBe(4);
+    expect(voided.stdout).toContain("config plan changed after approval");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a Kiro switch is refused under an active workflow, like any refresh", () => {
     const project = temp("aidlc-t243-kiro-switch-active-");
     mkdirSync(join(project, ".git"));
@@ -1134,6 +1161,11 @@ describe("t243 project initialization", () => {
       ["wrong shape", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), files: "none" }, null, 2)}\n`);
       }, "files is not a map of hashes"],
+      ["contribution missing its entries", (path) => {
+        const value = JSON.parse(readFileSync(path, "utf-8"));
+        value.rootContributions["AGENTS.md"] = { policy: "json-map" };
+        writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+      }, "rootContributions[\"AGENTS.md\"] is not a valid contribution"],
     ];
     for (const [label, damage, problem] of cases) {
       const project = temp("aidlc-t243-kiro-switch-damaged-");
@@ -1173,6 +1205,35 @@ describe("t243 project initialization", () => {
       expect(switched.status, `${label}: ${switched.stdout}${switched.stderr}`).toBe(0);
       expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
     }
+
+    // Under an active workflow nothing is moved: the refresh guard comes first.
+    const busy = temp("aidlc-t243-kiro-switch-damaged-busy-");
+    mkdirSync(join(busy, ".git"));
+    run(INIT, ["config", "--project-dir", busy, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none"], busy);
+    const intents = join(busy, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, "busy-probe"), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000003",
+        slug: "busy",
+        dirName: "busy-probe",
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, "busy-probe", "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    writeFileSync(join(busy, ".kiro", "tools", "data", "aidlc-manifest.json"), "{not json\n");
+    const busyBefore = transactionSourceHash(busy);
+    const held = run(INIT, [
+      "config", "--project-dir", busy, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ], busy);
+    expect(held.status).toBe(4);
+    expect(held.stdout).toContain("refusing to refresh while 1 workflow(s) are active");
+    expect(transactionSourceHash(busy)).toBe(busyBefore);
 
     // The human run says where it put the file.
     const project = temp("aidlc-t243-kiro-switch-damaged-human-");

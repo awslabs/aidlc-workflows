@@ -3526,7 +3526,11 @@ function unownedHookFiles(
     .filter((rel) => !Object.hasOwn(owned, rel))
     .map((rel) => {
       const path = join(projectDir, rel);
-      return { path: rel, state: transactionState(path), mode: lstatSync(path).mode & 0o777 };
+      // A link is bound with what Kiro reads through it, not only its target text.
+      const read = lstatSync(path).isSymbolicLink()
+        ? existsSync(path) ? `${transactionState(realpathSync(path))}:${statSync(path).mode & 0o777}` : "dangling"
+        : "";
+      return { path: rel, state: `${transactionState(path)}${read ? ` -> ${read}` : ""}`, mode: lstatSync(path).mode & 0o777 };
     });
 }
 
@@ -3558,13 +3562,33 @@ function baselineShapeProblem(value: Baseline): string | null {
   if (value.entries !== undefined && !(isRecord(value.entries) && Object.values(value.entries).every(isStringMap))) {
     return "entries is not a map of hash maps";
   }
-  if (
-    !isRecord(value.rootContributions) ||
-    !Object.values(value.rootContributions).every((entry) => isRecord(entry) && typeof entry.policy === "string")
-  ) {
-    return "rootContributions is not a map of contributions";
+  if (!isRecord(value.rootContributions)) return "rootContributions is not a map of contributions";
+  for (const [path, entry] of Object.entries(value.rootContributions)) {
+    if (!contributionValid(entry)) return `rootContributions[${JSON.stringify(path)}] is not a valid contribution`;
   }
   return null;
+}
+
+// One check per RootContribution variant, optional fields included.
+function contributionValid(entry: unknown): boolean {
+  if (!isRecord(entry)) return false;
+  const optionalString = (field: unknown) => field === undefined || typeof field === "string";
+  switch (entry.policy) {
+    case "managed-block":
+      return typeof entry.hash === "string" && optionalString(entry.marker);
+    case "json-map":
+      return isStringMap(entry.entries) && optionalString(entry.key);
+    case "json-array":
+      return isStringMap(entry.entries) && typeof entry.key === "string";
+    case "whole-file":
+      return typeof entry.hash === "string";
+    case "jsonc-settings":
+      return isStringMap(entry.entries) &&
+        (entry.added === undefined || (Array.isArray(entry.added) && entry.added.every((key) => typeof key === "string"))) &&
+        (entry.created === undefined || typeof entry.created === "boolean");
+    default:
+      return false;
+  }
 }
 
 // Without a usable occupant baseline nothing says which of its files are
@@ -3573,7 +3597,12 @@ function baselineShapeProblem(value: Baseline): string | null {
 // that refresh too, so the switch moves it aside first (nothing is deleted)
 // and the printed refresh is then enough; a dry run moves nothing and points
 // at the run that does.
-function assertSwitchBaseline(occupant: ProjectHarness, requested: string, dryRun: boolean): void {
+function assertSwitchBaseline(
+  projectDir: string,
+  occupant: ProjectHarness,
+  requested: string,
+  dryRun: boolean,
+): void {
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
@@ -3602,9 +3631,24 @@ function assertSwitchBaseline(occupant: ProjectHarness, requested: string, dryRu
       { kind: "apply" },
     );
   }
+  // Moving it is a change to the project, so it waits for the same guard and
+  // lock a refresh does, and moves only the bytes it judged.
+  const judged = transactionState(path);
   let aside = `${path}.unusable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-  for (let index = 1; pathPresent(aside); index++) aside = `${aside.replace(/-\d+$/, "")}-${index}`;
-  renameSync(path, aside);
+  withAuditLock(
+    projectDir,
+    () => {
+      assertRefreshSafe(projectDir);
+      if (transactionState(path) !== judged) {
+        throw new Error(`${rel} changed while the switch was checking it; run the switch again`);
+      }
+      for (let index = 1; pathPresent(aside); index++) aside = `${aside.replace(/-\d+$/, "")}-${index}`;
+      renameSync(path, aside);
+    },
+    undefined,
+    undefined,
+    600,
+  );
   throw new SwitchRefusal(
     `${lead} had an unusable ownership baseline (${rel}: ${problem}); moved it to ${rel}${aside.slice(path.length)}; ${refresh}`,
     { kind: "refresh", harness: occupant.distribution },
@@ -8070,7 +8114,7 @@ export async function main(
       ? projectHarnesses.find((candidate) => switchesInPlace(candidate.distribution, requestedHarness))
       : undefined;
     if (switchOccupant && requestedHarness) {
-      assertSwitchBaseline(switchOccupant, requestedHarness, argv.includes("--dry-run"));
+      assertSwitchBaseline(projectDir, switchOccupant, requestedHarness, argv.includes("--dry-run"));
     }
     const pinPath = join(projectDir, ".aidlc-version");
     if (pathPresent(pinPath) && !regularFile(pinPath)) {
@@ -8329,7 +8373,7 @@ export async function main(
         );
       }
       if (collision) {
-        assertSwitchBaseline(collision, stamp.distribution, argv.includes("--dry-run"));
+        assertSwitchBaseline(projectDir, collision, stamp.distribution, argv.includes("--dry-run"));
         switchingFrom = collision;
       }
     }
@@ -8600,9 +8644,11 @@ export async function main(
     const hookGate = Boolean(switchingFrom) &&
       Object.keys(files).some((rel) => rel.startsWith(`${hooksDir}/`) && rel.endsWith(".json"));
     const unownedHooks = hookGate ? unownedHookFiles(projectDir, hooksDir, files) : [];
-    const hookNames = unownedHooks.map((hook) => hook.path);
-    for (const rel of hookNames) {
-      actions.push({ path: rel, action: "preserve", detail: "hook file AI-DLC does not own, bound to this plan" });
+    // A file name is the repository's text: it is printed quoted unless plain,
+    // so it cannot pose as output of its own.
+    const hookNames = unownedHooks.map((hook) => commandToken(hook.path));
+    for (const hook of unownedHooks) {
+      actions.push({ path: hook.path, action: "preserve", detail: "hook file AI-DLC does not own, bound to this plan" });
     }
     const switchWarnings = hookNames.length > 0
       ? [`AI-DLC does not own ${hookNames.join(", ")}; Kiro runs ${hookNames.length === 1 ? "this hook file" : "these hook files"} on its v3 engine, which ${descriptor.harnessDir}/settings/cli.json now pins, and in Kiro IDE`]

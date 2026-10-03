@@ -915,11 +915,13 @@ only with your approval of that exact set of files: answer the prompt in a
 terminal, or run the switch with `--dry-run`, review the files, and apply it with
 the `--plan-token` that dry run prints. A hook file added, removed, renamed, or
 changed after that review stops the switch, including one that appears just
-before the switch writes. It needs that baseline
+before the switch writes. A hook file that is a link is bound with the file it
+points at. It needs that baseline
 (`.kiro/tools/data/aidlc-manifest.json`). Without one, refresh the installed row
 from the release it was installed from with `aidlc config --harness <installed>`
 first. A damaged one is moved aside to `aidlc-manifest.json.unusable-<time>` in
-the same folder (a dry run moves nothing), after which that refresh is enough. A release passed with `--from`
+the same folder (a dry run moves nothing, and nothing moves while a workflow is
+active), after which that refresh is enough. A release passed with `--from`
 and no `--harness` never switches the row. OpenCode and Copilot are not switched
 this way. For an older installed harness whose root block
 is not shared, the `predates shared onboarding` error suggests refreshing it with
