@@ -2871,7 +2871,7 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
-    expect(dirty.out).toContain('Ask \\"What should change?\\" for stage \\"code-generation\\"');
+    expect(dirty.out).toContain('already said what should change for stage \\"code-generation\\"');
     expect(dirty.out).toContain("their exact text unchanged");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });

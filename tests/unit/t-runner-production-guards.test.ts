@@ -10,7 +10,7 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
-  openSync, readFileSync, readdirSync, writeFileSync,
+  openSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
@@ -712,5 +712,27 @@ describe("bounded file workers through the public runner", () => {
     const events = readFileSync(join(result.stamp, "e2e-events.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     expect(events.some(event => event.running === 2)).toBe(true);
     expect(events.every(event => event.running <= 2)).toBe(true);
+  });
+});
+
+describe("integration start order through the public runner", () => {
+  const PASSES = `import { expect, test } from "bun:test";
+test("passes", () => expect(1).toBe(1));`;
+  const starts = (out: string): string[] => [...out.matchAll(/^=== START (\S+)\.test\.ts ===$/gm)].map((match) => match[1]);
+
+  test("weights start the longest file first; an unreadable weights file only costs the order", () => {
+    const fixture = runnerFixture({ "integration/t-a.test.ts": PASSES, "integration/t-b.test.ts": PASSES });
+    const weights = join(fixture.root, "tests", "integration-weights.json");
+    writeFileSync(weights, JSON.stringify({ defaultSeconds: 1, weights: { "t-b": 50 } }));
+    const weighted = fixture.run(["--integration", "--no-llm"]);
+    expect(weighted.status, weighted.out + weighted.failures).toBe(0);
+    expect(starts(weighted.out)).toEqual(["t-b", "t-a"]);
+    // A path that exists but cannot be read as a file: the tier still runs.
+    rmSync(weights);
+    mkdirSync(weights);
+    const unreadable = fixture.run(["--integration", "--no-llm"]);
+    expect(unreadable.status, unreadable.out + unreadable.failures).toBe(0);
+    expect(unreadable.out).toContain("integration-weights.json is unreadable; integration files start in name order");
+    expect(starts(unreadable.out)).toEqual(["t-a", "t-b"]);
   });
 });

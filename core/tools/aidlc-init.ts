@@ -241,6 +241,9 @@ type Baseline = {
   harnessDir: string;
   mcpMode: "defaults" | "none";
   files: Record<string, string>;
+  // Set once `files` holds only shipped paths. An older manifest may also
+  // record the project's own files under the harness dir (#1516).
+  shippedOnly?: true;
   entries?: Record<string, Record<string, string>>;
   rootContributions: Record<string, RootContribution>;
 };
@@ -249,6 +252,7 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  projectOverlays?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -4599,6 +4603,7 @@ function prepareRefreshSource(
     regenerated.add(`${descriptor.harnessDir}/tools/data/scope-grid.json`);
   }
 
+  const projectOverlays = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
     if (directory !== descriptor.harnessDir && directory !== ".agents") continue;
     const currentDir = join(projectDir, directory);
@@ -4608,12 +4613,14 @@ function prepareRefreshSource(
       const staged = join(root, rel);
       if (
         existsSync(staged) ||
-        prior?.files[rel] ||
+        (prior?.shippedOnly && prior.files[rel]) ||
+        rel === `${descriptor.harnessDir}/tools/data/aidlc-manifest.json` ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
       mkdirSync(dirname(staged), { recursive: true });
       cpSync(join(projectDir, rel), staged, { preserveTimestamps: true });
       regenerated.add(rel);
+      projectOverlays.add(rel);
     }
   }
 
@@ -4778,7 +4785,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, entries, notes };
+  return { root, cleanup, regenerated, projectOverlays, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -4812,6 +4819,57 @@ function assertRefreshSafe(projectDir: string): void {
     `refusing to refresh while ${activeWorkflows.length} workflow(s) are active: ${
       activeWorkflows.join(", ")
     }. Complete the workflow before rerunning aidlc config; update and use do not modify project files.`,
+  );
+}
+
+// Each copied harness runs its own engine and hooks against the project's
+// running workflows, so a harness added under one belongs on the release the
+// installed ones are on. That release can be fetched only when they all record
+// it and it lets harnesses share a project (their .gitignore block is shared).
+function runningAddRelease(
+  projectDir: string,
+  distribution: string,
+  installed: readonly ProjectHarness[],
+): { workflows: string[]; others: ProjectHarness[]; version?: string } | null {
+  const others = installed.filter((harness) => harness.distribution !== distribution);
+  if (others.length === 0) return null;
+  const workflows = activeWorkflowDescriptions(projectDir);
+  if (workflows.length === 0) return null;
+  const versions = new Set(others.map((harness) => harness.frameworkVersion));
+  const [version] = versions;
+  const shared = others.every((harness) =>
+    siblingDescriptor(harness)?.rootIntegrations.some((integration) =>
+      integration.path === ".gitignore" && integration.shared === "union"
+    )
+  );
+  return { workflows, others, version: versions.size === 1 && shared ? version : undefined };
+}
+
+function assertHarnessAddKeepsVersion(
+  projectDir: string,
+  adding: { distribution: string; frameworkVersion: string },
+  installed: readonly ProjectHarness[],
+  fromFiles: boolean,
+): void {
+  const running = runningAddRelease(projectDir, adding.distribution, installed);
+  if (!running || running.others.every((harness) => harness.frameworkVersion === adding.frameworkVersion)) return;
+  if (running.version) {
+    throw new NeedsRelease({
+      cause: "running",
+      version: running.version,
+      distribution: adding.distribution,
+      current: fromFiles ? adding.frameworkVersion : undefined,
+      workflows: running.workflows,
+    });
+  }
+  const from = running.others.map((harness) =>
+    `${harness.distribution} ${harness.frameworkVersion ?? "(an earlier aidlc that did not record its version)"}`
+  ).join(", ");
+  throw new Error(
+    `refusing to add ${adding.distribution} ${adding.frameworkVersion} while ${running.workflows.length} workflow(s) are active: ${
+      running.workflows.join(", ")
+    }. The installed harnesses are on ${from} and cannot be refreshed until the workflow completes, so the ` +
+      "new harness's hooks would run a different version against the same workflow.",
   );
 }
 
@@ -5112,11 +5170,14 @@ type ReleaseNeed = {
   distribution: string;
   // The project's directory for this harness, when it already has one.
   harnessDir?: string;
-  // The release those files are, when a pin asks for another.
+  // The release those files are, when a pin or a running workflow asks for
+  // another.
   current?: string;
-  cause: "pin" | "pin-missing" | "add" | "restore" | "refresh" | "mcp" | "from";
+  cause: "pin" | "pin-missing" | "add" | "running" | "restore" | "refresh" | "mcp" | "from";
   // For "mcp": the project has no .mcp.json at all, rather than an emptied one.
   absent?: boolean;
+  // For "running": the workflows the installed harnesses are running.
+  workflows?: string[];
 };
 
 // Whether a copied project's own files can apply its project choices. Plugins
@@ -5165,6 +5226,12 @@ function releaseNeedSentence(need: ReleaseNeed): string {
       return `This project is pinned to ${need.version}, which is not installed.`;
     case "add":
       return `Adding ${need.distribution} needs the ${need.version} release files.`;
+    case "running": {
+      const workflows = (need.workflows ?? []).join(", ");
+      return need.current
+        ? `The files passed to --from are ${need.current}, but the workflow running in this project (${workflows}) uses ${need.version}.`
+        : `Adding ${need.distribution} while a workflow runs in this project (${workflows}) needs the ${need.version} release files it uses.`;
+    }
     case "restore":
       return `${dir} is missing aidlc/spaces/default/memory/.`;
     case "refresh":
@@ -5192,6 +5259,7 @@ function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "sta
         ? `Download and install ${need.version} from ${host}`
         : `This first downloads and installs ${need.version} from ${host}`;
     case "add":
+    case "running":
       return `${fetch} and ${add} ${need.distribution}`;
     case "restore":
     case "mcp":
@@ -6602,6 +6670,7 @@ function planManagedFiles(
   nextHashes: Record<string, string>,
   regenerated: ReadonlySet<string>,
   retainBaseline: boolean,
+  projectOverlays: ReadonlySet<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -6641,7 +6710,13 @@ function planManagedFiles(
         }
         continue;
       }
+      const projectOwned = projectOverlays.has(rel);
+      if (projectOwned && targetRegular && currentHash === hash) {
+        actions.push({ path: rel, action: "preserve", detail: "project-owned" });
+        continue;
+      }
       if (
+        !projectOwned &&
         ![
           `${descriptor.harnessDir}/tools/data/harness.json`,
           `${descriptor.harnessDir}/tools/data/stage-graph.json`,
@@ -7977,6 +8052,12 @@ export async function main(
     const pendingConfirm = modelsContext?.confirm ??
       diagnosticsContext?.confirm ??
       choicesContext?.confirm;
+    // A copied harness added while a workflow runs comes from the release the
+    // installed ones are on, as a pin would choose it.
+    const runningAdd = copyChannel && requiredVersion === undefined && !existing.distribution &&
+        requestedHarness
+      ? runningAddRelease(projectDir, requestedHarness, projectHarnesses)
+      : null;
     let need: ReleaseNeed | null = null;
     // What this run will also do before the change itself, said in the
     // question and done only once it is answered.
@@ -8039,7 +8120,7 @@ export async function main(
           requestedHarness,
           from,
           existing.distribution,
-          requiredVersion,
+          requiredVersion ?? runningAdd?.version,
         );
       } catch (error) {
         // Natively and unpinned, a missing harness means the active runtime
@@ -8089,13 +8170,17 @@ export async function main(
           }
         }
         if (!selected && !need) {
+          const running = !harness && runningAdd?.version !== undefined && runningAdd.version !== AIDLC_VERSION;
           need = {
-            version: requiredVersion ?? harness?.frameworkVersion ?? AIDLC_VERSION,
+            version: requiredVersion ?? harness?.frameworkVersion ?? runningAdd?.version ?? AIDLC_VERSION,
             distribution: error.distribution,
             harnessDir: harness?.harnessDir,
             current: harness?.frameworkVersion,
+            workflows: running ? runningAdd?.workflows : undefined,
             cause: !copyChannel
               ? "pin-missing"
+              : running
+              ? "running"
               : !harness
               ? "add"
               : requiredVersion !== undefined && harness.frameworkVersion !== requiredVersion
@@ -8273,6 +8358,11 @@ export async function main(
         requiredVersion,
       );
     }
+    // Natively every harness runs the hooks of the engine serving the project,
+    // which is the release an add without --from takes its files from.
+    if (copyChannel && !existing.distribution && !argv.includes("--dry-run")) {
+      assertHarnessAddKeepsVersion(projectDir, stamp, installed, Boolean(from));
+    }
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
     const prior = readBaseline(baselinePath);
     const settingsMutation = modelsContext?.settings ?? choicesContext?.settings;
@@ -8360,6 +8450,7 @@ export async function main(
       files,
       prepared.regenerated,
       retainBaseline,
+      prepared.projectOverlays,
     );
     if (!selected.projectProjection) {
       planRootIntegrations(
@@ -8472,6 +8563,7 @@ export async function main(
       harnessDir: stamp.harnessDir,
       mcpMode,
       files,
+      ...(!selected.projectProjection || prior?.shippedOnly ? { shippedOnly: true as const } : {}),
       entries: prepared.entries,
       rootContributions,
     };
@@ -8601,6 +8693,17 @@ export async function main(
         projectDir,
         () => {
           assertRefreshSafe(projectDir);
+          executeSettingsAndProjectMutation(settingsMutation, plan);
+        },
+        undefined,
+        undefined,
+        600,
+      );
+    } else if (copyChannel && discoverProjectHarnesses(projectDir).length > 0) {
+      withAuditLock(
+        projectDir,
+        () => {
+          assertHarnessAddKeepsVersion(projectDir, stamp, discoverProjectHarnesses(projectDir), Boolean(from));
           executeSettingsAndProjectMutation(settingsMutation, plan);
         },
         undefined,
@@ -8759,7 +8862,8 @@ export async function main(
     const rawMessage = error instanceof Error ? error.message : String(error);
     const copyChannel = aidlcInvocation() !== "aidlc";
     // A pin refusing the files named by --from wants the pinned release itself,
-    // fetched instead of those files.
+    // fetched instead of those files; so does a running workflow refusing them
+    // for the release its harnesses are on.
     const pinMismatch = error instanceof MissingInstalledSource && from ? error : null;
     const needed: ReleaseNeed | null = error instanceof NeedsRelease
       ? error.need
@@ -8814,7 +8918,12 @@ export async function main(
         downloadFailed ? EXIT.unavailable : EXIT.integrity,
         downloadFailed
           ? undefined
-          : configRerunWith(input, projectDir, ["--download"], pinMismatch ? ["--from"] : []),
+          : configRerunWith(
+            input,
+            projectDir,
+            ["--download"],
+            pinMismatch || release.cause === "running" ? ["--from"] : [],
+          ),
       ), options);
       return;
     }
@@ -8851,6 +8960,8 @@ export async function main(
       // project or fail to select the same source in a copied installation.
       /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
         ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
+        : /refusing to add \S+ \S+ while \d+ workflow\(s\) are active/.test(rawMessage)
+        ? "Complete the workflow, then add this harness; or run this command with --dry-run to preview the add without writing"
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness

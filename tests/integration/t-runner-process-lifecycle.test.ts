@@ -128,6 +128,17 @@ async function until(predicate: () => boolean, label: string): Promise<void> {
   }
 }
 const json = <T>(path: string): T => JSON.parse(readFileSync(path, "utf8"));
+// A running runner rewrites its report in place, so a poll can land between the
+// truncate and the write. A report that does not parse yet is not the state
+// being waited for; the next poll reads the finished write.
+const liveJson = <T>(path: string): T | undefined => {
+  try {
+    return json<T>(path);
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+};
 
 afterEach(() => {
   for (const dir of roots.splice(0)) {
@@ -329,7 +340,7 @@ test("owned descendant",async()=>{
     try {
       await until(() => existsSync(preparing), "allocated environment");
       writeFileSync(runner.cancel, "cancel");
-      await until(() => json<{ state: string }>(join(runner.log(), "e2e-results.json")).state === "INTERRUPTED", "observed cancellation");
+      await until(() => liveJson<{ state: string }>(join(runner.log(), "e2e-results.json"))?.state === "INTERRUPTED", "observed cancellation");
       writeFileSync(release, "release");
       expect(await runner.closed, runner.output()).toBe(1);
       expect(existsSync(sentinel)).toBe(false);

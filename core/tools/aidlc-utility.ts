@@ -57,8 +57,10 @@ import { VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
+  ARCHIVED_FROM_FIELD,
   type LegacyDoctorResult,
   redactSecretPatterns,
+  stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
 import { sha256Bytes } from "./aidlc-distribution.ts";
 import {
@@ -265,6 +267,7 @@ import {
   type StageEntry,
   setCheckbox,
   setField,
+  setOrInsertField,
   setPhaseProgress,
   setStageSuffix,
   scopeGridPath,
@@ -595,8 +598,8 @@ Utilities:
   --new-scope "<task>"  Build a custom plan even when a ready-made one matches
   intent list       List intents in the active space (read-only; --json for structured output; --all includes archived)
   intent switch <name>  Switch the active intent (bare intent <name> still works)
-  intent archive <name> [--reason <text>]  Retire an in-flight intent; its record stays on disk and leaves the default list
-  intent unarchive <name>  Bring an archived intent back to in-flight
+  intent archive <name> [--reason <text>]  Retire an in-flight or completed intent; its record stays on disk and leaves the default list
+  intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
@@ -1613,6 +1616,8 @@ function pendingOrganicGate(
     "STAGE_AWAITING_APPROVAL",
     "GATE_APPROVED",
     "GATE_REJECTED",
+    // A stage skipped while its gate was open has no gate left to answer.
+    "STAGE_SKIPPED",
   ]);
   const events = audit
     .filter((event) => relevant.has(event.event))
@@ -4731,7 +4736,7 @@ export async function collectDoctorReport(
       const wcIdx = auditContent.lastIndexOf("**Event**: WORKFLOW_COMPLETED");
       if (wcIdx !== -1) {
         const status = stateContent.match(/^- \*\*Status\*\*:\s*(\S+)/m);
-        if (status && status[1] !== "Completed") {
+        if (status && !stateShowsCompletion(stateContent)) {
           results.push({
             pass: false,
             label: `State/audit drift: audit has WORKFLOW_COMPLETED but state Status=${status[1]}`,
@@ -5855,11 +5860,11 @@ export async function collectDoctorReport(
     for (const space of listSpaces(projectDir)) {
       for (const intent of listIntents(projectDir, space.name)) {
         // Only workflows that can still run. A finished workflow needs no scope
-        // definition, and holding one to this standard would be unrecoverable:
-        // `intent archive` refuses a completed intent outright, so the only exit
-        // would be recreating a scope the user deliberately deleted. Mirrors the
-        // enumeration activeWorkflowDependencyViolations already uses in this file
-        // (which t224 pins), so completion releases this check the same way it
+        // definition, and holding one to this standard would make the person
+        // archive finished work, or recreate a scope they deliberately deleted,
+        // just to clear a doctor failure. Mirrors the enumeration
+        // activeWorkflowDependencyViolations already uses in this file (which
+        // t224 pins), so completion releases this check the same way it
         // releases the plugin-selection block.
         if (isArchivedIntent(intent) || isCompletedIntent(intent) || !intent.dirName) {
           continue;
@@ -8147,11 +8152,12 @@ function auditReason(raw: string | undefined): string | null {
   return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
 }
 
-// The refusals that keep `intent archive` from hiding live work. A completed
-// intent is already terminal (nothing to retire). A record with Bolt worktrees
-// or claimed team Units still has work in flight in other checkouts that the
-// archive would orphan. Claim inspection fails closed: inability to prove the
-// registry is claim-free is not permission to retire shared work.
+// The refusals that keep `intent archive` from hiding live work. Claimed team
+// Units are held by other people's checkouts, so archiving them would retire
+// work someone else is doing. Claim inspection fails closed: inability to prove
+// the registry is claim-free is not permission to retire shared work. A
+// completed intent and one with Bolt worktrees archive like any other: nothing
+// is deleted, the worktrees stay on disk, and unarchive brings the record back.
 function refuseUnlessArchivable(
   projectDir: string,
   space: string,
@@ -8161,17 +8167,6 @@ function refuseUnlessArchivable(
 ): void {
   if (isArchivedIntent(row) || getField(state, "Status") === "Archived") {
     die(`Intent "${dirName}" is already archived.`);
-  }
-  if (row.status === "complete" || getField(state, "Status") === "Completed") {
-    die(
-      `Intent "${dirName}" is complete. A completed workflow is already terminal and is not archived.`,
-    );
-  }
-  const boltRefs = parseRefsList(getField(state, "Bolt Refs") ?? "");
-  if (boltRefs.length > 0) {
-    die(
-      `Intent "${dirName}" still has Bolt worktree(s) in flight (${boltRefs.join(", ")}). Merge or discard them before archiving.`,
-    );
   }
   if (!isTeamUnitOwnership(state)) return;
   const dependencyPath = unitDependencyPath(projectDir, dirName, space);
@@ -8198,16 +8193,18 @@ function refuseUnlessArchivable(
 }
 
 // `/aidlc intent archive <name> [--reason <text>]` · `/aidlc intent unarchive
-// <name>`. Archiving retires an in-flight intent without deleting anything:
-// the record dir, its artifacts, and its audit shards stay on disk; the
-// registry row flips to `archived`; the state file's Status flips to `Archived`
+// <name>`. Archiving retires an in-flight or completed intent without deleting
+// anything: the record dir, its artifacts, its audit shards, and any Bolt
+// worktrees stay on disk; the registry row flips to `archived`; the state
+// file's Status flips to `Archived` (the Status it replaced is kept beside it)
 // so the engine refuses to route its stages; and the default listing hides it.
-// Unarchiving reverses exactly those two field writes. Both run under the
-// WORKSPACE lock (invariant 2: every intents.json mutation takes the sentinel
-// bucket), then the target intent lock, so registry and state changes cannot
-// race either another registry writer or a workflow-local mutation. Both emit
-// their audit row FIRST (audit-first atomicity) into the target intent's own
-// shard, so the row lands even when that intent is not active.
+// Unarchiving reverses exactly those field writes, restoring `Completed` /
+// `complete` or `Running` / `in-flight`. Both run under the WORKSPACE lock
+// (invariant 2: every intents.json mutation takes the sentinel bucket), then
+// the target intent lock, so registry and state changes cannot race either
+// another registry writer or a workflow-local mutation. Both emit their audit
+// row FIRST (audit-first atomicity) into the target intent's own shard, so the
+// row lands even when that intent is not active.
 function handleIntentLifecycle(
   projectDir: string,
   verb: IntentLifecycleVerb,
@@ -8216,15 +8213,15 @@ function handleIntentLifecycle(
   missingValueFlags: ReadonlySet<string>,
 ): void {
   if (!target) die(`Usage: aidlc-utility intent ${verb} <name>`);
-  // Only `archive` records a reason. Refusing it on `unarchive` keeps a user
-  // from believing a reason was audited when nothing captures it.
+  // Only `archive` records a reason. `unarchive` still does what was asked and
+  // says the reason was not recorded, so nobody believes it was audited.
   const reasonGiven = flags.reason !== undefined || missingValueFlags.has("reason");
-  if (verb === "unarchive" && reasonGiven) {
-    die("intent unarchive refused: --reason is only accepted by intent archive.");
-  }
   // A bare or blank `--reason` would otherwise land in the audit shard as the
   // flag's boolean placeholder ("Reason: true") - a usage error, not a reason.
-  if (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === "")) {
+  if (
+    verb === "archive" &&
+    (missingValueFlags.has("reason") || (flags.reason !== undefined && flags.reason.trim() === ""))
+  ) {
     die("intent archive refused: --reason requires a nonblank value.");
   }
   const selection = resolveWorkflowSelection(projectDir);
@@ -8237,7 +8234,7 @@ function handleIntentLifecycle(
       `Intent "${dirName}" has no intents.json row in space "${space}", so its lifecycle status cannot change. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`,
     );
   }
-  const stage = withAuditLock(projectDir, () => {
+  const { stage, completed, boltRefs } = withAuditLock(projectDir, () => {
     return withAuditLock(projectDir, () => {
       const row = readIntentRegistry(projectDir, space).find((entry) =>
         recordDirMatches(entry, dirName),
@@ -8250,31 +8247,57 @@ function handleIntentLifecycle(
       const timestamp = isoTimestamp();
       if (verb === "archive") {
         refuseUnlessArchivable(projectDir, space, dirName, row, state);
+        const priorStatus = (getField(state, "Status") ?? "").trim();
+        // Built before the audit row: appendUnderHeading throws when
+        // `## Current Status` is absent, so a malformed state file fails
+        // before anything is written.
+        let content: string;
+        try {
+          content = setOrInsertField(state, "## Current Status", ARCHIVED_FROM_FIELD, priorStatus);
+        } catch (cause) {
+          die(`Intent "${dirName}" cannot be archived: its state file could not be updated (${errorMessage(cause)}).`);
+        }
+        content = setField(content, "Status", "Archived");
+        content = setField(content, "Last Updated", timestamp);
         const fields: Record<string, string> = { Stage: currentStage };
         const reason = auditReason(flags.reason);
         if (reason) fields.Reason = reason;
         appendAuditEntryUnlocked("WORKFLOW_ARCHIVED", fields, projectDir, dirName, space);
-        let content = setField(state, "Status", "Archived");
-        content = setField(content, "Last Updated", timestamp);
         writeStateFile(projectDir, content, dirName, space);
         updateIntentStatus(projectDir, dirName, ARCHIVED_INTENT_STATUS, space);
-        return currentStage;
+        return {
+          stage: currentStage,
+          completed: priorStatus === "Completed",
+          boltRefs: parseRefsList(getField(state, "Bolt Refs") ?? ""),
+        };
       }
       const stateArchived = getField(state, "Status") === "Archived";
       if (!isArchivedIntent(row) && !stateArchived) {
         die(`Intent "${dirName}" is not archived (status: ${row.status}); nothing to unarchive.`);
       }
+      // Anything but a recorded `Completed` comes back running: an archive
+      // made before the field existed could only have been running work. A
+      // state already brought back (an unarchive stopped before its registry
+      // write) keeps the Status it has.
+      const restoreCompleted = stateArchived
+        ? getField(state, ARCHIVED_FROM_FIELD) === "Completed"
+        : getField(state, "Status") === "Completed";
       appendAuditEntryUnlocked("WORKFLOW_UNARCHIVED", { Stage: currentStage }, projectDir, dirName, space);
-      let content = setField(state, "Status", "Running");
+      let content = setField(state, "Status", restoreCompleted ? "Completed" : "Running");
+      content = removeField(content, ARCHIVED_FROM_FIELD);
       content = setField(content, "Last Updated", timestamp);
       writeStateFile(projectDir, content, dirName, space);
-      updateIntentStatus(projectDir, dirName, "in-flight", space);
-      return currentStage;
+      updateIntentStatus(projectDir, dirName, restoreCompleted ? "complete" : "in-flight", space);
+      return { stage: currentStage, completed: restoreCompleted, boltRefs: [] };
     }, dirName, space);
   });
   if (verb === "unarchive") {
+    const back = completed
+      ? "it is complete again and back in the default /aidlc intent list."
+      : `it is in-flight again at "${stage}". Switch to it with /aidlc intent ${dirName}.`;
     process.stdout.write(
-      `Unarchived intent → ${dirName} (space: ${space}); it is in-flight again at "${stage}". Switch to it with /aidlc intent ${dirName}.\n`,
+      `Unarchived intent → ${dirName} (space: ${space}); ${back}\n` +
+        (reasonGiven ? "The --reason was not recorded: only intent archive records a reason.\n" : ""),
     );
     return;
   }
@@ -8293,7 +8316,13 @@ function handleIntentLifecycle(
     clearSessionIntentUuid(projectDir, sid);
   }
   process.stdout.write(
-    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; /aidlc intent list --all shows it and /aidlc intent unarchive ${dirName} brings it back.\n`,
+    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; /aidlc intent list --all shows it and /aidlc intent unarchive ${dirName} brings it back.\n` +
+      (completed
+        ? "It was complete, so it now leaves the default /aidlc intent list; unarchive brings it back as complete.\n"
+        : "") +
+      (boltRefs.length > 0
+        ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); /aidlc intent unarchive ${dirName} brings that work back.\n`
+        : ""),
   );
 }
 
@@ -9370,15 +9399,18 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // Preserve checkbox history while rebuilding scope-owned plan suffixes.
       const existingCheckboxes = parseCheckboxes(content);
       // The new plan must leave the workflow routable. `next` recovers a
-      // current stage the plan skips only from `[-]` or `[R]` (it asks for
-      // `report --result skipped`), and never for a team per-unit Construction
-      // stage, whose Unit gates live in Unit Progress while its box reads
-      // `[-]`. Anything else would commit a scope change nothing can route
-      // past, so refuse it before any write, the same way for every stage.
+      // current stage the plan skips from `[-]`, `[R]`, or `[S]` (it asks for
+      // `report --result skipped`, which routes past it), and never for a team
+      // per-unit Construction stage, whose Unit gates live in Unit Progress
+      // while its box reads `[-]`; that one is refused before any write.
       const skips = (slug: string): boolean => (adjustedMapping[slug] || "SKIP") !== "EXECUTE";
       const currentSlug = getField(content, "Current Stage") ?? "";
       const currentNode = graph.find((s) => s.slug === currentSlug);
       const currentState = existingCheckboxes.find((c) => c.slug === currentSlug)?.state;
+      // The person asked for a scope that does not run these stages, so they
+      // are skipped with it: a current stage that has not started, and every
+      // stage waiting for approval (a skipped stage holds no open approval).
+      const skippedNow: { slug: string; was: string }[] = [];
       if (currentNode && skips(currentSlug) && currentState !== "completed" && currentState !== "skipped") {
         if (isTeamUnitOwnership(content) && currentNode.phase === "construction" && isPerUnitStage(currentNode)) {
           die(
@@ -9388,28 +9420,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           );
         }
         if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "awaiting-approval") {
-          die(
-            `Cannot change scope to ${newScope}: it skips the current stage ${currentSlug}, which has not ` +
-              "started, so the workflow could not move past it. Continue the workflow until " +
-              `${currentSlug} is running or done, then change scope.`,
-          );
+          skippedNow.push({ slug: currentSlug, was: "it had not started" });
         }
       }
-      // A skipped stage cannot hold an open approval either: `next` refuses an
-      // awaiting-approval cursor on a SKIP stage and `report --result skipped`
-      // refuses `[?]`. Approving or requesting changes first leaves `[x]` or
-      // `[R]`, both of which route.
-      const openGatesSkipped = existingCheckboxes
-        .filter((c) => c.state === "awaiting-approval" && skips(c.slug))
-        .map((c) => c.slug);
-      if (openGatesSkipped.length > 0) {
-        const named = openGatesSkipped.join(", ");
-        die(
-          `Cannot change scope to ${newScope} while ${named} ${openGatesSkipped.length === 1 ? "is" : "are"} ` +
-            `waiting for approval: ${newScope} skips ${openGatesSkipped.length === 1 ? "it" : "them"}, and a ` +
-            "skipped stage cannot hold an open approval. Approve or request changes first, then change scope.",
-        );
+      for (const c of existingCheckboxes) {
+        if (c.state === "awaiting-approval" && skips(c.slug)) {
+          skippedNow.push({ slug: c.slug, was: "it was waiting for approval" });
+        }
       }
+      const skippedNowSlugs = new Set(skippedNow.map((s) => s.slug));
       const existingMap = new Map(existingCheckboxes.map(c => [c.slug, c]));
       const phaseMap: Record<string, typeof graph> = {};
       for (const stage of graph) {
@@ -9436,8 +9455,11 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           const existing = existingMap.get(stage.slug);
           // Every checkbox state round-trips, including an open gate's [?]
           // and a revision's [R]: collapsing those to [ ] would leave a gate
-          // the audit shows open reading as a stage that never started.
-          const marker = existing ? CHECKBOX_MAP[existing.state] : "[ ]";
+          // the audit shows open reading as a stage that never started. A
+          // stage skipped with this change reads [S].
+          const marker = skippedNowSlugs.has(stage.slug)
+            ? CHECKBOX_MAP.skipped
+            : existing ? CHECKBOX_MAP[existing.state] : "[ ]";
           const suffix = action === "EXECUTE" ? "EXECUTE" : "SKIP";
           newStageProgress += `- ${marker} ${stage.slug} \u2014 ${suffix}\n`;
         }
@@ -9484,17 +9506,27 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       };
       const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
-      auditEntries.unshift({
-        eventType: "SCOPE_CHANGED",
-        fields: {
-          "Old Scope": oldScope,
-          "New Scope": newScope,
-          "Stage Count Delta": deltaStr,
-          "Stages in Scope": String(executeStages.length),
-          "Approval Gates": String(gates),
-          Depth: effectiveDepth,
+      auditEntries.unshift(
+        {
+          eventType: "SCOPE_CHANGED",
+          fields: {
+            "Old Scope": oldScope,
+            "New Scope": newScope,
+            "Stage Count Delta": deltaStr,
+            "Stages in Scope": String(executeStages.length),
+            "Approval Gates": String(gates),
+            Depth: effectiveDepth,
+          },
         },
-      });
+        ...skippedNow.map(({ slug }) => ({
+          eventType: "STAGE_SKIPPED",
+          fields: {
+            Stage: slug,
+            Reason: `Scope changed to ${newScope}, which does not run this stage`,
+            "Skip Kind": "scope-change",
+          },
+        })),
+      );
       outputLines = [
         `Scope changed: ${oldScope} -> ${newScope}`,
         `Stages in scope: ${executeStages.length} (${deltaStr})`,
@@ -9502,6 +9534,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         `Depth: ${effectiveDepth}`,
         ...(flags.review === undefined ? [] : [`Review override: ${getField(content, "Review Override") || "scope default"}`]),
         `Completed: ${completedCount}/${executeStages.length}`,
+        ...skippedNow.map(({ slug, was }) =>
+          `Skipped ${slug} (${was}): ${newScope} does not run it. To run it on its own, type ` +
+            `\`${entrySkillInvocation()} --stage ${slug} --single\`.`),
         ...update.lines,
       ];
     }
@@ -9533,14 +9568,16 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
     "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>] " +
-    "[--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
+    "[--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
   );
   const flips = { skip: new Set<string>(), add: new Set<string>() };
   // Settings approved together with the stage changes land in the same state
   // write, so one approval never leaves the plan half-applied.
   const settingKeys = new Set<ConfigKey>(["sensors", "learnings", "summary-confirmation", "review"]);
   const settings: IntentSettingsRequest = {};
-  const allowed = new Set<string>(["skip", "add", "intent", "space", "project-dir", ...settingKeys]);
+  // Why the plan changed, when the engine knows (a jump to a skipped stage).
+  let reason: string | undefined;
+  const allowed = new Set<string>(["skip", "add", "reason", "intent", "space", "project-dir", ...settingKeys]);
   // Preserve the original tokens before parseArgs collapses repeated flags,
   // including in-process CLI dispatch;
   // process.argv may still belong to the outer `aidlc engine` invocation.
@@ -9564,6 +9601,8 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       const slugs = value.split(",").map(slug => slug.trim());
       if (slugs.some(slug => slug === "")) usage(`recompose --${name} requires nonempty comma-separated stage slugs.`);
       for (const slug of slugs) flips[name].add(slug);
+    } else if (name === "reason") {
+      reason = value.trim();
     } else if (settingKeys.has(name as ConfigKey)) {
       settings[name as ConfigKey] = { value, source: "you" };
     }
@@ -9640,21 +9679,40 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     };
 
     // --- Per-flip guards: pending-only, ahead-of-cursor, skeleton-gate ------
+    // A refused flip is one the plan cannot take; each refusal names what the
+    // person can do instead (a jump, or an isolated run that leaves the plan).
     const reject = (slug: string, why: string): never =>
       die(`Cannot recompose "${slug}": ${why}`);
+    const typed = (args: string): string => `\`${entrySkillInvocation()} ${args}\``;
+    const runAlone = (slug: string): string => `To run it on its own, type ${typed(`--stage ${slug} --single`)}.`;
+    const movePast = (slug: string): string => {
+      const next = nextInScopeStage(slug, scope, content);
+      return next
+        ? `To move past it, jump to the next stage with ${typed(`--stage ${next.slug}`)}.`
+        : "It is the last stage on the plan.";
+    };
 
     for (const slug of [...skipList, ...addList]) {
       if (!knownSlugs.has(slug)) {
         reject(slug, "not a compiled stage.");
       }
+      const skipping = skipList.includes(slug);
       const state = checkboxMap.get(slug);
       if (state === "completed" || state === "in-progress" || state === "skipped" ||
           state === "awaiting-approval" || state === "revising") {
-        reject(slug, `its checkbox is not pending ([${state}]). Only a PENDING stage's plan can be re-shaped; completed/in-progress/skipped stages are frozen.`);
+        const instead = state === "completed"
+          ? `It is already done; to run it again, jump back to it with ${typed(`--stage ${slug}`)}.`
+          : state === "skipped"
+            ? (skipping ? "It is already skipped." : runAlone(slug))
+            : (skipping ? movePast(slug) : runAlone(slug));
+        reject(slug, `its checkbox is not pending ([${state}]), so the plan can no longer change it. ${instead}`);
       }
       const idx = graph.findIndex((s) => s.slug === slug);
       if (currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
-        reject(slug, `it is at or behind the current stage ("${currentSlug}"). In-flight recompose only reaches forward; re-running the past is out of scope.`);
+        const instead = idx === currentIdx
+          ? (skipping ? movePast(slug) : runAlone(slug))
+          : (skipping ? "The workflow does not go back to it, so there is nothing to skip." : runAlone(slug));
+        reject(slug, `it is ${idx === currentIdx ? "the current stage" : `behind the current stage ("${currentSlug}")`}, and a plan change only reaches stages ahead. ${instead}`);
       }
     }
 
@@ -9674,11 +9732,23 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
       return effective(slug);
     });
     if (anchorBefore !== anchorAfter) {
+      const skippingAnchor = anchorBefore !== undefined && skipList.includes(anchorBefore);
       const mover =
-        anchorBefore && skipList.includes(anchorBefore) ? anchorBefore : (anchorAfter ?? anchorBefore ?? "construction");
+        skippingAnchor ? anchorBefore : (anchorAfter ?? anchorBefore ?? "construction");
+      // The scopes whose own plan already makes the change, without moving it.
+      const scopesThat = Object.entries(loadScopeMapping())
+        .filter(([name, def]) => name !== scope && (def.stages[mover] === "EXECUTE") !== skippingAnchor)
+        .map(([name]) => name)
+        .sort();
+      const changeScope = scopesThat.length > 0
+        ? `change to a scope that ${skippingAnchor ? "skips" : "runs"} it (${scopesThat.join(", ")}) with ${typed("--scope <scope>")}`
+        : "";
+      const instead = skippingAnchor
+        ? `To leave ${mover} out, jump past it when the workflow reaches it${changeScope ? `, or ${changeScope}` : ""}.`
+        : `${runAlone(mover)}${changeScope ? ` To put it on the plan, ${changeScope}.` : ""}`;
       reject(
         mover,
-        `the flip moves the first EXECUTE stage of Construction (the walking-skeleton gate anchor) from "${anchorBefore ?? "none"}" to "${anchorAfter ?? "none"}". The skeleton gate must stay anchored; jump or change scope instead.`,
+        `the flip moves the first EXECUTE stage of Construction (the walking-skeleton gate anchor) from "${anchorBefore ?? "none"}" to "${anchorAfter ?? "none"}". The skeleton gate must stay anchored. ${instead}`,
       );
     }
 
@@ -9719,7 +9789,9 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     const newErrors = validation.errors.filter((e) => !baseErrors.has(e));
     if (newErrors.length > 0) {
       die(
-        `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}`,
+        `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}\n` +
+          "To make the change, also add a stage that produces what is missing, or also skip the stage that needs it." +
+          (addList.length > 0 ? ` To run a stage without changing the plan, type ${typed("--stage <stage> --single")}.` : ""),
       );
     }
 
@@ -9808,6 +9880,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
           "Stages skipped": skipList.length > 0 ? skipList.join(", ") : "none",
           "Stages added": addList.length > 0 ? addList.join(", ") : "none",
           "Stages in Scope": String(executeStages.length),
+          ...(reason ? { Reason: reason } : {}),
         },
       },
       ...settingsUpdate.audit,

@@ -262,6 +262,23 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
     expect(r.out).toContain("State matches last audit event (no drift)");
   });
 
+  test("2b: WORKFLOW_COMPLETED + a completed workflow the person archived -> no drift", () => {
+    const p = track(createTestProject());
+    seedAuditFile(p);
+    seedStateFile(p, STATE_MID_IDEATION);
+    const statePath = seededStateFile(p);
+    sedReplaceInFile(statePath, /^- \*\*Status\*\*:.*$/m, "- **Status**: Archived\n- **Archived From**: Completed");
+    const auditPath = seededAuditShard(p);
+    writeFileSync(
+      auditPath,
+      `${readFileSync(auditPath, "utf-8")}${WORKFLOW_COMPLETED_BLOCK}`,
+      "utf-8",
+    );
+    const r = doctor(p);
+    expect(r.out).not.toContain("State/audit drift");
+    expect(r.out).toContain("State matches last audit event (no drift)");
+  });
+
   test("3: audit has no WORKFLOW_COMPLETED -> drift check does not fire", () => {
     const p = track(createTestProject());
     seedAuditFile(p); // audit-sample.md carries no WORKFLOW_COMPLETED
