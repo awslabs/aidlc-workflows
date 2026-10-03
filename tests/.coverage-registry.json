@@ -7165,6 +7165,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:processGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processStartedAtMs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:producersOf",
       "minMechanism": "none",
       "coveredBy": [

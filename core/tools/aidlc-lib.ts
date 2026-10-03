@@ -28392,7 +28392,10 @@ function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
   try { WINDOWS_PROCESS_API?.symbols.CloseHandle(receipt.handle); } catch { /* already closed */ }
 }
 
-function processGeneration(pid: number): string | null {
+// Exported so the transaction lock proves a reused PID with the same record.
+// Locks persist this string: a format change makes a live holder from another
+// release look like a reused PID.
+export function processGeneration(pid: number): string | null {
   if (pid === process.pid && AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.selfProcessGeneration) {
     return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.selfProcessGeneration();
   }
@@ -28408,6 +28411,34 @@ function processGeneration(pid: number): string | null {
         : null;
   if (pid === process.pid) SELF_PROCESS_GENERATION = generation;
   return generation;
+}
+
+// When a live process started, in epoch ms, read from its generation record;
+// null when the platform cannot say. For locks written by releases that
+// recorded no generation. A wall-clock step can shift it, so callers compare
+// with a margin.
+export function processStartedAtMs(pid: number): number | null {
+  const generation = processGeneration(pid);
+  if (!generation) return null;
+  let started = Number.NaN;
+  try {
+    if (process.platform === "win32") {
+      // FILETIME as "high:low" hex: 100 ns intervals since 1601-01-01.
+      const [high, low] = generation.split(":");
+      const filetime = (BigInt(`0x${high}`) << 32n) | BigInt(`0x${low}`);
+      started = Number(filetime / 10_000n) - 11_644_473_600_000;
+    } else if (process.platform === "darwin") {
+      const [seconds, micros] = generation.split(":").map(Number);
+      started = seconds * 1000 + micros / 1000;
+    } else if (process.platform === "linux") {
+      // procfs counts USER_HZ ticks since boot; USER_HZ is 100 wherever Bun runs.
+      const boot = /^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf-8"));
+      if (boot) started = Number(boot[1]) * 1000 + Number(generation) * 10;
+    }
+  } catch {
+    return null;
+  }
+  return Number.isFinite(started) ? started : null;
 }
 
 function writeOwnerStamp(

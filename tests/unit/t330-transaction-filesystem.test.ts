@@ -1,15 +1,17 @@
-// covers: function:assertTransactionFilesystem, function:executePlan
+// covers: function:assertTransactionFilesystem, function:executePlan,
+//   function:processGeneration, function:processStartedAtMs
 // Real local IO with selected mount operations unavailable; this does not
 // certify the atomicity/durability of S3 drivers or exercise a live S3 mount.
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  realpathSync, rmSync, statSync, symlinkSync, writeFileSync,
+  realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { processGeneration, processStartedAtMs } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TRANSACTION = pathToFileURL(join(REPO_ROOT, "core/tools/aidlc-transaction.ts")).href;
@@ -50,7 +52,10 @@ type Options = {
   replaceOwner?: boolean; requestedRoot?: string; contender?: boolean; releaseRetry?: boolean;
   pause?: "acquire" | "locked" | "release";
 };
-type Owner = { schemaVersion: number; pid: number; host: string; token: string; staging: string };
+type Owner = {
+  schemaVersion: number; pid: number; host: string; token: string; staging: string;
+  processGeneration?: string;
+};
 type Observation = {
   error: null | {
     name: string; message: string; root?: string; operation?: string; code?: string;
@@ -60,6 +65,7 @@ type Observation = {
   backend?: "directory" | "hardlink"; owner?: Owner; replacement?: string;
   faultHits: number; fallbackHits: number; probes: string[]; gates: string[];
   publicationCopies: number; preflightCompleted: boolean; pendingGate?: boolean;
+  stderr: string;
 };
 function childEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -254,7 +260,7 @@ function observe(root: string, options: Options = {}): Observation {
   });
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stdout + result.stderr).toBe(0);
-  const out = JSON.parse(result.stdout) as Observation;
+  const out = { ...JSON.parse(result.stdout), stderr: result.stderr } as Observation;
   if (!options.contender) {
     for (const gate of out.gates) expect(existsSync(gate), gate).toBe(false);
   }
@@ -423,13 +429,26 @@ describe("t330 lock ownership", () => {
       expectProject(root);
       deadOwner = out.owner!;
       expect(() => process.kill(deadOwner.pid, 0)).toThrow();
+      // Every new lock records its holder's process generation.
+      expect(deadOwner.processGeneration).toEqual(expect.any(String));
     }
     return { ...deadOwner };
   }
-  for (const state of ["live", "dead", "foreign", "missing", "malformed", "unknown-schema", "no-token", "invalid-pid", "out-of-range-pid"]) {
+  // A live PID holds the lock only while it is still the process that wrote
+  // it: the same generation, or, for an older release's lock that records no
+  // generation, a process that started before the lock was written.
+  const RECLAIMED = new Set(["dead", "reused", "legacy-reused"]);
+  const LONG_AGO = new Date("2001-01-01T00:00:00Z");
+  const CLEARED = "an earlier AI-DLC command stopped before it finished, so its lock was cleared.";
+  for (const state of ["live", "dead", "reused", "legacy-live", "legacy-reused", "foreign", "missing", "malformed", "unknown-schema", "no-token", "invalid-pid", "out-of-range-pid"]) {
     test(`directory owner ${state} is reclaimed only with proof of same-host death`, () => {
       const root = project(), lock = join(root, LOCK), stamp = owner();
-      if (state === "live") stamp.pid = process.pid;
+      if (state === "live") Object.assign(stamp, { pid: process.pid, processGeneration: processGeneration(process.pid) });
+      if (state === "reused") stamp.pid = process.pid;
+      if (state.startsWith("legacy-")) {
+        stamp.pid = process.pid;
+        delete stamp.processGeneration;
+      }
       if (state === "foreign") stamp.host = `other-boot:${stamp.host}`;
       if (state === "unknown-schema") stamp.schemaVersion = 2;
       if (state === "no-token") stamp.token = "";
@@ -438,12 +457,15 @@ describe("t330 lock ownership", () => {
       mkdirSync(lock);
       const raw = state === "malformed" ? "{" : JSON.stringify(stamp);
       if (state !== "missing") writeFileSync(join(lock, "owner.json"), raw);
+      if (state === "legacy-reused") utimesSync(join(lock, "owner.json"), LONG_AGO, LONG_AGO);
       const before = statSync(lock);
       const out = observe(root, { fallback: "EMLINK" });
-      if (state === "dead") {
+      if (RECLAIMED.has(state)) {
         expect(out.error).toBeNull();
+        expect(out.stderr).toContain(CLEARED);
         expectProject(root, true);
       } else {
+        expect(out.stderr).not.toContain(CLEARED);
         expect(out.error?.message).toMatch(/another AI-DLC mutation|cannot verify|another host or boot/);
         expect(statSync(lock).ino).toBe(before.ino);
         expect(readdirSync(lock)).toEqual(state === "missing" ? [] : ["owner.json"]);
@@ -464,6 +486,48 @@ describe("t330 lock ownership", () => {
     expect(statSync(lock).ino).toBe(before.ino);
     expect(statSync(lock).mtimeMs).toBe(before.mtimeMs);
     expectProject(root, false, [LOCK]);
+  });
+
+  for (const state of ["dead", "live", "reused", "legacy-live", "legacy-reused"]) {
+    test(`file owner ${state} is reclaimed only when its PID no longer runs its holder`, () => {
+      const root = project(), lock = join(root, LOCK), dead = owner();
+      const stamp: Record<string, unknown> = { pid: process.pid, staging: ".aidlc-txn-held" };
+      if (state === "dead") Object.assign(stamp, { pid: dead.pid, processGeneration: dead.processGeneration });
+      if (state === "live") stamp.processGeneration = processGeneration(process.pid);
+      if (state === "reused") stamp.processGeneration = dead.processGeneration;
+      const raw = `${JSON.stringify(stamp)}\n`;
+      writeFileSync(lock, raw);
+      if (state === "legacy-reused") utimesSync(lock, LONG_AGO, LONG_AGO);
+      const out = observe(root);
+      if (RECLAIMED.has(state)) {
+        expect(out.error).toBeNull();
+        expect(out.backend).toBe("hardlink");
+        expect(out.stderr).toContain(CLEARED);
+        expectProject(root, true);
+      } else {
+        expect(out.error?.message).toContain("another AI-DLC mutation");
+        expect(out.stderr).not.toContain(CLEARED);
+        expect(readFileSync(lock, "utf8")).toBe(raw);
+        expectProject(root, false, [LOCK]);
+      }
+    });
+  }
+
+  test("a live process's start time reads between its spawn and now", async () => {
+    const before = Date.now();
+    const child = Bun.spawn([process.execPath, "--eval", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore", stderr: "ignore",
+    });
+    try {
+      const started = processStartedAtMs(child.pid);
+      expect(started).not.toBeNull();
+      // Linux counts from whole boot seconds, so it can read up to 1 s early.
+      expect(started as number).toBeGreaterThanOrEqual(before - 1_100);
+      expect(started as number).toBeLessThanOrEqual(Date.now() + 100);
+    } finally {
+      child.kill();
+      await child.exited;
+    }
   });
 
   test("directory release preserves a replacement owner's directory", () => {

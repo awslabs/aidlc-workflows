@@ -578,9 +578,14 @@ owner-stamped directory when hard links are unavailable. Both use
 fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
 gate in the temporary directory, keyed by canonical root, around transaction
 execution, including
-acquisition, stale-owner recovery, and ownership-checked release. Directory
-recovery requires a matching host/boot identity and a dead owner PID; unknown,
-foreign, or incomplete directory owners are retained for manual diagnosis.
+acquisition, stale-owner recovery, and ownership-checked release. Recovery
+treats an owner as gone when its PID is dead or now runs a later process: both
+lock forms record the holder's process generation (the OS start record the
+gate's reaper also compares), and a lock from a release that recorded none is
+judged by whether the live process started more than 2 s after the lock was
+written. Each recovery prints one line on stderr. Directory recovery also
+requires a matching host/boot identity; unknown, foreign, or incomplete
+directory owners are retained for manual diagnosis.
 
 The coordination contract covers cooperating processes on one continuously
 running mount on one host with a common local temporary directory (`TMPDIR` on
