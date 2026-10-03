@@ -928,6 +928,14 @@ Locally modified framework-owned files conflict against the prior baseline.
 edits to hand-authored orchestrator prose. It does not claim unrelated
 project content.
 
+An unchanged framework file the new release no longer ships is removed, and
+config names each one: the refresh prints `Removed N files that are no longer
+part of AI-DLC <version>:` and the list, and `--dry-run` prints the same list
+as `Will remove`. Several files in one folder show as one line. When git
+tracks every removed file, config also names `git restore <path>` to get one
+back; later refreshes leave a restored file alone. In JSON these actions carry
+`detail: "no longer shipped"`.
+
 Provider, scope, and model answers preserve project-owned fields in
 `.claude/settings.json` and `.codex/config.toml`. The Claude
 `companyAnnouncements`, `permissions`, `statusLine`, and `hooks` keys remain

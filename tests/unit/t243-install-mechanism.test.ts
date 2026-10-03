@@ -1776,6 +1776,11 @@ describe("t243 project initialization", () => {
     for (const target of [created, recreated, added, project]) {
       const refreshed = configCopilot(target, retired);
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      // Only a removed file is listed; a team's file that only lost a setting is not.
+      expect(
+        refreshed.stdout.includes(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  .vscode/settings.json\n`),
+        target,
+      ).toBe(target === created || target === recreated);
     }
     expect(existsSync(join(created, VSCODE_SETTINGS))).toBe(false);
     expect(existsSync(join(recreated, VSCODE_SETTINGS))).toBe(false);
@@ -2462,9 +2467,81 @@ describe("t243 project initialization", () => {
       manifest.files[retiredRel] = sha256Bytes(retiredBody);
       writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
 
+      const listed = `1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${retiredRel}\n`;
+      const dry = refresh(project, ["--dry-run"]);
+      expect(dry.stdout).toContain(`Will remove ${listed}`);
+      expect(existsSync(join(project, retiredRel))).toBe(true);
       const refreshed = refresh(project);
       expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
       expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+      expect(refreshed.stdout).toContain(`Removed ${listed}`);
+      // Not a git repository, so no way back is named.
+      expect(dry.stdout + refreshed.stdout).not.toContain("git restore");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a refresh lists what it removes, by folder, and names git restore when git tracks them", () => {
+      const project = temp("aidlc-t243-retired-git-");
+      const git = (...args: string[]) => {
+        const result = spawnSync("git", [
+          "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
+          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+        ], { encoding: "utf-8" });
+        expect(result.status, result.stderr).toBe(0);
+      };
+      git("init", "-q");
+      const installed = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const retire = (rels: string[]) => {
+        const manifest = manifestOf(project);
+        for (const rel of rels) {
+          put(project, rel, `Shipped by an earlier release: ${rel}\n`);
+          manifest.files[rel] = sha256Bytes(`Shipped by an earlier release: ${rel}\n`);
+        }
+        writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+        git("add", "-A");
+        git("commit", "-q", "-m", "retire");
+      };
+      const knowledge = [1, 2, 3].map((n) => `.claude/knowledge/aidlc-retired/k${n}.md`);
+      const skills = Array.from(
+        { length: 12 },
+        (_, n) => `.claude/skills/aidlc-retired-${String(n + 1).padStart(2, "0")}/SKILL.md`,
+      );
+      retire([...knowledge, ...skills]);
+
+      const json = refresh(project, ["--dry-run", "--json"]);
+      expect((JSON.parse(json.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      }).data.actions.find((action) => action.path === skills[0])).toEqual({
+        path: skills[0],
+        action: "remove",
+        detail: "no longer shipped",
+      });
+      const listed = [
+        `15 files that are no longer part of AI-DLC ${AIDLC_VERSION}:`,
+        "  .claude/knowledge/aidlc-retired/ (3 files)",
+        ...skills.slice(0, 8).map((rel) => `  ${rel}`),
+        "  and 4 more files",
+        "To get one back, run `git restore <path>`.",
+        "",
+      ].join("\n");
+      expect(refresh(project, ["--dry-run"]).stdout).toContain(`Will remove ${listed}`);
+      const refreshed = refresh(project);
+      expect(refreshed.stdout).toContain(`Removed ${listed}`);
+      for (const rel of [...knowledge, ...skills]) expect(existsSync(join(project, rel)), rel).toBe(false);
+
+      // The named way back works, and the next refresh keeps what came back.
+      git("restore", skills[0]);
+      const kept = refresh(project);
+      expect(readFileSync(join(project, skills[0]), "utf-8")).toBe(`Shipped by an earlier release: ${skills[0]}\n`);
+      expect(kept.stdout).not.toContain("no longer part of");
+
+      const solo = ".claude/hooks/aidlc-retired-hook.ts";
+      retire([solo]);
+      expect(refresh(project).stdout).toContain(
+        `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
+      );
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {
@@ -2479,7 +2556,8 @@ describe("t243 project initialization", () => {
       writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
 
       for (let pass = 1; pass <= 2; pass++) {
-        refresh(project);
+        // Kept files are never reported as removed.
+        expect(refresh(project).stdout, `refresh ${pass}`).not.toContain("no longer part of");
         expect(readFileSync(join(project, skillRel), "utf-8"), `refresh ${pass}`).toBe(skillBody);
         expect(readFileSync(join(project, notesRel), "utf-8"), `refresh ${pass}`)
           .toBe("Team notes, edited after the older refresh.\n");

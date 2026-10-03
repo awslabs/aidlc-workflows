@@ -6923,8 +6923,70 @@ function planManagedFiles(
       continue;
     }
     operations.push({ kind: "remove", path: rel, expected: expected(target) });
-    actions.push({ path: rel, action: "remove" });
+    actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
   }
+}
+
+// A refresh names every file it removes because the release no longer ships
+// it, on dry run and apply alike. Several files in one folder are one line, so
+// a retired skill or knowledge folder stays readable.
+const NO_LONGER_SHIPPED = "no longer shipped";
+const RETIRED_LIST_LINES = 10;
+
+function retiredFilesReport(
+  projectDir: string,
+  actions: readonly PlannedAction[],
+  version: string,
+  removed: boolean,
+): string[] {
+  const paths = actions
+    .filter((item) => item.action === "remove" && item.detail === NO_LONGER_SHIPPED)
+    .map((item) => item.path)
+    .sort();
+  if (paths.length === 0) return [];
+  const byFolder = new Map<string, string[]>();
+  for (const path of paths) {
+    const folder = path.slice(0, path.lastIndexOf("/") + 1);
+    byFolder.set(folder, [...(byFolder.get(folder) ?? []), path]);
+  }
+  const rows = [...byFolder].flatMap(([folder, files]) =>
+    folder && files.length > 1
+      ? [{ line: `${folder} (${files.length} files)`, files: files.length }]
+      : files.map((file) => ({ line: file, files: 1 }))
+  );
+  const shown = rows.length > RETIRED_LIST_LINES ? rows.slice(0, RETIRED_LIST_LINES - 1) : rows;
+  const more = rows.slice(shown.length).reduce((sum, row) => sum + row.files, 0);
+  const lines = [
+    `${removed ? "Removed" : "Will remove"} ${
+      paths.length === 1 ? "1 file that is" : `${paths.length} files that are`
+    } no longer part of AI-DLC ${version}:`,
+    ...shown.map((row) => `  ${row.line}`),
+    ...(more > 0 ? [`  and ${more} more files`] : []),
+  ];
+  if (insideGitRepository(projectDir) && gitTracksEvery(projectDir, paths)) {
+    lines.push(
+      paths.length === 1
+        ? `To get it back, run \`git restore ${paths[0]}\`.`
+        : "To get one back, run `git restore <path>`.",
+    );
+  }
+  return lines;
+}
+
+// The way back is named only when it works: git tracks every removed file.
+function gitTracksEvery(projectDir: string, paths: readonly string[]): boolean {
+  const env = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
+  // One pathspec per top-level entry keeps the command line short.
+  const tops = [...new Set(paths.map((path) => path.split("/")[0]))];
+  const listed = spawnSync(
+    "git",
+    ["--literal-pathspecs", "-C", projectDir, "ls-files", "-z", "--", ...tops],
+    { encoding: "utf-8", env, timeout: 10_000 },
+  );
+  if (listed.status !== 0) return false;
+  const tracked = new Set(listed.stdout.split("\0"));
+  return paths.every((path) => tracked.has(path));
 }
 
 function planRootIntegrations(
@@ -7390,7 +7452,7 @@ function planRemovedRootIntegrations(
         continue;
       }
       operations.push({ kind: "remove", path, expected: expected(targetPath) });
-      actions.push({ path, action: "remove" });
+      actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       continue;
     }
     const text = readFileSync(targetPath, "utf-8");
@@ -7415,7 +7477,7 @@ function planRemovedRootIntegrations(
       value = value.replace(/^\r?\n/, "").replace(/\r?\n\r?\n$/, "\n");
       if (!value) {
         operations.push({ kind: "remove", path, expected: expected(targetPath) });
-        actions.push({ path, action: "remove" });
+        actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
         operations.push(writeOperation(path, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired managed block" });
@@ -7465,7 +7527,7 @@ function planRemovedRootIntegrations(
         actions.push({ path, action: "preserve", detail: "retired settings were changed or already removed" });
       } else if (contribution.created && jsoncRootMembers(value)?.members.length === 0 && value.replace(/\s/g, "") === "{}") {
         operations.push({ kind: "remove", path, expected: expected(targetPath) });
-        actions.push({ path, action: "remove" });
+        actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
         operations.push(writeOperation(path, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired settings" });
@@ -7500,7 +7562,7 @@ function planRemovedRootIntegrations(
       continue;
     }
     operations.push({ kind: "remove", path, expected: expected(targetPath) });
-    actions.push({ path, action: "remove" });
+    actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
   }
 }
 
@@ -8965,6 +9027,7 @@ export async function main(
         for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
       }
       if (options.mode === "human") {
+        writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, false));
         for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
       }
       const configuredSection = diagnosticsContext?.section ??
@@ -9110,6 +9173,7 @@ export async function main(
       );
     }
     if (options.mode === "human") {
+      writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true));
       writeMenuLines("", prepared.notes.map((note) => `  Note: ${note}`));
     }
     const outstandingActions = internal.setupWalkChild
