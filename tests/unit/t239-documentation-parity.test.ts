@@ -1040,6 +1040,7 @@ describe("documentation parity derives current behavior from authored implementa
       "Hook heartbeat data",
       "Human-turn receipts: 0 HUMAN_TURN rows",
       "Plan Approval authority is ambiguous or stale",
+      "cannot select one approval target",
       "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
     ]) {

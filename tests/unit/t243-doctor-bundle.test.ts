@@ -578,6 +578,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(runDiagnosis(torn).some((f) => f.id === "state-audit-drift")).toBe(true);
   });
 
+  test("13b: Rule 3 (drift) accepts a completed workflow the person archived", () => {
+    const completed = (stateContent: string) =>
+      runDiagnosis(diagInput({
+        stateContent,
+        timeline: {
+          stages: [],
+          workflowStartedRaw: "2026-01-10T00:00:00Z",
+          workflowStatus: "Archived",
+          workflowCompleted: true,
+          notes: [],
+        },
+      })).some((f) => f.id === "state-audit-drift");
+    expect(completed("- **Status**: Archived\n- **Archived From**: Completed\n")).toBe(false);
+    expect(completed("- **Status**: Archived\n- **Archived From**: Running\n")).toBe(true);
+  });
+
   test("14: reconstructTimeline sets workflowCompleted from the latest run only (Arden r2 #2)", () => {
     const audit = [
       "## started 1",

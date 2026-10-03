@@ -1035,8 +1035,8 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
 ]);
 
 // The two intent lifecycle verbs that retire and revive a record without
-// touching its files: `archive` moves an in-flight intent to the terminal
-// `archived` status, `unarchive` brings it back to `in-flight`.
+// touching its files: `archive` moves an in-flight or completed intent to the
+// `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
 export type WorkspaceCommand =
@@ -3531,10 +3531,10 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
 
 // The intent status lifecycle is a registry-row field. Creation writes
 // `in-flight`; workflow completion flips it to `complete`; `intent archive`
-// flips an in-flight row to `archived` and `intent unarchive` restores
-// `in-flight`. `archived` is the only status a human moves a row INTO and back
-// OUT of, so it gets a named constant and predicate; the other two stay the
-// literals the creation and completion paths already write.
+// flips an in-flight or complete row to `archived` and `intent unarchive`
+// restores the one it had. `archived` is the only status a human moves a row
+// INTO and back OUT of, so it gets a named constant and predicate; the other
+// two stay the literals the creation and completion paths already write.
 export const ARCHIVED_INTENT_STATUS = "archived";
 
 export function isArchivedIntent(entry: { status: string }): boolean {

@@ -35,7 +35,7 @@ diagnostic and lifecycle routes.
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
-| `/aidlc intent archive <name>` | Retire an in-flight intent without deleting its record; `unarchive <name>` brings it back |
+| `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -324,8 +324,8 @@ slug or full record-dir name. It never creates an intent or advances a workflow.
 
 ### `/aidlc intent archive <name>` — Retire an intent you will not finish
 
-`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight intent to
-the terminal `archived` status. Nothing is deleted: the record dir, its
+`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight or
+completed intent to the `archived` status. Nothing is deleted: the record dir, its
 artifacts, and its audit shards stay exactly where they are, and the archive
 itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
 your `--reason` when you give one). The registry row flips to `archived`, the
@@ -334,14 +334,18 @@ listing hides the row. If the archived intent was the active one, the per-user
 cursor is cleared, so the next `/aidlc` asks which intent to work on (or creates
 new work when none is left) instead of resuming retired stages.
 
-Archiving is refused for a completed intent (already terminal), for an intent
-with Bolt worktrees still in flight, and for a team-owned intent with claimed
-Units, because those still have work running in other checkouts.
+A completed intent archives too, which is how you hide finished work from the
+default listing. An intent with Bolt worktrees archives as well: the output
+names the worktrees, and they stay on disk untouched until you bring the intent
+back. Archiving is refused only for a team-owned intent with claimed Units,
+because those Units are still being worked in other checkouts.
 
-`/aidlc intent unarchive <name>` reverses it: the row returns to `in-flight`,
-`Status` returns to `Running` at the stage it stopped on, and `WORKFLOW_UNARCHIVED`
-is recorded. It does not move the cursor; switch to the revived intent with
-`/aidlc intent <name>` when you want to continue it.
+`/aidlc intent unarchive <name>` reverses it: the row and `Status` return to
+what they were (`in-flight` and `Running` at the stage it stopped on, or
+`complete` and `Completed` for finished work), and `WORKFLOW_UNARCHIVED` is
+recorded. Only `archive` records a reason; a `--reason` given to `unarchive` is
+not recorded, and the output says so. It does not move the cursor; switch to
+the revived intent with `/aidlc intent <name>` when you want to continue it.
 
 ### `/aidlc space [name]` — List or switch spaces
 

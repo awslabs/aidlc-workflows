@@ -1069,6 +1069,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t-native-hook-project-root.test.ts",
     "unit/t-own-words-gates.test.ts",
     "unit/t-plan-approval-recovery-paths.test.ts",
+    "unit/t-plan-approval-refusal-way-out.test.ts",
     "unit/t-recorded-bypass-parity.test.ts",
     "unit/t-request-changes-own-words.test.ts",
     "unit/t-tui-process-identity.test.ts",
