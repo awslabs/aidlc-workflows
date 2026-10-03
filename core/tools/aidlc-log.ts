@@ -2613,6 +2613,7 @@ function handleReview(args: string[]): void {
     let retried = false;
     let upgraded = false;
     let recovery: "stale-receipt" | undefined;
+    let replaces: string | null = null;
     let requestId: string | null = null;
     let reviewFile: string | null = null;
     const requestChangeNotices: string[] = [];
@@ -2710,6 +2711,19 @@ function handleReview(args: string[]): void {
             `artifact-stale:${artifactScopeStale}`,
           ]);
         };
+        // The one request that still works when a pending review can never
+        // finish (see replaceIteration below): named in every refusal that would
+        // otherwise leave the conductor restoring bytes it cannot restore.
+        const requestAgain = (n: number): string => {
+          const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
+          const singleArg = flags.single === "true" ? " --single" : "";
+          return `aidlc-log.ts review --stage "${flags.stage}" --reviewer "${flags.reviewer}"` +
+            `${unitArg}${singleArg} --iteration ${n}`;
+        };
+        const startAgain = (n: number): string =>
+          pendingStatus?.iteration === n && pendingStatus.replaceable && !attempt.replacementSpent
+            ? ` It never got a verdict, so request it again instead: \`${requestAgain(n)}\`.`
+            : "";
         if (retryPending) {
           const pendingRequest = attempt.pendingRequests.get(iteration);
           if (!pendingRequest) {
@@ -2817,7 +2831,8 @@ function handleReview(args: string[]): void {
               `Refusing review retry for "${flags.stage}": declared artifacts no ` +
                 `longer match the bytes from REVIEW_REQUESTED iteration ${iteration}. ` +
                 "A retry re-dispatches that exact request and cannot rebaseline changed " +
-                "content. Restore the requested artifact bytes before retrying.",
+                "content. Restore the requested artifact bytes before retrying." +
+                startAgain(iteration),
             );
           }
           // A request written before review records, or before source binding on
@@ -2843,7 +2858,8 @@ function handleReview(args: string[]): void {
               refuseReview(
                 `Refusing review retry for "${flags.stage}": workspace source no ` +
                   `longer matches REVIEW_REQUESTED iteration ${iteration}. A retry ` +
-                  "cannot rebaseline source changed while review was pending.",
+                  "cannot rebaseline source changed while review was pending." +
+                  startAgain(iteration),
               );
             }
             const currentUnitSource = fields["Unit Source Fingerprint"];
@@ -2854,7 +2870,8 @@ function handleReview(args: string[]): void {
               refuseReview(
                 `Refusing review retry for "${flags.stage}": unit source or ` +
                   `source-manifest.json no longer matches REVIEW_REQUESTED ` +
-                  `iteration ${iteration}. A retry cannot rebaseline changed unit source.`,
+                  `iteration ${iteration}. A retry cannot rebaseline changed unit source.` +
+                  startAgain(iteration),
               );
             }
           }
@@ -2893,6 +2910,45 @@ function handleReview(args: string[]): void {
           openReviewDraftSlot(attempt.floor);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
+          return;
+        }
+        // A pending request whose outputs or source changed before its verdict
+        // can never finish: a retry re-dispatches the old bytes, and a verdict
+        // cannot bind to them. It gives up its pass once per attempt, so an
+        // interrupted review never leaves the stage with no way to be reviewed.
+        const replaceIteration =
+          pendingStatus?.replaceable && !attempt.replacementSpent
+            ? pendingStatus.iteration
+            : null;
+        if (replaceIteration !== null) {
+          if (iteration !== replaceIteration) {
+            refuseReview(
+              `Cannot start review iteration ${iteration} for "${flags.stage}": iteration ` +
+                `${replaceIteration} never got a verdict and its outputs changed since, so it ` +
+                `is requested again as iteration ${replaceIteration}: ` +
+                `\`${requestAgain(replaceIteration)}\`.`,
+            );
+          }
+          const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+            mergedBoltUnits,
+          });
+          if (snapshot === null) {
+            refuseReview(
+              `Cannot start review for "${flags.stage}": a required output document ` +
+                "is missing or unreadable. Create every required output document " +
+                "for this stage, then retry the review.",
+            );
+          }
+          replaces = attempt.pendingRequests.get(replaceIteration)?.binding?.requestId ?? "none";
+          fields["Artifact Fingerprint"] = snapshot.fingerprint;
+          requestId = mintReviewRequestId();
+          fields["Request Id"] = requestId;
+          fields["Replaces Request Id"] = replaces;
+          stampRequestedSourceBinding(node);
+          openReviewDraftSlot(attempt.floor);
+          emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           return;
         }
         const recoveryEligible =
@@ -2954,6 +3010,19 @@ function handleReview(args: string[]): void {
             message,
           );
         }
+        // A pending request comes before the budget: the stage is waiting on its
+        // verdict, not out of passes, and saying "include the findings" for a
+        // review that never returned sent conductors to a gate that refuses.
+        if (attempt.pendingIterations.size > 0) {
+          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
+          refuseAttemptGuard(
+            "REVIEW_VERDICT_PENDING",
+            "A review request receives its verdict before another request starts.",
+            `Cannot start another review for "${flags.stage}" because iteration ` +
+              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
+              "repeat the same iteration with --retry-pending if the reviewer did not run.",
+          );
+        }
         // The budget is measured against `expected` ONLY. `iteration` is the
         // caller's claim about which pass this is, and it is validated against
         // `expected` further down with a message that names the right ordinal.
@@ -2973,16 +3042,6 @@ function handleReview(args: string[]): void {
             "REVIEW_BUDGET_EXHAUSTED",
             "Review requests do not exceed the configured attempt budget.",
             reviewBudgetMessage(flags.stage, expected, budget),
-          );
-        }
-        if (attempt.pendingIterations.size > 0) {
-          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
-          refuseAttemptGuard(
-            "REVIEW_VERDICT_PENDING",
-            "A review request receives its verdict before another request starts.",
-            `Cannot start another review for "${flags.stage}" because iteration ` +
-              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
-              "repeat the same iteration with --retry-pending if the reviewer did not run.",
           );
         }
         if (iteration !== expected) {
@@ -3043,6 +3102,7 @@ function handleReview(args: string[]): void {
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
+      ...(replaces !== null ? { replaces } : {}),
       requestId,
       reviewFile,
       recordVerdict,

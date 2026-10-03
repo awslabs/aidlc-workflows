@@ -65,6 +65,7 @@ import {
   auditBlockField,
   boltSlugForUnit,
   freshReviewReceipts,
+  guardAttemptState,
   latestReviewRecordRefs,
   mergeReviewRecordsFromDelta,
   REVIEW_RECORD_MAX_BYTES,
@@ -436,13 +437,17 @@ describe("t271 review iteration ceiling", () => {
 
   test("advisory stage: iteration 1 passes, iteration 2 refused with terminal guidance", () => {
     const proj = seedProject("feature"); // requirements-analysis declares advisory
-    const ok = runReview(proj, [
+    const first = [
       "--stage", "requirements-analysis",
       "--reviewer", "aidlc-product-lead-agent",
       "--iteration", "1",
-    ]);
+    ];
+    const ok = runReview(proj, first);
     expect(ok.status).toBe(0);
     expect(ok.stdout).toContain("REVIEW_REQUESTED");
+    // The pass is spent once its review returns (a pending one is still
+    // waiting, which has its own refusal below).
+    expect(runReview(proj, [...first, "--verdict", "READY"]).status).toBe(0);
 
     const over = runReview(proj, [
       "--stage", "requirements-analysis",
@@ -673,13 +678,15 @@ describe("t271 review iteration ceiling", () => {
     // Spend the one pass the cap allows FIRST. Without it the attempt's next
     // ordinal is still 1, so asking for 2 is a wrong ordinal rather than an
     // exhausted budget - and this case is about the cap, not about arithmetic.
-    expect(
-      runReview(proj, [
-        "--stage", "code-generation",
-        "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--iteration", "1",
-      ]).status,
-    ).toBe(0);
+    // The pass is spent once its review returns; a pending one is still waiting.
+    const first = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, first).status).toBe(0);
+    const returned = runReview(proj, [...first, "--verdict", "NOT-READY"]);
+    expect(returned.status, returned.stderr).toBe(0);
     const over = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -778,14 +785,16 @@ describe("t271 review iteration ceiling", () => {
     // The Bolt boundary opens a fresh attempt, so the pass above no longer counts
     // against this one. Spend this attempt's single pass before asking for a
     // second, or the refusal would be about the ordinal rather than the cap.
-    expect(
-      runReview(proj, [
-        "--stage", "functional-design",
-        "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--unit", "unit-alpha",
-        "--iteration", "1",
-      ]).status,
-    ).toBe(0);
+    // The pass is spent once its review returns; a pending one is still waiting.
+    const spent = [
+      "--stage", "functional-design",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, spent).status).toBe(0);
+    const returned = runReview(proj, [...spent, "--verdict", "NOT-READY"]);
+    expect(returned.status, returned.stderr).toBe(0);
     const over = runReview(proj, [
       "--stage", "functional-design",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -879,12 +888,16 @@ describe("t271 review iteration ceiling", () => {
     writeFileSync(graphPath, `${JSON.stringify(graph, null, 2)}\n`);
     const env = { AIDLC_STAGE_GRAPH: graphPath };
 
-    expect(runReview(proj, [
+    const single = [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
       "--unit", "unit-alpha",
       "--iteration", "1",
-    ], env).status).toBe(0);
+    ];
+    expect(runReview(proj, single, env).status).toBe(0);
+    // The pass is spent once its review returns; a pending one is still waiting.
+    const returned = runReview(proj, [...single, "--verdict", "NOT-READY"], env);
+    expect(returned.status, returned.stderr).toBe(0);
     const refused = runReview(proj, [
       "--stage", "code-generation",
       "--reviewer", "aidlc-architecture-reviewer-agent",
@@ -1665,6 +1678,103 @@ describe("t271 review iteration ceiling", () => {
     expect(retry.stderr).toContain("cannot rebaseline changed content");
     expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+  });
+
+  test("a pending review is still waiting for its verdict, not out of passes", () => {
+    const proj = seedProject("feature");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    expect(runReview(proj, [...request, "--iteration", "1"]).status).toBe(0);
+    const next = runReview(proj, [...request, "--iteration", "2"]);
+    expect(next.status).not.toBe(0);
+    expect(next.stderr).toContain("iteration 1 is still waiting for a verdict");
+    expect(next.stderr).not.toContain("include the findings in the approval summary");
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+  });
+
+  test("a review interrupted before its verdict, whose outputs then changed, is requested again at the same pass", () => {
+    // An interrupt: the reviewer was cut off, the outputs were rewritten, and the
+    // one pass was spent on a request that could never finish.
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    const first = runReview(proj, [...request, "--iteration", "1"]);
+    expect(first.status, first.stderr).toBe(0);
+    const { requestId } = JSON.parse(first.stdout) as { requestId: string };
+    writeFileSync(artifact, "requirements rewritten after the request\n", "utf-8");
+
+    // Neither the retry nor the next pass number leaves the conductor stuck:
+    // both name the one request that works.
+    const retry = runReview(proj, [...request, "--iteration", "1", "--retry-pending"]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).toContain("cannot rebaseline changed content");
+    expect(retry.stderr).toContain("request it again instead");
+    expect(retry.stderr).toContain("--iteration 1`");
+    const second = runReview(proj, [...request, "--iteration", "2"]);
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toContain("is requested again as iteration 1");
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+
+    // The gate's recovery offers that same request.
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis not in the stage graph");
+    const before = guardAttemptState(proj, state, stage).attempt;
+    expect(before.nextReview).toEqual({ iteration: 1 });
+    expect(before.pendingReview).toBeUndefined();
+
+    const again = runReview(proj, [...request, "--iteration", "1"]);
+    expect(again.status, again.stderr).toBe(0);
+    const reply = JSON.parse(again.stdout) as { requestId: string; replaces?: string };
+    expect(reply.replaces).toBe(requestId);
+    expect(reply.requestId).not.toBe(requestId);
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(2);
+    expect(auditBlockField(requests[1], "Iteration")).toBe("1");
+    expect(auditBlockField(requests[1], "Replaces Request Id")).toBe(requestId);
+    expect(auditBlockField(requests[1], "Artifact Fingerprint")).not.toBe(
+      auditBlockField(requests[0], "Artifact Fingerprint"),
+    );
+
+    // Its review records, and it took the pass rather than adding one.
+    const verdict = runReview(proj, [...request, "--iteration", "1", "--verdict", "READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    const over = runReview(proj, [...request, "--iteration", "2"]);
+    expect(over.status).not.toBe(0);
+    expect(over.stderr).toContain("allows 1 review pass");
+  });
+
+  test("an attempt replaces an unfinishable review once", () => {
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    writeFileSync(artifact, "first rewrite\n", "utf-8");
+    expect(runReview(proj, request).status).toBe(0);
+    writeFileSync(artifact, "second rewrite\n", "utf-8");
+
+    const third = runReview(proj, request);
+    expect(third.status).not.toBe(0);
+    expect(third.stderr).toContain("iteration 1 is still waiting for a verdict");
+    const retry = runReview(proj, [...request, "--retry-pending"]);
+    expect(retry.status).not.toBe(0);
+    expect(retry.stderr).not.toContain("request it again instead");
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(2);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis not in the stage graph");
+    const attempt = guardAttemptState(proj, state, stage).attempt;
+    expect(attempt.nextReview).toBeUndefined();
+    expect(attempt.pendingReview?.iteration).toBe(1);
   });
 
   test("an incomplete review retries once, and the retry reopens the review slot", () => {

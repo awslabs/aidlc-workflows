@@ -17047,6 +17047,9 @@ export interface ReviewAttemptAccounting {
   >;
   recoveryIteration: number | null;
   recoverySpent: boolean;
+  // A request that replaced a pending one which could never finish (its outputs
+  // or source changed before a verdict); one per attempt.
+  replacementSpent: boolean;
   ambiguity: string | null;
 }
 
@@ -17313,6 +17316,7 @@ export function reviewAttemptAccounting(
   let requestCount = 0;
   let recoveryIteration: number | null = null;
   let recoverySpent = false;
+  let replacementSpent = false;
   const pendingIterations = new Set<number>();
   const pendingRequests = new Map<
     number,
@@ -17354,7 +17358,11 @@ export function reviewAttemptAccounting(
     if (entry.event === "REVIEW_REQUESTED") {
       const binding = reviewRequestBindingFromBlock(entry.block);
       if (binding === null) continue;
-      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
+      // A replacement takes the pass of the request it replaces: it is a new
+      // dispatch of new bytes, so it neither counts again nor inherits a retry.
+      const replacement = auditBlockField(entry.block, "Replaces Request Id") !== null;
+      if (replacement) replacementSpent = true;
+      if (auditBlockField(entry.block, "Retry") !== "pending-request" && !replacement) {
         requestCount++;
       }
       if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
@@ -17367,9 +17375,10 @@ export function reviewAttemptAccounting(
       pendingRequests.set(iteration, {
         binding,
         retried:
-          previous?.retried === true ||
-          (auditBlockField(entry.block, "Retry") === "pending-request" &&
-            modernBinding),
+          !replacement &&
+          (previous?.retried === true ||
+            (auditBlockField(entry.block, "Retry") === "pending-request" &&
+              modernBinding)),
       });
     } else {
       const pending = pendingRequests.get(iteration);
@@ -17399,6 +17408,7 @@ export function reviewAttemptAccounting(
     pendingRequests,
     recoveryIteration,
     recoverySpent,
+    replacementSpent,
     ambiguity,
   };
 }
@@ -17408,6 +17418,11 @@ export interface PendingReviewRequestStatus {
   requestCurrent: boolean;
   retryable: boolean;
   verdictRecordable: boolean;
+  // Its outputs or source changed since the request (every output and any unit
+  // source manifest still reads), so it can never finish and a new request may
+  // replace it. A missing output is not this: restoring it can make the request
+  // current again.
+  replaceable: boolean;
 }
 
 // Whether the request's artifact fingerprint still describes the bytes on disk.
@@ -17467,6 +17482,7 @@ export function pendingReviewRequestStatus(
       requestCurrent: false,
       retryable: false,
       verdictRecordable: false,
+      replaceable: false,
     };
   }
 
@@ -17481,9 +17497,11 @@ export function pendingReviewRequestStatus(
       requestCurrent: false,
       retryable: false,
       verdictRecordable: false,
+      replaceable: false,
     };
   }
 
+  let readable = true;
   let requestCurrent =
     reviewRequestArtifactsCurrent(binding, snapshot) ||
     reviewAppendedAfterRequest(binding, snapshot);
@@ -17515,6 +17533,7 @@ export function pendingReviewRequestStatus(
     if (manifest.ok !== true) {
       requestCurrent = false;
       modernVerdictBinding = false;
+      readable = false;
     } else {
       const currentUnitSource =
         sourceState === null
@@ -17539,6 +17558,7 @@ export function pendingReviewRequestStatus(
     requestCurrent,
     retryable: requestCurrent && !pending.retried,
     verdictRecordable: requestCurrent && modernVerdictBinding,
+    replaceable: readable && !requestCurrent,
   };
 }
 
@@ -28005,7 +28025,7 @@ export function guardAttemptState(
   const pendingIterations = [...(accounting?.pendingIterations ?? [])].sort(
     (a, b) => a - b,
   );
-  const pendingReviewFor = (iteration: number) => ({
+  const pendingReviewAt = (iteration: number) => ({
     pendingReview: {
       iteration,
       retryable:
@@ -28024,6 +28044,14 @@ export function guardAttemptState(
       }),
     },
   });
+  // A pending request that can never finish (its outputs or source changed
+  // before a verdict) is requested again at the same pass, once per attempt.
+  const pendingReviewFor = (iteration: number) =>
+    pendingStatus?.iteration === iteration &&
+    pendingStatus.replaceable &&
+    accounting?.replacementSpent === false
+      ? { nextReview: { iteration } }
+      : pendingReviewAt(iteration);
   const budget = options.reviewBudget ?? null;
   const attempt: GuardAttemptState = {
     floor:
