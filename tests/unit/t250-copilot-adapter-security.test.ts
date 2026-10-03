@@ -833,6 +833,41 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("12b: a command that already carries AI-DLC's attempt id is refused for that, with the command to run instead", () => {
+    // AI-DLC adds --aidlc-attempt-id to each workflow command itself, so an
+    // agent that copies one from an earlier command into a new call was told
+    // to avoid chaining and redirection it never used (#1411).
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const guard = (command: string) => shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+      const copied = "--aidlc-attempt-id 11111111-1111-4111-8111-111111111111";
+      for (const [command, retry] of [
+        [`aidlc engine orchestrate next ${copied}`, "aidlc engine orchestrate next"],
+        [`aidlc continue ABCD1234 ${copied}`, "aidlc continue ABCD1234"],
+        [`bun .aidlc/tools/aidlc-orchestrate.ts next ${copied} 2>&1`, "bun .aidlc/tools/aidlc-orchestrate.ts next 2>&1"],
+        [`aidlc engine orchestrate report --stage requirements-analysis --result completed ${copied}`, "aidlc engine orchestrate report --stage requirements-analysis --result completed"],
+        ["aidlc engine orchestrate next --aidlc-attempt-id", "aidlc engine orchestrate next"],
+        ["aidlc engine orchestrate next --aidlc-attempt-id --resume", "aidlc engine orchestrate next --resume"],
+        ["aidlc engine orchestrate next --aidlc-attempt-id 2>&1", "aidlc engine orchestrate next 2>&1"],
+      ]) {
+        const denied = guard(command);
+        expect(denied.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+        const reason = denied.hookSpecificOutput?.permissionDecisionReason ?? "";
+        expect(reason, command).toContain("AI-DLC adds `--aidlc-attempt-id`");
+        expect(reason, command).toContain(`\`${retry}\``);
+        expect(reason, command).not.toContain("chaining");
+        expect(denied.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+        // The command it names is the next step that works.
+        const next = guard(retry);
+        expect(next.hookSpecificOutput?.permissionDecision, retry).toBe("allow");
+        expect(next.hookSpecificOutput?.updatedInput?.command, retry).toContain(STUB_ATTEMPT);
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
   // --- Deliberate block (core exit 2) → deny projection, later hooks skipped --
 
   test("13: a core-hook exit 2 becomes a deny-JSON projection (exit 0); reviewer-scope is skipped", () => {
