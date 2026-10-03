@@ -84,6 +84,9 @@ function quietEnv(extra: Record<string, string | undefined> = {}): Record<string
     AIDLC_INSTALL_ROOT: installRoot,
     AIDLC_BIN_DIR: join(machine, "bin"),
     AIDLC_UNATTENDED: "0",
+    // The engine prints clock times in its own zone. bun test runs in UTC while
+    // a child would take the machine's, so it gets this process's zone.
+    TZ: Intl.DateTimeFormat().resolvedOptions().timeZone,
     ...extra,
   };
   for (const name of RECORDABLE_PROJECT_BYPASSES) {
