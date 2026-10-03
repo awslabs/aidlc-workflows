@@ -866,6 +866,26 @@ describe("t304 copied projection configuration", () => {
     expect((await runAsync(show, { cwd: caller })).stdout).not.toContain("nothing yet");
   }, 120_000);
 
+  test("in a project with two harnesses, the models view's commands name the harness it shows", async () => {
+    const project = fullCopyProject();
+    const added = runCopied(project, ["config", "--harness", "codex", "--from", join(DIST, "codex"), "--yes"]);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    const tool = join(project, ".claude", "tools", "aidlc.ts");
+    const show = [BUN, tool, "config", "models", "--show", "--harness", "codex"];
+    const result = await runAsync(show, { cwd: project });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const preset = /nothing yet - run '(.+)'$/m.exec(result.stdout)?.[1] ?? "";
+    expect(preset).toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --harness codex");
+    const list = /Full per-agent list: (.+)$/m.exec(result.stdout)?.[1] ?? "";
+    expect(list).toBe("bun .claude/tools/aidlc.ts config models --show --json --harness codex");
+    const listed = await followFix(list, project, {});
+    expect(listed.status, listed.stdout + listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).data.harness).toBe("codex");
+    const recorded = await followFix(preset, project, {});
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect((await runAsync(show, { cwd: project })).stdout).not.toContain("nothing yet");
+  }, 120_000);
+
   // A workflow left running, as a stage question leaves one.
   function startWorkflow(project: string): string {
     const intents = join(project, "aidlc", "spaces", "default", "intents");

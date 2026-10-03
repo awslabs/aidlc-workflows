@@ -988,6 +988,14 @@ function modelStateData(
   };
 }
 
+// A `config models` command about one harness of the project, run as shown
+// from where the user is: it names that harness when the project has more
+// than one, since config would otherwise ask which.
+function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
+  const named = discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+  return `${configInvocationFor(projectDir)} config models ${args}${named}${projectTarget(projectDir)}`;
+}
+
 function showModels(
   policy: ModelPolicyRecord | null,
   tiers: AgentTiers,
@@ -1058,15 +1066,13 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
-      : `nothing yet - run '${configInvocationFor(projectDir)} config models --preset balanced --project --yes${
-        projectTarget(projectDir)
-      }'`
+      : `nothing yet - run '${modelsCommand(projectDir, harness, "--preset balanced --project --yes")}'`
   }\n`;
   writeMenuText(output);
   for (
     const line of commandRowLines(
       "Full per-agent list: ",
-      `${configInvocationFor(projectDir)} config models --show --json${projectTarget(projectDir)}`,
+      modelsCommand(projectDir, harness, "--show --json"),
       menuWidth(),
     )
   ) {
@@ -7618,7 +7624,7 @@ function prepareModelsSection(
         : failure(
             `model policy drift: ${drift.join("; ")}`,
             EXIT.failure,
-            configCommand("models --show"),
+            modelsCommand(projectDir, harness, "--show"),
           ),
       options,
     );
