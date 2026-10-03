@@ -87,10 +87,11 @@ stateDiagram-v2
     NotStarted --> Skipped : --stage/--phase jump or scope excludes
     InProgress --> Skipped : Cut mid-flight
     Revising --> Skipped : Abandon after rejection
+    Awaiting --> Skipped : Forward jump, or a scope that skips it
     Completed --> NotStarted : Redo (artifacts deleted)
 ```
 
-<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, and [R] Revising can each transition to [S] Skipped via jumps, scope exclusion, or abandonment. [x] Completed transitions back to [ ] Not Started on redo (artifacts deleted). -->
+<!-- Text fallback: [ ] Not Started transitions to [-] In Progress when a stage begins. [-] In Progress transitions to [?] Awaiting Approval when stage work is done and the gate opens. [?] Awaiting Approval transitions to [x] Completed when you approve, or to [R] Revising when you request changes. [R] Revising transitions back to [?] Awaiting Approval when revision is complete. [ ] Not Started, [-] In Progress, [?] Awaiting Approval, and [R] Revising can each transition to [S] Skipped via jumps, scope exclusion or a scope change, or abandonment. [x] Completed transitions back to [ ] Not Started on redo (artifacts deleted). -->
 
 ### Normal, revision, skip, redo, and jump flows
 

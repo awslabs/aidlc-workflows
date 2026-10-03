@@ -98,7 +98,7 @@ Jumps directly to a specific stage or phase. Supports both forward and backward 
 **Forward jump** (target is ahead of current position):
 1. Resolves target: `--stage` accepts a slug (`code-generation`) or display number (`3.5`). `--phase` accepts a name (`construction`) or number (`3`), resolves to the first in-scope stage of that phase.
 2. Checks for existing state file. If none, auto-initializes (runs 3 Initialization stages).
-3. Validates the target is in scope for the current/specified scope.
+3. Checks the target against the plan. A stage the plan skips is put back on the plan first (`recompose --add <slug> --reason "jump to <slug>"`, then `aidlc-jump.ts execute`), so the jump does what was asked; `recompose` still refuses a flip the plan cannot take and names what to do instead. A skipped stage behind or at the current stage is refused with the isolated-run alternative (`--stage <slug> --single`), because going back would run every stage after it again.
 4. Marks intermediate in-scope stages as `[S]` (skipped via jump). Already-completed `[x]` stages are left unchanged.
 5. Warns about missing upstream artifacts and asks for confirmation.
 6. Creates stage-level tasks and begins execution from the target stage.
