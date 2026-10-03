@@ -39,11 +39,16 @@ describe("t352 (1) the resolver takes one name per selector", () => {
   test("a path in --space or --intent is refused, and engine-minted names resolve", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
-    for (const space of ["../other", "a/b", "a\\b", "..", "."]) {
+    // A backslash separates only on Windows; elsewhere it is part of a name.
+    const backslashed = process.platform === "win32" ? ["a\\b", "..\\x"] : [];
+    for (const space of ["../other", "a/b", "..", ".", ...backslashed]) {
       expect(() => resolveWorkflowSelection(proj, { space }), space).toThrow("is not a space name: it is a path.");
     }
-    for (const intent of ["../../outside", "a/b", "..\\x", "..", "."]) {
+    for (const intent of ["../../outside", "a/b", "..", ".", ...backslashed]) {
       expect(() => resolveWorkflowSelection(proj, { intent }), intent).toThrow("is not an intent name: it is a path.");
+    }
+    if (process.platform !== "win32") {
+      expect(resolveWorkflowSelection(proj, { intent: "back\\slash" }).intent).toBe("back\\slash");
     }
     // Any single name still resolves as before, however it is spelled, and an
     // empty intent is still the legacy flat record.
