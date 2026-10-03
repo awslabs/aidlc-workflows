@@ -299,7 +299,7 @@ async function waitForPresent(paths: readonly string[]): Promise<void> {
 
 function fixture(
   version = AIDLC_VERSION,
-  options: Pick<ReleaseFixtureOptions, "binary"> = {},
+  options: Pick<ReleaseFixtureOptions, "binary" | "distributions"> = {},
 ): string {
   const root = temp("aidlc-t241-release-");
   writeReleaseFixture({
@@ -1447,6 +1447,126 @@ describe("t244 management lifecycle", () => {
       expect(result.status, `${root}: ${result.stdout}${result.stderr}`).toBe(4);
       expect(transactionState(workspace), root).toBe(before);
     }
+  });
+});
+
+// The person typed the command, so at a terminal it says what it removes and
+// keeps, then does it; a caller without a terminal still passes --yes. The
+// terminal runs use a real pty (util-linux `script`), so they are Linux only.
+const SCRIPT = process.platform === "linux" ? Bun.which("script") : null;
+
+function atTerminal(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): { status: number; output: string } {
+  const command = [process.execPath, LIFECYCLE, ...args]
+    .map((part) => `'${part.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+  const result = spawnSync(SCRIPT as string, ["-qfec", command, "/dev/null"], {
+    cwd,
+    env: { ...process.env, ...env, NO_COLOR: "1" },
+    input: "",
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  if (result.error) throw result.error;
+  return { status: result.status ?? -1, output: (result.stdout ?? "").replaceAll("\r\n", "\n") };
+}
+
+describe("t244 removal commands say what they remove and ask nothing", () => {
+  test("versions prune lists the versions before it removes them, and needs --yes without a terminal", () => {
+    const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const removableRelease = fixture(REMOVABLE_VERSION, { binary: "bytes" });
+    const machine = temp("aidlc-t244-prune-notice-");
+    const project = temp("aidlc-t244-prune-notice-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", REMOVABLE_VERSION, "--from", removableRelease,
+    ], project, env).status).toBe(0);
+    const removable = join(machine, "versions", REMOVABLE_VERSION);
+
+    const refused = run(LIFECYCLE, ["versions", "prune"], project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(2);
+    expect(refused.stdout).toContain(
+      `Pruning retained versions ${REMOVABLE_VERSION}; non-interactive use requires --yes`,
+    );
+    expect(existsSync(removable)).toBe(true);
+    if (!SCRIPT) return;
+
+    const pruned = atTerminal(["versions", "prune"], project, env);
+    expect(pruned.status, pruned.output).toBe(0);
+    const notice = pruned.output.indexOf(`Pruning retained versions ${REMOVABLE_VERSION}.\n`);
+    expect(notice, pruned.output).toBeGreaterThan(-1);
+    expect(pruned.output.indexOf(`pruned ${REMOVABLE_VERSION}`)).toBeGreaterThan(notice);
+    expect(pruned.output).not.toContain("[y/N]");
+    expect(existsSync(removable)).toBe(false);
+  });
+
+  test.skipIf(!SCRIPT)("uninstall at a terminal says what it removes and keeps first, then uninstalls", () => {
+    const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const machine = temp("aidlc-t244-uninstall-notice-");
+    const project = temp("aidlc-t244-uninstall-notice-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    const install = () => expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    install();
+    const kept = "Uninstalling AI-DLC (1 retained version(s)). Project trees will not be changed. " +
+      "Machine configuration, update cache, pins, and harness default will be kept.";
+    const refused = run(LIFECYCLE, ["uninstall"], project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(2);
+    expect(refused.stdout).toContain(`${kept.replace(/\.$/, "")}; non-interactive use requires --yes`);
+    expect(existsSync(join(machine, "versions"))).toBe(true);
+
+    const uninstalled = atTerminal(["uninstall"], project, env);
+    expect(uninstalled.status, uninstalled.output).toBe(0);
+    const notice = uninstalled.output.indexOf(`${kept}\n`);
+    expect(notice, uninstalled.output).toBeGreaterThan(-1);
+    expect(uninstalled.output.indexOf("Removed aidlc and all retained releases.")).toBeGreaterThan(notice);
+    expect(uninstalled.output).not.toContain("[y/N]");
+    expect(existsSync(join(machine, "versions"))).toBe(false);
+
+    install();
+    const purged = atTerminal(["uninstall", "--purge"], project, env);
+    expect(purged.status, purged.output).toBe(0);
+    const purgeNotice = purged.output.indexOf(
+      "Uninstalling AI-DLC (1 retained version(s)). Project trees will not be changed. " +
+        "Machine configuration and cache are selected for removal.\n",
+    );
+    expect(purgeNotice, purged.output).toBeGreaterThan(-1);
+    expect(purged.output.indexOf("Removed aidlc, all retained releases, machine settings"))
+      .toBeGreaterThan(purgeNotice);
+    expect(existsSync(join(machine, "versions"))).toBe(false);
+  });
+
+  test("a rollback to a release without some harnesses names --allow-harness-loss, which rolls back anyway", () => {
+    const fewer = fixture(AIDLC_VERSION, { binary: "executable", distributions: ["claude"] });
+    const next = fixture(NEXT_VERSION, { binary: "executable" });
+    const machine = temp("aidlc-t244-rollback-loss-");
+    const project = temp("aidlc-t244-rollback-loss-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    for (const [version, from] of [[AIDLC_VERSION, fewer], [NEXT_VERSION, next]]) {
+      const installed = run(LIFECYCLE, ["update", "--version", version, "--from", from], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    const lost = RELEASE_HARNESSES.filter((name) => name !== "claude").join(", ");
+    const refused = run(LIFECYCLE, ["rollback"], project, env);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+    expect(refused.stdout).toContain(
+      `rollback target ${AIDLC_VERSION} lacks harnesses: ${lost}; ` +
+        "to roll back anyway, without them, run it again with --allow-harness-loss",
+    );
+    expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(NEXT_VERSION);
+    const allowed = run(LIFECYCLE, ["rollback", "--allow-harness-loss"], project, env);
+    expect(allowed.status, allowed.stdout + allowed.stderr).toBe(0);
+    expect(allowed.stdout).toContain(`rolled back to ${AIDLC_VERSION}`);
   });
 });
 

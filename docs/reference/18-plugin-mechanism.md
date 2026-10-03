@@ -275,8 +275,9 @@ modes, stamps, and ownership records. A supported host hook with an injected
 current root uses the same implementation for only that plugin. Plain sync never
 deletes content for a missing installed source. Explicit
 `aidlc engine plugin sync --prune-missing` requires a proved full inventory,
-confirmation (`--yes` when non-interactive), and hash-proven ownership; it
-refuses locally modified or unowned paths.
+`--yes` when non-interactive, and hash-proven ownership; it refuses locally
+modified or unowned paths. At a terminal it asks nothing: it names the plugins
+it prunes and how to get them back, then prunes.
 
 Neither list, doctor, nor sync checks a remote plugin registry. The host remains
 responsible for published-version discovery.

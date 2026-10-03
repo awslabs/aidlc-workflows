@@ -28,7 +28,6 @@ import {
   emitResult,
   failure,
   globalOptions,
-  readTerminalLine,
   success,
   usage,
   valueAfter,
@@ -424,15 +423,18 @@ function pathEntryExists(path: string): boolean {
   }
 }
 
-function requireConfirmation(argv: readonly string[], message: string): void {
+// The person typed the command, so at a terminal it says what it removes and
+// keeps, then does it. A script or an agent has no terminal and passes --yes.
+function announceRemoval(argv: readonly string[], message: string): void {
   if (argv.includes("--yes")) return;
   if (!process.stdin.isTTY) {
-    commandError(`${message}; non-interactive use requires --yes`, EXIT.usage);
+    commandError(
+      `${message.replace(/\.$/, "")}; non-interactive use requires --yes`,
+      EXIT.usage,
+    );
   }
-  const answer = readTerminalLine(`${message}\nContinue [y/N]:`);
-  if (!/^y(?:es)?$/i.test(answer?.trim() ?? "")) {
-    commandError("operation cancelled", EXIT.failure);
-  }
+  // Printed before anything is removed; stdout stays the JSON result's own.
+  (argv.includes("--json") ? process.stderr : process.stdout).write(`${message}\n`);
 }
 
 function windowsLauncherOwnedByInstaller(): boolean {
@@ -1545,9 +1547,9 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
         { removed: [], protected: protectedVersions },
       );
     }
-    requireConfirmation(
+    announceRemoval(
       argv,
-      `Prune retained versions ${removable.map((item) => item.version).join(", ")}?`,
+      `Pruning retained versions ${removable.map((item) => item.version).join(", ")}.`,
     );
     const refreshed = retainedVersions();
     if (refreshed.pinWarnings.length > 0) {
@@ -1707,13 +1709,10 @@ function uninstallCommand(argv: string[]): CommandResult {
   }
   const purge = argv.includes("--purge");
   // The cleanup worker inherits this window's token. A UAC-elevated window is
-  // warned, and confirmation (or --yes) lets the user proceed anyway.
+  // warned before anything is removed; the person asked, so it proceeds.
   const elevation = process.platform === "win32" ? currentWindowsElevationType() : 3;
-  const warned = (text: string, prompting: boolean): string => {
-    const warning = elevatedUninstallWarning(elevation, prompting);
-    return warning ? `${warning}\n${text}` : text;
-  };
-  const warnings = elevatedUninstallWarning(elevation, false);
+  const warnings = elevatedUninstallWarning(elevation);
+  const warned = (text: string): string => warnings ? `${warnings}\n${text}` : text;
   if (process.platform === "win32") {
     // Uninstall is the explicit retry: it resumes a continuation that already
     // removed files, and re-plans one that failed before removing any.
@@ -1724,7 +1723,7 @@ function uninstallCommand(argv: string[]): CommandResult {
           recovery.retriedFailures.length > 0
             ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
             : ""
-        }`, false),
+        }`),
         { purge, deferred: true, recovered: recovery.resumed, ...(warnings ? { warnings: [warnings] } : {}) },
       );
     }
@@ -1762,11 +1761,11 @@ function uninstallCommand(argv: string[]): CommandResult {
   const settings = purge
     ? "Machine configuration and cache are selected for removal."
     : "Machine configuration, update cache, pins, and harness default will be kept.";
-  requireConfirmation(
+  announceRemoval(
     argv,
-    warned(`Uninstall AI-DLC (${versions.length} retained version(s))? Project trees will not be changed. ${settings}${
+    warned(`Uninstalling AI-DLC (${versions.length} retained version(s)). Project trees will not be changed. ${settings}${
       preservedUninstallPaths(plan.preserved)
-    }`, true),
+    }`),
   );
   if (process.platform === "win32") {
     return scheduleWindowsUninstall(purge, plan, warnings);
@@ -1986,7 +1985,10 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     ? installedDistributions(active).filter((item) => !installedDistributions(target).includes(item))
     : [];
   if (missing.length > 0 && !argv.includes("--allow-harness-loss")) {
-    throw new Error(`rollback target lacks harnesses: ${missing.join(", ")}`);
+    throw new Error(
+      `rollback target ${target} lacks harnesses: ${missing.join(", ")}; ` +
+        "to roll back anyway, without them, run it again with --allow-harness-loss",
+    );
   }
   activate(target);
   return success(`rolled back to ${target}`, { version: target });

@@ -27,8 +27,9 @@ under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
 elevated installer runs, and asked to confirm. `-Yes` confirms without a prompt;
 a non-interactive run without `-Yes` (including `-Json` and `-Quiet`) stops with
-that guidance. `aidlc uninstall` gives the same warning in its confirmation, or
-in its result with `--yes`. Sessions that already hold a full administrator
+that guidance. `aidlc uninstall` gives the same warning but asks nothing: at a
+terminal it prints the warning before it removes anything, and with `--yes` the
+warning is in its result. Sessions that already hold a full administrator
 token without UAC elevation, such as the built-in Administrator on Windows
 Server, see no warning. Running PowerShell with another account's credentials
 installs for that account. There is no all-users mode.
@@ -1251,7 +1252,8 @@ check. Warnings are advisory and exit 0; any failed check exits 1.
 
 `--no-color` and `NO_COLOR` disable ANSI output. `--project-dir <path>` selects
 project context without changing the shell directory. Destructive operations
-such as `uninstall` prompt on a TTY and require `--yes` without one. `--yes` never bypasses
+such as `uninstall` ask nothing on a TTY: they print what they remove and
+keep, then do it. Without a TTY they require `--yes`. `--yes` never bypasses
 ownership, integrity, active-workflow, or release-authentication refusals.
 
 | Code | Meaning |
