@@ -991,9 +991,12 @@ Once more than one harness is present, every `aidlc config` invocation needs
 `aidlc doctor` compares the release each harness tree records in
 `tools/data/aidlc-stamp.json`. When they differ it warns `Harness trees on
 different releases`, names each tree's release, and gives the commands that
-bring the others level. Natively that is `aidlc config --harness <name>` for
-each tree not on the engine's release. On a copied project each tree runs its
-own release, so the newest tree's tool refreshes the others from that release's
+bring the others level. A pinned project's trees are brought to the pin, as
+config refreshes every tree to it; on a copied project that is
+`bun <harness-dir>/tools/aidlc.ts config --harness <name> --download`. Without
+a pin, natively that is `aidlc config --harness <name>` for each tree not on the
+engine's release. On a copied project each tree runs its own release, so the
+newest tree's tool refreshes the others from that release's
 `aidlc-copy-runtime-<version>.tar.gz` with `--from`; a tree no config run has
 recorded first takes one `--download` refresh at its own release. While a
 workflow runs, config does not refresh a tree, so the warning names the tool
