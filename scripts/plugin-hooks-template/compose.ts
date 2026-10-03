@@ -101,6 +101,7 @@ type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
   writeHookStatusFile?: (healthDir: string, fileName: string, data: string) => boolean;
+  removeHookStatusFile?: (healthDir: string, fileName: string) => boolean;
   parseStageFrontmatter?: ParseStageFrontmatter;
   acquireAuditLock?: (
     projectDir: string,
@@ -275,9 +276,9 @@ function recordInstalledToolPayloadDrop(reason: string): void {
 // — a clean plugin's compose (or an early-exit guard) deleted another plugin's
 // live degraded drop, so doctor went green (round-6). Per-plugin files isolate
 // each plugin's signal; doctor globs `*.drops` and aggregates them all.
-// The file goes through the installed engine's hook status writer, which
-// writes through no link inside the record; an engine from before that writer
-// keeps the plain write until it is upgraded.
+// The file goes through the installed engine's hook status writer and
+// remover, which go through no link inside the record; an engine from before
+// them keeps the plain write and removal until it is upgraded.
 async function writeDropFile(healthDir: string, fileName: string, data: string): Promise<void> {
   const lib = await installedAidlcLib();
   if (typeof lib?.writeHookStatusFile === "function") {
@@ -288,13 +289,22 @@ async function writeDropFile(healthDir: string, fileName: string, data: string):
   writeFileSync(join(healthDir, fileName), data, { flag: "w" });
 }
 
+async function removeDropFile(healthDir: string, fileName: string): Promise<void> {
+  const lib = await installedAidlcLib();
+  if (typeof lib?.removeHookStatusFile === "function") {
+    lib.removeHookStatusFile(healthDir, fileName);
+    return;
+  }
+  const dropFile = join(healthDir, fileName);
+  if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+}
+
 async function flushDrops(): Promise<void> {
   try {
     const healthDir = await resolveHealthDir();
     const dropName = `plugin-compose-${PLUGIN_KEY}.drops`;
-    const dropFile = join(healthDir, dropName);
     if (_drops.length === 0) {
-      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+      await removeDropFile(healthDir, dropName);
     } else {
       await writeDropFile(healthDir, dropName, _drops.map((l) => l + "\n").join(""));
     }
@@ -317,9 +327,8 @@ async function flushInstalledToolPayloadDrops(): Promise<void> {
   try {
     const healthDir = await resolveHealthDir();
     const dropName = `plugin-compose-installed-tool-payloads-${HARNESS_KEY}.drops`;
-    const dropFile = join(healthDir, dropName);
     if (_installedToolPayloadDrops.length === 0) {
-      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+      await removeDropFile(healthDir, dropName);
     } else {
       await writeDropFile(healthDir, dropName, _installedToolPayloadDrops.map((line) => line + "\n").join(""));
     }

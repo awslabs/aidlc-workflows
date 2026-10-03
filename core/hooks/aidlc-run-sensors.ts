@@ -18,7 +18,7 @@
 // semantics defer to the future ralph driver.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
@@ -166,11 +166,8 @@ if (!existsSync(firstFiredMarker)) {
       "See the AI-DLC documentation to learn how rules and " +
       "the learning loop work.\n"
   );
-  try {
-    writeFileSync(firstFiredMarker, isoTimestamp(), "utf-8");
-  } catch {
-    // Marker write failure is non-fatal — banner may repeat next fire.
-  }
+  // Marker write failure is non-fatal: the banner may repeat next fire.
+  writeHookStatusFile(healthDir, ".first-fired", isoTimestamp());
 }
 
 // Step 9 — Active stage lookup (C3). The compile-resolved

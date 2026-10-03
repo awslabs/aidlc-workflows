@@ -33394,26 +33394,41 @@ export function isoTimestamp(): string {
 // --- Hook status files ---
 //
 // Every hook status file (a `<hook>.last` heartbeat, the drop and trace lines,
-// the debug log) lives in a record's `.aidlc-engine/hooks-health/` directory
-// and goes through this one writer. It writes through no symbolic link inside
-// the record: when `.aidlc-engine`, `hooks-health` or the file itself is a
-// link, the write is skipped and the link is left as it is. "replace" rewrites
-// the file, "append" adds to it. Never throws; returns whether it wrote.
+// the debug log, a hook's own marker) lives in a record's
+// `.aidlc-engine/hooks-health/` directory, and every write, read for rotation
+// and removal of one goes through these helpers. They go through no symbolic
+// link inside the record: when `.aidlc-engine`, `hooks-health` or the file
+// itself is a link, the operation is skipped and the link is left as it is.
+
+// The file's path once every component inside the record is known not to be a
+// link (directories created when `create`), or null.
+function hookStatusTarget(healthDir: string, fileName: string, create: boolean): string | null {
+  try {
+    const record = dirname(dirname(healthDir));
+    if (create) mkdirSync(record, { recursive: true });
+    const anchorReal = realpathSync(record);
+    const rel = relative(record, join(healthDir, fileName));
+    const target = assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    if (create) mkdirSync(dirname(target), { recursive: true });
+    // The directories exist now; none of them, nor the file, may be a link.
+    assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+// "replace" rewrites the file, "append" adds to it. Never throws; returns
+// whether it wrote.
 export function writeHookStatusFile(
   healthDir: string,
   fileName: string,
   data: string,
   mode: "replace" | "append" = "replace",
 ): boolean {
+  const target = hookStatusTarget(healthDir, fileName, true);
+  if (target === null) return false;
   try {
-    const record = dirname(dirname(healthDir));
-    mkdirSync(record, { recursive: true });
-    const anchorReal = realpathSync(record);
-    const rel = relative(record, join(healthDir, fileName));
-    const target = assertNoSymlinkInChainOrThrow(anchorReal, rel);
-    mkdirSync(dirname(target), { recursive: true });
-    // The directories exist now; none of them, nor the file, may be a link.
-    assertNoSymlinkInChainOrThrow(anchorReal, rel);
     const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
     const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | noFollow |
       (mode === "append" ? fsConstants.O_APPEND : fsConstants.O_TRUNC);
@@ -33423,6 +33438,18 @@ export function writeHookStatusFile(
     } finally {
       closeSync(fd);
     }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Removes the file when it is there. Never throws; returns whether it is gone.
+export function removeHookStatusFile(healthDir: string, fileName: string): boolean {
+  const target = hookStatusTarget(healthDir, fileName, false);
+  if (target === null) return false;
+  try {
+    rmSync(target, { force: true });
     return true;
   } catch {
     return false;
@@ -33470,14 +33497,20 @@ export function recordHookTrace(
   try {
     const healthDir = hooksHealthDir(projectDir, intent, space);
     const traceName = `${hookName}.trace`;
-    const traceFile = join(healthDir, traceName);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
-    if (existsSync(traceFile) && lstatSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
-      const lines = readRegularFileNoFollowOrThrow(traceFile, "hook trace")
-        .toString("utf-8")
-        .split("\n")
-        .filter((entry) => entry.length > 0);
-      writeHookStatusFile(healthDir, traceName, `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n${line}`);
+    const traceFile = hookStatusTarget(healthDir, traceName, false);
+    if (traceFile !== null && existsSync(traceFile) && lstatSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
+      let kept = "";
+      try {
+        const lines = readRegularFileNoFollowOrThrow(traceFile, "hook trace", 4 * HOOK_TRACE_MAX_BYTES)
+          .toString("utf-8")
+          .split("\n")
+          .filter((entry) => entry.length > 0);
+        kept = `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n`;
+      } catch {
+        // Too large or unreadable to keep half of: start it over.
+      }
+      writeHookStatusFile(healthDir, traceName, `${kept}${line}`);
       return;
     }
     writeHookStatusFile(healthDir, traceName, line, "append");

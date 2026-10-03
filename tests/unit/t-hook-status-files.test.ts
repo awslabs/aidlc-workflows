@@ -1,4 +1,4 @@
-// covers: function:writeHookStatusFile, function:recordHookDrop
+// covers: function:writeHookStatusFile, function:removeHookStatusFile, function:recordHookDrop, function:recordHookTrace
 //
 // Hook status files (the `<hook>.last` heartbeats, drop and trace lines, the
 // debug log) are written through no link inside the record. A linked file or
@@ -14,7 +14,13 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { hooksHealthDir, recordHookDrop, writeHookStatusFile } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  hooksHealthDir,
+  recordHookDrop,
+  recordHookTrace,
+  removeHookStatusFile,
+  writeHookStatusFile,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -118,6 +124,27 @@ describe("hook status files are written without following links", () => {
 
     expect(readdirSync(outside)).toEqual(["session-start.last"]);
     expect(readFileSync(join(outside, "session-start.last"), "utf-8")).toBe("keep me");
+    expect(lstatSync(healthDir).isSymbolicLink()).toBe(true);
+  });
+
+  test("removing a status file through a linked hooks-health directory leaves the target's file alone", () => {
+    const plainDir = hooksHealthDir(project());
+    expect(writeHookStatusFile(plainDir, "plugin-compose-test.drops", "x\n")).toBe(true);
+    expect(removeHookStatusFile(plainDir, "plugin-compose-test.drops")).toBe(true);
+    expect(existsSync(join(plainDir, "plugin-compose-test.drops"))).toBe(false);
+
+    const p = project();
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(dirname(healthDir), { recursive: true });
+    const outside = outsideDir();
+    writeFileSync(join(outside, "plugin-compose-test.drops"), "keep me", "utf-8");
+    link(outside, healthDir, DIR_LINK);
+
+    expect(removeHookStatusFile(healthDir, "plugin-compose-test.drops")).toBe(false);
+    recordHookTrace(p, "continue-workflow", "allowing the stop (human-wait carve-out)");
+
+    expect(readdirSync(outside)).toEqual(["plugin-compose-test.drops"]);
+    expect(readFileSync(join(outside, "plugin-compose-test.drops"), "utf-8")).toBe("keep me");
     expect(lstatSync(healthDir).isSymbolicLink()).toBe(true);
   });
 
