@@ -174,10 +174,17 @@ npm install -g bun
 bun --version
 ```
 
-For a source-generated `dist/` install, ensure `bun` is on the PATH inherited by the host, such as
-`~/.zshenv` for zsh or `~/.bashrc` for bash and Git Bash, not only an
-interactive-shell file. On native Windows PowerShell, the system PATH entry
-set by `npm install -g bun` is sufficient.
+For a source-generated `dist/` install, `bun` must be on the PATH the harness
+hands its hooks. A harness started from a terminal hands them that terminal's
+PATH, so `bun --version` working there is enough. A harness started from the
+dock, a desktop icon, or a service does not get that PATH. If its hooks do not
+run, open a terminal where `bun --version` works and run
+`bun <harness-dir>/tools/aidlc.ts doctor` there (for example
+`bun .kiro/tools/aidlc.ts doctor`): its `Runtime hook PATH` row names the
+directory to add and where. Restart the harness afterwards. Until then, start
+it from that terminal. On native
+Windows PowerShell, the system PATH entry set by `npm install -g bun` is
+sufficient.
 
 ### Kiro IDE hooks not running
 
@@ -732,6 +739,12 @@ Run `/aidlc` after compaction. The framework:
 3. Offers four resume options
 
 If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to safely re-execute the stage that was in progress during compaction.
+
+### The build stops after a compaction
+
+**Symptom** (GitHub Copilot): you approved the code plan, the build started, and after the chat compacted every build step the assistant tries is refused.
+
+Your approval, the workflow state, and every file already written are kept; only what the assistant had not yet written to a file is gone from the chat. After a compaction the assistant must read its step again before it builds anything. It runs `next` as its own command, which hands the approved build straight back without asking you again. `/aidlc --doctor` shows the step as out of date, with the time and the reason (the chat was compacted, or the workflow state changed after the step was issued, naming what changed when it is known), until that `next` runs.
 
 ---
 

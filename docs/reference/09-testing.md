@@ -402,7 +402,11 @@ creates a missing root with private permissions; it refuses an unsafe existing
 root rather than changing its permissions. On POSIX, every explicit-root ancestor
 must be owned by the current user or root, with no group/other write bits unless
 sticky; the implicit root's temporary parent must be current-user-owned or mode
-**1777**. Windows validates root/session owner and DACL, but does not yet validate
+**1777**. On a controlled test host whose filesystem reports those ancestors as
+owned by a sandbox uid (for example an overlay filesystem where `/` belongs to
+`nobody`), set `AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS=1` to skip only the ownership
+requirement; the write-bit rule and every other check here stay enforced.
+Windows validates root/session owner and DACL, but does not yet validate
 ancestor ACL trust; the generation handshake below remains enforced. Remove an
 unsafe pre-created root or point `AIDLC_TUI_BUN_ROOT` at a private directory under
 trusted ancestors, and keep that setting consistent across commands.
@@ -828,6 +832,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. `0` disables that operation timer; file/run deadlines still apply. |
 | `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`; see [Terminal Driver](#terminal-driver). |
 | `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native records/snapshots; use the same root across commands. Must be user-owned and private (0700 on POSIX; current-user owner, no Everyone/Users/Authenticated Users allow ACEs on Windows), never a symlink/reparse point. A missing root is created privately; an unsafe existing root or identity-replaced session directory is refused. |
+| `AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS` | unset | Set to `1` only on a controlled test host whose temporary-directory ancestors are owned by a sandbox uid (neither root nor the current user), such as an overlay filesystem where `/` belongs to `nobody`. Without it, every live native-root tier fails at setup, and the error names this variable. It skips only the POSIX explicit-root ancestor ownership check: ancestors writable by other users without the sticky bit and symlink/reparse points are still refused, and the private root's owner, mode and generation handshake stay enforced. |
 | `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
 | `AIDLC_NODE_BIN` | unset | Node executable made available to isolated live tool environments and test fixtures; it does not select a TUI backend. |
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |

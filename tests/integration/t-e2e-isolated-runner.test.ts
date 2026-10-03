@@ -233,6 +233,23 @@ test("relative alias is private", () => {
     expect(() => assertRunnerFixtureImports(root)).toThrow("imports missing");
   });
 
+  test("copied runners reject a missing import outside tests/ before the run starts", () => {
+    const root = fixture({ "t-proof.test.ts": pass });
+    const write = (path: string, body: string): void => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    };
+    // A harness module that reads a script, which reads a core module: the
+    // shape of sdk-drive.ts reading the credential broker.
+    write("tests/harness/needs-script.ts", 'import { value } from "../../scripts/fixture-script.ts";\nexport const read = value;\n');
+    const entries = ["tests/harness/needs-script.ts"];
+    expect(() => assertRunnerFixtureImports(root, entries)).toThrow("fixture-script.ts");
+    write("scripts/fixture-script.ts", 'import { base } from "../core/fixture-core.ts";\nexport const value = base;\n');
+    expect(() => assertRunnerFixtureImports(root, entries)).toThrow("fixture-core.ts");
+    write("core/fixture-core.ts", "export const base = 1;\n");
+    expect(() => assertRunnerFixtureImports(root, entries)).not.toThrow();
+  });
+
   test("unfiltered deterministic deep tiers skip the closed Claude preflight without failing", () => {
     const root = fixture({ "t-deterministic.test.ts": pass });
     const integration = join(root, "tests", "integration");

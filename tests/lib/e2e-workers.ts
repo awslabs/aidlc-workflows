@@ -336,7 +336,9 @@ export function createE2eNativeRoot(artifactDir: string): string {
       failures.push(error);
     }
   }
-  throw new AggregateError(failures, "e2e needs an OS temporary directory with trusted native root ancestors");
+  // The runner prints only the aggregate's message, so carry each base's reason.
+  const reasons = failures.map((error) => `- ${error instanceof Error ? error.message : String(error)}`);
+  throw new AggregateError(failures, `e2e needs an OS temporary directory with trusted native root ancestors:\n${reasons.join("\n")}`);
 }
 
 export async function e2eWorkerEnvironment(
