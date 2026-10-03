@@ -155,9 +155,10 @@ Settings you type with the new work go with the work you choose.
 `/aidlc --depth minimal --learnings off Fix the timeout on the export endpoint`
 asks the same question: choose **2** and the new intent starts with that depth
 and learnings off; choose **1** or **3** and they apply to the active intent
-(for **3**, before its plan is reshaped). A Guard Policy you lower this way
-applies to the active intent as you send the message, so the new intent starts
-at its default, and AI-DLC says so when it creates it. Naming the plan first
+(for **3**, before its plan is reshaped). A Guard Policy you lower this way,
+and any other setting typed in the same message, applies to the active intent
+as you send the message; the new intent starts at the default Guard Policy, and
+AI-DLC says so when it creates it. Naming the plan first
 (`/aidlc bugfix Fix the timeout`) asks the same question, proposing that plan.
 
 AI-DLC never creates a second intent without asking. If a prompt is genuinely a

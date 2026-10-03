@@ -3199,7 +3199,10 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
   let landed = false;
   if (askedState !== null) {
     try {
-      landed = resolveGuardPolicy(projectDir, askedState, { tolerateInvalidState: true }).value === value;
+      landed = resolveGuardPolicy(projectDir, askedState, {
+        tolerateInvalidState: true,
+        selection: { space: question.askedAbout!.space, intent: target!.intent },
+      }).value === value;
     } catch {
       landed = false;
     }
