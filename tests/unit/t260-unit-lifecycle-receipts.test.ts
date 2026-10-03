@@ -1054,6 +1054,39 @@ describe("t260 finished Units keep their receipts across a Construction policy c
     }
   });
 
+  // Two clones can each record a change in the same second after a start. Either
+  // may be the first change after it, so the start counts if either found
+  // stage-major flooring, whichever shard sorts first.
+  test("two same-second changes in different shards after a start do not depend on shard names", () => {
+    const results: Array<[string, boolean]> = [];
+    for (const [stageShard, unitShard] of [["aaaa-one.md", "zzzz-two.md"], ["zzzz-one.md", "aaaa-two.md"]]) {
+      policyProject("unit-major");
+      writeUnitArtifacts(proj, "unit-a");
+      appendFileSync(
+        seededAuditShard(proj),
+        block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:2026-01-02T00:00:00Z#1\n`),
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), stageShard),
+        `# AI-DLC Audit Log\n${block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n")}`,
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), unitShard),
+        `# AI-DLC Audit Log\n${block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Checkpoints\n**Value**: disabled\n**Previous Value**: enabled\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: disabled\n")}`,
+      );
+      results.push([
+        latestMainWorkflowStageRunFloorForProject(proj, SLUG, true),
+        unitCompletedReceipts(proj, SLUG).has("unit-a"),
+      ]);
+      cleanupTestProject(proj);
+      proj = "";
+    }
+    expect(results).toEqual([
+      ["STAGE_STARTED:2026-01-02T00:00:00Z#1", true],
+      ["STAGE_STARTED:2026-01-02T00:00:00Z#1", true],
+    ]);
+  });
+
   // Swarm convergence and the Plan Approval batch context floor every stage
   // start (they pass unitMajor false), whatever the policy. A recorded change
   // must not change what they read, even for a stage start recorded while Unit
