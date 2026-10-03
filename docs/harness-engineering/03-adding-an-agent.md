@@ -131,8 +131,9 @@ This is the one thing to internalize. Dropping the file makes the agent
 you get an agent that exists and never runs.
 
 - **Discovery makes it visible.** `loadAgents()` in
-  `.claude/tools/aidlc-lib.ts` reads every `.md` file in
-  `.claude/agents/` on the next invocation and derives the metadata map. No code
+  `.claude/tools/aidlc-lib.ts` reads every persona `.md` file in
+  `.claude/agents/` (one named `aidlc-*` or carrying `display_name`, `examples`,
+  `tier`, or `plugin`) on the next invocation and derives the metadata map. No code
   edit, no registration step — the file's presence is the registration. From
   this point the statusline can render its display name, and the team can add
   standards under its space-level `aidlc/knowledge/<slug>-agent/` directory.
