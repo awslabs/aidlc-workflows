@@ -792,6 +792,15 @@ describe("t294 runtime diagnostics", () => {
       expect.objectContaining({ status: "found", version: "1.0.80", path: join(real, command) }),
     );
     expect(existsSync(ran)).toBe(false);
+    if (windows) {
+      // cmd.exe would expand % in the path, so such a .cmd is not run.
+      const expanding = join(root, "npm%PATH%");
+      const expandingRan = join(root, "expanding-ran");
+      mkdirSync(expanding, { recursive: true });
+      writeFileSync(join(expanding, command), script([`type nul > "${expandingRan}"`, "echo 1.0.80"]));
+      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding }).status).toBe("missing");
+      expect(existsSync(expandingRan)).toBe(false);
+    }
 
     // Windows spelling: any case, backslashes, a trailing separator. The
     // search skips the folder, and a resolver that names it anyway is ignored.

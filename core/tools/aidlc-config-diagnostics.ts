@@ -505,6 +505,20 @@ function defaultRun(
   command: string,
   args: readonly string[],
 ): { status: number; stdout: string } {
+  // Windows runs a .cmd or .bat (what npm installs, for example copilot.cmd)
+  // only through cmd.exe. The path is quoted whole; one that cmd.exe would
+  // expand (% or !) or cannot quote (") is not run.
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    if (/[%!"]/.test(command) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) {
+      return { status: -1, stdout: "" };
+    }
+    const result = spawnSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", `""${command}" ${args.join(" ")}"`],
+      { encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, windowsVerbatimArguments: true },
+    );
+    return { status: result.status ?? -1, stdout: result.stdout ?? "" };
+  }
   const result = spawnSync(command, [...args], {
     encoding: "utf-8",
     timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
