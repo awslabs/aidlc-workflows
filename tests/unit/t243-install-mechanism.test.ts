@@ -2370,9 +2370,6 @@ describe("t243 project initialization", () => {
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // #1406: Claude Code reads a project's own subagents from .claude/agents/.
-  // One installed there by another tool (`name` + `description`, no AI-DLC
-  // persona keys) made the staged compile throw, so every refresh exited 4.
   test("a host subagent in .claude/agents does not stop a refresh", () => {
     const project = temp("aidlc-t243-host-agent-");
     mkdirSync(join(project, ".git"));

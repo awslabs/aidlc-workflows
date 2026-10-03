@@ -274,13 +274,7 @@ describe("t223 naming enforcement", () => {
     expect(res.stdout).toContain("frontmatter parse failed");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // #1406: the harness agents dir is shared with the host. Claude Code, Cursor,
-  // Kiro and Codex read their own subagents from it, and another tool may
-  // install one there. Such a file declares `name` and `description` and none
-  // of the keys only AI-DLC's persona schema uses, and the loader used to throw
-  // on it, which failed doctor, `graph compile` and every `aidlc config` refresh.
   describe("the host's own agents in the agents dir (#1406)", () => {
-    // What Claude Code documents for a subagent: name, description, tools, model.
     const HOST_AGENT = [
       "---",
       "name: foo-agent",
@@ -312,9 +306,6 @@ describe("t223 naming enforcement", () => {
       });
     });
 
-    // Anything that claims to be AI-DLC's is still held to the full schema, so
-    // a persona that lost its display_name keeps failing loudly instead of
-    // being skipped as foreign.
     const claims: Array<[string, string, string]> = [
       ["an aidlc- filename", "aidlc-broken-agent.md", "---\nname: aidlc-broken-agent\ndescription: x\n---\n"],
       ["an examples list", "team-agent.md", "---\nname: team-agent\nexamples:\n  - a.md\n---\n"],
@@ -369,7 +360,6 @@ describe("t223 naming enforcement", () => {
         );
       };
       expect(() => compileWith("aidlc-quality-agent")).not.toThrow();
-      // A host agent is not an AI-DLC persona, so the graph cannot name it.
       expect(() => compileWith("foo-agent")).toThrow(/lead_agent "foo-agent" has no matching/);
     });
 
@@ -382,8 +372,6 @@ describe("t223 naming enforcement", () => {
       });
     });
 
-    // A dangling symlink to an agent shared across repos is the host's: it is
-    // left alone rather than failing every command that loads agents.
     test("a host agent that cannot be read is left out; an aidlc- one still fails", () => {
       const dir = agentsWith({ "foo-agent.md": HOST_AGENT }, "shipped");
       symlinkSync(join(dir, "..", "missing-shared", "reviewer.md"), join(dir, "reviewer.md"));
@@ -397,8 +385,6 @@ describe("t223 naming enforcement", () => {
       });
     });
 
-    // A byte-order mark hides the frontmatter from the parser. A persona saved
-    // with one must fail loudly, as before, not vanish as a "host" file.
     test("a persona saved with a byte-order mark is not mistaken for a host agent", () => {
       const dir = agentsWith({
         "team-reviewer-agent.md": "\uFEFF---\nname: team-reviewer-agent\ndisplay_name: Reviewer\nplugin: team\n---\n",
@@ -412,7 +398,6 @@ describe("t223 naming enforcement", () => {
     test("doctor passes schema and naming checks beside a host agent and names it", () => {
       const project = createTestProject();
       projects.push(project);
-      // Host naming is not AI-DLC's: a stem/name drift here is not a finding.
       const dir = agentsWith(
         { "foo-agent.md": HOST_AGENT, "bar.md": HOST_AGENT.replace("name: foo-agent", "name: bar-helper") },
         "shipped",
@@ -439,8 +424,6 @@ describe("t223 naming enforcement", () => {
       );
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    // The Kiro IDE conductor aidlc.md carries no persona keys, but it is still
-    // AI-DLC's file, so its name keeps being checked.
     test("doctor still checks the conductor aidlc.md name beside host agents", () => {
       const project = createTestProject();
       projects.push(project);
@@ -465,9 +448,6 @@ describe("t223 naming enforcement", () => {
       expect(out).not.toContain('stem "foo-agent"');
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    // Rule delivery rewrites a dispatched persona's brief with the stage's
-    // rules. A host agent the project dispatches itself must reach its own
-    // subagent untouched, even while a workflow runs.
     test("a dispatch to a host agent keeps its own brief while a persona's is rewritten", () => {
       const project = setupIntegrationProject({ noAidlcDocs: true });
       projects.push(project);

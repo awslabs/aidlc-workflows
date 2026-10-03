@@ -189,8 +189,6 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
   // plugin personas, and its composer exemption. JSON-only helpers are outside
   // that contract even when their names use the aidlc- prefix.
   const rosterDir = agentsDir();
-  // `.kiro/agents` is shared with Kiro's own agents (#1406): a host agent is
-  // not a worker, whatever its name, so it is dispatched untouched.
   const workers = agents.filter((agent) =>
     /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
     agent !== "aidlc-composer-agent" &&

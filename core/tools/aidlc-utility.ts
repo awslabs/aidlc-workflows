@@ -2081,9 +2081,6 @@ function namingMismatches(
   const mismatches: NamingMismatch[] = [];
   for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
     const filePath = join(dir, f);
-    // The host's own agents share this dir and follow the host's naming, not
-    // AI-DLC's, and may be symlinks this check cannot stat (#1406). The Kiro
-    // IDE conductor aidlc.md carries no persona keys but is still AI-DLC's.
     if (kind === "Agent" && f !== "aidlc.md" && !isAidlcAgentFile(filePath)) continue;
     if (!statSync(filePath).isFile()) continue;
     const { name, plugin } = frontmatterFields(filePath, kind);
@@ -4417,8 +4414,6 @@ export async function collectDoctorReport(
       fix: errorMessage(e),
     });
   }
-  // Name the host's own agents that were left alone, so a persona someone
-  // expected to load is not skipped without a trace.
   try {
     const foreign = foreignAgentFiles().map((path) => basename(path));
     if (foreign.length > 0) {
@@ -4430,7 +4425,6 @@ export async function collectDoctorReport(
       });
     }
   } catch {
-    // An unreadable agents dir is reported by the naming check above.
   }
   try {
     pushNamingAdvisory(

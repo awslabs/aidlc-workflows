@@ -1376,9 +1376,6 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     }
   });
 
-  // #1406: `.kiro/agents` also holds Kiro's own agents (Markdown for Kiro IDE,
-  // JSON for Kiro CLI). One the project brought itself is not an AI-DLC worker,
-  // so its dispatch is not held to the worker memory-preload contract.
   test("5c2: a host agent in .kiro/agents is dispatched untouched; the same files claiming a persona are held to it", () => {
     const dir = scratchProject(true);
     try {

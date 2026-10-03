@@ -62,8 +62,6 @@ const DISPATCH_HOOK_OUTPUT_MAX_BYTES = 512 * 1024;
 const PRELOAD_FALLBACK_ENV = "AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK";
 
 function isAidlcAgent(value: unknown): value is string {
-  // The host's own agents live in the same dir (#1406): rule delivery is for
-  // AI-DLC personas only, never a subagent the project brought itself.
   return (
     typeof value === "string" &&
     /^[a-z0-9][a-z0-9-]*-agent$/.test(value) &&
