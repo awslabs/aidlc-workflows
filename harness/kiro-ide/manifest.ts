@@ -14,6 +14,11 @@
 //     executes them.
 
 import type { HarnessManifest } from "../../scripts/manifest-types.ts";
+import {
+  copyChannelDelegateShellDeny,
+  nativeDelegateShellDeny,
+  shellDenyLines,
+} from "./delegate-shell-deny.ts";
 import onboardingFills from "./onboarding.fills.ts";
 
 const DELEGATION_AGENTS = [
@@ -42,9 +47,13 @@ const spacePaths = ["aidlc/spaces/**"];
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
+const copyShellDeny = shellDenyLines(copyChannelDelegateShellDeny(".kiro"));
+
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
-// conductor's tools list selects those (agents/aidlc.md). tools is enforced on
+// conductor's tools list selects those (agents/aidlc.md). On that path its
+// shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
+// allow still serves a persona the person selects directly. tools is enforced on
 // every dispatch path; it names no MCP server, so a persona reaches none (an
 // @mcp wildcard would expose every user- and workspace-level server).
 function personaFrontmatter(agent: string): string[] {
@@ -59,6 +68,7 @@ function personaFrontmatter(agent: string): string[] {
     "      match:",
     `        - "bun .kiro/tools/aidlc-*"`,
     `        - "date -u *"`,
+    ...copyShellDeny,
     "    - capability: fs_read",
     "      effect: allow",
     "      match:",
@@ -251,14 +261,21 @@ const manifest: HarnessManifest = {
 
   // Delegated capabilities come from persona Markdown frontmatter. tools binds
   // on every dispatch path; permissions bind only on the invoke_sub_agent /
-  // orchestrate_subagent path the conductor selects. The allows are
-  // autoapprovals: unmatched operations still ask rather than being denied.
+  // orchestrate_subagent path the conductor selects (the shell allow aside,
+  // see delegate-shell-deny.ts). The allows are autoapprovals: unmatched operations
+  // still ask rather than being denied.
   // Delegates intentionally receive no subagent tool, so nested delegation
   // remains unavailable.
   frontmatterAdditions: DELEGATION_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
     lines: personaFrontmatter(agent),
   })),
+  // The native release keys the persona shell deny on the `aidlc engine`
+  // routes its conductor allow covers (delegate-shell-deny.ts).
+  nativeReplacements: [{
+    from: copyShellDeny.join("\n"),
+    to: shellDenyLines(nativeDelegateShellDeny()).join("\n"),
+  }],
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 

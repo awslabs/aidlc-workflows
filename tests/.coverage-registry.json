@@ -10676,6 +10676,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UTILITY_COMMANDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:uuidv7",
       "minMechanism": "none",
       "coveredBy": [
@@ -10979,6 +10986,13 @@
     {
       "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:WORKSPACE_NOUNS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

@@ -19,6 +19,7 @@ import {
   HARNESS_MATRIX,
   manifestGrantsIdeAgentTools,
 } from "../harness/harness-matrix.ts";
+import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -363,6 +364,148 @@ describe("t148 dist/kiro file structure", () => {
     for (const tree of nonIdeAgentTrees) {
       for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
         expect(fmToolsOf(join(tree, f))).toBeUndefined();
+      }
+    }
+  });
+
+  test("every delegation target denies the conductor's command allow except what the guard lets a delegate run", () => {
+    // A delegate's calls carry no agent identity, so the state-transition
+    // guard's delegated branch cannot fire on Kiro, and a delegated persona's
+    // shell allow is not applied: the delegate runs what the conductor's allow
+    // covers (Kiro CLI 2.27.1, IDE 1.2.4). The persona's deny is enforced, so it
+    // denies that whole allow and excludes the canonical commands the guard
+    // lets a delegate run. Kiro's matching, as measured on Kiro CLI 2.27.1: it
+    // judges each part of a command joined by &&, ||, ;, |, &, a newline, $( )
+    // or backticks on its own,
+    // as written, quotes and spaces kept; a deny "P *" matches P alone or P
+    // followed by arguments, never P as a word prefix; any other trailing "*"
+    // is a prefix; an exclude "X *" lifts X followed by arguments, not bare X.
+    // A part runs unprompted only when the conductor's allow covers it and the
+    // persona's deny does not; any other part asks.
+    const denyMatches = (pattern: string, command: string): boolean =>
+      pattern.endsWith(" *")
+        ? command === pattern.slice(0, -2) || command.startsWith(pattern.slice(0, -1))
+        : pattern.endsWith("*")
+        ? command.startsWith(pattern.slice(0, -1))
+        : command === pattern;
+    const excludeMatches = (pattern: string, command: string): boolean =>
+      pattern.endsWith("*") ? command.startsWith(pattern.slice(0, -1)) : command === pattern;
+    const ruleOf = (file: string): { match: string[]; exclude: string[] } => {
+      const fm = frontmatter(file);
+      const at = fm.indexOf("    - capability: shell\n      effect: deny\n      match:\n");
+      expect(at, `${file} has a shell deny rule`).toBeGreaterThanOrEqual(0);
+      const lines = fm.slice(at).split("\n").slice(3);
+      const list = (from: string[]): string[] =>
+        from.slice(0, from.findIndex((line) => !line.startsWith("        - "))).map((line) =>
+          line.slice('        - "'.length, -1)
+        );
+      const match = list(lines);
+      const rest = lines.slice(match.length);
+      return { match, exclude: rest[0] === "      exclude:" ? list(rest.slice(1)) : [] };
+    };
+    const partsOf = (command: string): string[] => {
+      const substitution = /\$\(([^()]*)\)|`([^`]*)`/g;
+      const inner = [...command.matchAll(substitution)].map((match) => match[1] ?? match[2]);
+      return [command.replace(substitution, ""), ...inner]
+        .flatMap((part) => part.split(/&&|\|\||;|\||&|\n/))
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+    };
+    const deniesPart = (rule: { match: string[]; exclude: string[] }, part: string): boolean =>
+      rule.match.some((pattern) => denyMatches(pattern, part)) &&
+      !rule.exclude.some((pattern) => excludeMatches(pattern, part));
+    const denies = (rule: { match: string[]; exclude: string[] }, command: string): boolean =>
+      partsOf(command).some((part) => deniesPart(rule, part));
+    const runsUnprompted = (rule: { match: string[]; exclude: string[] }, allow: string, command: string): boolean =>
+      partsOf(command).every((part) => denyMatches(allow, part) && !deniesPart(rule, part));
+    // Each refused command is one the guard refuses a delegate, spelled as
+    // written, re-quoted, re-spaced, or with a flag before the verb; each
+    // allowed one is a command personas run.
+    const channels = [
+      {
+        tree: "dist",
+        allow: "bun .kiro/tools/aidlc-*",
+        refused: [
+          "bun .kiro/tools/aidlc-orchestrate.ts next",
+          "bun .kiro/tools/aidlc-orchestrate.ts --project-dir . next",
+          'bun .kiro/tools/aidlc-"orchestrate.ts" next',
+          "bun .kiro/tools/aidlc-jump.ts execute --to x",
+          "bun .kiro/tools/aidlc-state.ts set-unit-ownership u1 developer",
+          "bun .kiro/tools/aidlc-utility.ts recompose --skip x",
+          'bun .kiro/tools/aidlc-utility.ts "scope-change" --scope mvp',
+          "bun .kiro/tools/aidlc-utility.ts  scope-change --scope mvp",
+          "bun .kiro/tools/aidlc-utility.ts --project-dir . scope-change --scope mvp",
+          "bun .kiro/tools/aidlc-utility.ts intent other-intent",
+          "bun .kiro/tools/aidlc-utility.ts space switch other",
+          "bun .kiro/tools/aidlc-log.ts link --stage x && bun .kiro/tools/aidlc-orchestrate.ts next",
+          "bun .kiro/tools/aidlc-log.ts link --stage x; bun .kiro/tools/aidlc-utility.ts recompose --skip x",
+          "bun .kiro/tools/aidlc-log.ts link --stage $(bun .kiro/tools/aidlc-orchestrate.ts next)",
+          "bun .kiro/tools/aidlc-log.ts link --stage `bun .kiro/tools/aidlc-orchestrate.ts next`",
+          "bun .kiro/tools/aidlc-log.ts link --stage x & bun .kiro/tools/aidlc-orchestrate.ts next",
+          "bun .kiro/tools/aidlc-log.ts link --stage x\nbun .kiro/tools/aidlc-orchestrate.ts next",
+          "bun .kiro/tools/aidlc-state.ts set-construction-execution swarm",
+          "bun .kiro/tools/aidlc-state.ts unit complete --stage code-generation --unit u1",
+        ],
+        foreign: "bun .kiro/tools/aidlc-log.ts link --stage x && rm -rf docs",
+        allowed: [
+          "bun .kiro/tools/aidlc-utility.ts project-description",
+          "bun .kiro/tools/aidlc-utility.ts codekb-snapshot --unit u1",
+          "bun .kiro/tools/aidlc-utility.ts version",
+          "bun .kiro/tools/aidlc-log.ts link --stage x",
+          "bun .kiro/tools/aidlc-worktree.ts merge u1",
+          "bun .kiro/tools/aidlc-state.ts get Status",
+          "bun .kiro/tools/aidlc-state.ts lookup phase-of code-generation",
+          "bun .kiro/tools/aidlc-jump.ts resolve --to code-generation",
+          "bun .kiro/tools/aidlc-utility.ts intent list --json",
+        ],
+      },
+      {
+        tree: "dist-release",
+        allow: "aidlc engine *",
+        refused: [
+          "aidlc engine orchestrate next",
+          'aidlc engine "orchestrate" next',
+          "aidlc engine --project-dir . orchestrate next",
+          'aidlc engine "--resume"',
+          "aidlc engine recompose --skip x",
+          "aidlc engine state unpark",
+          "aidlc engine config set depth minimal",
+          "aidlc engine config --project-dir . set depth minimal",
+          'aidlc engine config "set" depth minimal',
+          "aidlc engine intent other-intent",
+          "aidlc engine space switch other",
+          "aidlc engine log link --stage x && aidlc engine orchestrate next",
+          "aidlc engine log link --stage $(aidlc engine state unpark)",
+          "aidlc engine log link --stage `aidlc engine state unpark`",
+          "aidlc engine log link --stage x & aidlc engine state unpark",
+          "aidlc engine state init --scope feature",
+          "aidlc engine state set-construction-checkpoints disabled",
+          "aidlc engine state unit pause --stage code-generation --unit u1",
+        ],
+        foreign: "aidlc engine log link --stage x && rm -rf docs",
+        allowed: [
+          "aidlc engine workspace project-description",
+          "aidlc engine config get depth",
+          "aidlc engine worktree merge u1",
+          "aidlc engine state lookup phase-of code-generation",
+          "aidlc engine intent list",
+        ],
+      },
+    ];
+    for (const { tree, allow, refused, foreign, allowed } of channels) {
+      for (const command of refused) expect(delegatedLifecycleCommand(command), command).not.toBeNull();
+      for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
+      const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
+      expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
+      for (const file of readdirSync(agents).filter((name) => name.endsWith("-agent.md"))) {
+        const rule = ruleOf(join(agents, file));
+        expect(rule.match, `${tree} ${file}`).toEqual([allow]);
+        for (const command of refused) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
+        // An allowed command with a foreign command appended still asks.
+        expect(runsUnprompted(rule, allow, foreign), `${tree} ${file}: ${foreign}`).toBe(false);
+        for (const command of allowed) {
+          expect(runsUnprompted(rule, allow, command), `${tree} ${file}: ${command}`).toBe(true);
+        }
       }
     }
   });

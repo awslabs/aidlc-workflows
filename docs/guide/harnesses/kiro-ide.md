@@ -162,9 +162,14 @@ The install ships:
 - `.kiro/agents/aidlc.md` — the same conductor exposed in the workspace agent
   selector. It delegates through `invoke_sub_agent` (Kiro IDE) or
   `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
-  under its own permissions.
+  under its own tools and deny rules.
 - `.kiro/agents/aidlc-*-agent.md` — all 14 delegation personas, carrying
-  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships.
+  `tools:` grants and `permissions.rules`. On a delegated call Kiro enforces a
+  persona's deny rules but runs its commands under the conductor's allow, so
+  each persona denies that allow except the AI-DLC commands a delegate may run.
+  A delegate cannot move the workflow, change stage state, or switch or create
+  an intent or space, however it quotes or spaces the command.
+  No agent-v1 JSON ships.
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
   registrations, and a hook cannot detect that from inside. Kiro IDE does not
@@ -398,7 +403,7 @@ ways to enable it, either works:
 | Hook registration | `settings.json` `hooks` block | `.kiro/hooks/aidlc-*.json` v2 hook files (Kiro IDE 1.x, Kiro CLI v3 engine) |
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
-| Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | `invoke_sub_agent` (Kiro IDE) or `orchestrate_subagent` (Kiro CLI) → all 14 Markdown personas, each running under the `tools:` and `permissions.rules` in its own frontmatter |
+| Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | `invoke_sub_agent` (Kiro IDE) or `orchestrate_subagent` (Kiro CLI) → all 14 Markdown personas, each running under the `tools:` and deny rules in its own frontmatter and the conductor's command allow |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt, and on Kiro IDE `SESSION_RESUMED` when a prompt returns to an earlier chat (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
@@ -455,7 +460,8 @@ authored
 Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
 (`skills/aidlc/`), always-included active-memory steering (`steering/`),
 the conductor Markdown (`agents/aidlc.md`), the hook adapter and v2 hook JSON
-files (`hooks/`), and onboarding fills — edit those
+files (`hooks/`), the personas' delegate shell deny (`delegate-shell-deny.ts`),
+and onboarding fills — edit those
 (or `core/`), never hand-edit the generated `dist/kiro-ide`.
 
 This harness differs from the `kiro` CLI harness (`harness/kiro/`) in four ways:
