@@ -653,7 +653,7 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(
-      "Records balanced (default): medium effort for the whole Kiro session.",
+      "Records balanced (default): medium effort for the whole Kiro session, saved in your personal Kiro settings for every Kiro project.",
     );
     expect(result.stdout).not.toContain("medium project agent effort for deciding");
     expect(result.stdout).not.toContain("effort dials do not apply");
@@ -738,6 +738,21 @@ describe("t299 first-run setup wizard", () => {
       "chat.modelDefaults",
       JSON.stringify({ "claude-sonnet-4.6": { output_config: { effort: "medium" } } }),
     ]]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("recommended defaults on a saved model the account no longer offers ask for another", () => {
+    const seam = kiroSeam({ "chat.defaultModel": "claude-retired-1" });
+    const result = runWizard("\n\n", {
+      harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
+      env: seam.env,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "Your Kiro model claude-retired-1 is not offered on your Kiro account any more, so every prompt would fail. Choose the session model (Enter takes the recommended one):",
+    );
+    expect(result.stdout).toMatch(/keep claude-retired-1\s+not offered on your Kiro account any more/);
+    expect(result.stdout).toContain("Using claude-opus-5 (2.2x).");
+    expect(kiroWrites(seam.writes)[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("customize on Kiro CLI makes step 2 the session model and steps thorough down to the model's level", () => {

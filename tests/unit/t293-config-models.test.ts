@@ -861,7 +861,10 @@ describe("t293 config models CLI", () => {
 
   // The Kiro CLI session model lives in the person's personal Kiro settings; the
   // seam records the kiro-cli writes instead of making them.
-  function kiroSeam(current: Record<string, unknown>): { env: NodeJS.ProcessEnv; writes: string } {
+  function kiroSeam(
+    current: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ): { env: NodeJS.ProcessEnv; writes: string } {
     const writes = join(temp("aidlc-t293-kiro-writes-"), "writes.jsonl");
     return {
       writes,
@@ -875,6 +878,7 @@ describe("t293 config models CLI", () => {
           current,
           levels: { "claude-sonnet-4.6": ["low", "medium", "high", "max"] },
           writes,
+          ...extra,
         }),
       },
     };
@@ -936,6 +940,30 @@ describe("t293 config models CLI", () => {
     // The shipped project file stays free of a model map.
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8")))
       .toEqual({ "chat.defaultAgent": "aidlc" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro CLI plan token names the session it starts from, and a write Kiro refuses needs action", () => {
+    const project = install("kiro");
+    const token = (current: Record<string, unknown>) => {
+      const result = run([
+        "config", "models", "--project-dir", project, "--project", "--preset", "thorough", "--dry-run", "--json",
+      ], project, { ...runtimeEnv(), ...kiroSeam(current).env });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      return (JSON.parse(result.stdout) as { data: { planToken: string } }).data.planToken;
+    };
+    const onOpus = token({ "chat.defaultModel": "claude-opus-5" });
+    expect(token({ "chat.defaultModel": "claude-opus-5" })).toBe(onOpus);
+    expect(token({ "chat.defaultModel": "claude-sonnet-4.6" })).not.toBe(onOpus);
+
+    // AI-DLC's record is saved; the effort Kiro refuses is reported and needs action.
+    const refused = kiroSeam({ "chat.defaultModel": "claude-opus-5" }, { failWrite: "chat.modelDefaults" });
+    const result = run([
+      "config", "models", "--project-dir", project, "--project", "--preset", "thorough", "--yes",
+    ], project, { ...runtimeEnv(), ...refused.env });
+    expect(result.status, result.stdout + result.stderr).toBe(5);
+    expect(result.stdout).toContain("Kiro did not save the effort, so your personal Kiro settings are unchanged.");
+    expect(kiroWrites(refused.writes)).toEqual([]);
+    expect(existsSync(projectSettingsPath(project))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro CLI --preset --dry-run previews the personal Kiro settings change and writes nothing", () => {

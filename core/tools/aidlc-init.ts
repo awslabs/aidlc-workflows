@@ -133,6 +133,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import {
   applyKiroSessionPlan,
+  hasLegacyKiroEffortMap,
   isKiroPreset,
   KIRO_AUTO_DEFINITION,
   KIRO_EFFORT_LABEL,
@@ -140,6 +141,7 @@ import {
   kiroAutoRecommendation,
   kiroCliPath,
   type KiroModel,
+  type KiroModelList,
   type KiroPersonalSession,
   type KiroPreset,
   kiroRateLabel,
@@ -5440,6 +5442,8 @@ type FirstRunKiroSession = {
   session: Extract<KiroPersonalSession, { ok: true }>;
   // The model chosen to save; undefined keeps the current one.
   setModel?: KiroModel;
+  // The account's models, fetched once when first needed.
+  models?: KiroModelList;
 };
 
 class FirstRunCancelled extends Error {}
@@ -6234,6 +6238,19 @@ function kiroSessionFor(distribution: string): FirstRunKiroSession | null {
   return session.ok ? { cli, session } : null;
 }
 
+// A saved model the account no longer offers fails every prompt, so setup asks
+// for another instead of keeping it. Unknown when the list cannot be fetched.
+function kiroModelRetired(kiro: FirstRunKiroSession): boolean {
+  const current = kiro.session.model;
+  if (!current) return false;
+  kiro.models ??= listKiroModels(kiro.cli);
+  return kiro.models.ok && !kiro.models.models.some((model) => model.id === current);
+}
+
+function kiroRetiredIntro(model: string): string {
+  return `Your Kiro model ${model} is not offered on your Kiro account any more, so every prompt would fail. Choose the session model (Enter takes the recommended one):`;
+}
+
 function firstRunKiroSummary(kiro: FirstRunKiroSession | null | undefined): string {
   if (!kiro) return "unchanged (Kiro settings not read)";
   if (kiro.setModel) {
@@ -6250,7 +6267,8 @@ function chooseKiroSessionModel(
   preset: KiroPreset | null,
   intro?: string,
 ): KiroModel | undefined {
-  const list = listKiroModels(kiro.cli);
+  kiro.models ??= listKiroModels(kiro.cli);
+  const list = kiro.models;
   const current = kiro.session.model;
   if (!list.ok) {
     writeMenuRow(
@@ -6281,7 +6299,11 @@ function chooseKiroSessionModel(
   });
   process.stdout.write(
     `    ${number(models.length + 1)} ${keepLabel.padEnd(idWidth)}${
-      current ? "your current model" : "Kiro keeps picking the model; no effort preset"
+      !current
+        ? "Kiro keeps picking the model; no effort preset"
+        : models.some((model) => model.id === current)
+        ? "your current model"
+        : "not offered on your Kiro account any more"
     }\n`,
   );
   writeMenuRow(
@@ -6308,6 +6330,10 @@ function chooseKiroSessionModel(
 // The session-model question: keep or choose. Kiro auto recommends choosing.
 function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | null): void {
   const current = kiro.session.model;
+  if (current && kiroModelRetired(kiro)) {
+    kiro.setModel = chooseKiroSessionModel(kiro, preset, kiroRetiredIntro(current));
+    return;
+  }
   if (current) {
     writeMenuRow(
       "  ",
@@ -6345,7 +6371,9 @@ function askKiroSessionModel(kiro: FirstRunKiroSession, preset: KiroPreset | nul
 }
 
 // The preset step's wording on Kiro CLI: one effort for the whole session.
-function writeKiroPresetRows(model: string | null): void {
+// Setup runs on a project with no preset yet; `config models` keeps the
+// recorded one (removing it is `--reset`).
+function writeKiroPresetRows(model: string | null, context: "setup" | "models" = "setup"): void {
   writeMenuRow(
     "  ",
     model
@@ -6355,7 +6383,12 @@ function writeKiroPresetRows(model: string | null): void {
   writeMenuRow("    1. balanced    ", `${KIRO_EFFORT_LABEL[KIRO_PRESET_EFFORT.balanced]} effort  (recommended, default)`);
   writeMenuRow("    2. thorough    ", `${KIRO_EFFORT_LABEL[KIRO_PRESET_EFFORT.thorough]} effort: deeper and slower, costs more`);
   writeMenuRow("    3. minimal     ", `${KIRO_EFFORT_LABEL[KIRO_PRESET_EFFORT.minimal]} effort: fastest and cheapest`);
-  writeMenuRow("    4. unchanged   ", "records no preset; the model keeps Kiro's own effort");
+  writeMenuRow(
+    "    4. unchanged   ",
+    context === "setup"
+      ? "records no preset; the model keeps Kiro's own effort"
+      : "keeps the recorded preset as it is",
+  );
 }
 
 // A preset changes nothing where agents always run on the session's model and
@@ -6750,7 +6783,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   } else if (candidate.stamp.distribution === "kiro") {
     writeMenuRow(
       recommendedDetail,
-      "Records balanced (default): medium effort for the whole Kiro session.",
+      "Records balanced (default): medium effort for the whole Kiro session, saved in your personal Kiro settings for every Kiro project.",
     );
   } else if (sessionSetsAgentModels(modelHarness(candidate.stamp.distribution))) {
     writeMenuRow(
@@ -6795,14 +6828,17 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     // asks the one model question; a named model asks nothing.
     if (candidate.stamp.distribution === "kiro") {
       choices.kiro = kiroSessionFor(candidate.stamp.distribution);
-      if (choices.kiro && !choices.kiro.session.model) {
+      const current = choices.kiro?.session.model ?? null;
+      if (choices.kiro && (!current || kiroModelRetired(choices.kiro))) {
         process.stdout.write("\n");
         choices.kiro.setModel = chooseKiroSessionModel(
           choices.kiro,
           "balanced",
-          `You're on ${KIRO_AUTO_DEFINITION}. ${
-            kiroAutoRecommendation(null)
-          } Choose the session model (Enter takes the recommended one):`,
+          current
+            ? kiroRetiredIntro(current)
+            : `You're on ${KIRO_AUTO_DEFINITION}. ${
+              kiroAutoRecommendation(null)
+            } Choose the session model (Enter takes the recommended one):`,
         );
       }
     }
@@ -7693,7 +7729,9 @@ function kiroModelsMenu(
     "  Session model   ",
     kiro
       ? model
-        ? `${model}, from your personal Kiro settings`
+        ? kiroModelRetired(kiro)
+          ? `${model}, not offered on your Kiro account any more (every prompt fails)`
+          : `${model}, from your personal Kiro settings`
         : KIRO_AUTO_DEFINITION
       : "not read (Kiro settings could not be read)",
   );
@@ -7708,7 +7746,7 @@ function kiroModelsMenu(
   if (!choice) return "keep";
   if (choice === "1") return "session";
   if (choice !== "2") throw new Error("models selection cancelled");
-  writeKiroPresetRows(model);
+  writeKiroPresetRows(model, "models");
   const selected = promptChoice(
     "  Preset",
     4,
@@ -7727,6 +7765,7 @@ function writeKiroSessionLines(lines: readonly string[]): void {
 function kiroSessionData(result: KiroSessionResult): Record<string, unknown> {
   return {
     kiroSession: {
+      ok: result.ok,
       model: result.model,
       effort: result.effort,
       saved: result.saved,
@@ -9034,6 +9073,11 @@ export async function main(
         ? committedRecordIgnoreConflicts(projectDir)
         : [];
     prepared.notes.push(...hiddenRecords);
+    // Older releases shipped an effort map in the project's Kiro settings; a
+    // refresh that removes it says where the session's effort lives now.
+    const legacyKiroMap = stamp.distribution === "kiro" &&
+      !choicesContext && !diagnosticsContext && !modelsContext &&
+      hasLegacyKiroEffortMap(projectDir, descriptor.harnessDir);
     // Quiet output is one line when clean. Like the outstanding-actions line,
     // each record-hiding rule adds one Warning line, on dry run and apply.
     const withQuietWarnings = (message: string): string =>
@@ -9086,6 +9130,19 @@ export async function main(
             externalSettings: {
               root: machineTransactionRoot(),
               operation: externalSettingsOperation,
+            },
+          }
+        : {}),
+      // The person's Kiro session changes outside the transaction, so the plan
+      // names the session it starts from and what it asks for: a token approved
+      // for one Kiro model never writes effort onto another.
+      ...(pendingKiroSession
+        ? {
+            kiroSession: {
+              current: pendingKiroSession.session.model,
+              modelDefaults: pendingKiroSession.session.modelDefaults,
+              setModel: pendingKiroSession.setModel ?? null,
+              preset: pendingKiroSession.preset,
             },
           }
         : {}),
@@ -9240,6 +9297,11 @@ export async function main(
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
     // and a Cursor already open on it has to restart to load the hooks.
+    if (legacyKiroMap && !hasLegacyKiroEffortMap(projectDir, descriptor.harnessDir)) {
+      prepared.notes.push(
+        `This refresh removed AI-DLC's old effort map from ${descriptor.harnessDir}/settings/cli.json (claude-opus-4.8 at extra-high). AI-DLC now saves the session model and its effort in your personal Kiro settings: run \`${configCommand("models")}\` to choose them.`,
+      );
+    }
     const cursorOutsideGit = !choicesContext && !diagnosticsContext && !modelsContext &&
       descriptor.distribution === "cursor" && !insideGitRepository(projectDir);
     if (cursorOutsideGit) {
@@ -9333,6 +9395,9 @@ export async function main(
           : {}),
       },
     ), options);
+    // AI-DLC's record is saved, but the person's Kiro session is not what they
+    // asked for until the printed command runs again.
+    if (kiroSession && !kiroSession.ok) process.exitCode = EXIT.actionNeeded;
     if (
       setupMapWillRender
     ) {

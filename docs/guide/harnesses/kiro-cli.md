@@ -144,8 +144,15 @@ A model without that level gets its next level down, and a model with no
 effort setting keeps only the model. `aidlc config models` offers the same
 choice later ("1 session model, 2 preset"), and
 `aidlc config models --session-model <id>` saves a model from your account's
-list without prompts. `aidlc doctor` checks the live setting: the model is still
-offered, the effort matches the preset, and no project file overrides it.
+list without prompts. A saved model your account no longer offers fails every
+prompt, so setup asks for another instead of keeping it. `--dry-run` shows the
+personal Kiro settings change too and writes nothing. When Kiro refuses a write,
+AI-DLC says exactly what was saved and `config models` exits 5 (action needed).
+`aidlc doctor` checks the live setting: the model is still offered, the effort
+matches the preset, and no project file overrides it. Refreshing a project set
+up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
+extra-high) from `.kiro/settings/cli.json` and says so; run
+`aidlc config models` to choose the session model.
 Override one session with `/effort <level>` in chat or `kiro-cli chat --effort
 <level>` (low|medium|high|xhigh|max). The Kiro IDE does not read `cli.json`.
 

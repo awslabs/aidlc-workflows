@@ -77,6 +77,8 @@ type KiroSessionSeam = {
   current?: Record<string, unknown> | null;
   levels?: Record<string, string[]>;
   writes?: string;
+  // The settings key whose write fails, to test a write Kiro rejects.
+  failWrite?: string;
 };
 
 function kiroSessionTestSeam(env: NodeJS.ProcessEnv = process.env): KiroSessionSeam | null {
@@ -395,31 +397,40 @@ export function writeKiroPersonalSession(
   session: Extract<KiroPersonalSession, { ok: true }>,
   write: KiroSessionWrite,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true } | { ok: false; reason: string } {
+): { ok: true } | { ok: false; reason: string; savedModel: boolean } {
   const calls: string[][] = [];
   if (write.model) calls.push(["settings", "chat.defaultModel", write.model]);
   if (write.effort) {
+    // Merge onto the map as it is now, not as it was when the run began, so a
+    // change made in Kiro meanwhile is kept.
+    const fresh = readKiroPersonalSession(cli, env);
     calls.push([
       "settings",
       "chat.modelDefaults",
-      JSON.stringify(mergedKiroModelDefaults(session.modelDefaults, write.effort.model, write.effort.effort)),
+      JSON.stringify(mergedKiroModelDefaults(
+        fresh.ok ? fresh.modelDefaults : session.modelDefaults,
+        write.effort.model,
+        write.effort.effort,
+      )),
     ]);
   }
   const seam = kiroSessionTestSeam(env);
+  let savedModel = false;
   for (const args of calls) {
-    if (seam) {
-      if (seam.writes) appendFileSync(seam.writes, `${JSON.stringify(args)}\n`);
-      continue;
-    }
-    const result = withEmptyFolder((folder) =>
-      spawnSync(cli, args, { cwd: folder, encoding: "utf-8", env, timeout: SETTINGS_TIMEOUT_MS })
-    );
-    if (result.status !== 0) {
+    const failed = seam
+      ? seam.failWrite === args[1]
+      : withEmptyFolder((folder) =>
+        spawnSync(cli, args, { cwd: folder, encoding: "utf-8", env, timeout: SETTINGS_TIMEOUT_MS })
+      ).status !== 0;
+    if (failed) {
       return {
         ok: false,
         reason: `Kiro did not save the ${args[1] === "chat.defaultModel" ? "model" : "effort"}`,
+        savedModel,
       };
     }
+    if (seam?.writes) appendFileSync(seam.writes, `${JSON.stringify(args)}\n`);
+    if (args[1] === "chat.defaultModel") savedModel = true;
   }
   return { ok: true };
 }
@@ -536,10 +547,13 @@ async function applyPlan(
   }
   const saved = writeKiroPersonalSession(plan.cli, plan.session, write, env);
   if (!saved.ok) {
+    const modelSaved = saved.savedModel && write.model !== undefined;
     lines.push(
-      `${saved.reason}, so your personal Kiro settings are unchanged. Run \`${plan.modelsCommand}\` to try again.`,
+      modelSaved
+        ? `Kiro saved the model ${write.model} in your personal Kiro settings but not its effort, so ${write.model} keeps Kiro's own effort. Run \`${plan.modelsCommand}\` to try again.`
+        : `${saved.reason}, so your personal Kiro settings are unchanged. Run \`${plan.modelsCommand}\` to try again.`,
     );
-    return { ok: false, lines, model, effort, saved: {} };
+    return { ok: false, lines, model, effort, saved: modelSaved ? { model: write.model } : {} };
   }
   lines.push(
     `Saved in your personal Kiro settings (${kiroPersonalSettingsPath(env)}). They apply to every Kiro project you open:`,
@@ -567,6 +581,17 @@ function readJsonObject(path: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+// Releases before the session model step shipped this one effort entry in the
+// project's Kiro settings, where it replaced the person's own effort map. A
+// refresh says so when it removes it.
+export function hasLegacyKiroEffortMap(projectDir: string, harnessDir: string): boolean {
+  const map = readJsonObject(join(projectDir, harnessDir, "settings", "cli.json"))["chat.modelDefaults"];
+  if (!map || typeof map !== "object" || Array.isArray(map)) return false;
+  const entry = (map as Record<string, unknown>)["claude-opus-4.8"];
+  const output = entry && typeof entry === "object" ? (entry as Record<string, unknown>).output_config : undefined;
+  return Boolean(output && typeof output === "object" && (output as Record<string, unknown>).effort === "xhigh");
 }
 
 // The agent name `config models --agent` takes, from its Kiro agent file name.
@@ -642,13 +667,20 @@ export async function kiroSessionDoctorFindings(input: {
     const actual = personalKiroEffort(session, model);
     const levels = await kiroEffortLevels(cli, model, env, DOCTOR_TIMEOUT_MS);
     const expected = nearestKiroEffort(wanted, levels);
-    const matched = levels === null
-      ? actual !== null && KIRO_EFFORT_ORDER.indexOf(actual) <= KIRO_EFFORT_ORDER.indexOf(wanted)
-      : actual === expected;
+    // Without Kiro's list of levels only the preset's own level is certain.
+    const matched = actual === (levels === null ? wanted : expected);
     if (expected === null) {
       findings.push({
         pass: true,
         label: `Session model: ${model} (no effort setting), from your personal Kiro settings`,
+      });
+    } else if (levels === null && actual !== null && !matched) {
+      findings.push({
+        pass: false,
+        label: `Session model: ${model} runs at ${KIRO_EFFORT_LABEL[actual]} effort; the ${input.preset} preset asks for ${
+          KIRO_EFFORT_LABEL[wanted]
+        }, and Kiro did not list ${model}'s effort levels, so doctor could not confirm ${KIRO_EFFORT_LABEL[actual]} is its nearest`,
+        fix: `run \`${input.modelsCommand} --session-model ${model}\` to set it again`,
       });
     } else if (matched && actual) {
       findings.push({

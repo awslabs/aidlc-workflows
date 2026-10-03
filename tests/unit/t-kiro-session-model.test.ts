@@ -12,13 +12,18 @@
 //   - Kiro auto is never written as a choice; it gets the recommendation line
 //   - under the test runner the host's kiro-cli is never used
 //   - the ACP level lookup deletes the Kiro session it opened, after Kiro exits
-//   - doctor reads the live personal settings and names each problem once
+//   - doctor reads the live personal settings and names each problem once;
+//     without Kiro's level list it certifies only the preset's own level
+//   - a write Kiro rejects says exactly what was and was not saved, and the
+//     effort merges onto the personal map as it is at write time
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applyKiroSessionPlan,
+  hasLegacyKiroEffortMap,
+  type KiroPreset,
   type KiroSessionPlan,
   kiroCliPath,
   kiroEffortLevels,
@@ -235,6 +240,56 @@ describe("applying a session plan", () => {
     expect(result.lines).toContain("  effort   medium, for claude-opus-5");
     expect(writes(log)).toEqual([]);
   });
+
+  test("a rejected effort write after the model saved says so, and a rejected model write leaves everything", async () => {
+    const log = join(temp("kiro-session-"), "writes.jsonl");
+    const env = seamEnv({ models: MODELS, current: {}, levels: LEVELS, writes: log, failWrite: "chat.modelDefaults" });
+    const partial = await applyKiroSessionPlan(plan(env, { setModel: "claude-opus-5" }), env);
+    expect(partial.ok).toBe(false);
+    expect(partial.saved).toEqual({ model: "claude-opus-5" });
+    expect(partial.lines).toContain(
+      "Kiro saved the model claude-opus-5 in your personal Kiro settings but not its effort, so claude-opus-5 keeps Kiro's own effort. Run `aidlc config models` to try again.",
+    );
+    expect(writes(log)).toEqual([["settings", "chat.defaultModel", "claude-opus-5"]]);
+
+    const none = seamEnv({ models: MODELS, current: {}, levels: LEVELS, failWrite: "chat.defaultModel" });
+    const failed = await applyKiroSessionPlan(plan(none, { setModel: "claude-opus-5" }), none);
+    expect(failed.ok).toBe(false);
+    expect(failed.saved).toEqual({});
+    expect(failed.lines).toContain(
+      "Kiro did not save the model, so your personal Kiro settings are unchanged. Run `aidlc config models` to try again.",
+    );
+  });
+
+  test("the effort merges onto the personal map as it is at write time", () => {
+    const log = join(temp("kiro-session-"), "writes.jsonl");
+    // Read when the run began, the map was empty; Kiro now holds another model's effort.
+    const env = seamEnv({
+      models: MODELS,
+      current: { "chat.modelDefaults": { "claude-haiku-4.5": { output_config: { effort: "low" } } } },
+      writes: log,
+    });
+    const stale = { ok: true as const, model: null, modelDefaults: {} };
+    expect(writeKiroPersonalSession("kiro-cli", stale, { effort: { model: "claude-opus-5", effort: "medium" } }, env))
+      .toEqual({ ok: true });
+    expect(JSON.parse(writes(log)[0][2])).toEqual({
+      "claude-haiku-4.5": { output_config: { effort: "low" } },
+      "claude-opus-5": { output_config: { effort: "medium" } },
+    });
+  });
+
+  test("the effort map older releases shipped in the project is recognised", () => {
+    const dir = temp("kiro-session-legacy-");
+    mkdirSync(join(dir, ".kiro", "settings"), { recursive: true });
+    const file = join(dir, ".kiro", "settings", "cli.json");
+    writeFileSync(file, JSON.stringify({
+      "chat.defaultAgent": "aidlc",
+      "chat.modelDefaults": { "claude-opus-4.8": { output_config: { effort: "xhigh" } } },
+    }));
+    expect(hasLegacyKiroEffortMap(dir, ".kiro")).toBe(true);
+    writeFileSync(file, JSON.stringify({ "chat.defaultAgent": "aidlc" }));
+    expect(hasLegacyKiroEffortMap(dir, ".kiro")).toBe(false);
+  });
 });
 
 describe("doctor", () => {
@@ -248,7 +303,7 @@ describe("doctor", () => {
     }
     return dir;
   }
-  async function findings(env: NodeJS.ProcessEnv, dir: string, preset: "balanced" | null = "balanced") {
+  async function findings(env: NodeJS.ProcessEnv, dir: string, preset: KiroPreset | null = "balanced") {
     return kiroSessionDoctorFindings({
       projectDir: dir,
       harnessDir: ".kiro",
@@ -280,6 +335,26 @@ describe("doctor", () => {
     expect(await findings(env, project({ "chat.defaultAgent": "aidlc" }))).toEqual([{
       pass: true,
       label: "Session model: claude-opus-5 at medium effort (balanced), from your personal Kiro settings",
+    }]);
+  });
+
+  test("without Kiro's level list only the preset's own level passes, and a lower one is not certified", async () => {
+    // No levels in the seam: Kiro did not list the model's effort levels.
+    const at = (effort: string) => seamEnv({
+      models: MODELS,
+      current: {
+        "chat.defaultModel": "claude-opus-5",
+        "chat.modelDefaults": { "claude-opus-5": { output_config: { effort } } },
+      },
+    });
+    expect(await findings(at("xhigh"), project({}), "thorough")).toEqual([{
+      pass: true,
+      label: "Session model: claude-opus-5 at extra-high effort (thorough), from your personal Kiro settings",
+    }]);
+    expect(await findings(at("high"), project({}), "thorough")).toEqual([{
+      pass: false,
+      label: "Session model: claude-opus-5 runs at high effort; the thorough preset asks for extra-high, and Kiro did not list claude-opus-5's effort levels, so doctor could not confirm high is its nearest",
+      fix: "run `aidlc config models --session-model claude-opus-5` to set it again",
     }]);
   });
 
