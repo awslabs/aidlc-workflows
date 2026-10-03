@@ -52,6 +52,7 @@ export {
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
+  headingKey,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 export {
@@ -11048,8 +11049,10 @@ function visibleH2Title(line: string, block: MarkdownLine): string | null {
 	return heading?.level === 2 && !heading.nested ? heading.title : null;
 }
 
+// A Q<n> heading behind a leading emoji is still that question, as the
+// claim-sources sensor reads it.
 function visibleQuestionId(title: string): string | null {
-  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(title);
+  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(headingKey(title));
   return match ? `Q${match[1]}` : null;
 }
 
@@ -11148,7 +11151,7 @@ export function summaryConfirmationContentHash(content: string): string {
       continue;
     }
 
-    if (title === "Assumption Confirmation" && atxH2 && sawSummary) {
+    if (headingKey(title) === "Assumption Confirmation" && atxH2 && sawSummary) {
       if (postSummaryAssumptionSeen) {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }

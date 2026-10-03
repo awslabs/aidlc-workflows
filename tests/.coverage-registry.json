@@ -4606,6 +4606,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:headingKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:holdsAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -10321,6 +10333,10 @@
         {
           "file": "tests/integration/t185-stage-artifact-guard.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/unit/t341-markdown-blocks.test.ts",

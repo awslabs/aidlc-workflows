@@ -334,7 +334,8 @@ fixed number of renders; lines it cannot place stay `unknown`.
 
 Two consumers fail closed where a line is misread or left unplaced. The
 summary digest ends the excluded `Assumption Confirmation` section at any line
-spelled as a top-level `## Q<n>` or `## Requested Changes Feedback` heading,
+spelled as a top-level `## Q<n>` (with or without a leading emoji decoration)
+or `## Requested Changes Feedback` heading,
 even one the adapter reads as raw HTML or code, so a hidden heading can only
 widen the confirmed content. The claim-sources sensor reads a nonblank line the
 adapter could not place as its own claim.
