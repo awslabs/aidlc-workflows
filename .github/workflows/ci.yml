@@ -104,6 +104,9 @@ jobs:
       artifact-label: ci-deterministic-${{ matrix.suite.name }}
       # No workflow downloads CI evidence, so an upload timeout cannot drop a PR.
       evidence-optional: true
+      # Only the merge queue reruns an assertion-failed file once (flagged as
+      # flaky); a PR push stays strict, so a flake still shows red there.
+      retry-once: ${{ github.event_name == 'merge_group' }}
 
   test_native_terminal:
     name: Native terminal units (${{ matrix.runner }})

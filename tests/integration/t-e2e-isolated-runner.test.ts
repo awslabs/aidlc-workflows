@@ -51,7 +51,7 @@ function fixture(files: Record<string, string>): string {
     "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
-    "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
+    "tests/lib/bun-junit-to-meta.ts", "tests/lib/file-retry.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
     "tests/lib/e2e-deferred-cleanup.ts",
   ]) {

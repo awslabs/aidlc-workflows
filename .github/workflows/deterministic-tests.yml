@@ -26,6 +26,10 @@ on:
         description: True when nothing downloads this evidence, so a failed upload does not fail the job
         default: false
         type: boolean
+      retry-once:
+        description: Merge queue only. Rerun a smoke, unit or integration file once when its assertions failed
+        default: false
+        type: boolean
   # Manual reproductions emit diagnostics only, never full-suite or release qualification.
   workflow_dispatch:
     inputs:
@@ -189,6 +193,7 @@ jobs:
           TEST_TIER: ${{ inputs.tier }}
           UNIT_SHARD: ${{ inputs.unit-shard }}
           TEST_FILTER: ${{ inputs.diagnostic_filter || '' }}
+          RETRY_ONCE: ${{ inputs.retry-once == true }}
         run: |
           set -euo pipefail
           case "$TEST_TIER" in
@@ -198,6 +203,11 @@ jobs:
             e2e) args=(--e2e --isolated-e2e --e2e-file-timeout 7200) ;;
             *) exit 2 ;;
           esac
+          # The merge queue reruns an assertion-failed file once, in a fresh
+          # process; a pass is reported as flaky, a second failure stays red.
+          if [ "$RETRY_ONCE" = true ] && [ "$TEST_TIER" != e2e ]; then
+            args+=(--file-retries 1)
+          fi
           if [ -n "$TEST_FILTER" ]; then
             args+=(--filter "$TEST_FILTER")
           fi
@@ -244,6 +254,11 @@ jobs:
         env:
           TEST_TIER: ${{ inputs.tier }}
         run: bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true
+      - name: Report tests that passed on retry
+        # A pass on the second attempt is a flaky test to fix, so it is never
+        # silent. Like the weight report, this step cannot fail the job.
+        if: ${{ always() && inputs.retry-once == true && inputs.tier != 'e2e' }}
+        run: bun scripts/ci-retry-report.ts tmp/ci-deterministic/stamp.txt || true
       - name: Sanitize deterministic evidence
         id: sanitize
         if: ${{ always() }}

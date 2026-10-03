@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -45,6 +46,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
+import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, retryEligible } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -166,7 +168,10 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
                   Remaining work is bounded before each dispatch; cleanup is reserved.
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
   --isolated-files  Dispatch integration/e2e files with fresh checkouts and homes.
-  --file-retries N  Retry a short failed file once (0 or 1; --isolated-files only).
+  --file-retries N  Retry a short assertion-failed file once (0 or 1): in a fresh
+                  isolated worker with --isolated-files, otherwise in a fresh
+                  process for smoke/unit/integration (the merge queue). A
+                  timeout, crash or cleanup failure is never retried.
                   Known serial driver families may overlap; assertions are unchanged.
   --e2e-plan      Print the isolated file inventory/resource plan; run no tests or builds.
                   Requires --e2e or --isolated-files; implies --isolated-e2e.
@@ -1235,21 +1240,91 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
   return files;
 }
 
+function remainingRunMs(): number {
+  return RUN_WORK_DEADLINE_MS ? RUN_WORK_DEADLINE_MS - Date.now() : Number.POSITIVE_INFINITY;
+}
+
+interface OrdinaryRetry {
+  file: string;
+  name: string;
+  passedOnRetry: boolean;
+  firstAttempt: { failedCases: number; wallTimeMs: number; log: string | null };
+  secondAttempt: { status: Status; failedCases: number; wallTimeMs: number };
+}
+const ordinaryRetries: OrdinaryRetry[] = [];
+
+/** Move a failed first attempt's evidence aside so the retry cannot overwrite it. */
+function keepFirstAttempt(name: string): string | null {
+  if (!args.verbose) return null;
+  const kept = `${name}.attempt-1.log`;
+  for (const [from, to] of [
+    [`${name}.log`, kept],
+    [`${name}.junit.xml`, `${name}.attempt-1.junit.xml`],
+    [`${name}.execution.json`, `${name}.attempt-1.execution.json`],
+    [join("processes", name), join("processes", `${name}.attempt-1`)],
+  ]) {
+    try {
+      if (existsSync(join(logDir, from))) renameSync(join(logDir, from), join(logDir, to));
+    } catch {
+      // Best effort: the second attempt still runs, and its own log is complete.
+    }
+  }
+  return existsSync(join(logDir, kept)) ? kept : null;
+}
+
+/**
+ * Ordinary smoke/unit/integration files get one fresh second run (the merge
+ * queue passes --file-retries 1) when the first attempt failed assertions
+ * under the shared retry rule. A second failure stays a failure; a pass is
+ * recorded as passed on retry, never as a plain pass.
+ */
+async function runFileWithRetry(file: string, parallelMode: boolean): Promise<FileExecution | undefined> {
+  const first = await runBunTestFile(file, parallelMode);
+  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
+  const name = resultName(file);
+  const log = keepFirstAttempt(name);
+  const announce = (): void => {
+    process.stdout.write(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}) ===\n`);
+  };
+  if (parallelMode) await withStdoutLock(announce);
+  else announce();
+  const second = await runBunTestFile(file, parallelMode);
+  if (!second) return first;
+  const passedOnRetry = second.status === "PASS";
+  ordinaryRetries.push({
+    file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
+    name,
+    passedOnRetry,
+    firstAttempt: { failedCases: first.cases.failed, wallTimeMs: first.wallTimeMs, log },
+    secondAttempt: { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs },
+  });
+  if (passedOnRetry) {
+    const metaPath = join(resultsDir, `${name}.meta`);
+    if (existsSync(metaPath)) {
+      writeMeta(name, {
+        ...parseMeta(metaPath),
+        reason: `passed on retry: the first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}`,
+      });
+    }
+  }
+  return second;
+}
+
 async function runFileBand(
   effectiveParallel: number,
   serialFiles: string[],
   parallelFiles: string[],
 ): Promise<void> {
-  for (const file of serialFiles) await runBunTestFile(file, false);
+  for (const file of serialFiles) await runFileWithRetry(file, false);
   if (effectiveParallel <= 1) {
-    for (const file of parallelFiles) await runBunTestFile(file, false);
+    for (const file of parallelFiles) await runFileWithRetry(file, false);
     return;
   }
 
   const executing = new Set<Promise<FileExecution | undefined>>();
   try {
     for (const file of parallelFiles) {
-      const p = runBunTestFile(file, true).finally(() => {
+      const p = runFileWithRetry(file, true).finally(() => {
         executing.delete(p);
       });
       executing.add(p);
@@ -1576,10 +1651,7 @@ async function runIsolatedE2e(): Promise<void> {
         const first = await execute(task.file, worker);
         // Retry only a short assertion failure after confirmed retirement. A
         // timeout, missing evidence or cleanup failure never earns another run.
-        if (args.fileRetries && first.status === "FAIL" && first.cases.failed > 0 &&
-            first.evidenceComplete && !first.cleanupError && !first.timedOut &&
-            first.wallTimeMs <= 25 * 60_000 &&
-            (!RUN_WORK_DEADLINE_MS || RUN_WORK_DEADLINE_MS - Date.now() > 5 * 60_000)) {
+        if (args.fileRetries && retryEligible(first, ISOLATED_RETRY_MAX_MS, remainingRunMs())) {
           const second = await execute(task.file, worker, 2);
           if (second.status === "PASS") {
             records.get(task.file)!.passedOnRetry = true;
@@ -1656,6 +1728,8 @@ function printSummary(): void {
   process.stdout.write(`Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}\n`);
   process.stdout.write(`Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}\n`);
   process.stdout.write(`Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}\n`);
+  const flaky = ordinaryRetries.filter((retry) => retry.passedOnRetry).map((retry) => retry.name);
+  if (flaky.length > 0) process.stdout.write(`Passed on retry (flaky): ${flaky.join(", ")}\n`);
   for (const error of selectionErrors) process.stdout.write(`error: ${error}\n`);
   if (args.verbose && logDir) {
     process.stdout.write(`Log directory: ${displayLogDirPath(logDir)}\n`);
@@ -1694,6 +1768,16 @@ function writeVerboseSummary(): void {
     );
     if (row.reason) lines.push(`    ${row.reason}`);
   }
+  // Rows keep the PASS/FAIL column the timing and report parsers read; a retry
+  // is named here and in retries.json instead.
+  for (const [heading, passed] of [["Passed on retry (flaky: fix these)", true], ["Failed on both attempts", false]] as const) {
+    const retries = ordinaryRetries.filter((retry) => retry.passedOnRetry === passed);
+    if (retries.length === 0) continue;
+    lines.push("", `${heading}:`);
+    for (const retry of retries) {
+      lines.push(`  ${retry.name}: first attempt failed ${retry.firstAttempt.failedCases} case(s)${retry.firstAttempt.log ? `, log ${retry.firstAttempt.log}` : ""}`);
+    }
+  }
   lines.push(
     "",
     "Totals:",
@@ -1709,6 +1793,15 @@ function writeVerboseSummary(): void {
     `  Result: ${runFailed() ? "FAIL" : "PASS"}`,
   );
   writeFileSync(join(logDir, "summary.txt"), `${lines.join("\n")}\n`, "utf8");
+  if (args.fileRetries && !args.isolatedFiles) {
+    // Machine-readable for flake triage; present (possibly empty) whenever the
+    // run allowed retries, so "no retries" is distinguishable from "not enabled".
+    writeFileSync(join(logDir, "retries.json"), `${JSON.stringify({
+      maxFirstAttemptSeconds: ORDINARY_RETRY_MAX_MS / 1000,
+      platform: process.platform,
+      retries: ordinaryRetries,
+    }, null, 2)}\n`);
+  }
 
   const failures: string[] = selectionErrors.map((error) => `error: ${error}`);
   if (args.requireCoverage && !coverage.complete) {
