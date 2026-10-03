@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1286,
+    "total": 1287,
     "enumeratedByClass": {
-      "function": 954,
+      "function": 955,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 591,
+      "function": 593,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -4544,6 +4544,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t319-doctor-hooks-blocked.test.ts",
           "mechanism": "cli"
         }
@@ -4587,8 +4591,13 @@
       "unitClass": "function",
       "unitId": "function:hookLiveness",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7847,6 +7856,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordPreWorkflowHeartbeat",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -13661,6 +13682,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t248-steering-content-delivery.test.ts",
           "mechanism": "cli"
         },
@@ -13738,6 +13763,10 @@
         },
         {
           "file": "tests/unit/t-copilot-directive-budget.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         },
         {
@@ -14991,6 +15020,10 @@
         },
         {
           "file": "tests/integration/t341-composed-scope-durability.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
         },
         {
