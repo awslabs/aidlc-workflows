@@ -410,6 +410,43 @@ ownership. Audit merge separately defaults to 9,000 retries at 100 ms
 `AIDLC_AUDIT_LOCK_RETRY_MS`; its explicit retry count takes precedence over
 `AIDLC_AUDIT_LOCK_TIMEOUT_MS`.
 
+### Hook phase trace
+
+`AIDLC_HOOK_TRACE_DIR` is an opt-in diagnostic for a hook process that stops
+making progress. Unset (the default) or set to a relative path, it does
+nothing. Set to an absolute directory, every `engine hook <name>` process
+appends one JSON line per phase to `<dir>/hook-<pid>.ndjson`. Every line
+carries `at`, `sinceStartMs`, `pid`, `ppid`, and `phase`:
+
+| Phase | Written by | Extra fields |
+|---|---|---|
+| `dispatcher-start` | Dispatcher, first line of a hook route | `hook`, `runtimeStartedAt`, `platform`, `runtime` |
+| `stdin-begin`, `stdin-end` | Dispatcher, around the payload read | `bytes` on `stdin-end` |
+| `hook-import-begin`, `hook-import-end` | Dispatcher, around loading the hook module | |
+| `hook-child-started` | Dispatcher, `record-human-turn` only | `childPid` |
+| `hook-run-end` | Dispatcher, after the hook returns | `code` |
+| `dispatcher-error` | Dispatcher, when dispatch throws | `message` |
+| `exit` | Process exit | `code` |
+| `fold-imports-loaded`, `fold-begin`, `fold-end` | `fold-usage` | `mode` on `fold-begin` |
+| `fold-skip-begin`, `fold-skip-end` | `fold-usage`, conversation outside the workflow | |
+| `usage-lock-wait`, `usage-lock-wait-end` | Usage-ledger lock | `lock` and `boundMs`; `waitedMs`, plus the Windows wait `result` |
+| `usage-lock-released`, `usage-lock-not-acquired` | Usage-ledger lock | |
+
+The last line of a stuck process's file names the layer that stopped. No
+file at all means the hook never reached the dispatcher (the host's shell
+or the runtime start) or the directory could not be written; a file that
+ends at `dispatcher-start` stopped in dispatcher setup before the payload
+read; a file that ends at `stdin-begin` means the host
+never closed stdin; one that ends at `usage-lock-wait` means the usage-ledger
+wait. The writer opens and closes the file for each line, takes no lock,
+reads nothing, and drops a failed write, so tracing never changes what a hook
+decides or prints. `core/tools/aidlc-hook-trace.ts` owns the switch and the
+line format; the dispatcher and `aidlc-usage.ts` load it only when the
+variable is set, so a runtime tree without that file behaves as before. The
+Full Suite's Windows live legs turn it on per test file and add a
+process-table snapshot when a hook runs 10 minutes; see
+[Testing](09-testing.md).
+
 ### Observers never write authority
 
 Some engine invocations exist only to LEARN the current directive. There are

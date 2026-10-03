@@ -757,6 +757,11 @@ try {
             $startedAt = [DateTime]::UtcNow
             Start-ScheduledTask -TaskName $taskName
             $deadline = $taskWorkDeadline
+            # Live runs only: a runner-only sibling of $logRoot, collected with it.
+            $stallDirectory = Join-Path (Join-Path $tools 'logs') ('hook-stalls-' + $id)
+            $stallSeen = @{}
+            $nextStallCheck = $startedAt.AddMinutes(1)
+            $stallWarned = $false
             do {
                 $task = Get-ScheduledTask -TaskName $taskName
                 $info = Get-ScheduledTaskInfo -TaskName $taskName
@@ -771,6 +776,17 @@ try {
                 if ([DateTime]::UtcNow -ge $deadline) {
                     $childExit = [long]$info.LastTaskResult
                     throw ('Isolated scheduled task exceeded {0} minutes: state={1}, LastTaskResult=0x{2:X8}' -f $TimeoutMinutes, $task.State, $childExit)
+                }
+                if ($Label -eq 'run' -and [DateTime]::UtcNow -ge $nextStallCheck) {
+                    $nextStallCheck = [DateTime]::UtcNow.AddMinutes(1)
+                    try { Write-HookStallSnapshot $stallDirectory $stallSeen (@($sandboxSid.Value) + $codexSandboxSids) }
+                    catch {
+                        # Evidence only; never fail or delay the run for it.
+                        if (-not $stallWarned) {
+                            [Console]::Error.WriteLine(('Hook stall snapshot unavailable: {0}' -f $_.Exception.Message))
+                            $stallWarned = $true
+                        }
+                    }
                 }
                 Start-Sleep -Seconds 2
             } while ($true)
@@ -882,6 +898,69 @@ function Stop-SandboxProcesses([switch]$Disable, [string[]]$AdditionalSids = @()
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'Isolated processes did not stop; refusing unsafe collection.'
+}
+
+# A hook process that never returns leaves its live test waiting until the
+# ceiling. Once an isolated `engine hook` process has run $AfterMinutes, record
+# the isolated account's process table and the thread states of that process
+# and its parents, once per process. Process metadata only: it never opens a
+# file the isolated run uses, so it cannot add a handle to the stall it records.
+function Write-HookStallSnapshot([string]$Directory, [hashtable]$Seen, [string[]]$OwnerSids, [int]$AfterMinutes = 10) {
+    $now = [DateTime]::UtcNow
+    $processes = @(Get-CimInstance Win32_Process)
+    $candidates = @($processes | Where-Object {
+        $null -ne $_.CommandLine -and $_.CommandLine.Contains('engine hook ') -and
+        $null -ne $_.CreationDate -and
+        ($now - $_.CreationDate.ToUniversalTime()).TotalMinutes -ge $AfterMinutes -and
+        -not $Seen.ContainsKey(('{0}@{1}' -f $_.ProcessId, $_.CreationDate.Ticks))
+    })
+    if ($candidates.Count -eq 0) { return }
+    $owned = [Collections.Generic.List[object]]::new()
+    foreach ($process in $processes) {
+        try { $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop }
+        catch { continue }
+        if ($owner.ReturnValue -eq 0 -and $owner.Sid -in $OwnerSids) { $owned.Add($process) }
+    }
+    $byId = @{}
+    foreach ($process in $owned) { $byId[[string]$process.ProcessId] = $process }
+    $stalled = @($candidates | Where-Object { $byId.ContainsKey([string]$_.ProcessId) })
+    if ($stalled.Count -eq 0) { return }
+    $traced = [Collections.Generic.List[string]]::new()
+    foreach ($process in $stalled) {
+        $cursor = $process
+        while ($null -ne $cursor -and -not $traced.Contains([string]$cursor.ProcessId)) {
+            $traced.Add([string]$cursor.ProcessId)
+            $cursor = $byId[[string]$cursor.ParentProcessId]
+        }
+    }
+    $threads = [Collections.Generic.List[object]]::new()
+    foreach ($id in $traced) {
+        foreach ($thread in @(Get-CimInstance Win32_Thread -Filter ("ProcessHandle = '{0}'" -f $id))) {
+            $threads.Add([ordered]@{
+                processId = [int]$id; threadId = [int]$thread.Handle
+                state = $thread.ThreadState; waitReason = $thread.ThreadWaitReason
+                kernelModeTime = $thread.KernelModeTime; userModeTime = $thread.UserModeTime
+            })
+        }
+    }
+    $snapshot = [ordered]@{
+        at = $now.ToString('o')
+        afterMinutes = $AfterMinutes
+        stalled = @($stalled | ForEach-Object { [int]$_.ProcessId })
+        processes = @($owned | ForEach-Object {
+            [ordered]@{
+                processId = [int]$_.ProcessId; parentProcessId = [int]$_.ParentProcessId
+                name = $_.Name; commandLine = $_.CommandLine
+                createdAt = if ($null -ne $_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null }
+                threadCount = $_.ThreadCount; kernelModeTime = $_.KernelModeTime; userModeTime = $_.UserModeTime
+            }
+        })
+        threads = @($threads)
+    }
+    if (-not (Test-Path -LiteralPath $Directory)) { New-PrivateDirectory $Directory }
+    $path = Join-Path $Directory ('hook-stall-{0}.json' -f $now.ToString('yyyyMMddTHHmmssfffZ'))
+    [IO.File]::WriteAllText($path, ($snapshot | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+    foreach ($process in $stalled) { $Seen[('{0}@{1}' -f $process.ProcessId, $process.CreationDate.Ticks)] = $true }
 }
 
 function Get-NpmInstallBody([string]$Package) {

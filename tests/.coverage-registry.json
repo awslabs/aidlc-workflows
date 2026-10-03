@@ -11646,6 +11646,10 @@
         {
           "file": "tests/unit/t267-usage.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-hook-phase-trace.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -11873,6 +11877,10 @@
         },
         {
           "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t352-hook-phase-trace.test.ts",
           "mechanism": "cli"
         }
       ],

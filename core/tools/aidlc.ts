@@ -1185,6 +1185,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Opt-in hook phase trace; aidlc-hook-trace.ts owns the switch and the format.
+// It is loaded only when its variable is set, so a runtime tree without that
+// file dispatches exactly as before.
+function hookTrace(phase: string, detail?: Record<string, unknown>): void {
+  if (!process.env.AIDLC_HOOK_TRACE_DIR) return;
+  try {
+    (require("./aidlc-hook-trace.ts") as typeof import("./aidlc-hook-trace.ts")).hookTrace(phase, detail);
+  } catch {
+    // Diagnostics only.
+  }
+}
+
 function dispatcherDir(): string {
   return dirname(fileURLToPath(import.meta.url));
 }
@@ -2263,14 +2275,21 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
     });
     child.stdin.write(await readStdin());
     child.stdin.end();
-    return await child.exited;
+    hookTrace("hook-child-started", { childPid: child.pid });
+    const childCode = await child.exited;
+    hookTrace("hook-run-end", { code: childCode });
+    return childCode;
   }
+  hookTrace("hook-import-begin");
   const mod = await import(pathToFileURL(action.path).href);
+  hookTrace("hook-import-end");
   if (typeof mod.run !== "function") {
     text(2, `aidlc engine hook ${action.name}: hook does not export run(input)\n`);
     return 1;
   }
-  return await mod.run(await readStdin());
+  const code = await mod.run(await readStdin());
+  hookTrace("hook-run-end", { code });
+  return code;
 }
 
 async function runStatusline(action: Extract<Action, { type: "statusline" }>): Promise<number> {
@@ -3013,6 +3032,17 @@ export async function main(rawArgv: string[]): Promise<void> {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   process.exitCode = 0;
   bufferedStdin = null;
+  const tracedHook = argv[0] === "engine" && argv[1] === "hook" ? argv[2] : undefined;
+  if (tracedHook !== undefined && process.env.AIDLC_HOOK_TRACE_DIR) {
+    // runtimeStartedAt against this line's time shows a slow runtime start.
+    hookTrace("dispatcher-start", {
+      hook: tracedHook,
+      runtimeStartedAt: new Date(performance.timeOrigin).toISOString(),
+      platform: process.platform,
+      runtime: process.versions.bun ?? process.version,
+    });
+    process.on("exit", (code) => hookTrace("exit", { code }));
+  }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv);
   if (projectDirOption.error) {
@@ -3128,7 +3158,9 @@ export async function main(rawArgv: string[]): Promise<void> {
     route?.routeOnly === "statusline" ||
     (route?.routeOnly === "adapter" && !kasAdapterInvocation(argv))
   ) {
-    await readStdin();
+    if (tracedHook !== undefined) hookTrace("stdin-begin");
+    const input = await readStdin();
+    if (tracedHook !== undefined) hookTrace("stdin-end", { bytes: input.length });
   }
   if (
     route?.id === "top-config" &&
@@ -3173,6 +3205,9 @@ if (import.meta.main) {
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
   void main(process.argv.slice(2)).catch((error) => {
+    // Recorded before the message is rendered, so a failing stderr write
+    // still leaves the reason in the trace.
+    hookTrace("dispatcher-error", { message: errorMessage(error) });
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,
