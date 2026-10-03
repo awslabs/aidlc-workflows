@@ -12655,7 +12655,7 @@ export function copiedAuditBlocks(
   let own: string | null | undefined;
   for (const members of groups.values()) {
     if (members.length < 2) continue;
-    own ??= ownShard();
+    if (own === undefined) own = ownShard();
     const blocks = members.map((index) =>
       auditShardBlocks(shards[index].content).map((block) =>
         auditBlockField(block, "Timestamp") === null ? null : block

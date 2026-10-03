@@ -1811,6 +1811,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:auditShardHostSegment",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditShardName",
       "minMechanism": "none",
       "coveredBy": [
@@ -1820,6 +1832,10 @@
         },
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2563,6 +2579,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:cloneIdFileContent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:cloneIdPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2924,6 +2952,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:copiedAuditBlocks",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3504,6 +3544,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t325-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4700,6 +4744,10 @@
       "unitId": "function:humanTurnState",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
@@ -6349,8 +6397,13 @@
       "unitClass": "function",
       "unitId": "function:parseAuditShardEvents",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7178,6 +7231,10 @@
         {
           "file": "tests/integration/t172-migration-audit-trail.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -7227,6 +7284,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t185-stage-artifact-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-audit-shard-identity.test.ts",
           "mechanism": "cli"
         },
         {
