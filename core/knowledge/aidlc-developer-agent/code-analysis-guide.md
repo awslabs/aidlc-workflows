@@ -52,7 +52,8 @@ anything inside. The same names hold hand-written code elsewhere: Node's
 `bin/www`, Rails' `bin/` scripts, a hexagonal `adapter/out/` package, or a
 JavaScript monorepo's `packages/` named in its `package.json` `workspaces` or
 `pnpm-workspace.yaml`. Open one file in a folder only when nothing beside it
-tells which.
+tells which. A folder the brief names to scan, or one listed in
+`.aidlc-source-paths.json`, is source whatever sits beside it.
 
 ## Source File Classification
 

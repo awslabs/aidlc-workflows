@@ -376,5 +376,7 @@ describe("t-dotnet-build-outputs", () => {
     expect(skip).toContain("skip them without listing or reading anything inside");
     expect(skip).toContain("Open one file in a folder only when nothing beside it tells which.");
     expect(skip).not.toContain("Open a file in it to tell which.");
+    // A path the scan was asked for, or a registered source path, stays source.
+    expect(skip).toContain("A folder the brief names to scan, or one listed in `.aidlc-source-paths.json`, is source whatever sits beside it.");
   });
 });
