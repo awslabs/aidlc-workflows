@@ -18,6 +18,7 @@ import {
   isSafeOnboardingPath,
   jsoncRootMembers,
   jsoncSettingValue,
+  managedBlockMarkers,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -2668,20 +2669,7 @@ export function postApplyOutstandingActions(
   return actions;
 }
 
-export function managedBlockMarkers(
-  path: string,
-  identity: string,
-): { begin: string; end: string } {
-  return path.endsWith(".md")
-    ? {
-        begin: `<!-- BEGIN AI-DLC:${identity} -->`,
-        end: `<!-- END AI-DLC:${identity} -->`,
-      }
-    : {
-        begin: `# BEGIN AI-DLC:${identity}`,
-        end: `# END AI-DLC:${identity}`,
-      };
-}
+export { managedBlockMarkers };
 
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }

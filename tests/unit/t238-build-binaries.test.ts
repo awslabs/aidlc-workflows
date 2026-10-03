@@ -586,11 +586,28 @@ describe("t238 build-binaries release builder", () => {
         }
         expect(existsSync(join(copyRoot, "runtime", distribution, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
       }
+      // Nor the team's .gitignore or AGENTS.md: AI-DLC's part of each ships in
+      // the harness folder, and config or the engine adds it to the team's file.
+      for (const [distribution, harnessDir, markers] of [
+        ["claude", ".claude", ["gitignore"]],
+        ["copilot", ".aidlc", ["gitignore", "agents"]],
+      ] as const) {
+        for (const path of [".gitignore", "AGENTS.md"]) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+        }
+        for (const marker of markers) {
+          const block = join("tools", "data", "root-blocks", marker);
+          expect(existsSync(join(copyRoot, "runtime", distribution, harnessDir, block)), `${distribution}/${block}`).toBe(true);
+        }
+        expect(existsSync(join(nativeRoot, "runtime", distribution, ".gitignore"))).toBe(true);
+      }
       const upgraded = join(runtimeChannels, "upgraded-project");
       const teamFiles = new Map([
         [kept[0], "# Team practices\n\n- Affirmed: trunk-based development\n"],
         [kept[1], "# Project rules\n\n- Learned: run the linter before review\n"],
         [kept[2], "payments\n"],
+        [".gitignore", "node_modules\n.env.local\n"],
+        ["AGENTS.md", "# Shop\n\nOur own notes for agents.\n"],
       ]);
       for (const [path, body] of teamFiles) {
         mkdirSync(dirname(join(upgraded, path)), { recursive: true });

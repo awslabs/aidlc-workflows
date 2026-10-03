@@ -10,7 +10,7 @@
 // copy the packager bundled INSIDE the engine at tools/data/memory-seed/
 // (resolved by frameworkMemorySeedDir, mirroring frameworkTemplatesDir/DATA_DIR).
 //
-// Four contracts land here:
+// Five contracts land here:
 //   (a) THE BUNDLE: the packager emitted the method seed INSIDE the shipped
 //       engine dir, and frameworkMemorySeedDir() resolves to it (in-process, the
 //       `none` floor — a pure relative-to-DATA_DIR path).
@@ -22,6 +22,8 @@
 //   (d) THE COPY RUNTIME: its memory folder ships without team.md and
 //       project.md, so creation adds each one that is missing and keeps one
 //       that exists.
+//   (e) THE ROOT FILES: starting work in a copy config never ran in adds
+//       AI-DLC's part of .gitignore after the team's own lines.
 //
 // MECHANISM. (a) imports frameworkMemorySeedDir in-process from the shipped dist
 // tree (the `none` floor for an exported lib fn). (b)/(c) SPAWN the real engine
@@ -38,6 +40,7 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -172,5 +175,19 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     expect(readFileSync(join(keptMemory, "team.md"), "utf-8")).toBe(team);
     expect(readFileSync(join(keptMemory, "project.md"), "utf-8"))
       .toBe(readFileSync(join(BUNDLED_SEED, "project.md"), "utf-8"));
+  });
+  // === (e) AI-DLC'S PART OF THE TEAM'S ROOT FILES ===========================
+  // A copy runtime leaves the team's .gitignore out; starting work in a copy
+  // that config never ran in adds AI-DLC's part after the team's lines.
+  test("e: starting work in an unconfigured copy adds AI-DLC's part to the team's .gitignore", () => {
+    const proj = mkTemp("copy-root");
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(proj, ".claude"), { recursive: true });
+    writeFileSync(join(proj, ".gitignore"), "node_modules\n.env.local\n", "utf-8");
+    const res = runIntentCreate(proj);
+    expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
+    const block = readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", "root-blocks", "gitignore"), "utf-8");
+    expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toBe(
+      `node_modules\n.env.local\n\n# BEGIN AI-DLC:gitignore\n${block.trim()}\n# END AI-DLC:gitignore\n`,
+    );
   });
 });

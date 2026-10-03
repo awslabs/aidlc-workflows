@@ -85,7 +85,7 @@ import {
   validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
-import { repointHarnessIncludes } from "./aidlc-includes.ts";
+import { addRootBlocks, repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
   HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
@@ -7299,6 +7299,9 @@ function ensureWorkspaceDirs(
   // case) — so this never dirties a single-team committed tree; it self-heals a
   // tree whose cursor and includes drifted out of sync.
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
+  // A copy that config never ran in gets AI-DLC's part of .gitignore and
+  // AGENTS.md, after the team's own content.
+  addRootBlocks(projectDir);
 }
 
 function waitAtIntentCreateChangeControlSnapshotBarrier(): void {

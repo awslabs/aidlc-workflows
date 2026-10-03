@@ -44,12 +44,16 @@ import {
   insertJsoncSetting,
   jsoncRootMembers,
   jsoncSettingValue,
+  mergeBlock,
   type ProjectionDescriptor,
   projectionFiles,
   removeJsoncSetting,
   replaceJsoncSetting,
+  rootBlockPath,
   sha256Bytes,
   sha256File,
+  shippedRootIntegrationPath,
+  unionBlocks,
   validateProjectionDescriptor,
   walkFiles,
 } from "./aidlc-distribution.ts";
@@ -4999,92 +5003,24 @@ function assertHarnessAddKeepsVersion(
   );
 }
 
-function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
-  contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
-  let base = contributors[0].text.trim();
-  const seen = new Set<string>();
-  for (const line of base.split(/\r?\n/)) {
-    const entry = line.trim();
-    if (entry && !entry.startsWith("#")) seen.add(entry);
-  }
-  for (let index = 1; index < contributors.length; index++) {
-    const contributor = contributors[index];
-    const extras: string[] = [];
-    for (const line of contributor.text.split(/\r?\n/)) {
-      const entry = line.trim();
-      if (!entry || entry.startsWith("#") || seen.has(entry)) continue;
-      extras.push(entry);
-      seen.add(entry);
-    }
-    if (extras.length > 0) {
-      base += `\n\n# ${contributor.distribution} harness\n${extras.join("\n")}`;
-    }
-  }
-  return base;
-}
-
-function mergeBlock(
-  path: string,
-  current: string,
-  shipped: string,
-  identity: string,
-  legacyWholeFileHashes: readonly string[] = [],
-): {
-  value?: string;
-  currentHash?: string;
-  nextHash?: string;
-  adoptedLegacy?: boolean;
-  error?: string;
-} {
-  const { begin, end } = managedBlockMarkers(path, identity);
-  const begins = current.split(begin).length - 1;
-  const ends = current.split(end).length - 1;
-  if (begins > 1 || ends > 1 || (begins === 1) !== (ends === 1)) {
-    return { error: "managed markers are missing, duplicated, or malformed" };
-  }
-  const beginAt = current.indexOf(begin);
-  const endAt = current.indexOf(end);
-  const newline = current.includes("\r\n") ? "\r\n" : "\n";
-  const body = shipped.trim().replace(/\r?\n/g, newline);
-  const block = `${begin}${newline}${body}${newline}${end}`;
-  if (beginAt >= 0) {
-    if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
-    const currentBlock = current.slice(beginAt, endAt + end.length);
-    return {
-      value: `${current.slice(0, beginAt)}${block}${current.slice(endAt + end.length)}`,
-      currentHash: sha256Bytes(currentBlock),
-      nextHash: sha256Bytes(block),
-    };
-  }
-  if (current.length > 0 && legacyWholeFileHashes.includes(sha256Bytes(current))) {
-    return {
-      value: `${block}${newline}`,
-      nextHash: sha256Bytes(block),
-      adoptedLegacy: true,
-    };
-  }
-  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
-  // our marked block without claiming or rewriting that existing prefix.
-  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
-    return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
-  }
-  const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
-  return {
-    value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
-    nextHash: sha256Bytes(block),
-  };
-}
+// An earlier release put a generic template (node_modules, dist, editor
+// files) in AI-DLC's part of .gitignore; a refresh keeps those lines as the
+// project's own and says so once.
+const KEPT_GITIGNORE_LINES_DETAIL = "kept your own ignore lines";
+const KEPT_GITIGNORE_LINES_NOTE =
+  "Kept your .gitignore entries for node_modules, dist and editor files; AI-DLC now adds only its own lines.";
 
 function unchangedManagedBlockHash(
   projectDir: string,
   sourceRoot: string,
+  harnessDir: string,
   integration: ProjectionDescriptor["rootIntegrations"][number],
 ): string | undefined {
   const targetPath = join(projectDir, integration.path);
   const merged = mergeBlock(
     integration.path,
     regularFile(targetPath) ? readFileSync(targetPath, "utf-8") : "",
-    readFileSync(join(sourceRoot, integration.path), "utf-8"),
+    readFileSync(shippedRootIntegrationPath(sourceRoot, harnessDir, integration), "utf-8"),
     integration.marker || basename(integration.path),
     integration.legacySignatures?.wholeFileHashes,
   );
@@ -7025,7 +6961,7 @@ function planRootIntegrations(
     descriptor: Pick<ProjectionDescriptor, "rootIntegrations"> | null;
   }> | undefined;
   for (const integration of descriptor.rootIntegrations) {
-    const sourcePath = join(sourceRoot, integration.path);
+    const sourcePath = shippedRootIntegrationPath(sourceRoot, descriptor.harnessDir, integration);
     const targetPath = join(projectDir, integration.path);
     const targetExists = pathPresent(targetPath);
     const targetRegular = targetExists && lstatSync(targetPath).isFile();
@@ -7070,7 +7006,7 @@ function planRootIntegrations(
             legacyHashes.add(hash);
           }
           try {
-            const path = join(sibling.root, "tools", "data", "root-blocks", marker);
+            const path = rootBlockPath(sibling.root, integration);
             if (!regularFile(path)) {
               if (siblingIntegration?.shared === "union") missingCopy ??= sibling;
               continue;
@@ -7137,7 +7073,9 @@ function planRootIntegrations(
             actions.push({ path: integration.path, action: "preserve", detail: `owned by ${owner.distribution}` });
             continue;
           }
-        } else {
+        } else if (priorHash || !merged.currentBlockShipped) {
+          // A part that is exactly what a release shipped (one a copy added
+          // before config ran) is AI-DLC's own even without a record.
           actions.push({
             path: integration.path,
             action: "conflict",
@@ -7158,7 +7096,9 @@ function planRootIntegrations(
         actions.push({
           path: integration.path,
           action: targetExists ? "merge" : "create",
-          detail: combinedWith
+          detail: merged.keptOwnLines
+            ? KEPT_GITIGNORE_LINES_DETAIL
+            : combinedWith
             ? `combined with ${combinedWith}`
             : merged.adoptedLegacy ? "adopted exact legacy signature" : undefined,
         });
@@ -8716,7 +8656,7 @@ export async function main(
             const contribution = baseline?.rootContributions?.[integration.path];
             if (contribution?.policy === "managed-block") {
               if (integration.shared === "identical") {
-                const currentHash = unchangedManagedBlockHash(projectDir, selected.root, integration);
+                const currentHash = unchangedManagedBlockHash(projectDir, selected.root, descriptor.harnessDir, integration);
                 if (currentHash && contribution.hash === currentHash) continue;
               }
               throw new Error(
@@ -8724,7 +8664,7 @@ export async function main(
               );
             } else if (
               sibling.frameworkVersion !== undefined && baseline === null &&
-              !unchangedManagedBlockHash(projectDir, selected.root, integration)
+              !unchangedManagedBlockHash(projectDir, selected.root, descriptor.harnessDir, integration)
             ) {
               throw new Error(
                 `refusing to refresh ${stamp.distribution} while installed ${sibling.distribution} has lost its projection descriptor and ownership baseline; run aidlc config --harness ${sibling.distribution} first`,
@@ -8903,7 +8843,7 @@ export async function main(
           (ownFilesProject
             ? integration.policy === "json-map"
             : prior === null || preparedRegenerated.has(integration.path)) &&
-          regularFile(join(preparedRoot, integration.path)),
+          regularFile(shippedRootIntegrationPath(preparedRoot, descriptor.harnessDir, integration)),
       );
       if (presentRootIntegrations.length > 0) {
         planRootIntegrations(
@@ -8969,6 +8909,9 @@ export async function main(
         ? committedRecordIgnoreConflicts(projectDir)
         : [];
     prepared.notes.push(...hiddenRecords);
+    if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
+      prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
+    }
     // Quiet output is one line when clean. Like the outstanding-actions line,
     // each record-hiding rule adds one Warning line, on dry run and apply.
     const withQuietWarnings = (message: string): string =>

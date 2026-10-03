@@ -40,6 +40,7 @@ import {
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
+  copyChannelOmits,
   insertJsoncSetting,
   jsoncSettingValue,
   projectionFiles,
@@ -106,6 +107,13 @@ const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const INSTALLER = join(REPO_ROOT, "scripts", "install.sh");
 const FIXTURE_GH = join(REPO_ROOT, "tests", "fixtures", "bin", "gh.ts");
 const CLAUDE_COPY = join(REPO_ROOT, "dist", "claude");
+// The generic template earlier releases shipped above AI-DLC's .gitignore lines.
+const EARLIER_GITIGNORE_TEMPLATE = [
+  "# Logs", "logs", "*.log", "npm-debug.log*", "yarn-debug.log*", "yarn-error.log*",
+  "pnpm-debug.log*", "lerna-debug.log*", "", "node_modules", "dist", "dist-ssr", "*.local", "",
+  "# Editor directories and files", ".vscode/*", "!.vscode/extensions.json", ".idea", ".DS_Store",
+  "*.suo", "*.ntvs*", "*.njsproj", "*.sln", "*.sw?",
+].join("\n");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
@@ -2979,6 +2987,9 @@ describe("t243 project initialization", () => {
         readFileSync(join(CLAUDE_RELEASE, ".gitignore"), "utf-8").trim()
       }\n# END AI-DLC:gitignore\n`,
     );
+    // AI-DLC's block holds only its own lines, not a generic project template.
+    expect(gitignore).not.toContain("node_modules");
+    expect(gitignore.split("\n")[1]).toStartWith("# AI-DLC");
 
     const baseline = JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"), "utf-8"),
@@ -3008,6 +3019,73 @@ describe("t243 project initialization", () => {
     expect(disabled.status, disabled.stdout + disabled.stderr).toBe(0);
     expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers)
       .toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Earlier releases put a generic template (logs, node_modules, dist, editor
+  // files) at the top of AI-DLC's .gitignore part. The first refresh keeps
+  // those lines as the project's own, above AI-DLC's part, and says so once.
+  test("a refresh keeps an earlier release's template lines as the project's own", () => {
+    const project = temp("aidlc-t243-gitignore-template-");
+    mkdirSync(join(project, ".git"));
+    const shipped = readFileSync(join(CLAUDE_RELEASE, ".gitignore"), "utf-8");
+    const earlier = `${EARLIER_GITIGNORE_TEMPLATE}\n\n${shipped}`;
+    const { descriptor } = projectionFiles(CLAUDE_RELEASE);
+    expect(descriptor.rootIntegrations.find((integration) => integration.path === ".gitignore")
+      ?.legacySignatures?.wholeFileHashes).toContain(sha256Bytes(earlier));
+    writeFileSync(
+      join(project, ".gitignore"),
+      `mine.env\n\n# BEGIN AI-DLC:gitignore\n${earlier.trim()}\n# END AI-DLC:gitignore\n`,
+    );
+    const refreshed = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes",
+    ], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const said = (refreshed.stdout.match(/Kept your \.gitignore entries/g) ?? []).length;
+    expect(said).toBe(1);
+    expect(refreshed.stdout).toContain(
+      "Kept your .gitignore entries for node_modules, dist and editor files; AI-DLC now adds only its own lines.",
+    );
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(
+      `mine.env\n\n${EARLIER_GITIGNORE_TEMPLATE}\n\n# BEGIN AI-DLC:gitignore\n${shipped.trim()}\n# END AI-DLC:gitignore\n`,
+    );
+    const again = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes",
+    ], project);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("Kept your .gitignore entries");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The copy runtime leaves the root .gitignore and AGENTS.md out; config run
+  // from it reads AI-DLC's part from the harness folder and adds it to the
+  // team's own files.
+  test("config from a copy runtime without root files adds AI-DLC's part to the team's files", () => {
+    const runtime = join(temp("aidlc-t243-copy-runtime-"), "runtime");
+    for (const distribution of ["claude", "kiro"]) {
+      const root = join(REPO_ROOT, "dist", distribution);
+      const omitted = copyChannelOmits(projectionFiles(root).descriptor);
+      for (const rel of walkFiles(root)) {
+        if (omitted.has(rel)) continue;
+        const target = join(runtime, distribution, rel);
+        mkdirSync(dirname(target), { recursive: true });
+        cpSync(join(root, rel), target);
+      }
+      expect(existsSync(join(runtime, distribution, ".gitignore"))).toBe(false);
+    }
+    const project = temp("aidlc-t243-copy-config-");
+    mkdirSync(join(project, ".git"));
+    writeFileSync(join(project, ".gitignore"), "node_modules\nmine.env\n");
+    writeFileSync(join(project, "AGENTS.md"), "# Shop\n\nOur own notes for agents.\n");
+    cpSync(join(runtime, "kiro"), project, { recursive: true });
+    const configured = run(INIT, [
+      "config", "--project-dir", project, "--from", runtime, "--harness", "kiro", "--yes",
+    ], project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
+    expect(gitignore).toStartWith("node_modules\nmine.env\n\n# BEGIN AI-DLC:gitignore\n");
+    expect(gitignore.match(/BEGIN AI-DLC:gitignore/g)).toHaveLength(1);
+    const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
+    expect(agents).toStartWith("# Shop\n\nOur own notes for agents.\n\n<!-- BEGIN AI-DLC:agents -->\n");
+    expect(agents.match(/BEGIN AI-DLC:agents/g)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {

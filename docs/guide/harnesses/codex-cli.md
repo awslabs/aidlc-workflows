@@ -106,7 +106,6 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -r "$RUNTIME_ROOT/codex/.codex/"  your-project/.codex/
    cp -r "$RUNTIME_ROOT/codex/.agents/" your-project/.agents/
    cp -r "$RUNTIME_ROOT/codex/aidlc/"   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
-   cp "$RUNTIME_ROOT/codex/AGENTS.md"   your-project/AGENTS.md   # or merge into yours
    ```
 
    The `aidlc/` directory is the workspace shell — it ships the pre-built
@@ -115,11 +114,18 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    `$RUNTIME_ROOT/codex/` tree at once). `$aidlc --doctor` fails its "workspace shell
    ready" check if it is missing.
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" **before** starting a workflow — the per-clone audit shards
-   under each intent's `audit/` are committed deliberately (each clone writes
-   its own `<host>-<clone>.md`, so concurrent appends never git-conflict), while
-   per-user cursors and machine-local runtime state stay ignored.
+2. Run the copy's own setup once, from the project:
+
+   ```bash
+   bun .codex/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness codex
+   ```
+
+   It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
+   everything already there (or creates them), before your first workflow:
+   the per-clone audit shards under each intent's `audit/` are committed
+   deliberately (each clone writes its own `<host>-<clone>.md`, so concurrent
+   appends never git-conflict), while per-user cursors and machine-local
+   runtime state stay ignored.
 
 3. Trust the project and pre-seed hook trust. Codex never runs untrusted
    hooks (the `--dangerously-bypass-hook-trust` flag does not run them

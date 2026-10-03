@@ -34,7 +34,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
-import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
+import { addRootBlocks, repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -232,6 +232,9 @@ try {
 } catch {
   // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
 }
+// A copy that config never ran in gets AI-DLC's part of .gitignore and
+// AGENTS.md, after the team's own content.
+addRootBlocks(projectDir);
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
 

@@ -39,9 +39,17 @@
 // since the includes are committed, a failed rewrite leaves the prior (valid)
 // pointer in place, recoverable by re-running.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import {
+  mergeBlock,
+  type ProjectionDescriptor,
+  type RootIntegration,
+  rootBlockPath,
+  unionBlocks,
+} from "./aidlc-distribution.ts";
 import { activeSpace, harnessDir, writeFileAtomic } from "./aidlc-lib.ts";
+import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 
 /** Workspace-relative POSIX memory path for a space: `aidlc/spaces/<space>/memory`.
  *  POSIX separators — these strings live in include files read identically on
@@ -364,4 +372,84 @@ function readSafe(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+// --- AI-DLC's part of the team's root files ---------------------------------
+//
+// A copy runtime leaves the team's .gitignore and AGENTS.md out (a copy would
+// replace them) and ships AI-DLC's part of each in root-blocks. Where config
+// never ran (no harness in the project has its install record), this adds that
+// part with config's own rule, at the same two moments as the includes: after
+// the team's content, or as the whole file when there is none. A part that is
+// exactly what a release shipped is brought up to date; a part the team
+// changed, and every file config manages, is left as it is. Best-effort: a
+// file that cannot be read or merged is skipped, never corrupted.
+export function addRootBlocks(projectDir: string): string[] {
+  const written: string[] = [];
+  const parts = new Map<string, {
+    integration: RootIntegration;
+    contributors: Array<{ distribution: string; text: string }>;
+    legacy: Set<string>;
+    configured: boolean;
+  }>();
+  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
+  try {
+    harnesses = discoverProjectHarnesses(projectDir);
+  } catch {
+    return written;
+  }
+  for (const harness of harnesses) {
+    const data = join(harness.root, "tools", "data");
+    let descriptor: ProjectionDescriptor;
+    try {
+      descriptor = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8")) as ProjectionDescriptor;
+    } catch {
+      continue;
+    }
+    const configured = existsSync(join(data, "aidlc-manifest.json"));
+    for (const integration of descriptor.rootIntegrations ?? []) {
+      if (integration.policy !== "managed-block") continue;
+      const text = readSafe(rootBlockPath(harness.root, integration));
+      if (text === null) continue;
+      const part = parts.get(integration.path) ?? {
+        integration,
+        contributors: [],
+        legacy: new Set<string>(),
+        configured: false,
+      };
+      part.contributors.push({ distribution: harness.distribution, text });
+      for (const hash of integration.legacySignatures?.wholeFileHashes ?? []) part.legacy.add(hash);
+      part.configured ||= configured;
+      parts.set(integration.path, part);
+    }
+  }
+  for (const [path, part] of parts) {
+    if (part.configured) continue;
+    const shipped = part.integration.shared === "union"
+      ? unionBlocks(part.contributors)
+      : [...part.contributors].sort((left, right) => left.distribution.localeCompare(right.distribution))[0].text;
+    const target = join(projectDir, path);
+    let current = "";
+    try {
+      const stat = lstatSync(target, { throwIfNoEntry: false });
+      if (stat && !stat.isFile()) continue;
+      if (stat) {
+        const bytes = readFileSync(target);
+        current = bytes.toString("utf-8");
+        if (!Buffer.from(current, "utf-8").equals(bytes)) continue;
+      }
+    } catch {
+      continue;
+    }
+    const merged = mergeBlock(path, current, shipped, part.integration.marker || basename(path), [...part.legacy]);
+    if (merged.error || merged.value === undefined || merged.value === current) continue;
+    if (merged.currentHash && !merged.currentBlockShipped) continue;
+    try {
+      writeFileAtomic(target, merged.value);
+      written.push(path);
+    } catch {
+      // Leave the file as it was; the next session or config tries again.
+    }
+  }
+  return written;
 }

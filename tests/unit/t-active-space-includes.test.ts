@@ -1,4 +1,4 @@
-// covers: function:repointHarnessIncludes
+// covers: function:repointHarnessIncludes, function:addRootBlocks
 //
 // t-active-space-includes — the harness-native rule includes FOLLOW the
 // active-space cursor (gap #1, the (A) ambient channel).
@@ -37,7 +37,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
+import { addRootBlocks, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const distSurface = (h: string, ...parts: string[]): string =>
@@ -600,5 +600,69 @@ describe("t-active-space-includes: Cursor rules + persona bodies", () => {
     rmSync(join(root, ".cursor", "rules"), { recursive: true });
     const written = portablePaths(repointHarnessIncludes(root, "teamB"));
     expect(written).toEqual([".cursor/agents/aidlc-architect-agent.md"]);
+  });
+});
+
+// A copy runtime leaves the team's .gitignore and AGENTS.md out and ships
+// AI-DLC's part of each in the harness folder (root-blocks). Where config never
+// ran, the engine adds that part after the team's content, once.
+describe("t-active-space-includes: AI-DLC's part of the team's root files", () => {
+  const blocks = join(distSurface("copilot", ".aidlc"), "tools", "data", "root-blocks");
+  const gitignorePart = (): string =>
+    `# BEGIN AI-DLC:gitignore\n${readFileSync(join(blocks, "gitignore"), "utf-8").trim()}\n# END AI-DLC:gitignore\n`;
+  const agentsPart = (): string =>
+    `<!-- BEGIN AI-DLC:agents -->\n${readFileSync(join(blocks, "agents"), "utf-8").trim()}\n<!-- END AI-DLC:agents -->\n`;
+  function copiedProject(): string {
+    const root = freshRoot();
+    cpSync(distSurface("copilot", ".aidlc"), join(root, ".aidlc"), { recursive: true });
+    return root;
+  }
+
+  test("keeps the team's .gitignore and AGENTS.md byte for byte and adds AI-DLC's part once", () => {
+    const root = copiedProject();
+    writeFileSync(join(root, ".gitignore"), "node_modules\n.env.local\n");
+    writeFileSync(join(root, "AGENTS.md"), "# Shop\n\nOur own notes for agents.\n");
+    expect(addRootBlocks(root).sort()).toEqual([".gitignore", "AGENTS.md"]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
+    expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(`# Shop\n\nOur own notes for agents.\n\n${agentsPart()}`);
+    // A second session changes nothing.
+    expect(addRootBlocks(root)).toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`node_modules\n.env.local\n\n${gitignorePart()}`);
+  });
+
+  test("a project without the files gets only AI-DLC's part", () => {
+    const root = copiedProject();
+    addRootBlocks(root);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(gitignorePart());
+    expect(readFileSync(join(root, "AGENTS.md"), "utf-8")).toBe(agentsPart());
+  });
+
+  test("an earlier release's unchanged copy keeps its template lines as the team's own", () => {
+    const root = copiedProject();
+    const template = [
+      "# Logs", "logs", "*.log", "npm-debug.log*", "yarn-debug.log*", "yarn-error.log*",
+      "pnpm-debug.log*", "lerna-debug.log*", "", "node_modules", "dist", "dist-ssr", "*.local", "",
+      "# Editor directories and files", ".vscode/*", "!.vscode/extensions.json", ".idea", ".DS_Store",
+      "*.suo", "*.ntvs*", "*.njsproj", "*.sln", "*.sw?",
+    ].join("\n");
+    writeFileSync(join(root, ".gitignore"), `${template}\n\n${readFileSync(join(blocks, "gitignore"), "utf-8")}`);
+    expect(addRootBlocks(root)).toContain(".gitignore");
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`${template}\n\n${gitignorePart()}`);
+  });
+
+  test("a part the team changed, and a project config manages, are left as they are", () => {
+    const changed = copiedProject();
+    const edited = gitignorePart().replace("# END AI-DLC:gitignore", "our-own-line\n# END AI-DLC:gitignore");
+    writeFileSync(join(changed, ".gitignore"), edited);
+    writeFileSync(join(changed, "AGENTS.md"), "# Shop\n");
+    expect(addRootBlocks(changed)).toEqual(["AGENTS.md"]);
+    expect(readFileSync(join(changed, ".gitignore"), "utf-8")).toBe(edited);
+
+    const configured = copiedProject();
+    writeFileSync(join(configured, ".aidlc", "tools", "data", "aidlc-manifest.json"), "{}\n");
+    writeFileSync(join(configured, ".gitignore"), "node_modules\n");
+    expect(addRootBlocks(configured)).toEqual([]);
+    expect(readFileSync(join(configured, ".gitignore"), "utf-8")).toBe("node_modules\n");
+    expect(readdirSync(configured)).not.toContain("AGENTS.md");
   });
 });
