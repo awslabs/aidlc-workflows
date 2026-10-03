@@ -9842,21 +9842,22 @@ function skippedJumpDirective(target: string, direction: string, current: string
 const INIT_JUMP_ERROR =
   "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
-// Why a jump cannot reopen its target for the units the person chose, said
-// before anything changes.
+// Why a jump cannot reopen its target for the unit the person named, said
+// before anything changes. The person gets one line that speaks to them; the
+// command for "for every unit" is for the conductor only.
 function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
   const node = nodeForSlug(targetSlug);
   const name = node?.name || targetSlug;
-  const plain = "Nothing changed. Tell the person in one line, and if they say 'for every unit', " +
+  const why = !node || !isPerUnit(node)
+    ? `${name} is done once for all units, so it cannot be redone for one unit. Nothing changed. ` +
+      "Say 'for every unit' to redo it."
+    : readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)
+      ? `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
+        "Nothing changed. Say 'for every unit' to do that."
+      : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
+        "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
+  return `Run nothing. Tell the person in one line: "${why}" If they say 'for every unit', ` +
     `run \`next --stage ${targetSlug} --every-unit\`.`;
-  if (!node || !isPerUnit(node)) {
-    return `${name} is not a step each unit does on its own, so it cannot be redone for one unit. ${plain}`;
-  }
-  if (readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)) {
-    return `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ${plain}`;
-  }
-  return `${name} can be reopened for one unit only while Construction builds one unit at a time and is ` +
-    `still on the steps each unit does; here it can only be reopened for every unit. ${plain}`;
 }
 
 // Returns "route" without emitting when the target is the step a solo
@@ -9921,7 +9922,7 @@ function emitJumpDirective(
     // redoes the step for every unit. `--every-unit` asks for exactly what the
     // jump below does here, so it goes through and says so in one line.
     if (flags.jumpUnit !== undefined) {
-      emit(errorDirective(unitChoiceRefusal(unitMajorState, targetSlug)));
+      emit(printDirective(unitChoiceRefusal(unitMajorState, targetSlug)));
       return;
     }
     const everyUnitLine = flags.everyUnit && direction !== "forward"

@@ -1059,7 +1059,7 @@ When a stage detects existing output artifacts in its artifact directory:
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.
 
-**Audit logging**: After the user's choice, call the state tool (maps the "Redo from scratch" option to `--decision redo`):
+**Audit logging**: After the user's choice, call the state tool (maps the "Redo from scratch" option to `--decision redo`). A choice the engine already recorded, the `artifact_reuse` answer above that `aidlc-jump.ts reopen --via redo` writes, is not recorded again:
 
 ```bash
 {{INVOKE}} engine state reuse-artifact <stage-slug> \

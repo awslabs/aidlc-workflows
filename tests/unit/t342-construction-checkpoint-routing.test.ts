@@ -1323,19 +1323,26 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture({ iteration: "stage-major" });
     for (const unit of ["alpha", "beta"]) cover(p, unit, stages.slice(0, 1));
     const before = readFileSync(seededStateFile(p), "utf-8");
+    // The person sees one line that speaks to them; the command for "for every
+    // unit" is for the agent only.
     const refused = (args: string[]): string => {
       const said = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
-      expect(said.kind, JSON.stringify(said)).toBe("error");
-      expect(said.message).toContain("Nothing changed");
+      expect(said.kind, JSON.stringify(said)).toBe("print");
       expect(said.message).not.toContain("jump.ts");
-      expect(said.message).not.toContain("/aidlc --");
-      return said.message;
+      const target = args[1];
+      expect(said.message).toContain(`If they say 'for every unit', run \`next --stage ${target} --every-unit\``);
+      const line = /Tell the person in one line: "([^"]+)"/.exec(said.message)?.[1];
+      expect(line, said.message).toBeDefined();
+      for (const leak of ["Tell the person", "next --stage", "run `", "/aidlc --"]) expect(line!).not.toContain(leak);
+      expect(line!).toContain("Nothing changed.");
+      expect(line!).toContain("Say 'for every unit'");
+      return line!;
     };
     expect(refused(["--stage", "functional-design", "--unit", "alpha"])).toContain(
       "Functional Design can be reopened for one unit only while Construction builds one unit at a time",
     );
     expect(refused(["--stage", "build-and-test", "--unit", "alpha"])).toContain(
-      "Build and Test is not a step each unit does on its own",
+      "Build and Test is done once for all units",
     );
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
@@ -1357,9 +1364,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = gatesApprovedUntil("infrastructure-design", { legacy: true });
     const before = readFileSync(seededStateFile(p), "utf-8");
     const said = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--unit", "alpha"]).stdout);
-    expect(said.kind, JSON.stringify(said)).toBe("error");
-    expect(said.message).toContain("NFR Design was approved for every unit at its stage approval");
-    expect(said.message).toContain("if they say 'for every unit', run `next --stage nfr-design --every-unit`");
+    expect(said.kind, JSON.stringify(said)).toBe("print");
+    expect(said.message).toContain(
+      "Tell the person in one line: \"NFR Design was approved for every unit at its stage approval, so it can only " +
+        "be reopened for every unit. Nothing changed. Say 'for every unit' to do that.\"",
+    );
+    expect(said.message).toContain("If they say 'for every unit', run `next --stage nfr-design --every-unit`");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     // Saying "for every unit" then does it.
