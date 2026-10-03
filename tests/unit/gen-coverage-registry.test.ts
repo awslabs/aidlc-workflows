@@ -516,58 +516,66 @@ describe("ratchet anti-regression (a covered unit cannot silently lose its claim
     }
   });
 
-  test("two PRs that each add a CLI-spawning test merge with git, in either order: each touches only its own file and its registry claim", () => {
+  test("two PRs that each add a CLI-spawning test merge with git, in either order: each touches only its own file and its generated registry", () => {
     const { rows } = buildRegistry();
-    // Two adjacent UNCOVERED subcommand-or-other units: the closest two claims can sit.
-    const gap = rows.findIndex((r, i) => r.status === "UNCOVERED" && rows[i + 1]?.status === "UNCOVERED");
-    expect(gap).toBeGreaterThanOrEqual(0);
-    const spawner = (name: string) => [
-      `// covers: ${rows[name === "t-spawn-a" ? gap : gap + 1].unitId}`,
+    // Two audit units that sit next to each other in the registry: the closest two claims can sit.
+    const at = rows.findIndex((r, i) => r.unitClass === "audit" && rows[i + 1]?.unitClass === "audit");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const sides = [
+      { name: "t-spawn-a", claim: `audit:${rows[at].unitId}` },
+      { name: "t-spawn-b", claim: `audit:${rows[at + 1].unitId}` },
+    ];
+    const spawner = (claim: string) => [
+      `// covers: ${claim}`,
       'import { spawnSync } from "node:child_process";',
       "const BUN = process.execPath;",
       'const TOOL = "../../dist/claude/.claude/tools/aidlc-state.ts";',
       'test("x", () => { expect(spawnSync(BUN, [TOOL, "show"]).status).toBe(0); });',
       "",
     ].join("\n");
-    const claim = (list: RegistryRow[], index: number, name: string): RegistryRow[] => list.map((r, i) =>
-      i === index ? { ...r, status: "covered", coveredBy: [{ file: `tests/unit/${name}.test.ts`, mechanism: "cli" }] } : r);
-    const sides = {
-      a: { name: "t-spawn-a", registry: claim(rows, gap, "t-spawn-a") },
-      b: { name: "t-spawn-b", registry: claim(rows, gap + 1, "t-spawn-b") },
-    };
-    const both = claim(claim(rows, gap, "t-spawn-a"), gap + 1, "t-spawn-b");
-    for (const [first, second] of [[sides.a, sides.b], [sides.b, sides.a]]) {
+    for (const [first, second] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
       const repo = mkdtempSync(join(tmpdir(), "cov-merge-spawners-"));
       try {
+        const registry = join(repo, "registry.json");
         const git = (...args: string[]) => spawnSync("git", args, { cwd: repo, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        // The real generator, reading claims from this repo's tiers and writing its registry here.
+        const generate = () => {
+          const run = spawnSync(process.execPath, [TOOL], {
+            encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            env: { ...process.env, AIDLC_COVERAGE_TESTS_DIR: repo, AIDLC_COVERAGE_REGISTRY: registry },
+          });
+          expect(run.status, run.stderr).toBe(0);
+        };
         const commit = (message: string) => {
           expect(git("add", "-A").status).toBe(0);
           expect(git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", message).status).toBe(0);
         };
-        const pr = (side: { name: string; registry: RegistryRow[] }) => {
+        const pr = (side: { name: string; claim: string }) => {
           expect(git("checkout", "-q", "main").status).toBe(0);
           expect(git("checkout", "-qb", side.name).status).toBe(0);
-          writeFileSync(join(repo, "unit", `${side.name}.test.ts`), spawner(side.name));
-          writeFileSync(join(repo, "registry.json"), registryJson(side.registry));
+          writeFileSync(join(repo, "unit", `${side.name}.test.ts`), spawner(side.claim));
+          generate();
           commit(side.name);
-          // The PR's whole diff: its own test file and the registry, nothing shared besides.
+          // The PR's whole diff: its own test file and the regenerated registry, nothing shared besides.
           expect(git("diff", "--name-only", "main", side.name).stdout.trim().split("\n")).toEqual(["registry.json", `unit/${side.name}.test.ts`]);
         };
         expect(git("init", "-q", "-b", "main").status).toBe(0);
         expect(git("config", "core.autocrlf", "false").status).toBe(0);
         mkdirSync(join(repo, "unit"));
         writeFileSync(join(repo, "unit", "t-existing.test.ts"), 'test("x", () => {});\n');
-        writeFileSync(join(repo, "registry.json"), registryJson(rows));
+        generate();
         commit("base");
         pr(first);
         pr(second);
         const merge = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "merge", "-q", "--no-edit", first.name);
         expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
-        expect(readFileSync(join(repo, "registry.json"), "utf-8")).toBe(registryJson(both));
-        for (const side of [first, second]) {
-          const src = readFileSync(join(repo, "unit", `${side.name}.test.ts`), "utf-8");
-          expect(mechanismsOf(`${side.name}.test.ts`, src)).toEqual(["cli"]);
+        const merged = readFileSync(registry, "utf-8");
+        for (const side of sides) {
+          const unit = (JSON.parse(merged) as { units: RegistryRow[] }).units.find((r) => `audit:${r.unitId}` === side.claim)!;
+          expect(unit).toMatchObject({ status: "covered", coveredBy: [{ file: `tests/unit/${side.name}.test.ts`, mechanism: "cli" }] });
         }
+        generate();
+        expect(readFileSync(registry, "utf-8")).toBe(merged);
       } finally {
         rmSync(repo, { recursive: true, force: true });
       }
