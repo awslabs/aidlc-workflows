@@ -3325,6 +3325,8 @@ type SteeringTokenPayload = {
   q?: UnitGateRhythm;
   j?: ConstructionCheckpointKind;
   y?: { batch: number; units: string[] };
+  // The step carries the person's Redo answer to the re-use question.
+  e?: true;
   h: string | null;
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
@@ -4731,6 +4733,7 @@ function markerSteeringPayload(
       !Array.isArray(p.y.units) || p.y.units.length === 0 ||
       !p.y.units.every((unit) => typeof unit === "string")
     )) ||
+    (p.e !== undefined && p.e !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
     (p.l !== undefined && typeof p.l !== "string")
   ) {
@@ -4778,6 +4781,7 @@ function steeringTokenPayload(
     y: directive.swarm_checkpoint
       ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
       : undefined,
+    e: directive.artifact_reuse ? true : undefined,
     h: route.stateHash,
     l: layout,
   };
@@ -8724,6 +8728,33 @@ function unitMajorRedo(
     OTHER_UNITS_KEPT;
 }
 
+// Whether the person's Redo on the resume menu answered the re-use question for
+// this Unit's step (`jump reopen --via redo` records it). The answer is spent
+// once the Unit starts the step, and a later reopen or jump asks again.
+function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): boolean {
+  let chosen = false;
+  for (const row of readAuditShardEvents(projectDir)) {
+    const rowUnit = auditBlockField(row.block, "Unit");
+    if (row.event === "ARTIFACT_REUSED") {
+      if (
+        auditBlockField(row.block, "Stage") === slug && rowUnit === unit &&
+        auditBlockField(row.block, "Decision") === "redo" &&
+        auditBlockField(row.block, "Source") === "Redo on the resume menu"
+      ) chosen = true;
+      continue;
+    }
+    if (!chosen) continue;
+    if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") chosen = false;
+    else if (row.event === "UNIT_STARTED" && rowUnit === unit && auditBlockField(row.block, "Stage") === slug) chosen = false;
+    else if (row.event === "GATE_REJECTED" && rowUnit === unit) {
+      const gated = (auditBlockField(row.block, "Gate Stages") ?? auditBlockField(row.block, "Stage") ?? "")
+        .split(",").map((entry) => entry.trim());
+      if (gated.includes(slug)) chosen = false;
+    }
+  }
+  return chosen;
+}
+
 // A jump back to a per-unit stage a Unit already finished, in a solo unit-major
 // walk (#1411). Current Stage stays on the first per-unit stage there, or has
 // moved on to a later per-unit stage's gate, so that jump would be a
@@ -9109,6 +9140,9 @@ function emitUnitMajorRunStage(
     );
     directive.gate = false;
     directive.unit = step.unit;
+    if (redoChosenForUnitStep(projectDir, step.stage.slug, step.unit)) {
+      directive.artifact_reuse = { decision: "redo", unit: step.unit };
+    }
     emit(directive);
     return;
   }
@@ -11936,6 +11970,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
     applySwarmCheckpointShape(
       directive, resolveSwarmCheckpoint(pd, payload.y.batch, payload.y.units, liveState),
     );
+  }
+  // Read again from the audit, so an answer spent since is not handed out.
+  if (payload.e === true && payload.u !== null && redoChosenForUnitStep(pd, node.slug, payload.u)) {
+    directive.artifact_reuse = { decision: "redo", unit: payload.u };
   }
   if (payload.w) {
     const resolution = resolveBoltDag(pd);

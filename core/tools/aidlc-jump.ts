@@ -214,6 +214,17 @@ function handleReopen(args: string[]): void {
         ? `Redid ${stageName} for unit ${unit} at the person's request (Redo on the resume menu).`
         : `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
     });
+    // Redo is the person's answer to the re-use question for this Unit's step
+    // too: recorded here, so the reopened step redoes it without asking again.
+    if (flags.via === "redo") {
+      emitAudit(pd, "ARTIFACT_REUSED", {
+        Stage: targetSlug,
+        Decision: "redo",
+        Artifacts: `construction/${unit}/${targetSlug}/`,
+        Unit: unit,
+        Source: "Redo on the resume menu",
+      });
+    }
   }
   for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {
     content = removeField(content, field);
