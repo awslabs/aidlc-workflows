@@ -25902,72 +25902,54 @@ export function hasUnsafeSingleLineCharacter(value: string): boolean {
 	return false;
 }
 
+// Split a request into the person's own words and a pasted document. The
+// document runs from the first <document> to the last </document>, so a fake
+// closing marker inside pasted text can only turn more text into data, never
+// data into directions. A marker with no partner makes the rest of the message
+// on its side the document. `documentSplit` says in one line how it was split.
+// A message that is only a pasted document asks to build what it describes.
+const ONLY_DOCUMENT_REQUEST = "Build what the pasted document describes.";
 export function authoritativeProjectDescription(raw: string): {
   description: string;
   pastedDocumentPresent: boolean;
-  error?: string;
+  document?: string;
+  documentSplit?: string;
 } {
   const open = "<document>";
   const close = "</document>";
-  const start = raw.indexOf(open);
-  const strayClose = raw.indexOf(close);
-  if (start < 0) {
-    if (strayClose >= 0) {
-      return {
-        description: "",
-        pastedDocumentPresent: false,
-        error: `project description has ${close} without a matching ${open}`,
-      };
-    }
+  const first = raw.indexOf(open);
+  const last = raw.lastIndexOf(close);
+  if (first < 0 && last < 0) {
     return {
       description: raw.trim(),
       pastedDocumentPresent: false,
     };
   }
-  if (strayClose >= 0 && strayClose < start) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: `project description has ${close} before the next ${open}`,
-    };
-  }
 
-  const end = raw.indexOf(close, start + open.length);
-  if (end < 0) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: `project description has ${open} without a matching ${close}`,
-    };
-  }
-  const nested = raw.indexOf(open, start + open.length);
-  if (nested >= 0 && nested < end) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: "project description has nested <document> blocks",
-    };
-  }
-
-  const trailing = raw.slice(end + close.length);
-  if (trailing.includes(open) || trailing.includes(close)) {
-    return {
-      description: "",
-      pastedDocumentPresent: true,
-      error: "project description has repeated or additional <document> markers",
-    };
-  }
-  if (trailing.trim().length > 0) {
-    return {
-      description: "",
-      pastedDocumentPresent: true,
-      error: `project description has content after terminal ${close}`,
-    };
-  }
-
+  // More openings than closings means a closing marker is missing, so the last
+  // closing one may be pasted text: the document then runs to the end.
+  const unbalanced = first >= 0 && raw.split(open).length > raw.split(close).length;
+  const opened = first >= 0 && (unbalanced || last < 0 || last > first);
+  const closed = !unbalanced && last > first;
+  const start = opened ? first : 0;
+  const end = closed ? last + close.length : raw.length;
+  const documentSplit = opened && closed
+    ? `I read everything from the first ${open} to the last ${close} as your pasted document, and only the text outside it as your instructions.`
+    : opened
+      ? `Your ${unbalanced && last >= 0 ? `message has more ${open} than ${close} markers` : `${open} has no closing ${close}`}, so I read everything from ${open} to the end as your pasted document, and only the text before it as your instructions.`
+      : closed
+        ? `Your ${close} has no opening ${open}, so I read everything up to ${close} as your pasted document, and only the text after it as your instructions.`
+        : `Your ${close} comes before your ${open}, so I read the whole message as your pasted document.`;
+  // Only the document span goes: every byte of the person's words around it
+  // stays as they typed it, and the whole is trimmed once.
+  const directions = `${raw.slice(0, start)}${raw.slice(end)}`.trim();
   return {
-    description: raw.slice(0, start).trim(),
+    description: directions || ONLY_DOCUMENT_REQUEST,
     pastedDocumentPresent: true,
+    document: raw.slice(start, end),
+    documentSplit: directions
+      ? documentSplit
+      : `${documentSplit} There are no words outside it, so I took the request as: ${ONLY_DOCUMENT_REQUEST}`,
   };
 }
 
