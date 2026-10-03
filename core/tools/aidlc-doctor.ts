@@ -109,12 +109,15 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
   }
   if (!helper.includes("& $executable @args")) return null;
   const { previousWindowsShimHelperState } = await import("./aidlc-lifecycle.ts");
-  const { reason, fix } = previousWindowsShimHelperState();
+  const state = previousWindowsShimHelperState();
+  if (!state) return null;
   const label =
     "Windows launcher: aidlc-shim.ps1 passes arguments the old way, so a value with spaces reaches aidlc as separate words";
-  return reason
-    ? { pass: false, label: `${label}; AI-DLC cannot replace it because ${reason}`, fix }
-    : { pass: false, severity: "warn", label: `${label}; the next aidlc command replaces it`, fix };
+  return state.kind === "install"
+    ? { pass: false, label: `Windows launcher: not checked, because ${state.reason}`, fix: state.fix }
+    : state.kind === "blocked"
+    ? { pass: false, label: `${label}; AI-DLC cannot replace it because ${state.reason}`, fix: state.fix }
+    : { pass: false, severity: "warn", label: `${label}; ${state.reason}`, fix: state.fix };
 }
 
 export async function doctorUpdateState(

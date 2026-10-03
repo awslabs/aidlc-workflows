@@ -1304,62 +1304,80 @@ function runningActiveExecutable(active: string): boolean {
   }
 }
 
-// What doctor says about a previous helper the installer wrote: why the
-// running binary cannot replace it (reason null when it can) and the exact
-// step that gets the current one. A held machine lock is not a reason: the
-// next command retries. Activating the active version again rewrites both
-// launcher files and keeps the version and channel; the installer would
-// fetch the latest stable release instead.
-export function previousWindowsShimHelperState(): { reason: string | null; fix: string } {
-  const reinstall = "rerun the AI-DLC installer (install.ps1)";
+// What doctor says about a previous helper the installer wrote. "replace":
+// this binary replaces it on its next command. "blocked": it cannot, and
+// why. Both fixes activate the verified active version again, which
+// rewrites both launcher files and keeps the version and channel; a held
+// machine lock is not a reason, the next command retries. "install": the
+// active version marker is damaged or disagrees with the command target,
+// which no other doctor row reports; the person picks the version. Null: a
+// missing or invalid command target, or an incomplete version, which the
+// Command pointer and Installed runtime rows report with their own repair.
+export type PreviousShimHelperState =
+  | { kind: "replace" | "blocked" | "install"; reason: string; fix: string }
+  | null;
+
+export function previousWindowsShimHelperState(): PreviousShimHelperState {
+  const reinstall = "rerun the same verified AI-DLC installer (install.ps1)";
+  let active: string | null;
+  try {
+    active = readActiveExecutable();
+  } catch {
+    return null;
+  }
+  if (!active) return null;
+  const target = basename(dirname(active));
+  // With aidlc.cmd moved aside, or stopped by the old helper, an aidlc.exe
+  // runs `use` by full path.
+  const reactivate = `run \`& '${active.replaceAll("'", "''")}' use ${target}\``;
   let version: string | null = null;
   try {
     version = readVersionMarker(activeVersionPath());
   } catch {
-    // A damaged marker is reported below.
+    // Reported below as a damaged marker.
   }
-  // The version doctor reports as active (the command target first, then the
-  // marker) is the one to keep. With aidlc.cmd moved aside, its aidlc.exe
-  // runs `use` by full path.
-  const keep = activeVersion();
-  const reactivate = keep
-    ? `run \`& '${installedExecutablePath(keep).replaceAll("'", "''")}' use ${keep}\``
-    : reinstall;
+  // The new helper refuses what the oldest one accepted without a marker.
+  if (version !== target) {
+    return {
+      kind: "install",
+      reason: version
+        ? `the active version marker ${activeVersionPath()} names ${version} but the command target names ${target}`
+        : `the active version marker ${activeVersionPath()} is missing or damaged`,
+      fix: `if you use ${target}, ${reactivate}; for another retained version, run that version's aidlc.exe under ${versionsRoot()} with \`use <version>\`; or ${reinstall}`,
+    };
+  }
   try {
+    if (!completeVersion(target)) return null;
     if (!previousWindowsShimHelpers().includes(readFileSync(windowsShimPath(), "utf-8"))) {
       // The installer owns aidlc.cmd only beside its own helper, so both go.
       return {
+        kind: "blocked",
         reason: `${windowsShimPath()} was changed after it was installed`,
         fix: `move ${commandPath()} and ${windowsShimPath()} aside, then ${reactivate}`,
       };
     }
     if (readFileSync(commandPath(), "utf-8") !== windowsShim()) {
       return {
+        kind: "blocked",
         reason: `${commandPath()} was changed after it was installed`,
         fix: `move ${commandPath()} aside, then ${reactivate}`,
       };
     }
-    // The new helper refuses what the oldest one accepted without a marker.
-    const active = readActiveExecutable();
-    if (!version || !active || active !== resolve(installedExecutablePath(version))) {
-      return {
-        reason: "the active version marker and the active command target do not agree",
-        fix: reactivate,
-      };
-    }
-    if (!runningActiveExecutable(active)) {
-      return {
-        reason: `this aidlc.exe is not the active one, ${active}`,
-        fix: "run any command through `aidlc`, for example `aidlc version`",
-      };
-    }
-    return {
-      reason: null,
-      fix: `run \`aidlc version\`; if this row is still here, run \`aidlc use ${version}\`, which rewrites the launcher for the version you have and says why if it cannot`,
-    };
-  } catch (error) {
-    return { reason: error instanceof Error ? error.message : String(error), fix: reinstall };
+  } catch {
+    return null;
   }
+  if (!runningActiveExecutable(active)) {
+    return {
+      kind: "blocked",
+      reason: `this aidlc.exe is not the active one, ${active}`,
+      fix: "run any command through `aidlc`, for example `aidlc version`",
+    };
+  }
+  return {
+    kind: "replace",
+    reason: "the next aidlc command replaces it",
+    fix: `run \`aidlc version\`; if this row is still here, run \`aidlc use ${target}\`, which rewrites the launcher for the version you have and says why if it cannot`,
+  };
 }
 
 // `aidlc update` runs in the binary it replaces, which writes its own helper,
@@ -1371,7 +1389,7 @@ export function previousWindowsShimHelperState(): { reason: string | null; fix: 
 export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
-    if (previousWindowsShimHelperState().reason !== null) return;
+    if (previousWindowsShimHelperState()?.kind !== "replace") return;
     const root = machineTransactionRoot();
     executePlan({
       schemaVersion: 1,

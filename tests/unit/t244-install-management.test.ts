@@ -2016,21 +2016,37 @@ describe("t244 Windows and completion release surfaces", () => {
         writeFileSync(helperPath, previous);
 
         // A damaged marker stops the old helper before aidlc starts, so only
-        // aidlc.exe reaches doctor; its fix keeps the version the target names.
+        // aidlc.exe reaches doctor. No other row reports the marker, so this
+        // one does, and lets the person pick the version to keep.
         writeFileSync(activeVersionPath(), "damaged\n");
         expect(launch("version").exitCode).toBe(4);
         const damaged = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
-          data?: { checks: Array<{ label: string; fix?: string }> };
+          data?: { checks: Array<{ pass: boolean; label: string; fix?: string }> };
         };
         expect(
           (damaged.data?.checks ?? []).filter((check) => check.label.startsWith("Windows launcher:")),
-        ).toEqual([expect.objectContaining({
-          label: expect.stringContaining(
-            "cannot replace it because the active version marker and the active command target do not agree",
-          ),
-          fix: reactivate,
-        })]);
+        ).toEqual([{
+          pass: false,
+          label: `Windows launcher: not checked, because the active version marker ${activeVersionPath()} ` +
+            "is missing or damaged",
+          fix: `if you use ${fixtureVersion}, ${reactivate}; for another retained version, run that ` +
+            `version's aidlc.exe under ${join(installRoot(), "versions")} with \`use <version>\`; ` +
+            "or rerun the same verified AI-DLC installer (install.ps1)",
+        }]);
         reactivated();
+        // A missing command target is the Command pointer row's to report.
+        renameSync(activeExecutablePath(), `${activeExecutablePath()}.aside`);
+        const pointerless = JSON.parse(direct("doctor", "--json", "--project-dir", project).stdout) as {
+          data?: { checks: Array<{ pass: boolean; label: string }> };
+        };
+        const pointerRows = (pointerless.data?.checks ?? []).filter((check) =>
+          check.label.startsWith("Windows launcher:") || check.label.startsWith("Command pointer")
+        );
+        expect(pointerRows).toEqual([expect.objectContaining({
+          pass: false,
+          label: expect.stringContaining("Command pointer is missing"),
+        })]);
+        renameSync(`${activeExecutablePath()}.aside`, activeExecutablePath());
 
         // While another mutation holds the machine lock, as the update does
         // during its version probe, the command runs without waiting and
