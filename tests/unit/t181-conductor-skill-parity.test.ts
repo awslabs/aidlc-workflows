@@ -921,6 +921,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/aidlc-common/protocols/stage-protocol-reviewer.md",
       "core/aidlc-common/stages/inception/requirements-analysis.md",
       "core/hooks/aidlc-review-freeze.ts",
+      "core/tools/aidlc-lib.ts",
     ];
     for (const rel of files) {
       const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
@@ -929,6 +930,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         'If the user requests changes, ask **"What should change?"**',
         'withdraws active summary authorization; ask "What should change?"',
         "Ask the human what should change, then record",
+        'Ask "What should change?" for stage',
         "then re-ask for a final pick",
         "treat it as a request to discuss that question further",
         "ask what outcome they care about most",
