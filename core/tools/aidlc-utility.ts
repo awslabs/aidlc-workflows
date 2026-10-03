@@ -1,6 +1,8 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  constants as fsConstants,
+  copyFileSync,
   cpSync,
   existsSync,
   lstatSync,
@@ -62,7 +64,7 @@ import {
   redactSecretPatterns,
   stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
-import { sha256Bytes } from "./aidlc-distribution.ts";
+import { sha256Bytes, TEAM_MEMORY_FILES } from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -7169,9 +7171,21 @@ function ensureWorkspaceDirs(
   // churns" invariant). This is a deliberate, GUARDED exception to the
   // "never SEED" rule the rest of this function follows.
   const defaultMemory = memoryDirFor(projectDir, DEFAULT_SPACE);
+  const seed = frameworkMemorySeedDir();
   if (!existsSync(defaultMemory)) {
-    const seed = frameworkMemorySeedDir();
     if (existsSync(seed)) cpSync(seed, defaultMemory, { recursive: true });
+  } else {
+    // A copy-channel runtime leaves the team's memory files out so a copy never
+    // replaces them; a fresh copy gets each here, only if it is missing.
+    for (const name of TEAM_MEMORY_FILES) {
+      const source = join(seed, name);
+      if (!existsSync(source)) continue;
+      try {
+        copyFileSync(source, join(defaultMemory, name), fsConstants.COPYFILE_EXCL);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
   }
   // Align the harness-native includes with the active space at bootstrap (first
   // /aidlc). A no-op when they already point there (the common default-cursor
