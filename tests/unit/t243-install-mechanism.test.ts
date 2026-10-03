@@ -2143,7 +2143,9 @@ describe("t243 project initialization", () => {
     const skillBody = "---\nname: my-team-skill\ndescription: A project-owned skill.\n---\n\n# My team skill\n";
     const manifestRel = ".claude/tools/data/aidlc-manifest.json";
 
-    function manifestOf(project: string): { frameworkVersion: string; files: Record<string, string> } {
+    function manifestOf(
+      project: string,
+    ): { frameworkVersion: string; files: Record<string, string>; shippedOnly?: true } {
       return JSON.parse(readFileSync(join(project, manifestRel), "utf-8"));
     }
 
@@ -2224,12 +2226,55 @@ describe("t243 project initialization", () => {
       const retiredBody = "---\nname: aidlc-retired-probe\n---\n\nShipped by an earlier release.\n";
       put(project, retiredRel, retiredBody);
       const manifest = manifestOf(project);
+      expect(manifest.shippedOnly).toBe(true);
       manifest.files[retiredRel] = sha256Bytes(retiredBody);
       writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
 
       const refreshed = refresh(project);
       expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
       expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("project files an older refresh recorded are kept and dropped from the record", () => {
+      const project = installedProject();
+      const notesRel = ".claude/knowledge/team-notes/notes.md";
+      put(project, skillRel, skillBody);
+      put(project, notesRel, "Team notes, edited after the older refresh.\n");
+      const manifest = manifestOf(project);
+      delete manifest.shippedOnly;
+      manifest.files[skillRel] = sha256Bytes(skillBody);
+      manifest.files[notesRel] = sha256Bytes("Team notes.\n");
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      for (let pass = 1; pass <= 2; pass++) {
+        refresh(project);
+        expect(readFileSync(join(project, skillRel), "utf-8"), `refresh ${pass}`).toBe(skillBody);
+        expect(readFileSync(join(project, notesRel), "utf-8"), `refresh ${pass}`)
+          .toBe("Team notes, edited after the older refresh.\n");
+        const after = manifestOf(project);
+        expect(after.files).not.toHaveProperty(skillRel);
+        expect(after.files).not.toHaveProperty(notesRel);
+        expect(after.shippedOnly).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a record-only adoption leaves the manifest unmarked, so the next refresh keeps project files", () => {
+      const project = temp("aidlc-t243-owned-copy-");
+      cpSync(CLAUDE_COPY, project, { recursive: true });
+      mkdirSync(join(project, ".git"));
+      put(project, skillRel, skillBody);
+      const machine = { AIDLC_INSTALL_ROOT: temp("aidlc-t243-owned-machine-") };
+      const recorded = run(INIT, [
+        "config", "models", "--project-dir", project, "--project", "--preset", "balanced", "--yes",
+      ], project, machine);
+      expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+      expect(manifestOf(project).shippedOnly).toBeUndefined();
+
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project, machine);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+      expect(manifestOf(project).files).not.toHaveProperty(skillRel);
+      expect(manifestOf(project).shippedOnly).toBe(true);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   });
 

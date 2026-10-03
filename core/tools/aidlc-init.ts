@@ -226,6 +226,9 @@ type Baseline = {
   harnessDir: string;
   mcpMode: "defaults" | "none";
   files: Record<string, string>;
+  // Set once `files` holds only shipped paths. An older manifest may also
+  // record the project's own files under the harness dir (#1516).
+  shippedOnly?: true;
   entries?: Record<string, Record<string, string>>;
   rootContributions: Record<string, RootContribution>;
 };
@@ -4526,7 +4529,7 @@ function prepareRefreshSource(
       const staged = join(root, rel);
       if (
         existsSync(staged) ||
-        prior?.files[rel] ||
+        (prior?.shippedOnly && prior.files[rel]) ||
         rel === `${descriptor.harnessDir}/tools/data/aidlc-manifest.json` ||
         !generatedOverlayCandidate(rel, descriptor.harnessDir)
       ) continue;
@@ -8276,6 +8279,7 @@ export async function main(
       harnessDir: stamp.harnessDir,
       mcpMode,
       files,
+      ...(!selected.projectProjection || prior?.shippedOnly ? { shippedOnly: true as const } : {}),
       entries: prepared.entries,
       rootContributions,
     };
