@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 1286,
+    "total": 1288,
     "enumeratedByClass": {
-      "function": 954,
+      "function": 956,
       "audit": 110,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 591,
+      "function": 593,
       "audit": 70,
       "scope": 11,
       "stage": 11,
@@ -3667,6 +3667,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:fileIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t329-document-input.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -9033,6 +9045,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t315-plugin-build.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sameFileIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t329-document-input.test.ts",
           "mechanism": "cli"
         }
       ],

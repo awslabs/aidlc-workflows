@@ -28823,12 +28823,23 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
   return current;
 }
 
+/** A file's identity as exact integers. NTFS file IDs keep a sequence number in
+ *  their top 16 bits, so they exceed 2^53 and a JS number rounds them: two files
+ *  created one after the other can read as the same number. */
 export interface FileIdentity {
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
-function sameFileIdentity(
+/** The exact identity of the file at a path, or behind an open descriptor. */
+export function fileIdentity(target: string | number): FileIdentity {
+  const st = typeof target === "number"
+    ? fstatSync(target, { bigint: true })
+    : statSync(target, { bigint: true });
+  return { dev: st.dev, ino: st.ino };
+}
+
+export function sameFileIdentity(
   left: FileIdentity,
   right: FileIdentity,
 ): boolean {
@@ -28907,9 +28918,10 @@ export function readRegularFileNoFollowOrThrow(
   }
   try {
     const st = fstatSync(fd);
+    const identity = fileIdentity(fd);
     if (
       expectedIdentity !== undefined &&
-      !sameFileIdentity(st, expectedIdentity)
+      !sameFileIdentity(identity, expectedIdentity)
     ) {
       throw changedDuringReadError(
         `${what} changed after project-containment validation: ${path}`,
@@ -28967,8 +28979,7 @@ export function readRegularFileNoFollowOrThrow(
           `No path component may be replaced by a symlink while the file is read.`,
       );
     }
-    const current = statSync(currentRealPath);
-    if (current.dev !== st.dev || current.ino !== st.ino) {
+    if (!sameFileIdentity(fileIdentity(currentRealPath), identity)) {
       throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
     let bytes: Buffer;
@@ -29010,9 +29021,8 @@ export function readRegularFileNoFollowOrThrow(
           `No path component may be replaced by a symlink while the file is read.`,
       );
     }
-    const after = statSync(afterRealPath);
     const afterFd = fstatSync(fd);
-    if (after.dev !== st.dev || after.ino !== st.ino ||
+    if (!sameFileIdentity(fileIdentity(afterRealPath), identity) ||
         afterFd.nlink !== 1 || afterFd.size !== st.size ||
         afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
         bytes.length !== st.size) {
