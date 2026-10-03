@@ -198,6 +198,15 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           r.stoppedAfterAskUserQuestion || waitingOnLoggedQuestion,
           `RE never reached its post-artifact human wait: ${JSON.stringify(events.slice(-12))}`,
         ).toBe(true);
+        // That wait belongs to RE: nothing was approved and the engine still
+        // holds RE when the drive stops. Under the test profile, a conductor
+        // that reports RE complete without asking gets it approved with nobody
+        // asked, and the next stage's first question would satisfy the check
+        // above.
+        expect(events, `RE was approved with nobody asked: ${JSON.stringify(events.slice(-12))}`)
+          .not.toContain("GATE_APPROVED");
+        expect(r.stateFile ?? "", "the drive left no state file to read")
+          .toContain("- **Current Stage**: reverse-engineering");
 
         // Defensive fallback for a missing callback snapshot. The native
         // question assertions still apply independently of this file scan.

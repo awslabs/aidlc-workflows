@@ -30,13 +30,12 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
   self-contained.
 
 > [!TIP]
-> For a source-generated `dist/` install, bun must be on the PATH that
-> *non-interactive* shells see
-> — that's what the IDE uses to run a hook or tool. Those shells read
-> `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc`, but the bun
-> installer writes to `~/.zshrc`. If `which bun` works in your terminal yet
-> hooks can't find bun, copy the `BUN_INSTALL`/`PATH` export into
-> `~/.zshenv` (or `~/.bashrc`).
+> For a source-generated `dist/` install, bun must be on the PATH the IDE
+> hands its hooks and tools. Opened from a terminal, the IDE hands them that
+> terminal's PATH, so `bun --version` working there is enough. Opened from the
+> dock or a desktop icon, it may not: if hooks can't find bun, `/aidlc --doctor`
+> names the directory to add and the system-wide file to add it to. Restart the
+> IDE afterwards.
 
 ## Install
 
@@ -382,9 +381,9 @@ ways to enable it, either works:
   (in PowerShell, `New-Item -ItemType File aidlc/.aidlc-hook-debug`)
   in your project. It takes effect on the very next hook fire — no IDE restart —
   and `rm aidlc/.aidlc-hook-debug` turns it back off.
-- **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Because the IDE runs
-  hooks in non-interactive shells, set it where those shells read it — add the
-  export to `~/.zshenv` (zsh) or `~/.bashrc` (bash), then restart the IDE.
+- **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Hooks see the
+  environment the IDE started with, so quit the IDE, then open it from a
+  terminal where the variable is exported.
   On Windows, set it as a user variable in PowerShell instead,
   `[Environment]::SetEnvironmentVariable("AIDLC_HOOK_DEBUG", "1", "User")`,
   then quit and reopen the IDE (run it again with `$null` in place of `"1"` to

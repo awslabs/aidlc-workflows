@@ -171,10 +171,14 @@ npm install -g bun
 bun --version
 ```
 
-For a source-generated `dist/` install, ensure `bun` is on the PATH inherited by the host, such as
-`~/.zshenv` for zsh or `~/.bashrc` for bash and Git Bash, not only an
-interactive-shell file. On native Windows PowerShell, the system PATH entry
-set by `npm install -g bun` is sufficient.
+For a source-generated `dist/` install, `bun` must be on the PATH the harness
+hands its hooks. A harness started from a terminal hands them that terminal's
+PATH, so `bun --version` working there is enough. A harness started from the
+dock, a desktop icon, or a service does not get that PATH: if its hooks do not
+run, the doctor's `Runtime hook PATH` row names the directory to add and the
+system-wide file to add it to; restart the harness afterwards. On native
+Windows PowerShell, the system PATH entry set by `npm install -g bun` is
+sufficient.
 
 ### Kiro IDE hooks not running
 
