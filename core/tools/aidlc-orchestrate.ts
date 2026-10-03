@@ -2994,6 +2994,13 @@ function composeDispatchDirective(
             : ""),
       );
     }
+    // The person's word on new project vs existing code outranks the scan, so
+    // the plan the composer scores is the one creation records.
+    if (flags.projectType) {
+      parts.push(
+        `The person said this is ${flags.projectType === "brownfield" ? "existing code" : "a new project"}: the composer plans it as ${flags.projectType}, passing \`--project-type ${flags.projectType}\` to \`graph ars\` and \`graph validate-grid\` in place of the scan's projectType.`,
+      );
+    }
     if (flags.report) {
       parts.push(
         `First have it read and triage the scan report at "${flags.report}" (auto-fixable vs human-decision findings), then compose a compact fix-and-ship grid - this often routes to the stock bugfix or security-patch scope rather than minting a new one.`,

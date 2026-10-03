@@ -238,6 +238,16 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(String(ask.compose_command)).toContain("--project-type brownfield");
   });
 
+  test("a composed plan is scored with the person's type, not the scan's", () => {
+    const proj = project();
+    const ask = next(proj, ["--project-type", "brownfield", "fix the login timeout bug"]);
+    const d = next(proj, String(ask.compose_command).split(" next ")[1].split(" "));
+    expect(d.kind).toBe("print");
+    expect(String(d.message)).toContain(
+      "The person said this is existing code: the composer plans it as brownfield, passing `--project-type brownfield` to `graph ars` and `graph validate-grid`",
+    );
+  });
+
   test("new work described over a finished workflow takes the type to its creation", () => {
     const proj = project();
     expect(create(proj, "classic").status).toBe(0);
