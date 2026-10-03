@@ -2344,19 +2344,15 @@ describe("t243 project initialization", () => {
     expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
 
-  test("adding a harness on another version than the installed ones is refused while a workflow runs", () => {
-    const project = temp("aidlc-t243-add-version-split-");
+  // Copied harnesses each run their own engine and hooks against the project's
+  // workflows, so these cases drive the copy channel.
+  function kiroUnderRunningWorkflow(prefix: string): { project: string; stampPath: string; kiroStamp: Record<string, unknown> } {
+    const project = temp(prefix);
     mkdirSync(join(project, ".git"));
     const kiro = run(INIT, [
       "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
     ], project);
     expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
-    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
-    const kiroStamp = JSON.parse(readFileSync(stampPath, "utf-8")) as { frameworkVersion: string };
-    const addClaude = (...extra: string[]) => run(INIT, [
-      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
-    ], project);
-
     const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
     const intentDir = join(intentsDir, "260919-add-split");
     mkdirSync(intentDir, { recursive: true });
@@ -2368,17 +2364,27 @@ describe("t243 project initialization", () => {
       status: "in-flight",
     }], null, 2)}\n`);
     writeFileSync(join(intentDir, "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    return { project, stampPath, kiroStamp: JSON.parse(readFileSync(stampPath, "utf-8")) };
+  }
 
-    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+  test("a copied harness added from another release while a workflow runs is refused with the fetch of the running release", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-split-");
+    const addClaude = (...extra: string[]) => run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
+    ], project);
+
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
     const refused = addClaude("--yes");
     expect(refused.status, refused.stdout + refused.stderr).toBe(4);
     const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
     expect(payload.message).toContain(
-      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
+      `the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (default/260919-add-split) uses ${NEXT_VERSION}`,
     );
-    expect(payload.message).toContain("kiro 2.9.0");
-    expect(payload.remediation ?? "").toContain("--dry-run");
-    expect(payload.remediation ?? "").not.toMatch(/config --harness/);
+    expect(payload.message).toContain(`aidlc-copy-runtime-${NEXT_VERSION}.tar.gz`);
+    // The rerun fetches the running release instead of the files named.
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
     expect(existsSync(join(project, ".claude"))).toBe(false);
     const previewed = addClaude("--dry-run");
     expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
@@ -2387,6 +2393,52 @@ describe("t243 project initialization", () => {
     const added = addClaude("--yes");
     expect(added.status, added.stdout + added.stderr).toBe(0);
     expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied harness added beside a release that predates sharing a project waits for the workflow", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-predates-");
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    // Before harnesses could share a project, no release shared .gitignore.
+    const descriptorPath = join(project, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<Record<string, unknown>>;
+    };
+    for (const integration of descriptor.rootIntegrations) delete integration.shared;
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
+    );
+    expect(payload.message).toContain("kiro 2.9.0");
+    expect(payload.remediation ?? "").toContain("Complete the workflow");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness|--download/);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned project's add from other files names the pinned release, not the running workflow", () => {
+    const { project } = kiroUnderRunningWorkflow("aidlc-t243-add-version-pinned-");
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const source = temp("aidlc-t243-add-version-source-");
+    cpSync(CLAUDE_RELEASE, source, { recursive: true });
+    const sourceStamp = join(source, ".claude", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(sourceStamp, "utf-8"));
+    writeFileSync(sourceStamp, `${JSON.stringify({ ...stamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", source, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${NEXT_VERSION}, but this project is pinned to ${AIDLC_VERSION}`,
+    );
+    expect(payload.message).not.toContain("refusing to add");
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("adding a harness on another version is allowed once no workflow runs", () => {
