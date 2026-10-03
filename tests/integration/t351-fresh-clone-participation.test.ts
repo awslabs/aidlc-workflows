@@ -376,7 +376,8 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     }).code).toBe(0);
     expect(readSessionBinding(proj, SESSION)).toMatchObject({ intent: record, source: "switch" });
     expect(readSessionIntentUuid(proj, SESSION)).toBe(stamp);
-    expect(readSessionIntentHandoff(proj, SESSION)).toBeNull();
+    // Only the switch's own receipt is there, until the next prompt (#1263).
+    expect(readSessionIntentHandoff(proj, SESSION)).toMatchObject({ via: "switch", toIntentUuid: stamp });
     expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("participant");
   });
 

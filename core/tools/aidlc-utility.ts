@@ -94,8 +94,7 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
-  copilotConfigPath,
-  copilotFolderTrusted,
+  copilotCliTrust,
   insideGitRepository,
   instructionFileDoctorCheck,
   runtimeDoctorChecks,
@@ -290,6 +289,11 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeFileAtomic,
+  readSessionIntentUuid,
+  recordSessionIntentSwitch,
+  clearSessionIntentHandoff,
+  LONE_INTENT_PREFIX,
+  recordIntentKey,
   writeSessionIntentUuid,
   writeSessionBinding,
   writeStateFile,
@@ -4001,51 +4005,46 @@ export async function collectDoctorReport(
       });
     }
     // Folder trust: the CLI skips repo hooks in a folder its trustedFolders
-    // does not cover. copilotConfigPath finds the file where the CLI does
-    // (USERPROFILE on Windows), and copilotFolderTrusted matches entries the
-    // way the CLI does (parent folders count; Windows ignores case). The CLI
-    // writes JSONC (line/block/inline comments plus trailing commas). A folder
-    // the CLI has not trusted is a warning: only headless `copilot -p` runs
-    // skip the hooks silently, the interactive CLI asks first, and VS Code
-    // gates hooks on its own Workspace Trust, never on this list. An absent
-    // config is ADVISORY because a VS Code-only install has no CLI config; an
-    // existing unreadable or malformed config fails because CLI hook trust
-    // cannot be verified.
-    const configPath = copilotConfigPath();
-    try {
-      if (!existsSync(configPath)) {
-        results.push({
-          pass: true,
-          label:
-            "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
-        });
-      } else {
-        const raw = readFileSync(configPath, "utf-8");
-        const trusted =
-          (Bun.JSONC.parse(raw) as { trustedFolders?: unknown }).trustedFolders;
-        results.push(
-          copilotFolderTrusted(projectDir, Array.isArray(trusted) ? trusted : [])
-            ? {
-                pass: true,
-                label:
-                  "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
-              }
-            : {
-                pass: false,
-                severity: "warn",
-                label:
-                  "Copilot CLI has not trusted this folder: `copilot -p` runs skip the hooks, interactive runs ask first (VS Code does not use this list)",
-                fix: `add ${JSON.stringify(projectDir)} to trustedFolders in ${configPath} (or accept the CLI's interactive trust prompt)`,
-              },
-        );
-      }
-    } catch {
+    // does not cover. copilotCliTrust finds the file where the CLI does
+    // (USERPROFILE on Windows), reads the list the CLI reads, and matches
+    // entries the way the CLI does (parent folders count; Windows ignores
+    // case). The CLI writes JSONC (line/block/inline comments plus trailing
+    // commas). A folder the CLI has not trusted is a warning: only headless
+    // `copilot -p` runs skip the hooks silently, the interactive CLI asks
+    // first, and VS Code gates hooks on its own Workspace Trust, never on
+    // this list. An absent config is ADVISORY because a VS Code-only install
+    // has no CLI config; an existing unreadable or malformed config fails
+    // because CLI hook trust cannot be verified.
+    const cliTrust = copilotCliTrust(projectDir);
+    if (cliTrust.state === "absent") {
+      results.push({
+        pass: true,
+        label:
+          "~/.copilot/config.json absent (fine for VS Code-only installs; for the CLI, one interactive run records folder trust - hooks silently no-op untrusted)",
+      });
+    } else if (cliTrust.state === "unreadable") {
       results.push({
         pass: false,
         label:
           "could not parse ~/.copilot/config.json to verify folder trust (CLI hooks silently no-op untrusted)",
-        fix: `repair ${configPath} as valid JSONC, then re-run doctor`,
+        fix: `repair ${cliTrust.configPath} as valid JSONC, then re-run doctor`,
       });
+    } else {
+      results.push(
+        cliTrust.state === "trusted"
+          ? {
+              pass: true,
+              label:
+                "project folder in ~/.copilot/config.json trustedFolders (CLI hooks silently no-op without it)",
+            }
+          : {
+              pass: false,
+              severity: "warn",
+              label:
+                "Copilot CLI has not trusted this folder: `copilot -p` runs skip the hooks, interactive runs ask first (VS Code does not use this list)",
+              fix: `run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(projectDir)} to trustedFolders in ${cliTrust.configPath} yourself`,
+            },
+      );
     }
     // Headless reminder (advisory pass-with-label): -p/prompt-mode runs skip
     // repo hooks unless the env var opts in.
@@ -8120,7 +8119,20 @@ function handleIntent(
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName, "switch");
     clearSessionRebindOffer(projectDir, sid);
+    const priorUuid = readSessionIntentUuid(projectDir, sid);
+    // A record with no registry row has no UUID: the stamp of the intent the
+    // session came from is cleared, so it cannot pull the session back there.
     if (match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
+    else clearSessionIntentUuid(projectDir, sid);
+    // The session now reads another intent's coordination, which never saw
+    // this turn's prompt. Leave the Stop hook the same one-shot receipt intent
+    // creation leaves, so a turn that only selected ends here instead of being
+    // sent to drive the selection. A self-switch, or a switch back to where the
+    // turn started, crosses no boundary.
+    if (match.uuid) recordSessionIntentSwitch(projectDir, sid, priorUuid, match.uuid);
+    else if (selection.space !== space || selection.intent !== match.dirName) {
+      recordSessionIntentSwitch(projectDir, sid, priorUuid, recordIntentKey(space, match.dirName));
+    }
   }
   process.stdout.write(`Active intent -> ${match.dirName} (space: ${space})\n`);
 }
@@ -8333,6 +8345,10 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
   const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
+  const priorUuid = sessionId ? readSessionIntentUuid(projectDir, sessionId) : null;
+  let spaceHasNoIntent = false;
+  let loneIntent: string | null = null;
+  let cursorRecord: string | null = null;
   if (sessionId) {
     // The space is chosen; its intent is found by the cursor or the lone rule.
     // A record the binding cannot carry leaves the session in the space with no intent.
@@ -8344,6 +8360,8 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
         : targetIntent === readActiveIntentCursor(projectDir, target)
           ? "space-switch-cursor"
           : "space-switch-lone";
+    spaceHasNoIntent = source === "space-switch-none";
+    loneIntent = source === "space-switch-lone" ? targetIntent : null;
     writeSessionBinding(projectDir, sessionId, target, targetIntent, source);
     clearSessionRebindOffer(projectDir, sessionId);
     // A stamp joins the session on resume, so only the record the space's own
@@ -8353,6 +8371,24 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       : undefined;
     if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
     else clearSessionIntentUuid(projectDir, sessionId);
+    if (!uuid && source === "space-switch-cursor") cursorRecord = targetIntent;
+  }
+  // Same Stop receipt as an intent switch (see handleIntent), from the stamp
+  // this switch replaced to the one it wrote. A space with no intent clears
+  // the stamp, so it leaves none; leaving it later starts from no intent.
+  if (sessionId) {
+    const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+    if (stampedUuid) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, stampedUuid);
+    // The cursor names a record with no registry row: the receipt names it by
+    // space and record, as an intent switch to it does.
+    else if (cursorRecord) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, recordIntentKey(target, cursorRecord));
+    // A space with no intent ends the turn on its own (no workflow to drive),
+    // so an earlier switch's receipt is spent here rather than left for a later
+    // turn to chain onto. A space whose lone record the session only selects
+    // (no stamp) records the move from the turn's origin to that record, so a
+    // switch back to where the turn started still cancels it.
+    else if (loneIntent) recordSessionIntentSwitch(projectDir, sessionId, priorUuid, `${LONE_INTENT_PREFIX}${loneIntent}`);
+    else if (spaceHasNoIntent) clearSessionIntentHandoff(projectDir, sessionId);
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
   // loads its method into ambient context (the cursor alone only moves AIDLC's

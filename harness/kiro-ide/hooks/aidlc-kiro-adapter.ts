@@ -2761,8 +2761,8 @@ function buildForward(): Forward {
       // what the human sees.
       // Modern Stop carries the exact chat identity. Prefer it over the
       // workspace-global SessionStart marker so concurrent chats cannot consume
-      // one another's post-create handoff receipt; retain the marker for legacy
-      // agentStop and broken modern channels.
+      // one another's post-create or post-switch handoff receipt; retain the
+      // marker for legacy agentStop and broken modern channels.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: {

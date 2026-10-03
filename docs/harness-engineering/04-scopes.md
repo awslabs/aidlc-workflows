@@ -52,11 +52,12 @@ files in the error. Invalid ceremony values are rejected with the file, key,
 and the two allowed values. Resolution is kill switch (`1`) → valid intent
 line → scope default → on. Every shipped scope declares all four ceremony keys
 explicitly rather than leaning on the default: classic declares sensors,
-learnings, and plan approval on and summary confirmation off, express declares
-all four off, poc declares plan approval off and the other three on, and the
-other eight declare all four on. Classic's gated flow also caps reviews to
-one advisory pass and disables walking-skeleton ceremony, while explicit autonomy
-keeps the single pre-merge review.
+learnings, and plan approval on and summary confirmation off, bugfix declares
+sensors and plan approval on and learnings and summary confirmation off,
+express declares all four off, poc declares plan approval off and the other
+three on, and the other seven declare all four on. Classic's gated flow also
+caps reviews to one advisory pass and disables walking-skeleton ceremony, while
+explicit autonomy keeps the single pre-merge review.
 
 Express turns sensors, learnings, and summary confirmation off; override them
 per intent with [`/aidlc --sensors on|off`](../guide/12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),

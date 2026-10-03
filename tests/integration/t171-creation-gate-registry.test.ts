@@ -207,6 +207,37 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(recordDirs(proj).length).toBe(2); // read-only: no third intent yet
     });
 
+    // Finished either way: the registry row (complete-workflow) or only the
+    // state file (finalize).
+    for (const finishedBy of ["registry", "state"] as const) {
+      test(`beside live work, work finished in the ${finishedBy} is neither listed nor counted`, () => {
+        const [finished, live] = seedTwoIntentsNoCursor();
+        if (finishedBy === "registry") {
+          const rows = readIntentRegistry(proj).map((row) =>
+            row.dirName === finished ? { ...row, status: "complete" } : row,
+          );
+          writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+        } else {
+          const statePath = join(intentsDir(proj), finished, "aidlc-state.md");
+          const state = readFileSync(statePath, "utf-8");
+          expect(state).toMatch(/^- \*\*Status\*\*: /m);
+          writeFileSync(statePath, state.replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
+        }
+        const pick = JSON.parse(next(["--scope", "poc"]).stdout.trim());
+        expect(pick.ask_type).toBe("intent-pick");
+        expect(pick.question).toContain("1 piece of work in progress");
+        expect(pick.question).toContain(live);
+        expect(pick.question).not.toContain(finished);
+        expect(pick.available_intents).toEqual([live]);
+        const routing = JSON.parse(next(["--scope", "poc", "a brand new standalone thing"]).stdout.trim());
+        expect(routing.ask_type).toBe("new-work-routing");
+        expect(routing.question).toContain("1 piece of work in progress");
+        expect(routing.question).not.toContain(finished);
+        expect(routing.available_intents).toEqual([live]);
+        expect(recordDirs(proj).length).toBe(2); // read-only
+      });
+    }
+
     for (const selector of ["customer work", "x; touch pwned"]) {
       test(`intent picker executes literal selector ${selector}`, () => {
         const records = seedTwoIntentsNoCursor();

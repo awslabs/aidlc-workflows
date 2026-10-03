@@ -144,7 +144,8 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
     const bf = counts(GRID.bugfix.stages, true);
-    expect(q).toContain(costClause(bf));
+    // bugfix asks no learnings question and no summary confirmation, and says so up front.
+    expect(q).toContain(`${costClause(bf)}; no learnings ritual or summary confirmation.`);
     expect(q).not.toContain("per unit of work");
   });
 
@@ -193,7 +194,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
-    expect(m).toContain(`(${costClause(bf)})`);
+    expect(m).toContain(`(${costClause(bf)}; no learnings ritual or summary confirmation)`);
     expect(m).not.toContain("per unit of work");
   });
 

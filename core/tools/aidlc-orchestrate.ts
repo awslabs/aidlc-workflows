@@ -130,6 +130,7 @@ import {
   workflowParticipation,
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
+  clearSessionIntentSwitch,
   activeUnitCheckpoint,
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
@@ -369,6 +370,7 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
+import { codeGenerationResumeNarration } from "./aidlc-testing-posture.ts";
 import {
   planApprovalOffAtCreation,
   planApprovalEnv,
@@ -569,6 +571,14 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const line = narratePerUnitBeat(directive);
     if (line === null) delete directive.narration;
     else directive.narration = line;
+  }
+  // A Code Generation build cut off part way and picked up again: the person
+  // hears where it picks up instead of the stage starting over. Nothing ticked,
+  // or a build that has not started under the current approval, says nothing new.
+  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
+    const projectDir = emissionProjectDir(directive);
+    const line = projectDir ? codeGenerationResumeNarration(projectDir, directive.unit ?? null) : null;
+    if (line !== null) directive.narration = line;
   }
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
@@ -801,6 +811,16 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
+  // Stage work handed to the session, by any path (a fresh publication, the
+  // same work handed over again, or a `continue` to the next part), ends a
+  // switch's one-shot stop, so the loop holds it like any other work (#1263).
+  const kind = prepared.transported.kind;
+  if (
+    prepared.projectDir && !isReadOnlyEngineProbe() &&
+    (kind === "run-stage" || kind === "load-steering" || kind === "invoke-swarm")
+  ) {
+    clearSessionIntentSwitch(prepared.projectDir);
+  }
 }
 
 function legacyPlanApprovalRecoveryDirective(): AskDirective {
@@ -1491,13 +1511,28 @@ function scopeCommands(
   }));
 }
 
-// The depth and test strategy typed with a description ride on the plan
-// offer's answer commands, so the work the person confirms is created with
-// them. Both were checked against the level words when parsed.
+// The depth, test strategy, and sensors, learnings, and summary confirmation
+// switches typed with a description ride on the plan offer's answer commands,
+// so the work the person confirms is created as the offer previewed it. Each
+// was checked against its allowed words when parsed. Plan approval rides only
+// as on: only the person's own words turn it off, on their own path.
+const CARRIED_CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+
+function carriedCeremonyFlags(flags: ParsedFlags): string[] {
+  const carried: string[] = [];
+  for (const key of CARRIED_CEREMONY_KEYS) {
+    const value = flags.ceremony?.[key];
+    if (value) carried.push(`${CEREMONY_FLAGS[key]} ${value}`);
+  }
+  if (flags.ceremony?.plan_approval === "on") carried.push(`${CEREMONY_FLAGS.plan_approval} on`);
+  return carried;
+}
+
 function carriedCreationFlags(flags: ParsedFlags): string {
   const carried: string[] = [];
   if (flags.depth) carried.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) carried.push(`--test-strategy ${flags.testStrategy}`);
+  carried.push(...carriedCeremonyFlags(flags));
   return carried.length > 0 ? ` ${carried.join(" ")}` : "";
 }
 
@@ -2947,15 +2982,19 @@ function composeDispatchDirective(
           `On approval, run \`next --scope <scopeName> --request ${flags.request} -- <creationDescription>\` (a custom plan names its baseScope instead and adds its typed changes, below), with the description as one shell-safe argument: the request id ties this work to its gate, and it works once.`,
       );
     }
-    // Levels typed with the request ride on to creation: a typed depth
-    // replaces the plan's creationDepth, a typed test strategy keeps it.
+    // Levels and switches typed with the request ride on to creation: a typed
+    // depth replaces the plan's creationDepth, a typed test strategy keeps it,
+    // and a typed switch is the person's value for that setting.
     const typedLevels = carriedCreationFlags(flags).trim();
     if (typedLevels) {
       parts.push(
         `This request carries ${typedLevels}: add exactly that to the approval's \`next\` command` +
           (flags.depth
             ? ", in place of any creationDepth."
-            : ", alongside --depth <creationDepth> when the proposal carries one."),
+            : ", alongside --depth <creationDepth> when the proposal carries one.") +
+          (carriedCeremonyFlags(flags).length > 0
+            ? " A switch typed here is the person's choice: show it on the gate's Scope settings row and pass it in place of any creationSettings flag for the same setting."
+            : ""),
       );
     }
     if (flags.report) {
@@ -3010,11 +3049,11 @@ function composeDispatchDirective(
 //
 // This consults the deterministic query layer (listIntents over the active
 // space) and, when intents EXIST but none is flagged active, NAMES the
-// disambiguation move as an `ask` directive that lists the existing intents and
+// disambiguation move as an `ask` directive that lists the unfinished intents and
 // asks the human to pick one via `/aidlc intent <name>` - instead of creating.
-// Returns null when creation should proceed unchanged (zero intents in the space,
-// or one already resolved active — the latter only when this is reached with an
-// explicit scope/intent that didn't load a cursor'd state). The engine stays
+// Returns null when creation should proceed unchanged (zero unfinished intents
+// in the space, or one already resolved active - the latter only when this is
+// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
@@ -3025,18 +3064,20 @@ function intentPickPromptIfRecordsExist(
   // Archived intents are retired work: they never block creation and are never
   // offered as a pick (the listing shows them only under --all). A space whose
   // every record is archived therefore reads as zero intents here.
-  const intents = listIntents(projectDir, space, selection.intent).filter(
+  const recorded = listIntents(projectDir, space, selection.intent).filter(
     (intent) => !isArchivedIntent(intent),
   );
-  if (intents.length === 0) return null; // zero intents → creation is correct
-  // Finished work alone leaves nothing to continue, so new work is created
-  // rather than asked about. Beside live work it stays listed, annotated.
-  if (intents.every((intent) => isCompletedIntent(intent))) return null;
-  if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a creation path
+  if (recorded.length === 0) return null; // zero intents -> creation is correct
+  if (recorded.some((i) => i.active)) return null; // a cursor already resolves -> not a creation path
   // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
   // Carry exact record-dir selectors accepted by `intent <name>`. Slugs remain
   // display labels because duplicate labels are legal and ambiguous to switch.
-  const intentStates = intents.map((intent) => {
+  // Finished work has nothing left to continue or reshape, so it is neither
+  // listed nor counted as work in progress, and a space holding only finished
+  // work creates. Either signal marks it finished: the registry row, or the
+  // state file a finalize completed. `intent list` and `intent <record>` still
+  // reach it.
+  const intentStates = recorded.map((intent) => {
     let state = "";
     if (intent.dirName) {
       try {
@@ -3049,7 +3090,11 @@ function intentPickPromptIfRecordsExist(
       }
     }
     return { intent, state };
-  });
+  }).filter(({ intent, state }) =>
+    !isCompletedIntent(intent) && getField(state, "Status") !== "Completed"
+  );
+  const intents = intentStates.map(({ intent }) => intent);
+  if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
   const present = intentStates.filter(({ intent }) => intent.dirName);
@@ -3076,15 +3121,10 @@ function intentPickPromptIfRecordsExist(
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
     if (annotate) {
-      const completed =
-        intent.status.toLowerCase() === "complete" ||
-        getField(state, "Status") === "Completed";
       const parked = (getField(state, "Parked") ?? "").trim();
       const parkedAt = (getField(state, "Parked At Stage") ?? "").trim();
       const currentStage = (getField(state, "Current Stage") ?? "").trim();
-      if (completed) {
-        annotation = "complete";
-      } else if (parked && parkedAt && parkedAt === currentStage) {
+      if (parked && parkedAt && parkedAt === currentStage) {
         annotation = `parked at ${parkedAt}`;
       } else if (
         intent.dirName &&
@@ -5329,9 +5369,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     ));
     return;
   }
+  // A plan offer's compose answer carries the switches typed with its request
+  // on to the composer and creation, so only other compose runs are refused.
+  const offerCompose = flags.compose === true && question?.origin === "front";
   if (
     flags.ceremony &&
-    (flags.readOnly || flags.config || flags.workspaceCommand || flags.compose ||
+    (flags.readOnly || flags.config || flags.workspaceCommand || (flags.compose && !offerCompose) ||
       flags.newScope || flags.report || flags.single || flags.stage || flags.phase || flags.resume)
   ) {
     emit(errorDirective(

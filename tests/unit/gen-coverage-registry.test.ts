@@ -836,6 +836,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next` and `continue` on the packaged Copilot tree: the
     // printed result is what VS Code's terminal tool keeps or cuts
     "unit/t-copilot-directive-budget.test.ts",
+    // spawns the real `next`, human-turn hook, guard, and `testing-posture brief`:
+    // what an interrupted build is handed, and what the person hears, cross them
+    "unit/t-code-generation-resume.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",

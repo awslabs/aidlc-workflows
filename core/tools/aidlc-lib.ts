@@ -6019,6 +6019,36 @@ export interface SessionIntentHandoff {
   fromIntentUuid: string;
   toIntentUuid: string;
   issuedAtMs: number;
+  /** Set by `/aidlc intent` and `/aidlc space`; a creation receipt has none. */
+  via?: "switch";
+}
+
+// The `from` of a switch out of a session with no intent stamp, such as an
+// empty space or a fresh chat that picked no intent yet. It still crosses a
+// boundary, and no intent has this UUID, so nothing settles against it.
+export const NO_PRIOR_INTENT = "none";
+
+// The `to` of a switch into a space whose lone record the session only
+// selects (no stamp). No stamp ever equals it, so the Stop hook never ends a
+// turn on it, and a switch back to the turn's origin still cancels the chain.
+export const LONE_INTENT_PREFIX = "lone:";
+
+// The `to` of a switch onto a record with no intents.json row (hand-made,
+// migrated, or a damaged registry), which has no UUID to name it: the exact
+// space and record the session now selects. The Stop hook ends a selection
+// turn on it only when the session selects that record and carries no stamp.
+export const RECORD_INTENT_PREFIX = "record:";
+
+export function recordIntentKey(space: string, dirName: string): string {
+  return `${RECORD_INTENT_PREFIX}${space}/${dirName}`;
+}
+
+export function parseRecordIntentKey(key: string): { space: string; dirName: string } | null {
+  if (!key.startsWith(RECORD_INTENT_PREFIX)) return null;
+  const rest = key.slice(RECORD_INTENT_PREFIX.length);
+  const slash = rest.indexOf("/");
+  if (slash <= 0 || slash === rest.length - 1) return null;
+  return { space: rest.slice(0, slash), dirName: rest.slice(slash + 1) };
 }
 
 function sessionIntentHandoffPath(projectDir: string, sessionId: string): string {
@@ -6026,14 +6056,16 @@ function sessionIntentHandoffPath(projectDir: string, sessionId: string): string
   return recordPath ? `${recordPath}.handoff.json` : "";
 }
 
-// Record the exact second-intent boundary for the session that created it.
-// This receipt is transient and one-shot: the Stop hook validates both UUIDs
-// before allowing the old conversation to end, then clears it.
+// Record the exact intent boundary a session crossed by creating a second
+// intent or switching to another one. This receipt is transient and one-shot:
+// the Stop hook validates both UUIDs before allowing that turn to end, then
+// clears it.
 export function writeSessionIntentHandoff(
   projectDir: string,
   sessionId: string,
   fromIntentUuid: string,
   toIntentUuid: string,
+  via?: "switch",
 ): void {
   const path = sessionIntentHandoffPath(projectDir, sessionId);
   if (!path || !fromIntentUuid || !toIntentUuid || fromIntentUuid === toIntentUuid) return;
@@ -6045,6 +6077,7 @@ export function writeSessionIntentHandoff(
         fromIntentUuid,
         toIntentUuid,
         issuedAtMs: Date.now(),
+        ...(via ? { via } : {}),
       } satisfies SessionIntentHandoff)}\n`,
       "utf-8",
     );
@@ -6078,7 +6111,12 @@ export function readSessionIntentHandoff(
         handoff.fromIntentUuid !== handoff.toIntentUuid &&
         Number.isFinite(handoff.issuedAtMs)
       ) {
-        return handoff;
+        return {
+          fromIntentUuid: handoff.fromIntentUuid,
+          toIntentUuid: handoff.toIntentUuid,
+          issuedAtMs: handoff.issuedAtMs,
+          ...(handoff.via === "switch" ? { via: "switch" as const } : {}),
+        };
       }
     }
   } catch {
@@ -6094,6 +6132,45 @@ export function clearSessionIntentHandoff(projectDir: string, sessionId: string)
     unlinkSync(path);
   } catch {
     /* absent/unwritable per-user runtime state; best-effort */
+  }
+}
+
+// `/aidlc intent` or `/aidlc space` moved the session from `priorUuid` (null:
+// no stamp) to `toUuid`. The receipt runs from the intent whose coordination
+// saw this turn's prompt: a fresh receipt left earlier keeps its `from`, and a
+// switch back to that intent crosses no boundary, so the receipt is cleared
+// instead of leaving a free stop on the intent being worked (#1263).
+export function recordSessionIntentSwitch(
+  projectDir: string,
+  sessionId: string,
+  priorUuid: string | null,
+  toUuid: string,
+): void {
+  const earlier = readSessionIntentHandoff(projectDir, sessionId);
+  const now = Date.now();
+  const chained = earlier !== null && earlier.issuedAtMs <= now &&
+    now - earlier.issuedAtMs <= SESSION_INTENT_HANDOFF_TTL_MS;
+  const from = chained ? earlier.fromIntentUuid : priorUuid ?? NO_PRIOR_INTENT;
+  if (from === toUuid) {
+    if (earlier) clearSessionIntentHandoff(projectDir, sessionId);
+    return;
+  }
+  writeSessionIntentHandoff(projectDir, sessionId, from, toUuid, "switch");
+}
+
+// Stage work handed to the session ends a switch's one-shot stop: from there
+// the Stop hook holds the loop on the destination as on any intent. A
+// creation's receipt is left as it is.
+// (The person's next prompt spends any receipt left from an earlier turn: see
+// the human-turn hook.)
+export function clearSessionIntentSwitch(projectDir: string): void {
+  try {
+    const sessionId = resolveWorkflowSelection(projectDir).sessionId ?? readCurrentSessionId(projectDir);
+    if (sessionId && readSessionIntentHandoff(projectDir, sessionId)?.via === "switch") {
+      clearSessionIntentHandoff(projectDir, sessionId);
+    }
+  } catch {
+    /* per-user runtime state; a receipt left behind expires on its own */
   }
 }
 

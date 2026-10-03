@@ -504,10 +504,10 @@ override an intent's scope default (only the person turns plan approval off).
 `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
 `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
 force the respective ceremony off. Classic enables sensors, learnings, and plan
-approval and disables summary confirmation; express and poc disable plan
-approval. Apart from plan approval off, which builds each code plan without
-asking, stage approvals, human-turn authority, audit, and team write protection
-remain in force.
+approval and disables summary confirmation; bugfix disables learnings and
+summary confirmation; express and poc disable plan approval. Apart from plan
+approval off, which builds each code plan without asking, stage approvals,
+human-turn authority, audit, and team write protection remain in force.
 
 ---
 
