@@ -30290,44 +30290,44 @@ function latestMainWorkflowStageRunFloorFromRows(
 }
 
 // The stage starts recorded while stage-major flooring was in force, read from
-// the CONSTRUCTION_POLICY_SET rows the typed setters write. Before the first
-// change the flooring is that row's previous one; after the last change it is
-// the caller's current unit-major flooring. With no change recorded the set is
+// the CONSTRUCTION_POLICY_SET rows the typed setters write. Each row records the
+// policy it found in the state (its Previous Value, and the other field it left
+// alone), so a start reads the policy of the first change after it: a row whose
+// state write failed is corrected by the next one. A start after the last
+// change follows the caller's current unit-major flooring. A start in the same
+// second as a change recorded in another shard cannot be ordered against it, so
+// it counts, whatever the shard filenames. With no change recorded the set is
 // empty: under unit-major flooring no stage start counts, as always.
 function stageStartsUnderStageFlooring(
   rows: readonly AuditShardEvent[],
 ): Set<AuditShardEvent> {
   const counted = new Set<AuditShardEvent>();
-  const ordered = sortAttemptEvents(
-    rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET" || row.event === "STAGE_STARTED"),
-  );
-  const first = ordered.find((row) => row.event === "CONSTRUCTION_POLICY_SET");
-  const last = ordered.findLastIndex((row) => row.event === "CONSTRUCTION_POLICY_SET");
-  if (!first) return counted;
-  let stageFlooring = !constructionPolicyFloorsUnitMajor(first, "before");
-  for (const row of ordered.slice(0, last)) {
-    if (row.event === "CONSTRUCTION_POLICY_SET") {
-      stageFlooring = !constructionPolicyFloorsUnitMajor(row, "after");
-    } else if (stageFlooring) {
-      counted.add(row);
+  const changes = sortAttemptEvents(rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET"));
+  if (changes.length === 0) return counted;
+  for (const start of rows) {
+    if (start.event !== "STAGE_STARTED") continue;
+    if (changes.some((change) => change.timestamp === start.timestamp && change.shard !== start.shard)) {
+      counted.add(start);
+      continue;
     }
+    const closing = changes.find((change) =>
+      change.timestamp > start.timestamp ||
+      (change.timestamp === start.timestamp && change.pos > start.pos));
+    if (closing && !constructionPolicyFoundUnitMajor(closing)) counted.add(start);
   }
   return counted;
 }
 
-// The flooring a recorded policy change left (or found) in force: unit-major
-// when Construction Iteration is unit-major or Construction Checkpoints are
-// enabled, the same rule the lifecycle readers apply to the state file.
-function constructionPolicyFloorsUnitMajor(
-  row: AuditShardEvent,
-  side: "before" | "after",
-): boolean {
-  const value = (field: string): string | null =>
-    side === "before" && auditBlockField(row.block, "Field") === field
+// Whether a recorded policy change found unit-major flooring in force: Construction
+// Iteration unit-major or Construction Checkpoints enabled before the change, the
+// same rule the lifecycle readers apply to the state file.
+function constructionPolicyFoundUnitMajor(row: AuditShardEvent): boolean {
+  const before = (field: string): string | null =>
+    auditBlockField(row.block, "Field") === field
       ? auditBlockField(row.block, "Previous Value")
       : auditBlockField(row.block, field);
-  return value("Construction Iteration") === "unit-major" ||
-    value("Construction Checkpoints") === "enabled";
+  return before("Construction Iteration") === "unit-major" ||
+    before("Construction Checkpoints") === "enabled";
 }
 
 // The set of units the CURRENT attempt of `slug` has genuinely converged and

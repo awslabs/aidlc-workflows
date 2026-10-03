@@ -986,6 +986,46 @@ describe("t260 finished Units keep their receipts across a Construction policy c
     expect(latestMainWorkflowStageRunFloor(audit, SLUG, false)).toBe("STAGE_STARTED:2026-01-03T00:00:00Z#1");
   });
 
+  // A change whose state write failed leaves its row behind; the start and the
+  // Unit finished while the old policy still held keep counting after the retry.
+  test("a change that never reached the state does not take away work done before the retry", () => {
+    policyProject("unit-major");
+    const change = (ts: string) =>
+      block("CONSTRUCTION_POLICY_SET", ts, "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n");
+    appendFileSync(
+      seededAuditShard(proj),
+      change("2026-01-03T00:00:00Z") +
+        block("STAGE_STARTED", "2026-01-04T00:00:00Z", `**Stage**: ${SLUG}\n`) +
+        block("UNIT_COMPLETED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:2026-01-04T00:00:00Z#2\n`) +
+        change("2026-01-06T00:00:00Z"),
+    );
+    writeUnitArtifacts(proj, "unit-a");
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true)).toBe("STAGE_STARTED:2026-01-04T00:00:00Z#2");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  // Two clones can record a change and a stage start in the same second. Their
+  // order is unknowable, so the start counts whichever shard sorts first.
+  test("a stage start in the same second as a change in another shard does not depend on shard names", () => {
+    const floors: string[] = [];
+    for (const [changeShard, startShard] of [["aaaa-one.md", "zzzz-two.md"], ["zzzz-one.md", "aaaa-two.md"]]) {
+      policyProject("unit-major");
+      writeFileSync(
+        join(seededAuditDir(proj), changeShard),
+        "# AI-DLC Audit Log\n" +
+          block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n"),
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), startShard),
+        `# AI-DLC Audit Log\n${block("STAGE_STARTED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n`)}`,
+      );
+      floors.push(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true));
+      cleanupTestProject(proj);
+      proj = "";
+    }
+    expect(floors).toEqual(["STAGE_STARTED:2026-01-03T00:00:00Z#2", "STAGE_STARTED:2026-01-03T00:00:00Z#2"]);
+  });
+
   // Swarm convergence and the Plan Approval batch context floor every stage
   // start (they pass unitMajor false), whatever the policy. A recorded change
   // must not change what they read, even for a stage start recorded while Unit

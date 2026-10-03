@@ -1087,10 +1087,11 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   });
 }
 
-// Every applied Construction policy change is in the audit with the iteration
-// and checkpoint values it leaves in force. The attempt floor reads them so a
-// change never takes away a Unit's finished work: a stage start recorded while
-// stage starts were attempt boundaries stays the boundary it was.
+// Every applied Construction policy change is in the audit with the value it
+// found and the iteration and checkpoint values it leaves in force. The attempt
+// floor reads them so switching to unit-major iteration or turning checkpoints
+// on keeps the Units already finished: a stage start recorded while stage
+// starts were attempt boundaries stays the boundary it was.
 function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
   const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
   emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
