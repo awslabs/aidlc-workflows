@@ -293,13 +293,14 @@ describe("t114 scope precedence + validation", () => {
   // one changes nothing for it: `/aidlc-init "<description>"` (next
   // --new-intent "<description>"), free text, and a typed scope with a
   // description get the answer they get over a known scope, and the plan
-  // offer's answers start the work.
+  // offers' answers start the work (free text's compose answer is a new-work
+  // answer with no --new-intent).
   test("new work over a completed intent on a retired scope gets what a known scope gets (#1550)", () => {
     const shape = (d: Record<string, unknown>): string =>
       d.kind === "ask"
         ? `ask ${d.ask_type}`
         : `${d.kind} ${String(d.message ?? d.reason ?? "").match(
-          /intent create --scope \w+|scope change --scope \w+|Dispatch the composer agent|Workflow complete/,
+          /intent create --scope \w+|Dispatch the composer agent|Workflow complete/,
         )?.[0] ?? ""}`;
     const newWork = (scope: string) => {
       proj = createOrchestrationTestProject();
@@ -317,14 +318,20 @@ describe("t114 scope precedence + validation", () => {
         return run(text.slice(text.indexOf(" next ") + 6).split(" "));
       };
       const initOffer = run(["--new-intent", "fix the login redirect"]);
-      const composed = answer(initOffer.compose_command);
+      const initComposed = answer(initOffer.compose_command);
+      const freeTextOffer = run(["fix the login redirect"]);
+      const freeTextComposed = answer(freeTextOffer.compose_command);
       const seen = {
         initOffer: shape(initOffer),
         initConfirmed: shape(answer(initOffer.confirm_command)),
-        initComposed: shape(composed),
-        initComposedInFlight: String(composed.message).includes("mode in-flight"),
-        freeText: shape(run(["fix the login redirect"])),
+        initComposed: shape(initComposed),
+        initComposedInFlight: String(initComposed.message).includes("mode in-flight"),
+        freeTextOffer: shape(freeTextOffer),
+        freeTextConfirmed: shape(answer(freeTextOffer.confirm_command)),
+        freeTextComposed: shape(freeTextComposed),
+        freeTextComposedInFlight: String(freeTextComposed.message).includes("mode in-flight"),
         typedScope: shape(run(["--scope", "bugfix", "fix the login redirect"])),
+        positionalScope: shape(run(["bugfix", "fix the login redirect"])),
       };
       cleanupTestProject(proj);
       proj = "";
@@ -337,8 +344,12 @@ describe("t114 scope precedence + validation", () => {
       initConfirmed: "print intent create --scope bugfix",
       initComposed: "print Dispatch the composer agent",
       initComposedInFlight: false,
-      freeText: "ask new-work-routing",
-      typedScope: "print scope change --scope bugfix",
+      freeTextOffer: "ask scope-confirm",
+      freeTextConfirmed: "print intent create --scope bugfix",
+      freeTextComposed: "print Dispatch the composer agent",
+      freeTextComposedInFlight: false,
+      typedScope: "print intent create --scope bugfix",
+      positionalScope: "print intent create --scope bugfix",
     });
     expect(newWork("retired-lane")).toEqual(known);
   });
