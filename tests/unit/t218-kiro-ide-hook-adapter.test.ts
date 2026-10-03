@@ -5422,7 +5422,7 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
       expect(r.code, r.stderr).toBe(2);
       expect(r.stderr).toContain("no reply from the person is on record since it opened");
       expect(r.stderr).toContain(
-        "If they already replied, Kiro did not pass that reply to AI-DLC's hooks in this window, so it was not recorded.",
+        "If they already replied, that reply was not recorded: Kiro may not have passed it to AI-DLC's hooks in this window.",
       );
       expect(r.stderr).toContain(
         "trusting the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
