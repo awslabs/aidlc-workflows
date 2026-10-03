@@ -482,6 +482,29 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
   });
 
+  // An unattended run never parks itself, whatever the ledger holds, and an
+  // empty ledger is no reply from the person.
+  test("an autonomous park needs a recorded reply in an attended session", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    // Empty ledger: no reply on record, so the run keeps moving.
+    const empty = guarded(proj, ["park"]);
+    expect(empty.rc, empty.out).not.toBe(0);
+    expect(empty.out).toContain("no reply from the person is on record");
+    // A reply on record, but the driver declared the run unattended.
+    recordHumanTurn(proj);
+    for (const tool of [STATE, KIRO_CLI_STATE]) {
+      expect(guarded(proj, ["park"], true, tool).rc).not.toBe(0);
+    }
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // The same reply in an attended session is the person's stop.
+    const attended = guarded(proj, ["park"]);
+    expect(attended.rc, attended.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
   test("an approval that names no choice records nothing, even after the person replied", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
