@@ -879,6 +879,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t351-composer-unsaved-plans.test.ts",
     "unit/t352-hook-phase-trace.test.ts",
     "unit/t352-workflow-selector-names.test.ts",
+    // spawns the real intent-create, next, reclassify, and jump: the person's
+    // word on the project type and the question about it are process boundaries
+    "unit/t352-workspace-reclassify.test.ts",
     "integration/t-review-verdict-unit-state.test.ts",
     "unit/t-runner-production-guards.test.ts",
     "unit/t-summary-confirmation-plain-form.test.ts",
@@ -894,6 +897,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real `next`, human-turn hook, utility setter, and guard: who
     // turns plan approval off, and what the engine builds, are process boundaries
     "unit/t-plan-approval-switch.test.ts",
+    // spawns the shipped Copilot adapter, core hooks, engine, and doctor: whether
+    // a hook ran is decided across those process boundaries
+    "unit/t-copilot-hook-health.test.ts",
     // spawns the real audit append, Unit verbs, and `next`: which shard a
     // process writes, and the walk after a copied shard, are process boundaries
     "unit/t-audit-shard-identity.test.ts",

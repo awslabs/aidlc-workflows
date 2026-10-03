@@ -41,7 +41,9 @@ less.
 2. **Check the install.** Run `aidlc doctor`.
    - Pass: the summary line reads `0 problems`.
    - Read every warning. A `Runtime hook PATH` warning means the host may
-     start the hooks without finding `aidlc`: fix it first.
+     start the hooks without finding `aidlc`: fix it first. On GitHub Copilot
+     and Kiro IDE, `AIDLC hooks have not run in this project yet` is expected
+     before the first chat in the folder; step 4 shows whether they run.
 3. **Run one stage.** Open the harness in the same folder and start a
    throwaway workflow, for example:
 
@@ -53,7 +55,9 @@ less.
    the first real stage asks you something (a question or an approval),
    answer it the way the harness shows it: pick an option where a picker
    appears (Claude Code, Codex CLI), or type the number or your answer in the
-   chat where the options are numbered (GitHub Copilot and the others).
+   chat where the options are numbered (GitHub Copilot and the others). On
+   GitHub Copilot, if the agent says AI-DLC's hooks have not run in this
+   project, fix the switches it names before the workshop.
 4. **Check the hooks fired.** Back in the terminal, run
    `aidlc doctor --verbose`.
    - Pass: a row `Hooks last fired:` lists hook names with current times,
@@ -263,7 +267,7 @@ following its instructions, and a failure is easier to miss.
 |---|---|---|---|---|---|
 | Claude Code | Native picker; picker answers count as your turn | Yes, every check | Keeps the workflow going until the step is reported | Project hooks are approved with `/hooks` and Claude Code restarted; an organization policy can block them (the doctor checks) | None noted |
 | Codex CLI | Picker, with numbered prose as the fallback; picker answers count | Yes, every check | Keeps the workflow going | The project's hooks are trusted (one interactive trust pass, or the shipped trust seed) | No custom status line |
-| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor cannot tell whether VS Code runs the hooks until a stage has run |
+| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | In VS Code, the workspace is trusted and Chat: Use Hooks is on (an organization can switch it off). For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor warns until a Copilot chat has started in the folder, and once a stage starts with no hook run, the chat says so; a real stage and your reply are still the full readiness check |
 | Cursor | Numbered prose | Yes | Cannot hold the turn; the reminder arrives as a follow-up message | The project is in a git repository and the folder is trusted (the doctor checks the repository) | Headless `agent -p` runs cannot pass approval gates. No status line |
 | Kiro CLI | Numbered prose | Yes | Keeps the workflow going in interactive sessions, not in `--no-interactive` runs | The `aidlc` agent is active | No status line; no session-end or pre-compaction hooks |
 | Kiro IDE | Numbered prose | Partly: the approval floor, Plan Approval, and the terminal command check. No reviewer read-scope, state-transition, or review-freeze check | Cannot hold the turn; the agent's own instructions keep the workflow going | The folder is trusted, the window was reloaded, and the `aidlc` agent is chosen (the doctor warns until hooks have run) | No status line |

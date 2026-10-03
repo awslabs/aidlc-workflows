@@ -516,6 +516,15 @@ export interface UnitPausedAskDirective extends AskDirectiveBase {
   resume_command: string;
 }
 
+// A folder set up as a new project now holds code: the person says which it
+// is. Each answer is one complete command; either records the type as theirs.
+export interface ProjectTypeAskDirective extends AskDirectiveBase {
+  ask_type: "project-type";
+  response_route: "command";
+  existing_code_command: string;
+  new_project_command: string;
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -616,6 +625,7 @@ export type AskDirective =
   | ComposeOfferAskDirective
   | IntentPickAskDirective
   | UnitPausedAskDirective
+  | ProjectTypeAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -849,6 +859,8 @@ const ASK_FIELDS = [
   "remedies",
   "state_signature",
   "plan_approval",
+  "existing_code_command",
+  "new_project_command",
 ] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -1024,6 +1036,8 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
       checkOptionalString(o, "recovery_choice", kind, errors);
+      checkOptionalString(o, "existing_code_command", kind, errors);
+      checkOptionalString(o, "new_project_command", kind, errors);
       if (
         typeof o.ask_type === "string" &&
         ![
@@ -1036,10 +1050,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "legacy-plan-approval-recovery",
           "guard-recovery",
           "plan-approval",
+          "project-type",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -1067,6 +1082,8 @@ export function validateDirective(obj: unknown): ValidationResult {
         "reason_codes",
         "remedies",
         "state_signature",
+        "existing_code_command",
+        "new_project_command",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -1128,6 +1145,16 @@ export function validateDirective(obj: unknown): ValidationResult {
         rejectUnexpected(
           "unit-paused",
           { stage: true, unit: true, resume_command: true },
+        );
+      } else if (o.ask_type === "project-type") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: project-type response_route must be "command"`);
+        }
+        checkString(o, "existing_code_command", kind, errors);
+        checkString(o, "new_project_command", kind, errors);
+        rejectUnexpected(
+          "project-type",
+          { existing_code_command: true, new_project_command: true },
         );
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {

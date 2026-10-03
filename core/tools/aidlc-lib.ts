@@ -373,6 +373,7 @@ export interface HookActivation {
   recovery: string;
   missedReply: string;
   notRunYet?: string;
+  notRunInWorkflow?: string;
 }
 
 interface ShippedHarnessData {
@@ -547,6 +548,9 @@ function readShippedHarnessData(): ShippedHarnessData {
           recovery: activation.recovery,
           missedReply: activation.missedReply,
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunInWorkflow === "string"
+            ? { notRunInWorkflow: activation.notRunInWorkflow }
+            : {}),
         }
         : null;
     _shippedHarnessData = {
@@ -5289,6 +5293,54 @@ export function clearSessionRebindOffer(
     unlinkSync(path);
   } catch {
     /* absent runtime receipt */
+  }
+}
+
+// A host whose prompt hook cannot add context (Cursor) lets the person's
+// prompt through and leaves the rebind line here; the conversation's next
+// directive says it once.
+function sessionSelectionNoticePath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.selection-notice` : "";
+}
+
+export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path || !line) return;
+  // The line is true only while this chat stays on the work it is on now.
+  const binding = readSessionBinding(projectDir, sessionId);
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ line, space: binding?.space ?? null, intent: binding?.intent ?? null })}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+// A typed workspace switch or create ("/aidlc intent login") moves this
+// conversation's selection itself, so no rebind line is kept for it. The
+// command head is the one the typed guard switch parser reads.
+export function promptMovesSelection(prompt: string): boolean {
+  const text = prompt.trim();
+  const head = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
+  if (head === null) return false;
+  const kind = parseWorkspaceCommand(splitKiroCommandArgs(text.slice(head[0].length).trim())).kind;
+  return kind === "switch" || kind === "create" || kind === "create-intent";
+}
+
+export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const text = readFileSync(path, "utf-8");
+    unlinkSync(path);
+    const saved = JSON.parse(text) as { line?: unknown; space?: unknown; intent?: unknown };
+    // A chat that moved since (a switch, new work, an archive) is not where the line says.
+    const binding = readSessionBinding(projectDir, sessionId);
+    if ((binding?.space ?? null) !== saved.space || (binding?.intent ?? null) !== saved.intent) return null;
+    return typeof saved.line === "string" && saved.line ? saved.line : null;
+  } catch {
+    return null;
   }
 }
 
@@ -23611,6 +23663,11 @@ export interface HookLiveness {
    * newest one: hooks stopped firing while the engine kept writing.
    */
   stale: boolean;
+  /**
+   * No heartbeat file at all, yet the workflow has a stage or gate event:
+   * the host has never run this record's hooks.
+   */
+  neverFired: boolean;
 }
 
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
@@ -23670,7 +23727,26 @@ export function hookLiveness(
       newestStageOrGateEvent !== null &&
       newestStageOrGateEvent.timestampMs - newestHeartbeat.timestampMs >
         HOOK_HEARTBEAT_STALE_SLACK_MS,
+    neverFired: !hasHookFiredContent && newestStageOrGateEvent !== null,
   };
+}
+
+// Before the first workflow no core hook writes a heartbeat, so doctor could
+// not tell a folder nobody has chatted in from one whose host is not running
+// AIDLC hooks (an untrusted folder, a window not reloaded). An adapter leaves
+// the heartbeat the core hooks write on a chat's first event, only while no
+// intent record resolves: inside one, heartbeats feed the Plan Approval
+// staleness refusal and the never-fired notice (hookLiveness) and stay the
+// core hooks' own.
+export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): void {
+  try {
+    if (recordDir(projectDir) !== null) return;
+    const healthDir = hooksHealthDir(projectDir);
+    mkdirSync(healthDir, { recursive: true });
+    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
+  } catch {
+    // Advisory: without it doctor keeps its "not run yet" warning.
+  }
 }
 
 // `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator
@@ -25826,72 +25902,54 @@ export function hasUnsafeSingleLineCharacter(value: string): boolean {
 	return false;
 }
 
+// Split a request into the person's own words and a pasted document. The
+// document runs from the first <document> to the last </document>, so a fake
+// closing marker inside pasted text can only turn more text into data, never
+// data into directions. A marker with no partner makes the rest of the message
+// on its side the document. `documentSplit` says in one line how it was split.
+// A message that is only a pasted document asks to build what it describes.
+const ONLY_DOCUMENT_REQUEST = "Build what the pasted document describes.";
 export function authoritativeProjectDescription(raw: string): {
   description: string;
   pastedDocumentPresent: boolean;
-  error?: string;
+  document?: string;
+  documentSplit?: string;
 } {
   const open = "<document>";
   const close = "</document>";
-  const start = raw.indexOf(open);
-  const strayClose = raw.indexOf(close);
-  if (start < 0) {
-    if (strayClose >= 0) {
-      return {
-        description: "",
-        pastedDocumentPresent: false,
-        error: `project description has ${close} without a matching ${open}`,
-      };
-    }
+  const first = raw.indexOf(open);
+  const last = raw.lastIndexOf(close);
+  if (first < 0 && last < 0) {
     return {
       description: raw.trim(),
       pastedDocumentPresent: false,
     };
   }
-  if (strayClose >= 0 && strayClose < start) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: `project description has ${close} before the next ${open}`,
-    };
-  }
 
-  const end = raw.indexOf(close, start + open.length);
-  if (end < 0) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: `project description has ${open} without a matching ${close}`,
-    };
-  }
-  const nested = raw.indexOf(open, start + open.length);
-  if (nested >= 0 && nested < end) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: "project description has nested <document> blocks",
-    };
-  }
-
-  const trailing = raw.slice(end + close.length);
-  if (trailing.includes(open) || trailing.includes(close)) {
-    return {
-      description: "",
-      pastedDocumentPresent: true,
-      error: "project description has repeated or additional <document> markers",
-    };
-  }
-  if (trailing.trim().length > 0) {
-    return {
-      description: "",
-      pastedDocumentPresent: true,
-      error: `project description has content after terminal ${close}`,
-    };
-  }
-
+  // More openings than closings means a closing marker is missing, so the last
+  // closing one may be pasted text: the document then runs to the end.
+  const unbalanced = first >= 0 && raw.split(open).length > raw.split(close).length;
+  const opened = first >= 0 && (unbalanced || last < 0 || last > first);
+  const closed = !unbalanced && last > first;
+  const start = opened ? first : 0;
+  const end = closed ? last + close.length : raw.length;
+  const documentSplit = opened && closed
+    ? `I read everything from the first ${open} to the last ${close} as your pasted document, and only the text outside it as your instructions.`
+    : opened
+      ? `Your ${unbalanced && last >= 0 ? `message has more ${open} than ${close} markers` : `${open} has no closing ${close}`}, so I read everything from ${open} to the end as your pasted document, and only the text before it as your instructions.`
+      : closed
+        ? `Your ${close} has no opening ${open}, so I read everything up to ${close} as your pasted document, and only the text after it as your instructions.`
+        : `Your ${close} comes before your ${open}, so I read the whole message as your pasted document.`;
+  // Only the document span goes: every byte of the person's words around it
+  // stays as they typed it, and the whole is trimmed once.
+  const directions = `${raw.slice(0, start)}${raw.slice(end)}`.trim();
   return {
-    description: raw.slice(0, start).trim(),
+    description: directions || ONLY_DOCUMENT_REQUEST,
     pastedDocumentPresent: true,
+    document: raw.slice(start, end),
+    documentSplit: directions
+      ? documentSplit
+      : `${documentSplit} There are no words outside it, so I took the request as: ${ONLY_DOCUMENT_REQUEST}`,
   };
 }
 
@@ -34892,16 +34950,20 @@ export function decideFence(
  * The one line a human hears when a guard stands aside. It names what lowered
  * the fence, so someone using a scope default learns that the policy word did
  * it. The authority belongs in the GUARD_STOOD_ASIDE audit row, not the line.
+ * `recorded` false: the row could not be written, and the line says so instead
+ * of claiming it.
  */
 export function guardStoodAsideLine(
   fence: GuardFence,
   source: string,
   detail?: string,
+  recorded = true,
 ): string {
-  return (
-    `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
-    `Recorded in the audit trail${detail ? `: ${detail}` : "."}`
-  );
+  const where = recorded
+    ? "Recorded in the audit trail"
+    : `Not recorded in the audit trail, which was busy or could not be written; \`${aidlcInvocation()} doctor\` lists it`;
+  return `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
+    `${where}${detail ? `: ${detail}` : "."}`;
 }
 
 /**

@@ -201,7 +201,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "ref", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "ref", "retry-once", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -240,6 +240,7 @@ describe("t345 complete nightly coverage", () => {
       "unit-shard": { type: "string", default: "" },
       "artifact-label": { type: "string", required: true },
       "evidence-optional": { type: "boolean", default: false },
+      "retry-once": { type: "boolean", default: false },
     });
     expect(callable.inputs.diagnostic_filter).toBeUndefined();
     expect(callable.inputs.diagnostic_backend).toBeUndefined();
@@ -367,15 +368,21 @@ describe("t345 complete nightly coverage", () => {
     expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
   });
 
-  for (const [tier, shard, filter, expected] of [
-    ["smoke", "", "", ["--smoke"]],
-    ["unit", "3/8", "", ["--unit", "--shard", "3/8"]],
-    ["integration", "", "", ["--integration"]],
-    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"]],
-    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"]],
-    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"]],
+  for (const [tier, shard, filter, expected, retry] of [
+    ["smoke", "", "", ["--smoke"], "false"],
+    ["unit", "3/8", "", ["--unit", "--shard", "3/8"], "false"],
+    ["integration", "", "", ["--integration"], "false"],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "false"],
+    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"], "false"],
+    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"], "false"],
+    // The merge queue retries smoke, unit and integration files once; isolated
+    // e2e never takes the flag.
+    ["smoke", "", "", ["--smoke", "--file-retries", "1"], "true"],
+    ["unit", "3/12", "", ["--unit", "--shard", "3/12", "--file-retries", "1"], "true"],
+    ["integration", "", "", ["--integration", "--file-retries", "1"], "true"],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "true"],
   ] as const) {
-    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""} preserves arguments, captured output and failure status`, () => {
+    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""}${retry === "true" ? " in the merge queue" : ""} preserves arguments, captured output and failure status`, () => {
       const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
       const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
       try {
@@ -397,7 +404,7 @@ describe("t345 complete nightly coverage", () => {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
             cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
@@ -875,6 +882,10 @@ describe("t345 complete nightly coverage", () => {
     // pass the input, and a missing input compares unequal to true.
     expect(ci.jobs.deterministic.with?.["evidence-optional"] as unknown).toBe(true);
     expect(workflow.jobs.deterministic.with?.["evidence-optional"]).toBeUndefined();
+    // Only merge groups retry; PR pushes, dispatches and Full Suite stay strict.
+    expect(ci.jobs.deterministic.with?.["retry-once"]).toBe(`\${{ github.event_name == 'merge_group' }}`);
+    expect(workflow.jobs.deterministic.with?.["retry-once"]).toBeUndefined();
+    expect(deterministic.on.workflow_dispatch.inputs["retry-once"]).toBeUndefined();
     expect(deterministic.on.workflow_dispatch.inputs["evidence-optional"]).toBeUndefined();
     // These are the three uploads in the required check's chain; each test step
     // keeps its own exit code, so a real failure still fails the job.
@@ -920,6 +931,14 @@ describe("t345 complete nightly coverage", () => {
     // always exits 0 and `|| true` covers a crash of Bun itself.
     expect(report["continue-on-error"]).toBeUndefined();
     expect(report.run).toBe('bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true');
+    // The flaky-test report follows it with the same never-fails shape.
+    const retries = all[index + 1];
+    expect(retries.name).toBe("Report tests that passed on retry");
+    expect(retries.if).toBe(`\${{ always() && inputs.retry-once == true && inputs.tier != 'e2e' }}`);
+    expect(retries["continue-on-error"]).toBeUndefined();
+    expect(retries.run).toBe("bun scripts/ci-retry-report.ts tmp/ci-deterministic/stamp.txt || true");
+    const execution = all.find((step) => step.name === "Run deterministic tier")!;
+    expect(execution.env?.RETRY_ONCE).toBe(`\${{ inputs.retry-once == true }}`);
   });
 
   test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {

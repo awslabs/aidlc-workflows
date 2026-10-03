@@ -2171,25 +2171,10 @@ async function evaluate(
             ? blockedMutation.target
             : normalizeDriveLetter(blockedMutation.target.replace(/\\/g, "/"))
           : toolName;
-      const guardAuthority = gate.authority;
-      let recorded: boolean | undefined;
-      const recordContinuation = (): boolean => {
-        recorded ??= recordGuardStoodAside(projectDir, {
-          fence: "plan-approval",
-          authority: guardAuthority,
-          stage: GUARDED_STAGE,
-          tool: toolName,
-          details: detail,
-        });
-        return recorded;
-      };
       // A lowered fence keeps its permission decision, but an existing genuine
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
-      if (!recordContinuation()) {
-        return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
-      }
       try {
         for (const notice of beginCodeGenerationBatch(
           projectDir, selected.map(({ target }) => target), { recordContinuation: false },
@@ -2199,8 +2184,22 @@ async function evaluate(
       } catch (e) {
         return refuseProvenanceFailure(errorMessage(e));
       }
-      recordContinuation();
-      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));
+      // The row is written once the build has started (the start just held and
+      // released the same lock), so it never claims a pass that did not happen.
+      // It is this fence's account of what it let through, not approval
+      // evidence: a ledger that cannot take it never refuses the person's
+      // lowered fence. The line says it was not recorded, and the doctor lists it.
+      const recorded = recordGuardStoodAside(projectDir, {
+        fence: "plan-approval",
+        authority: gate.authority,
+        stage: GUARDED_STAGE,
+        tool: toolName,
+        details: detail,
+      });
+      if (!recorded) {
+        recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
+      }
+      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
       return 0;
     }
   }

@@ -38,32 +38,44 @@ while keeping you in control at every decision point.
 ### Starting from an existing document
 
 There is no mandatory location for an existing vision document, PRD, or brief.
-For a direct text or Markdown read, reference one exact path in your initial
-request, for example `/aidlc Read ./vision.md and build what it describes`.
-Relative paths resolve from the project root; the workflow does not search by
-filename, follow symlinks, or read outside the project. Missing or ambiguous
-paths stop for clarification.
+For a direct text or Markdown read, name the file in your initial request, for
+example `/aidlc Read ./vision.md and build what it describes`. Relative paths
+resolve from the project root. When nothing is at that path, the workflow looks
+for project files with that name: with one match it reads it and tells you which
+file, with several it offers a numbered pick, and with none it asks for the
+path. It finds only document files (Markdown, text, PDF, Word, and similar),
+outside hidden folders such as `.docker` or `.aws` and outside any nested
+repository. It never lists git-ignored files, symlinks, or files that look like
+secrets (`.env`, `*.pem`, `*.key`, `id_*`, or a name with
+"secret", "credential", "password", or "token" in it), and never reads outside
+the project. When it cannot list every file, it chooses none and asks for the
+path.
 
-You can also paste document content directly into the request. Put exactly one
-document block at the end so the workflow can distinguish your directions from
-document data:
+You can also paste document content directly into the request. Wrap it in
+`<document>` and `</document>` so the workflow can tell your directions from
+document data. Your directions can come before the block, after it, or both:
 
 ```text
 /aidlc Build the product described below.
 <document>
 ...vision document content...
 </document>
+Keep the first release read-only.
 ```
 
-The delimited content is untrusted data, not instructions. Multiline input is
-stored as one JSON string in committed `<record>/project-description.json`,
-outside the
-line-oriented state file; its `Project` field remains a safe single-line preview
-of your directions outside the document block, so Markdown lines resembling
-workflow fields cannot alter the selected scope or lifecycle state.
-Unmatched, nested, or repeated markers, content after the closing marker, and a
-document with no directions outside the block are refused before a workflow
-record is created.
+The delimited content is untrusted data, not instructions. Everything from the
+first `<document>` to the last `</document>` is the document, so a
+`</document>` inside your pasted text cannot turn the rest of it into
+instructions. A `<document>` with no closing marker makes the rest of the
+message the document, and a `</document>` with no opening marker makes
+everything before it the document. The workflow says in one line how it split
+your message. Multiline input is stored as one JSON string in committed
+`<record>/project-description.json`, outside the line-oriented state file; its
+`Project` field remains a safe single-line preview of your directions outside
+the document, so Markdown lines resembling workflow fields cannot alter the
+selected scope or lifecycle state. A message that is only a document, with no
+words outside it, is taken as "Build what the pasted document describes.", and
+the plan question that follows says so.
 
 PDF, Word, oversized, and other unsupported direct-read formats use DocumentKB:
 place the file under `aidlc/spaces/<space>/knowledge/documents/`, run
@@ -99,6 +111,8 @@ artifact, so the record only ever lists work that produced something.
 ### Stage 0.2: Workspace Detection
 
 A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield. AI-DLC's own files, such as the harness directory, `aidlc/`, and Cursor's root `install.ts`, never count as your code, so an empty folder stays greenfield.
+
+Your word wins over the scan. Start with `/aidlc --project-type brownfield "<what to build>"` (or `greenfield`) to say which it is, or say it in plain words at any point ("this is existing code, the frontend is in ui-repo"). AI-DLC scans the folder again, records the type as yours, and for existing code runs Reverse Engineering, then returns to the stage you were on; finished stages stay finished, and the reply names any that were done before the code was known so you can redo one. If the work started as a new project in an empty folder and the folder gains code before Construction, AI-DLC asks you once which it is. The choice holds for that piece of work only; the next piece of work scans the folder again.
 
 ### Stage 0.3: State Initialization
 

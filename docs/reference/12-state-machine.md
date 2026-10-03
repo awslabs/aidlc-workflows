@@ -160,6 +160,7 @@ rules.
 | `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
 | `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
 | `{Active,Revising} → Skipped` | `aidlc-orchestrate.ts report --stage <slug> --result skipped --reason <text>` | `tools/aidlc-state.ts` (internal routed-skip emitter) |
+| `AwaitingApproval -> Skipped` (plan row SKIP) | The same skipped report, only when the stage's plan row now says SKIP (the person said the work is a new project while Reverse Engineering waited at its gate); the gate closes as skipped, never as approved | `tools/aidlc-state.ts` (internal routed-skip emitter) |
 | `Pending → Skipped` | Scope composition or `aidlc-jump execute` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` |
 | `{Pending,Active,Revising} -> Skipped` (unit-major walk) | `aidlc-orchestrate.ts report --stage <directive.stage> --unit <directive.unit> --result skipped --reason <text>` once no unit owes the stage (each unit skipped or kind-vacuous) | `tools/aidlc-state.ts` (internal `skip --unit` emitter; one `UNIT_SKIPPED` per unit) |
 
@@ -173,7 +174,8 @@ state lifecycle verbs before or after reporting.
 **Routed skip.** `report --result skipped` is accepted only on the main
 workflow with an explicit nonblank `--stage` and `--reason`, when the named
 stage is declared `execution: CONDITIONAL`, equals `Current Stage`, and is
-Active or Revising. It runs before
+Active or Revising, or AwaitingApproval when its plan row now says SKIP (a
+gate the person's own decision made moot). It runs before
 artifact, per-unit, and ensemble-evidence guards because a justified skip owes
 no completion evidence. The engine invokes the internal skip transition with
 its routing marker: the transaction preserves `[S]`, emits exactly one
@@ -479,7 +481,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**111 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 111 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**112 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 112 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -797,7 +799,8 @@ and the person's review of what the agent runs are the outer boundary. See the
 | `HEALTH_CHECKED` | `tools/aidlc-utility.ts` | `--doctor` run |
 | `WORKSPACE_SCAFFOLDED` | `tools/aidlc-utility.ts` | Net-new directory tree created by init |
 | `WORKSPACE_SCANNED` | `tools/aidlc-utility.ts` | Brownfield workspace detection complete |
-| `WORKSPACE_INITIALISED` | `tools/aidlc-utility.ts` | State file materialized |
+| `WORKSPACE_INITIALISED` | `tools/aidlc-utility.ts` | State file materialized; carries `Project Type Source` (`workspace scan`, or `you` when creation had `--project-type`) |
+| `WORKSPACE_RECLASSIFIED` | `tools/aidlc-utility.ts` | `workspace reclassify --project-type <t>`: the person said the work is a new project or existing code. Carries `Old Project Type` and `New Project Type` (each with who set it), `Scanned As` and the rescanned stack, optional `Repos Recorded`, and `Reverse Engineering` (`back on the plan`, `skipped`, or `plan unchanged`) |
 
 ### Documents
 
