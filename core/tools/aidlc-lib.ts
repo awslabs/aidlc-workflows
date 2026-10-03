@@ -77,8 +77,10 @@ export {
 } from "./aidlc-reply-reader.ts";
 import {
   _resetSettingsCacheForTests,
+  LOCAL_SETTINGS_FILE,
   RECORDABLE_PROJECT_BYPASSES,
   resolveAidlcSettings,
+  SETTINGS_FILE,
   type ProjectFlagsRecord,
   type RecordableProjectBypass,
 } from "./aidlc-settings.ts";
@@ -18105,6 +18107,10 @@ function sourceFingerprintHardExcludedFile(name: string): boolean {
 }
 // The one directory the walk used to descend into and now leaves out.
 const SOURCE_FINGERPRINT_PYCACHE_DIR = "__pycache__";
+// AI-DLC's own settings at the workspace root are its configuration, like the
+// aidlc/ shell beside them, not the team's code: a setting recorded while a
+// stage runs is no source change that stage made.
+const AIDLC_ROOT_SETTINGS_FILES = new Set<string>([SETTINGS_FILE, LOCAL_SETTINGS_FILE]);
 
 /** Today's lines with each legacy-only line put back at the index it held. */
 function legacyFilesystemFingerprint(
@@ -18202,7 +18208,8 @@ function sourcePathExcludedSinceRecorded(key: string, entry: string): boolean {
   const parts = (separator === -1 ? key : key.slice(separator + 1)).split("/");
   return (
     sourceFingerprintHardExcludedFile(parts[parts.length - 1]) ||
-    parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR)
+    parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR) ||
+    (separator <= 0 && parts.length === 1 && AIDLC_ROOT_SETTINGS_FILES.has(parts[0]))
   );
 }
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
@@ -20989,7 +20996,10 @@ function filesystemSourceIdentity(
         }
         if (stat.isFile()) {
           const excludedByName =
-            sourceFingerprintHardExcludedFile(entry.name) &&
+            (
+              sourceFingerprintHardExcludedFile(entry.name) ||
+              (rel === "" && carriesWorkspaceShell && AIDLC_ROOT_SETTINGS_FILES.has(entry.name))
+            ) &&
             !registeredPathIncludes(childRegistryRel);
           if (
             sourceOnly &&

@@ -2949,6 +2949,71 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  test("a setting recorded while the plan waits keeps the plan current", () => {
+    const proj = scratchProject();
+    try {
+      mkdirSync(join(proj, "src"), { recursive: true });
+      writeFileSync(join(proj, "src", "app.ts"), "export const app = 1;\n", "utf-8");
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "settings-session",
+        "--stage-level",
+      ];
+      appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "settings-session" }, proj);
+      const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      const decision = spawnSync(
+        BUN,
+        [logTool, "decision", ...identity, "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" },
+      );
+      expect(decision.status, decision.stderr).toBe(0);
+      // The person records a kill switch while the plan waits: AI-DLC's own
+      // settings, not the code the plan describes.
+      writeFileSync(join(proj, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+      writeFileSync(join(proj, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+      // Then they approve the plan in their own words.
+      const turn = spawnSync(
+        BUN,
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "settings-session", prompt: "Approve Plan" }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(turn.status, turn.stderr).toBe(0);
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"),
+      );
+      const answer = spawnSync(
+        BUN,
+        [logTool, "answer", ...identity, "--details", "Approve Plan"],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" },
+      );
+      expect(answer.status, answer.stderr).toBe(0);
+      expect(answer.stderr).not.toContain("re-present the plan");
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("missing and legacy directive markers fail closed instead of selecting stage-level authority", () => {
     const proj = scratchProject();
     try {

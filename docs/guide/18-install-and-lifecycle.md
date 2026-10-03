@@ -304,7 +304,10 @@ tree, the `aidlc/` workspace shell, root integrations, a projection stamp, and
 an ownership baseline. It does not create a workflow intent.
 
 When more than one harness is present, every `aidlc config` invocation must
-include `--harness <name>`, including previews and refreshes. See
+include `--harness <name>`, including previews and refreshes. The one exception
+is recording or clearing a bypass with `aidlc config flags --bypass` or
+`--clear-bypass` and nothing else to change: a bypass belongs to the project,
+not to one harness. See
 [Root Integrations and Ownership](#root-integrations-and-ownership) for which
 harnesses can coexist and how their shipped `.gitignore` entries are combined.
 
@@ -976,7 +979,7 @@ shipped block copy is available (`merge (combined with <harness>)`); older
 installs without that copy keep ownership until refreshed. Each harness records
 the same combined block hash on its next config invocation.
 Once more than one harness is present, every `aidlc config` invocation needs
-`--harness <name>`.
+`--harness <name>`, except recording or clearing a bypass on its own.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or

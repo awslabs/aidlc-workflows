@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -604,7 +604,8 @@ describe("t295 flags section", () => {
     // It says what happened and how to undo it.
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
     expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
-    expect(changedSince(before)).toEqual([".gitignore", "aidlc.settings.local.json"]);
+    // AI-DLC's managed .gitignore block already lists the local file.
+    expect(changedSince(before)).toEqual(["aidlc.settings.local.json"]);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     // What the plan-approval guard reads on its next check.
     expect(resolveProjectFlag(name, {}, project)).toBe("1");
@@ -650,6 +651,82 @@ describe("t295 flags section", () => {
       schemaVersion: 1,
       flags: { schemaVersion: 1 },
     });
+  });
+
+  test("a bypass typed without a layer is the person's own, and a clear finds where it is recorded", () => {
+    const project = install();
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(),
+    );
+    const bypasses = (file: string): string[] | undefined => existsSync(join(project, file))
+      ? (JSON.parse(readFileSync(join(project, file), "utf-8")) as { flags?: { bypasses?: string[] } }).flags?.bypasses
+      : undefined;
+    const mine = flags("--bypass", "AIDLC_DISABLE_SENSORS");
+    expect(mine.status, mine.stdout + mine.stderr).toBe(0);
+    expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_SENSORS in aidlc.settings.local.json.");
+    expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_SENSORS"]);
+    expect(bypasses("aidlc.settings.json")).toBeUndefined();
+    // Recorded for the team, a clear with no layer clears it there.
+    expect(flags("--project", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
+    const cleared = flags("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json.");
+    expect(bypasses("aidlc.settings.json")).toBeUndefined();
+    expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
+    // Any other flag with no layer still asks which one.
+    const other = flags("--swarm", "on", "--yes");
+    expect(other.status).toBe(2);
+    expect(other.stdout + other.stderr).toContain("requires exactly one of --local, --project, or --global");
+  });
+
+  test("on an install whose .gitignore lacks the local line, the clone's own exclude list keeps it out of git", () => {
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const dropLocalLine = (project: string) => {
+      const path = join(project, ".gitignore");
+      writeFileSync(path, readFileSync(path, "utf-8").replace("aidlc.settings.local.json\n", ""));
+      return readFileSync(path, "utf-8");
+    };
+    const record = (project: string) => run(
+      ["config", "flags", "--project-dir", project, "--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes"],
+      project,
+      runtimeEnv(),
+    );
+    // A repository whose main checkout holds the project, and a linked worktree
+    // whose exclude list lives in the shared git directory.
+    const main = temp("aidlc-t295-repo-");
+    git(main, "init", "-q");
+    git(main, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base");
+    const linked = join(temp("aidlc-t295-linked-"), "wt");
+    git(main, "worktree", "add", "-q", linked);
+    for (const project of [main, linked]) {
+      const installed = run([
+        "config", "--project-dir", project, "--from", join(DIST_RELEASE, "claude"),
+        "--harness", "claude", "--mcp", "none", "--yes",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const gitignore = dropLocalLine(project);
+      const recorded = record(project);
+      expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+      expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe(gitignore);
+      const exclude = resolve(project, git(project, "rev-parse", "--git-path", "info/exclude"));
+      expect(readFileSync(exclude, "utf-8").split("\n")).toContain("aidlc.settings.local.json");
+      expect(git(project, "check-ignore", "aidlc.settings.local.json")).toBe("aidlc.settings.local.json");
+    }
+    expect(resolve(linked, git(linked, "rev-parse", "--git-path", "info/exclude")))
+      .toBe(resolve(main, ".git", "info", "exclude"));
+    // Outside git there is nothing to ignore, and the setting still records.
+    const plain = install();
+    const gitignore = dropLocalLine(plain);
+    const recorded = record(plain);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(readFileSync(join(plain, ".gitignore"), "utf-8")).toBe(gitignore);
+    expect(resolvedFlags(plain)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
   });
 
   test("with several harnesses a bypass records without naming one, and other flags still ask which", () => {

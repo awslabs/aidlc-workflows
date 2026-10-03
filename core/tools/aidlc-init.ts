@@ -685,6 +685,42 @@ function settingsTargetForMutation(
   throw new Error("settings layer selection cancelled");
 }
 
+// A bypass typed with no layer is the person's own switch. --bypass records it
+// in their local file; --clear-bypass clears it where it is recorded, the
+// nearest layer holding it, so turning a check back on does just that. Any
+// other change with no layer, or one that both adds and clears, is asked about
+// as before (null).
+function bypassSettingsTarget(
+  argv: readonly string[],
+  projectDir: string,
+  harnessRoot: string,
+): SettingsTarget | null {
+  if (SETTINGS_TARGET_FLAGS.some(([flag]) => argv.includes(flag))) return null;
+  if (argv.includes("--reset") || !settingsProjectAvailable(projectDir)) return null;
+  const adds = valuesAfter(argv, "--bypass");
+  const clears = valuesAfter(argv, "--clear-bypass");
+  if ((adds.length > 0) === (clears.length > 0)) return null;
+  const target: SettingsTarget = adds.length > 0
+    ? "local"
+    : (["local", "project", "global"] as const).find((layer) =>
+        (readSettingsTarget(projectDir, layer)?.flags?.bypasses ?? []).some((name) => clears.includes(name))
+      ) ?? "local";
+  const previous = readSettingsTarget(projectDir, target);
+  const next = updateSettingsSection(
+    previous,
+    "flags",
+    buildFlagsRecord(previous?.flags ?? null, argv, harnessRoot),
+  );
+  return bypassOnlyRequest(argv, {
+    target,
+    path: settingsPathForTarget(projectDir, target),
+    previous,
+    next,
+  })
+    ? target
+    : null;
+}
+
 function validateModelsArgs(argv: readonly string[]): string | null {
   // `config models --from` names a preset or profile, not source bytes.
   const download = validateDownloadArgs(argv, false);
@@ -3364,7 +3400,8 @@ function prepareChoiceSection(
   let mcpMode: "defaults" | "none" | undefined;
   let settings: SettingsMutation | undefined;
   const target = section === "flags" && (hasMutationFlags || configInputIsTty())
-    ? settingsTargetForMutation(argv, projectDir)
+    ? (hasMutationFlags ? bypassSettingsTarget(argv, projectDir, selected.root) : null) ??
+      settingsTargetForMutation(argv, projectDir)
     : undefined;
   const targetCurrentSettings = target
     ? readSettingsTarget(projectDir, target)
@@ -3583,19 +3620,24 @@ function regularFile(path: string): boolean {
   return pathPresent(path) && lstatSync(path).isFile();
 }
 
+/**
+ * Plans the project settings write. Returns this clone's git exclude file when
+ * a new local settings file must also be kept out of git there; the caller
+ * appends it with `excludeLocalSettingsFromClone` once the plan has run.
+ */
 function planProjectSettingsMutation(
   projectDir: string,
   mutation: SettingsMutation | undefined,
   operations: TransactionOperation[],
   actions: PlannedAction[],
-): void {
-  if (!mutation || mutation.target === "global") return;
+): string | null {
+  if (!mutation || mutation.target === "global") return null;
   const rel = relative(projectDir, mutation.path);
   if (mutation.next === null) {
-    if (!pathPresent(mutation.path)) return;
+    if (!pathPresent(mutation.path)) return null;
     operations.push({ kind: "remove", path: rel, expected: expected(mutation.path) });
     actions.push({ path: rel, action: "remove" });
-    return;
+    return null;
   }
   const creating = !pathPresent(mutation.path);
   operations.push(writeOperation(
@@ -3604,25 +3646,45 @@ function planProjectSettingsMutation(
     expected(mutation.path),
   ));
   actions.push({ path: rel, action: creating ? "create" : "update" });
-  if (mutation.target !== "local" || !creating) return;
+  if (mutation.target !== "local" || !creating) return null;
+  // AI-DLC's managed .gitignore block lists the local file. An install from
+  // before it did keeps the file out of git through this clone's own exclude
+  // list instead, so recording a setting never edits the team's .gitignore,
+  // which is their source.
   const gitignorePath = join(projectDir, ".gitignore");
-  const current = regularFile(gitignorePath)
-    ? readFileSync(gitignorePath, "utf-8")
-    : "";
-  const lines = current.split(/\r?\n/);
-  if (lines.includes(LOCAL_SETTINGS_FILE)) return;
-  const separator = current.length === 0 || current.endsWith("\n") ? "" : "\n";
-  const next = `${current}${separator}${LOCAL_SETTINGS_FILE}\n`;
-  operations.push(writeOperation(
-    ".gitignore",
-    next,
-    expected(gitignorePath),
-  ));
-  actions.push({
-    path: ".gitignore",
-    action: regularFile(gitignorePath) ? "update" : "create",
-    detail: `ignore ${LOCAL_SETTINGS_FILE}`,
+  const gitignore = regularFile(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+  if (gitignore.split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) return null;
+  const located = spawnSync("git", ["-C", projectDir, "rev-parse", "--git-path", "info/exclude"], {
+    encoding: "utf-8",
+    timeout: 10_000,
   });
+  if (located.status !== 0 || !located.stdout.trim()) return null;
+  const exclude = resolve(projectDir, located.stdout.trim());
+  if (regularFile(exclude) && readFileSync(exclude, "utf-8").split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) {
+    return null;
+  }
+  const shown = relative(projectDir, exclude);
+  actions.push({
+    path: shown.startsWith("..") || isAbsolute(shown) ? exclude : shown.replaceAll("\\", "/"),
+    action: regularFile(exclude) ? "update" : "create",
+    detail: `ignore ${LOCAL_SETTINGS_FILE} in this clone`,
+  });
+  return exclude;
+}
+
+// Best effort: a personal settings file git does not ignore only shows as
+// untracked, so a failure here never undoes the settings change.
+function excludeLocalSettingsFromClone(exclude: string | null): void {
+  if (exclude === null) return;
+  try {
+    const current = regularFile(exclude) ? readFileSync(exclude, "utf-8") : "";
+    if (current.split(/\r?\n/).includes(LOCAL_SETTINGS_FILE)) return;
+    mkdirSync(dirname(exclude), { recursive: true });
+    const separator = current.length === 0 || current.endsWith("\n") ? "" : "\n";
+    writeFileSync(exclude, `${current}${separator}${LOCAL_SETTINGS_FILE}\n`);
+  } catch {
+    // See above.
+  }
 }
 
 function globalSettingsOperation(
@@ -7762,8 +7824,9 @@ function handleSettingsOnlySection(
     } else {
       const operations: TransactionOperation[] = [];
       const actions: PlannedAction[] = [];
-      planProjectSettingsMutation(projectDir, mutation, operations, actions);
+      const exclude = planProjectSettingsMutation(projectDir, mutation, operations, actions);
       executePlan({ schemaVersion: 1, root: projectDir, operations });
+      excludeLocalSettingsFromClone(exclude);
       invalidateSettingsCache(path);
     }
     emitResult(success(
@@ -7815,7 +7878,7 @@ function recordBypassesOnly(
   try {
     const operations: TransactionOperation[] = [];
     const actions: PlannedAction[] = [];
-    planProjectSettingsMutation(projectDir, mutation, operations, actions);
+    const exclude = planProjectSettingsMutation(projectDir, mutation, operations, actions);
     const externalSettingsOperation = globalSettingsOperation(mutation);
     if (externalSettingsOperation) {
       actions.push({
@@ -7894,6 +7957,7 @@ function recordBypassesOnly(
     executePlan(externalSettingsOperation
       ? { schemaVersion: 1, root: machineTransactionRoot(), operations: [externalSettingsOperation] }
       : { schemaVersion: 1, root: projectDir, operations });
+    excludeLocalSettingsFromClone(exclude);
     invalidateSettingsCache(mutation.path);
     // What changed, and the command that undoes it.
     const before = new Set(mutation.previous?.flags?.bypasses ?? []);
@@ -8712,7 +8776,7 @@ export async function main(
         );
       }
     }
-    planProjectSettingsMutation(
+    const settingsExclude = planProjectSettingsMutation(
       projectDir,
       settingsMutation,
       operations,
@@ -8922,6 +8986,7 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    excludeLocalSettingsFromClone(settingsExclude);
     // The new routing is published only now that the project matches it: a
     // refusal or conflict above leaves the pin as it was. A pin that changed
     // while this ran is someone else's newer choice, so it is not overwritten.

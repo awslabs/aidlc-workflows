@@ -1554,11 +1554,12 @@ function notePromptCapability(sessionId: string): void {
   );
 }
 
-// An updated build carries the typed switch again. The recorded kill switch is
-// the person's own terminal command; recording it refreshes no project files,
-// so it also works while the work runs.
+// The step that works now comes first: the recorded kill switch is the
+// person's own terminal command, and recording it refreshes no project files,
+// so it also covers the work running now. An updated build carries the typed
+// switch again.
 function summaryConfirmationWayOut(): string {
-  return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. You can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
+  return `To turn summary confirmation off now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal: it turns it off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set summary-confirmation off\` yourself.`;
 }
 
 // Plan approval off is read from what the person types or says, so this build
