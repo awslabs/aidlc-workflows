@@ -250,9 +250,11 @@ project's own and is scanned as usual.
 Tell the developer to scan only what people wrote: follow the repo's
 `.gitignore` files, and skip build outputs, dependency folders, and IDE and
 tool caches even where nothing ignores them (for example .NET `bin/` and
-`obj/` beside a project file). The "What to Skip" section of
+`obj/` beside a project file), without opening them. The "What to Skip"
+section of
 `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md` lists
-them and says when a folder with one of those names holds hand-written code.
+them and says how the files beside a folder tell when one of those names holds
+hand-written code.
 
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
