@@ -1222,6 +1222,25 @@ describe("t271 review iteration ceiling", () => {
     const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
     const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
     expect(body).toBe(r1Review("**Verdict:** READY", "### What I verified"));
+    // The audit row says the reviewer's heading was changed, and which.
+    expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe("line 9: ## What I verified");
+  });
+
+  test("only the heading markers change: line endings and an opening ## Review are kept", () => {
+    const { proj, record } = requestHeadingReview();
+    const original = "## Review\r\n\r\n" + r1Review().replaceAll("\n", "\r\n").replace("Advisory", "# Advisory notes\r\n\r\nAdvisory");
+    const recorded = record(original);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(
+      original.replace("\r\n# Advisory notes", "\r\n### Advisory notes").replace("## What I verified", "### What I verified"),
+    );
+    expect(body.startsWith("## Review\r\n")).toBe(true);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED");
+    expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe(
+      "line 9: # Advisory notes; line 13: ## What I verified",
+    );
   });
 
   test("a heading never hides another defect, and heading forms that cannot be made ### still refuse", () => {

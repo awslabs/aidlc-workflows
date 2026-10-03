@@ -720,31 +720,33 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
 }
 
 // A review file's top-level `#` and `##` heading lines (outside code, quotes
-// and lists, other than an opening `## Review`) made `###`, or null when it
-// has none. Only the heading markers change.
-function demoteReviewHeadings(body: Buffer): Buffer | null {
+// and lists, other than an opening `## Review`) made `###`, with every other
+// byte kept, and a line naming each one changed; null when there is none.
+function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] } | null {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(body);
   } catch {
     return null;
   }
-  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
-  const source = normalized.split("\n");
-  const { lines } = markdownBlocks(normalized);
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  // Lines at even indexes, their own line endings at odd ones.
+  const parts = text.slice(bom.length).split(/(\r\n|\r|\n)/);
+  const source = parts.filter((_, index) => index % 2 === 0);
+  const { lines } = markdownBlocks(source.join("\n"));
   if (lines.length !== source.length) return null;
   const opening = source.findIndex((line) => line.trim() !== "");
-  let changed = 0;
+  const changed: string[] = [];
   for (let index = 0; index < source.length; index++) {
     if (lines[index].kind !== "heading" || lines[index].containers.length > 0) continue;
     if (index === opening && /^## Review[ \t]*$/.test(source[index])) continue;
     const demoted = source[index].replace(/^( {0,3})#{1,2}(?=[ \t]|$)/, "$1###");
-    if (demoted !== source[index]) {
-      source[index] = demoted;
-      changed++;
-    }
+    if (demoted === source[index]) continue;
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: an audit value is one plain line
+    changed.push(`line ${index + 1}: ${source[index].trim().replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 120)}`);
+    parts[index * 2] = demoted;
   }
-  return changed === 0 ? null : Buffer.from(source.join("\n"), "utf-8");
+  return changed.length === 0 ? null : { bytes: Buffer.from(bom + parts.join(""), "utf-8"), changed };
 }
 
 // --- Subcommand: decision ---
@@ -3216,10 +3218,12 @@ function handleReview(args: string[]): void {
         // defect, or a heading form this cannot change, refuses as before.
         if (!validity.valid && validity.heading && body !== null) {
           const demoted = demoteReviewHeadings(body);
-          const again = demoted === null ? null : validateReviewAppendix(demoted, expectedReview);
+          const again = demoted === null ? null : validateReviewAppendix(demoted.bytes, expectedReview);
           if (demoted !== null && again?.valid) {
-            reviewBytes = demoted;
+            reviewBytes = demoted.bytes;
             validity = again;
+            // The record shows the reviewer's headings were changed, and which.
+            fields["Review Headings Made Level 3"] = demoted.changed.join("; ");
           } else if (again && !again.valid && !again.heading) {
             validity = again;
           }
