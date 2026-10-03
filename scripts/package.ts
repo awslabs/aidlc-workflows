@@ -97,7 +97,7 @@ import {
 import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
+import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -645,6 +645,14 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     throw new Error(`[${m.name}] unclassified projection entries: ${unclassified.join(", ")}`);
   }
   const rootIntegrations = m.rootIntegrations.map((integration) => {
+    if (copyStartsWithout(integration)) {
+      // A copy starts without this file; its shipped list rides along so
+      // config can turn it on without a download.
+      const dst = join(treeRoot, "tools", "data", "root-blocks", basename(integration.path));
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, readFileSync(join(outRoot, integration.path)));
+      return integration;
+    }
     if (integration.policy !== "managed-block") return integration;
     const bytes = readFileSync(join(outRoot, integration.path));
     // Every managed block ships a copy inside the harness folder: siblings

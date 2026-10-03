@@ -5319,6 +5319,11 @@ function ownFilesCoverChoices(
   );
   const shipped = integration?.legacySignatures?.jsonEntryHashes;
   if (!integration?.jsonKey || !shipped) return true;
+  // A copy starts without the file and carries the shipped list itself.
+  if (
+    !pathPresent(join(projectDir, integration.path)) &&
+    regularFile(rootBlockPath(join(projectDir, descriptor.harnessDir), integration))
+  ) return true;
   let servers: unknown;
   try {
     servers = (JSON.parse(readFileSync(join(projectDir, integration.path), "utf-8")) as Record<string, unknown>)[
@@ -7211,7 +7216,9 @@ function planRootIntegrations(
         continue;
       }
       const shippedHashes = integration.legacySignatures?.jsonEntryHashes ?? {};
-      if (mcpMode === "defaults" && ownBytes) {
+      // With no project file the source is the shipped copy in root-blocks
+      // (a copy starts without it), so its entries are added as shipped.
+      if (mcpMode === "defaults" && ownBytes && current) {
         for (const entry of Object.keys(sourceMap)) {
           const currentHash = sha256Bytes(canonical(targetMap[entry]));
           if ((shippedHashes[entry] ?? []).includes(currentHash)) nextEntries[entry] = currentHash;

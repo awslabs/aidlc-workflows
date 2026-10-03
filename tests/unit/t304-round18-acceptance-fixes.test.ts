@@ -502,6 +502,26 @@ describe("t304 copied projection configuration", () => {
     expectCopyChannelPurity(back.stdout);
   }, 120_000);
 
+  // The copy runtime leaves .mcp.json out, so a copy starts with no servers,
+  // as config does by default; the shipped list rides in the harness folder,
+  // so turning them on needs no download.
+  test("a copy starts with no MCP servers and turns the shipped ones on offline", () => {
+    const project = fullCopyProject();
+    rmSync(join(project, ".mcp.json"));
+    expect(existsSync(join(project, ".claude", "tools", "data", "root-blocks", ".mcp.json"))).toBe(true);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    const written = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(Object.keys(written.mcpServers).sort()).toEqual(Object.keys(shipped.mcpServers).sort());
+  }, 120_000);
+
   test("own files never adopt a user's edit to a shipped server", () => {
     const project = fullCopyProject();
     const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes", "--from", join(DIST, "claude")]);

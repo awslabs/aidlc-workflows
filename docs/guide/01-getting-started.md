@@ -164,7 +164,9 @@ Claude projects can install the shipped MCP defaults during config:
 aidlc config --harness claude --mcp defaults
 ```
 
-Use `--mcp none` to omit them. The default set is:
+Use `--mcp none` to omit them. A copy-channel install starts without them; run
+`bun .claude/tools/aidlc.ts config project --mcp defaults --yes` to add them.
+The default set is:
 
 | Server | Provides | Credentials |
 | --- | --- | --- |

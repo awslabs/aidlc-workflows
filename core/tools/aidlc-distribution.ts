@@ -336,16 +336,26 @@ export function copyChannelOmits(
 ): Set<string> {
   return new Set([
     ...descriptor.rootIntegrations
-      .filter((integration) => integration.policy === "jsonc-settings" || integration.policy === "managed-block")
+      .filter((integration) =>
+        integration.policy === "jsonc-settings" || integration.policy === "managed-block" ||
+        copyStartsWithout(integration))
       .map((integration) => integration.path),
     ...TEAM_MEMORY_FILES.map((name) => `aidlc/spaces/default/memory/${name}`),
     "aidlc/active-space",
   ]);
 }
 
-// Every managed-block root file a release ships is also copied, byte for
-// byte, to <harnessDir>/tools/data/root-blocks/<marker>, inside the harness
-// folder a copy brings along.
+// An optional settings file a copy starts without, as `config` does by
+// default: Claude Code's .mcp.json, whose servers would otherwise all be
+// offered at first start. Its shipped list still travels in root-blocks.
+export function copyStartsWithout(integration: Pick<RootIntegration, "policy" | "optional">): boolean {
+  return integration.policy === "json-map" && integration.optional === true;
+}
+
+// Every managed-block root file a release ships, and every file a copy starts
+// without, is also copied, byte for byte, to
+// <harnessDir>/tools/data/root-blocks/<marker or file name>, inside the
+// harness folder a copy brings along.
 export function rootBlockPath(
   harnessRoot: string,
   integration: Pick<RootIntegration, "path" | "marker">,
@@ -354,14 +364,14 @@ export function rootBlockPath(
 }
 
 // Where a projection holds the bytes it ships for a root integration: the root
-// file, or for a managed block the copy runtime leaves out, its root-blocks copy.
+// file, or for one the copy runtime leaves out, its root-blocks copy.
 export function shippedRootIntegrationPath(
   root: string,
   harnessDir: string,
-  integration: Pick<RootIntegration, "path" | "marker" | "policy">,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy" | "optional">,
 ): string {
   const path = join(root, integration.path);
-  if (integration.policy !== "managed-block" || existsSync(path)) return path;
+  if ((integration.policy !== "managed-block" && !copyStartsWithout(integration)) || existsSync(path)) return path;
   const block = rootBlockPath(join(root, harnessDir), integration);
   return existsSync(block) ? block : path;
 }

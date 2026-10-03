@@ -1490,7 +1490,10 @@ out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
 copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
 names the one setting to add yourself. It leaves out your `.gitignore` and
 `AGENTS.md` too: AI-DLC adds its own lines to them, after everything already
-there, or creates them when the project has none. It also leaves out the team's memory
+there, or creates them when the project has none. Claude Code's `.mcp.json` is
+left out as well, so a copy starts with no MCP servers, as `aidlc config` does
+by default; to turn the shipped servers on, run
+`bun .claude/tools/aidlc.ts config project --mcp defaults --yes`. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
 learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
