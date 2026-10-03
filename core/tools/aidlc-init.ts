@@ -127,6 +127,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  projectedDispatcher,
   type ProjectHarness,
   hasControlCharacters,
   quoteCommandArgument,
@@ -888,7 +889,7 @@ export function validatePublicConfigArgs(input: readonly string[]): string | nul
 }
 
 function modelPolicyHelp(): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   return [
     "Choose model and effort policy for each agent",
@@ -1055,13 +1056,13 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
-      : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
+      : `nothing yet - run '${configCommand("models --preset balanced --project --yes")}'`
   }\n`;
   writeMenuText(output);
   for (
     const line of commandRowLines(
       "Full per-agent list: ",
-      `${aidlcInvocation()} config models --show --json`,
+      configCommand("models --show --json"),
       menuWidth(),
     )
   ) {
@@ -1375,7 +1376,7 @@ function validateDiagnosticArgs(
 }
 
 function diagnosticHelp(section: DiagnosticSection): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   const common = [
     heading("Inspection:", out),
@@ -2157,7 +2158,7 @@ function configInputIsTty(): boolean {
 }
 
 function configCommand(args = ""): string {
-  return `${aidlcInvocation()} config${args ? ` ${args}` : ""}`;
+  return `${configInvocationFor()} config${args ? ` ${args}` : ""}`;
 }
 
 function commandToken(value: string): string {
@@ -2178,19 +2179,40 @@ function projectTarget(projectDir: string): string {
     : ` --project-dir ${quoteCommandArgument(projectDir)}`;
 }
 
+// Whether two paths reach one file; a missing path reaches none.
+function sameFile(left: string, right: string): boolean {
+  const canonical = (path: string): string => {
+    const real = realpathSync.native(path);
+    return process.platform === "win32" ? real.toLowerCase() : real;
+  };
+  try {
+    return canonical(left) === canonical(right);
+  } catch {
+    return false;
+  }
+}
+
 // How a printed command starts so it runs from where the user is: `aidlc`, or
-// a Bun projection's tool path, rooted at the project when not run from it.
-function configInvocationFor(projectDir: string): string {
-  return aidlcInvocation() === "aidlc"
-    ? "aidlc"
-    : ranFromProject(projectDir)
-    ? aidlcInvocation()
-    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
+// the Bun tool that ran this command. The project's own tool is named from the
+// project when run there and by its path in the project when not. Any other
+// tool (a runtime unpacked elsewhere, which may be adding a harness the project
+// does not have yet) is named by its own path, unless it is the one under the
+// working directory. In the source tree the project's own tool stands in.
+function configInvocationFor(projectDir = process.cwd()): string {
+  const invocation = aidlcInvocation();
+  if (invocation === "aidlc") return invocation;
+  const toolIn = (root: string) => join(root, runtimeHarnessDir(), "tools", "aidlc.ts");
+  const ran = projectedDispatcher();
+  if (ran === null || sameFile(ran, toolIn(projectDir))) {
+    return ranFromProject(projectDir)
+      ? invocation
+      : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+  }
+  return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
-// it runs as shown from where they are. A Bun projection's tool path is
-// relative to the project, so from elsewhere it is rooted there instead.
+// it runs as shown from where they are.
 function configRerunWith(
   input: readonly string[],
   projectDir: string,
@@ -2807,7 +2829,7 @@ function validateChoiceArgs(
 }
 
 function choiceHelp(section: ChoiceSection): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   const specific = section === "flags"
     ? [
@@ -4565,7 +4587,7 @@ function prepareRefreshSource(
       throw new Error(
         `${currentHarnessData}: harness.json contains legacy policy key(s) ${policyKeys.join(", ")}. ` +
           `Remove ${policyKeys.join(", ")} from ${currentHarnessData}, then run ` +
-          `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
+          `'${configCommand()}' to record policy in aidlc.settings.json.`,
       );
     }
     for (const [key, value] of Object.entries(current)) {
