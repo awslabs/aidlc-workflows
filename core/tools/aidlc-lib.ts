@@ -26126,11 +26126,10 @@ export function fenceSwitchSentence(
       `Guard Policy is held strict in ${memoryStrict.path}, so the ${fence} check ` +
       "cannot be turned off from chat; edit that file to change it for everyone on this repo."
     );
-  } catch (error) {
-    // The resolver's error names the file and the allowed values.
+  } catch {
     return (
-      `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat ` +
-      `until it is fixed: ${errorMessage(error)}`
+      `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat; ` +
+      "fix the policy before trying again."
     );
   }
 }

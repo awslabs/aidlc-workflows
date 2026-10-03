@@ -137,13 +137,14 @@ const manifest: HarnessManifest = {
     // Says what happened and what lets their next message be recorded; it adds
     // no step to the refusal it joins.
     missedReply:
-      "If the person already replied, Kiro is not running AI-DLC's hooks in this window, so " +
-      "that reply was not recorded. Tell them that, and that trusting the folder if the " +
+      "If the person already replied, that reply was not recorded: Kiro may not be running " +
+      "AI-DLC's hooks in this window. Tell them that, and that trusting the folder if the " +
       "Restricted Mode banner shows at the top of the window (select Manage, then Trust), " +
       'running "Developer: Reload Window" from the Command Palette (Ctrl+Shift+P, or ' +
       "Cmd+Shift+P on macOS), and choosing the aidlc agent in the chat panel's agent picker " +
-      "lets their next message be recorded. In Kiro CLI, starting `kiro-cli` again in this " +
-      "folder does the same. If they use an ACP client, tell them their client " +
+      "should let their next message be recorded; if it still is not, `/aidlc --doctor` shows " +
+      "why. In Kiro CLI, starting `kiro-cli` again in this folder does the same. If they use " +
+      "an ACP client, tell them their client " +
       KIRO_CLI_ACP_HOOKS,
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.

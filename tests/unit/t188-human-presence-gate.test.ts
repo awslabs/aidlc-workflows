@@ -286,19 +286,21 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(claude.out).toContain("If the person already replied, that reply was not recorded for this question.");
     expect(claude.out).toContain("--doctor shows whether AI-DLC's hooks run here.");
     expect(claude.out).not.toContain("reply again");
-    expect(claude.out).not.toContain("Kiro is not running AI-DLC's hooks");
+    expect(claude.out).not.toContain("Kiro may not be running AI-DLC's hooks");
     expect(claude.out).not.toContain("Reload Window");
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
     expect(r.rc).not.toBe(0);
     const refusal = JSON.parse(r.out).error as string;
     expect(refusal).toContain(
-      "If the person already replied, Kiro is not running AI-DLC's hooks in this window, so that reply was not recorded.",
+      "If the person already replied, that reply was not recorded: Kiro may not be running AI-DLC's hooks in this window.",
     );
     expect(refusal).toContain(
       "trusting the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
     );
     expect(refusal).toContain('running "Developer: Reload Window" from the Command Palette');
-    expect(refusal).toContain("choosing the aidlc agent in the chat panel's agent picker lets their next message be recorded.");
+    expect(refusal).toContain(
+      "choosing the aidlc agent in the chat panel's agent picker should let their next message be recorded; if it still is not, `/aidlc --doctor` shows why.",
+    );
     expect(refusal).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
     expect(refusal).not.toContain("reply again");
     // #1487: an ACP client gets neither the v3 pin nor hooks unless it asks.
@@ -323,13 +325,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const refusal = JSON.parse(r.out).error as string;
     expect(refusal).toContain("no new human reply");
     expect(refusal).toContain(
-      "If the person already replied, Kiro CLI is not running AI-DLC's hooks in this session, so that reply was not recorded",
+      "If the person already replied, that reply was not recorded: Kiro CLI may not be running AI-DLC's hooks in this session",
     );
     expect(refusal).toContain("a session on the v3 engine does not run them as shipped");
     expect(refusal).toContain(
       "starting `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder",
     );
-    expect(refusal).toContain("lets the next chat record their replies.");
+    expect(refusal).toContain("should let the next chat record their replies; if it still does not, `/aidlc --doctor` shows why.");
     expect(refusal).not.toContain("reply again");
     expect(refusal).toContain("an ACP client starts `kiro-cli acp --agent-engine v2`");
     expect(refusal).not.toContain("Reload Window");
@@ -353,8 +355,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     stampPrompt(proj, Date.now());
     writeHeartbeat(proj, Date.now());
     for (const [state, steps] of [
-      [KIRO_CLI_STATE, "If the person already replied, Kiro CLI is not running AI-DLC's hooks in this session"],
-      [KIRO_IDE_STATE, "If the person already replied, Kiro is not running AI-DLC's hooks in this window"],
+      [KIRO_CLI_STATE, "If the person already replied, that reply was not recorded: Kiro CLI may not be running AI-DLC's hooks"],
+      [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded: Kiro may not be running AI-DLC's hooks"],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
       expect(r.rc).not.toBe(0);

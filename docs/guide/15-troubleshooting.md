@@ -194,7 +194,8 @@ machine (see [First run](harnesses/kiro-ide.md#first-run)).
 2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
    **Developer: Reload Window**.
 3. Choose the **aidlc** agent in the chat panel's agent picker.
-4. Send a message, or reply to the open question again.
+4. Send your next message in that chat; AI-DLC records it now. If it still does
+   not, `/aidlc --doctor` shows why.
 
 ### Kiro CLI hooks not running
 

@@ -5428,7 +5428,9 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
         "trusting the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
       );
       expect(r.stderr).toContain('running "Developer: Reload Window" from the Command Palette');
-      expect(r.stderr).toContain("choosing the aidlc agent in the chat panel's agent picker lets their next message be recorded.");
+      expect(r.stderr).toContain(
+        "choosing the aidlc agent in the chat panel's agent picker should let their next message be recorded; if it still is not, `/aidlc --doctor` shows why.",
+      );
       expect(r.stderr).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
       expect(r.stderr).not.toContain("reply again");
     } finally {

@@ -1828,8 +1828,9 @@ if (target === "enforce-approval-gate") {
         "recorded. Tell them that, and that trusting the folder if the Restricted Mode " +
         "banner shows at the top of the window (select Manage, then Trust), running " +
         `"Developer: Reload Window" from the Command Palette (${palette}), and choosing ` +
-        "the aidlc agent in the chat panel's agent picker lets their next message be " +
-        "recorded. In Kiro CLI, starting `kiro-cli` again in this folder does the same.\n",
+        "the aidlc agent in the chat panel's agent picker should let their next message be " +
+        "recorded; if it still is not, `/aidlc --doctor` shows why. In Kiro CLI, starting " +
+        "`kiro-cli` again in this folder does the same.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }

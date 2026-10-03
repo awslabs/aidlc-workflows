@@ -684,8 +684,6 @@ describe("t333 (3) resolution precedence", () => {
     expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(true);
     const sentence = fenceSwitchSentence(proj, "review-freeze", content);
     expect(sentence).toContain("cannot be turned off from chat");
-    // It says why, so the person knows what to fix.
-    expect(sentence).toContain("until it is fixed: ");
     expect(sentence).not.toContain("config set guard.review-freeze off");
   });
 

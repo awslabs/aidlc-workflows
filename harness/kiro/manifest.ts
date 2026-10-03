@@ -53,12 +53,12 @@ const manifest: HarnessManifest = {
     // Says what happened and what lets the next chat record replies; it adds no
     // step to the refusal it joins.
     missedReply:
-      "If the person already replied, Kiro CLI is not running AI-DLC's hooks in this " +
-      "session, so that reply was not recorded: the hooks run on its v2 engine with the " +
-      "aidlc agent active, and a session on the v3 engine does not run them as shipped. " +
-      "Tell them that, and that starting `kiro-cli chat --agent-engine v2 --agent aidlc` " +
-      "in this folder (an ACP client starts `kiro-cli acp --agent-engine v2`) lets the next " +
-      "chat record their replies.",
+      "If the person already replied, that reply was not recorded: Kiro CLI may not be " +
+      "running AI-DLC's hooks in this session. They run on its v2 engine with the aidlc " +
+      "agent active, and a session on the v3 engine does not run them as shipped. Tell them " +
+      "that, and that starting `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder " +
+      "(an ACP client starts `kiro-cli acp --agent-engine v2`) should let the next chat record " +
+      "their replies; if it still does not, `/aidlc --doctor` shows why.",
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
