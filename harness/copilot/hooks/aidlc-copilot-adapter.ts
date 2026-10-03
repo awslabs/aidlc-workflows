@@ -404,6 +404,18 @@ export async function run(
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
     : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+  // PowerShell itself: cmd never splits a command line at `;`.
+  const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
+  // The plan-approval guard reads a PowerShell command the way PowerShell runs
+  // it. Only the adapter says which shell ran, never the payload.
+  function withShellReading(raw: string): string {
+    try {
+      const { aidlc_shell: _shell, ...parsed } = JSON.parse(raw) as Record<string, unknown>;
+      return JSON.stringify(powerShellTerminal ? { ...parsed, aidlc_shell: "powershell" } : parsed);
+    } catch {
+      return raw;
+    }
+  }
   // In PowerShell and cmd a backslash is a path separator, never an escape,
   // so a word may also hold one (`C:\work\app`, `.aidlc\tools`). bun splits
   // the words with the Windows rule, where a backslash counts only right
@@ -438,6 +450,25 @@ export async function run(
   }
   function argumentsStayInProject(args: readonly string[]): boolean {
     return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
+  }
+
+  // In PowerShell an agent often moves to the project first:
+  // `cd C:\work\app; aidlc engine orchestrate next`. A `cd` or `Set-Location`
+  // to the project folder itself, by an absolute path, is set aside with its
+  // `;`, and the command after it is read as if typed alone. PowerShell runs
+  // that command even when the cd fails, so it never runs anywhere its bare
+  // form could not. Any other folder, a subfolder too, keeps the whole
+  // command: the installed engine takes its working folder as the project.
+  const PROJECT_CD = /^ *(?:cd|Set-Location)(?: +-(?:Literal)?Path)? +(?:'([A-Za-z0-9_./:\\ -]+)'|"([A-Za-z0-9_./:\\ -]+)"|([A-Za-z0-9_./:\\-]+)) *; */i;
+  function projectCdLead(command: string): string {
+    const match = powerShellTerminal ? PROJECT_CD.exec(command) : null;
+    if (!match) return "";
+    const target = terminalPath(match[1] ?? match[2] ?? match[3]);
+    try {
+      return isAbsolute(target) && normalizeDriveLetter(realpathSync(target)) === normalizeDriveLetter(realpathSync(projectDir)) ? match[0] : "";
+    } catch {
+      return "";
+    }
   }
 
   // A bare `aidlc` is vouched for only as the installed launcher. cmd runs a
@@ -722,9 +753,15 @@ export async function run(
     return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
   }
 
-  function orchestrationCommand(): ParsedOrchestration {
-    const command = nativeToolInput?.command;
+  function orchestrationCommand(command: unknown = nativeToolInput?.command, lead = ""): ParsedOrchestration {
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
+    // After a cd to the project, only a command claimed or vouched for alone
+    // changes; every other form keeps the answer a cd-led command had.
+    const projectLead = lead ? "" : projectCdLead(command);
+    if (projectLead) {
+      const bare = orchestrationCommand(command.slice(projectLead.length), projectLead);
+      return bare.status === "recognized" || bare.status === "terminal" ? bare : { status: "unrelated" };
+    }
     const prefix = executionPrefix(command);
     let prefixCursor = 0;
     const prefixFirst = prefix[prefixCursor++] ?? "";
@@ -841,7 +878,7 @@ export async function run(
         (subArgs[0] === "knowledge" && ["onboard", "sync"].includes(subArgs[1] ?? "")) ||
         (subArgs[0] === "plugin" && ["sync", "select", "build"].includes(subArgs[1] ?? "")))) ||
         !argumentsStayInProject(subArgs),
-      rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
+      rewrite: (selectedAttemptId) => `${lead}${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
@@ -1706,7 +1743,7 @@ export async function run(
         }
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
-          canonicalInput,
+          withShellReading(canonicalInput),
         );
         if (planApproval.code === 2) {
           process.stdout.write(denyJson(planApproval.stderr));
@@ -1720,10 +1757,12 @@ export async function run(
         // for the call: the host's own approval applies. A workflow command is
         // vouched once its coordination claim succeeds or the check stands
         // aside for it, and no call without a host session is vouched for.
+        const typed = typeof nativeToolInput?.command === "string" ? nativeToolInput.command : "";
+        const bare = typed.slice(projectCdLead(typed).length);
         const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
-            plainInEveryShell(nativeToolInput?.command) &&
-            !(shellWords(String(nativeToolInput?.command))?.[0] === "aidlc" && projectSuppliesLauncher())
+            plainInEveryShell(bare) &&
+            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
           ? ALLOW_DECISION
           : null;
         if (command.status === "terminal") {

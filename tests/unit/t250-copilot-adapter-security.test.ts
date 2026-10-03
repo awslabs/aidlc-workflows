@@ -1862,6 +1862,76 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("27k: in PowerShell a cd to the project before an AI-DLC command runs like the bare command; any other cd or chain keeps today's answer", () => {
+    // An agent in VS Code on Windows often moves to the project first:
+    // `cd C:\work\app; aidlc engine orchestrate next` (#1411). The payload's
+    // shell is simulated here so the Windows rule also runs on Linux.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      mkdirSync(join(s.projectRoot, "src"));
+      const outside = mkdtempSync(join(tmpdir(), "t250-outside-"));
+      try {
+        const win = (path: string) => path.replaceAll("/", "\\");
+        const root = s.projectRoot;
+        const call = (command: string, shell?: string, toolName = "run_in_terminal", extra: Record<string, unknown> = {}) =>
+          shellDecision(runAdapter(s, "guard-tool-call", {
+            ...shellCall(command, "S-ALLOW", toolName),
+            ...extra,
+            tool_input: { command, ...(shell ? { shell } : {}) },
+          }));
+        // The shell the guards were told the command runs in.
+        const guardShell = () => capturedInputs(s.captureDir, "aidlc-plan-approval-guard.ts").at(-1)?.aidlc_shell;
+        const leads = [
+          `cd ${win(root)}; `,
+          `cd '${win(root)}' ; `,
+          `Set-Location ${root}; `,
+          `Set-Location -LiteralPath "${win(root)}";`,
+        ];
+        for (const shell of ["pwsh", "C:\\Program Files\\PowerShell\\7\\pwsh.exe", "powershell.exe", ...(process.platform === "win32" ? [undefined] : [])]) {
+          for (const lead of leads) {
+            const claimed = call(`${lead}aidlc engine orchestrate next`, shell);
+            expect(claimed.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
+            // The rewrite keeps the agent's own cd.
+            expect(claimed.hookSpecificOutput?.updatedInput?.command, `${shell}: ${lead}`).toBe(`${lead}aidlc engine orchestrate next ${STUB_ATTEMPT}`);
+            expect(guardShell(), `${shell}: ${lead}`).toBe("powershell");
+            const terminal = call(`${lead}aidlc engine log answers`, shell);
+            expect(terminal.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
+            expect(terminal.hookSpecificOutput?.updatedInput, `${shell}: ${lead}`).toBeUndefined();
+          }
+          for (const command of [
+            // another folder, a subfolder (the installed engine takes its
+            // working folder as the project), or a relative path
+            `cd ${win(outside)}; aidlc engine orchestrate next`,
+            `cd ${win(join(root, "src"))}; aidlc engine orchestrate next`,
+            "cd .; aidlc engine orchestrate next",
+            // any other chain
+            `cd ${win(root)}; aidlc engine orchestrate next; rm -rf build`,
+            `cd ${win(root)}; aidlc engine orchestrate next | Out-File next.txt`,
+            `cd ${win(root)}; cd ${win(root)}; aidlc engine orchestrate next`,
+            `cd ${win(root)} && aidlc engine orchestrate next`,
+            `cd ${win(root)}; git status`,
+            `cd ${win(root)}; rm -rf build`,
+          ]) {
+            expect(call(command, shell), `${shell}: ${command}`).toEqual({});
+          }
+        }
+        // cmd never splits on `;`, and a POSIX shell keeps its own reading, so
+        // the cd-led command keeps today's answer there and is not PowerShell.
+        for (const shell of ["cmd.exe", "C:\\Windows\\System32\\cmd.exe", "bash", ...(process.platform === "win32" ? [] : [undefined])]) {
+          expect(call(`cd ${root}; aidlc engine orchestrate next`, shell, "run_in_terminal", { aidlc_shell: "powershell" }), String(shell)).toEqual({});
+          expect(guardShell(), String(shell)).toBeUndefined();
+        }
+        expect(call(`cd ${root}; aidlc engine orchestrate next`, undefined, "Bash")).toEqual({});
+        expect(guardShell()).toBeUndefined();
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("28: chained, redirected, substituted, wrapped, host-only, machine, and other commands get no allow; denies are unchanged", () => {
     const s = scratch();
     try {

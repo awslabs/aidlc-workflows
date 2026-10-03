@@ -187,7 +187,13 @@ then use the ignored local `dist/copilot/` output.
     VS Code's terminal is PowerShell or cmd, a backslash is a plain path
     separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
     without a click; only a backslash right before a double quote keeps the
-    prompt. In a Git Bash or WSL terminal a backslash still keeps it;
+    prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
+    PowerShell terminal one `cd` or `Set-Location` to the project folder
+    itself, by its full path, may come first:
+    `cd C:\work\app; aidlc engine orchestrate next` runs like
+    `aidlc engine orchestrate next`, also while a plan waits for approval. A
+    `cd` to any other folder, a subfolder included, keeps the prompt, because
+    the installed `aidlc` takes the folder it runs in as the project;
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file
