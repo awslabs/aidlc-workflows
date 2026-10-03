@@ -50,14 +50,17 @@ flow, a rich task description may still receive an adaptive compose offer before
 anything is created. Classic uses Standard artifacts and tests. Walking-skeleton
 ceremony and summary confirmation are off. Sensors run and the learnings ritual runs.
 Reviews are advisory (one pass per stage, findings at the approval gate);
-explicit autonomy keeps the single pre-merge review. Approval gates, Plan Approval, human-turn authority, audit,
-and team cross-unit write protection remain in force.
+explicit autonomy keeps the single pre-merge review. Guard Policy defaults to off:
+plan re-approval, review freeze, state transition, and reviewer read scope stand aside
+for undirected work and record a `GUARD_STOOD_ASIDE` row each time; Plan Approval is
+still asked, by the engine. Human-turn authority and audit remain in force.
 
-Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, or
-`/aidlc --summary-confirmation on|off` to override the scope for an intent.
-`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, and
-`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` force the respective ceremony off,
-even when the intent says on.
+Use `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
+`/aidlc --summary-confirmation on|off`, or `/aidlc --plan-approval on|off` to
+override the scope for an intent (only you turn plan approval off).
+`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+`AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
+force the respective ceremony off, even when the intent says on.
 
 Do not choose Classic when the problem itself is still unclear and would benefit
 from market research, feasibility analysis, or explicit scope discovery; choose
@@ -73,6 +76,16 @@ Express skips Ideation, the design pass, Unit decomposition, Delivery Planning,
 and CI Pipeline. It disables stage reviewer dispatch and uses Minimal artifacts
 and requirement-driven tests. Reverse Engineering and deployment stages remain
 conditional.
+
+Express also turns sensors, learnings, and summary confirmation off.
+Override them per intent with [`/aidlc --sensors on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
+[`/aidlc --learnings on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls),
+or [`/aidlc --summary-confirmation on|off`](12-cli-commands.md#aidlc-sensors-learnings-summary-confirmation-ceremony-controls).
+
+Express's [Guard Policy](13-customization.md#guard-policy) defaults to off: plan
+approval, review freeze, state transition, and reviewer read scope stand aside for
+undirected work and record a `GUARD_STOOD_ASIDE` row each time. Human presence stays
+on. Type `/aidlc --guard-policy strict` or `relaxed` to raise it for one intent.
 
 Do not choose Express for ambiguous, cross-team, regulated, or architecture-heavy
 work. Its speed comes from intentionally removing those decision surfaces.

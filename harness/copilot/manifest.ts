@@ -59,6 +59,18 @@ const manifest: HarnessManifest = {
       },
     },
     {
+      // VS Code pauses agent mode after `chat.agent.maxRequests` requests in
+      // one turn (default 50) to ask "Continue to iterate?", and the chat sits
+      // silent until someone answers; one Construction stage passes that
+      // (#1411). Config adds 200 when the project does not set it, and never
+      // changes a value the team set, other keys, or comments. Optional: the
+      // copy runtime leaves the file out (copyChannelOmits), since copying it
+      // would replace the team's own.
+      path: ".vscode/settings.json",
+      policy: "jsonc-settings",
+      optional: true,
+    },
+    {
       path: "AGENTS.md",
       policy: "managed-block",
       marker: "agents",
@@ -69,6 +81,19 @@ const manifest: HarnessManifest = {
           "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",
           // The 2.9.0 shipped variant (#1131 changed the onboarding record-dir shape).
           "sha256:bf3077a6520e2735f618bad386858afc57edceaa791d98de7a6c269d71861e56",
+          // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
+          "sha256:55b31ba55f6e7ebc47fe76a00039e2ec16e020503fb63791cbd8665438ff32ac",
+          // The pre-Guards shipped variant (the onboarding gained its Guards section).
+          "sha256:7a3a19981ba7a3c447b54eb0d0b1e96f8c9931687595967103cb5dfbb3c2b309",
+          // The pre-skill-prefix shipped variant (#1341: user-typed skill
+          // names rendered the shell invocation instead of the skill command).
+          "sha256:622ebad60ee4fed6a2a9811e7378ccbff6b76d651aaee00fd079b02471d8cf06",
+          // The pre-plan-offer shipped variant (its onboarding said the init
+          // runner always creates the first record in one step).
+          "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
+          // The variant whose folder-trust bullet said both Copilot surfaces
+          // read trustedFolders (VS Code never does).
+          "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
         ],
       },
     },
@@ -94,6 +119,8 @@ const manifest: HarnessManifest = {
     // The hook adapter, beside the core hook bodies it pipes into.
     { src: "hooks/aidlc-copilot-adapter.ts", dst: "hooks/aidlc-copilot-adapter.ts" },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
+    // The VS Code settings AI-DLC adds when absent (the jsonc-settings integration).
+    { src: "dot-vscode-settings.json", dst: ".vscode/settings.json", projectRoot: true },
   ],
 
   // AGENTS.md at the project root — both Copilot surfaces auto-read it.
@@ -101,6 +128,15 @@ const manifest: HarnessManifest = {
 
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,
+
+  // VS Code's run_in_terminal tool keeps a result whole only up to 20,000
+  // characters (MAX_OUTPUT_LENGTH in microsoft/vscode src/vs/workbench/contrib/
+  // terminalContrib/chatAgentTools/browser/outputHelpers.ts). A longer one is
+  // saved to a file and the chat and the PostToolUse hook get a 500-character
+  // preview and the tail, so the adapter cannot read the directive (#1411).
+  // 19,000 bytes are never more than 19,000 characters, which leaves room for
+  // the newline and anything the terminal adds.
+  directiveMaxBytes: 19000,
 
   // Copilot discovers project skills at .github/skills/ (and .agents/skills/,
   // .claude/skills/) — never inside .aidlc/. emit.ts composes the full skill

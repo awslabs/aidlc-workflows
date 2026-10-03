@@ -7,7 +7,11 @@ keywords:
 description: Skip operations, ship the core
 skeleton: on
 runner: true
-change_control: relaxed
+guard_policy: off
+sensors: on
+learnings: on
+summary_confirmation: on
+plan_approval: on
 ---
 
 # mvp scope
@@ -18,7 +22,7 @@ team-formation, no approval-handoff) and the entire operation phase is
 skipped — an MVP proves the product, it does not yet carry production
 operations weight.
 
-Change Control defaults to relaxed: an input that changes after approval is recorded and announced in one line, and the run continues.
+Guard Policy defaults to off: changed inputs are recorded and announced, the run continues, and plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
 
 ## Why these stages, why skip those
 

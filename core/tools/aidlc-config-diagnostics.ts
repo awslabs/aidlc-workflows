@@ -1,3 +1,4 @@
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import {
   accessSync,
@@ -6,16 +7,25 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, extname, join, relative, resolve } from "node:path";
-import { sha256Bytes } from "./aidlc-distribution.ts";
+import { delimiter, dirname, extname, join, relative, resolve } from "node:path";
+import {
+  assertProjectionPathHasNoSymlinks,
+  isSafeOnboardingPath,
+  jsoncRootMembers,
+  jsoncSettingValue,
+  sha256Bytes,
+} from "./aidlc-distribution.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
+  kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
+import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import type { ModelHarness } from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
@@ -38,17 +48,11 @@ export type RuntimeRecord = {
 };
 
 // `builtin` remains readable for records written by earlier builds. New provider
-// answers are only recorded for Bedrock-oriented harnesses.
-export type ProviderKind = "amazon-bedrock" | "builtin" | "other";
+// answers use `current`, `amazon-bedrock`, or `other`.
+export type ProviderKind = "current" | "amazon-bedrock" | "builtin" | "other";
 
 // Kiro CLI and Kiro IDE provide their own model access. AI-DLC has no provider
 // decision to ask, write, or check for them, even when a legacy answer exists.
-//
-// Every OTHER harness is Bedrock-oriented and must still be asked. Claude Code,
-// Codex CLI, and OpenCode take region and profile bytes directly. GitHub
-// Copilot and Cursor reach Bedrock through their own BYOK or provider settings,
-// which is manual work AI-DLC tracks rather than performs. Never assume those
-// are on the harness's own access.
 export type BedrockOrientedHarness = Exclude<ModelHarness, "kiro" | "kiro-ide">;
 
 const HARNESS_OWNED_MODEL_ACCESS: ReadonlySet<ModelHarness> = new Set<ModelHarness>([
@@ -66,43 +70,22 @@ export function ownedModelAccessFact(product: string): string {
   return `Model access comes with ${product}; AI-DLC configures no model provider for it.`;
 }
 
-// Per-harness wording for the provider question on Bedrock-oriented harnesses.
-// Harness-owned model access has no question and uses ownedModelAccessFact.
-export type ProviderMenuCopy = {
-  bedrock: string;
-};
+export type ProviderMenuCopy = { bedrock: string };
 
-// Every line describes what recording the answer DOES, never which vendor the
-// user is presumed to be on. Naming one would be a guess: Claude Code also runs
-// on Vertex AI, Codex on Azure, and OpenCode on anything it has a provider for.
 export function providerMenuCopy(
   harness: BedrockOrientedHarness,
 ): ProviderMenuCopy {
   switch (harness) {
     case "claude":
-      return {
-        bedrock: "records the AWS region and profile in settings.json, and the AWS MCP region in .mcp.json when present",
-      };
+      return { bedrock: "write the AWS region and profile to settings.json" };
     case "codex":
-      return {
-        bedrock: "records the AWS region and profile in config.toml",
-      };
+      return { bedrock: "record the AWS region and profile and guide user-level Codex setup" };
     case "opencode":
-      // opencode.json is written only when the follow-up offer is accepted; the
-      // record itself always carries the region and profile.
-      return {
-        bedrock: "records the AWS region and profile, and offers to write them to opencode.json",
-      };
+      return { bedrock: "record the AWS region and profile and offer to write opencode.json" };
     case "copilot":
-      // Copilot reaches Bedrock through BYOK environment variables that AI-DLC
-      // cannot set, so that branch is tracked as manual work, not performed.
-      return {
-        bedrock: "records that you set the Copilot BYOK provider variables yourself",
-      };
+      return { bedrock: "record the manual Copilot BYOK provider setup" };
     case "cursor":
-      return {
-        bedrock: "records that you configure the provider in Cursor yourself",
-      };
+      return { bedrock: "record the manual Cursor provider setup" };
   }
 }
 export type ProviderPendingStatus = "pending" | "done";
@@ -158,29 +141,19 @@ function invocationForHarness(harnessDir: string): string {
 // The one command that rebuilds a missing workspace shell: an explicit
 // `--harness` refresh, which goes through the refresh transaction instead of the
 // interactive existing-projection walk. Every surface that names the rebuild
-// (doctor row, setup map, trust issue, and the copy-channel refresh failure in
-// `aidlc config`) renders it from here.
+// (doctor row, setup map, trust issue) renders it from here.
 //
-// The `--from` clause is added only for a projection that invokes through the
-// bun dispatcher, because a native install refreshes from its installed runtime
-// with no `--from` at all. Bun-invoking bytes come from two places, and the
-// placeholder names both: the `runtime/<harness>/` root extracted from the
-// manual-copy `aidlc-copy-runtime-X.Y.Z.tar.gz` asset, which is built from the
-// `dist/` projections, or a checkout's own `dist/<harness>/` tree. Either keeps
-// the project on the Bun channel; the native `aidlc-runtime-X.Y.Z.tar.gz` and
-// `dist-release/` trees are the wrong source here, since refreshing from them
-// would swap the hooks and tools to the `aidlc` command. Without `--from` the
-// bun projection stops at "refreshing project files needs release source
-// bytes", the state this remedy exists to end.
+// A native install refreshes from its installed runtime. A projection that
+// invokes through the bun dispatcher has no installed runtime, so its command
+// also carries `--download`, which fetches and verifies the copy runtime for the
+// project's release; the native runtime is the wrong source there, since
+// refreshing from it would swap the hooks and tools to the `aidlc` command.
 export function workspaceShellRefreshCommand(
   harnessDir: string,
   distribution: string,
 ): string {
   const invoke = invocationForHarness(harnessDir);
-  const from = invoke === "aidlc"
-    ? ""
-    : ` --from <the runtime/${distribution}/ root you copied from, or a checkout's dist/${distribution}/ tree>`;
-  return `${invoke} config --harness ${distribution}${from}`;
+  return `${invoke} config --harness ${distribution}${invoke === "aidlc" ? "" : " --download"}`;
 }
 
 export type RuntimeBinaryProbe = {
@@ -222,6 +195,7 @@ export type DiagnosticIssue = {
   id: string;
   message: string;
   remediation: string;
+  severity?: "warn";
 };
 
 export type DiagnosticFileSetting = {
@@ -283,7 +257,8 @@ const PROJECT_KEYS = new Set(["schemaVersion", "mcp", "completions"]);
 const SAFE_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/;
 const PENDING_ACTION_IDS = [
   "bedrock-model-access",
-  // Retired from generation, but accepted so legacy records can be read and reset.
+  "codex-provider-configuration",
+  // Retired IDs remain readable so legacy records can be reset.
   "kiro-ide-chat-model",
   "copilot-byok-configuration",
   "cursor-provider-configuration",
@@ -301,11 +276,20 @@ export const PROVIDER_PENDING_ACTIONS: Record<
     remediation:
       "Open the Amazon Bedrock console for the recorded region, verify the required Anthropic models are available, and confirm IAM allows bedrock:InvokeModel.",
   },
+  "codex-provider-configuration": {
+    label:
+      "Configure the selected provider in the user-level Codex configuration.",
+    remediation:
+      "Configure the provider, credentials, and model in $CODEX_HOME/config.toml (normally ~/.codex/config.toml). " +
+      "For Bedrock, add model_provider = \"amazon-bedrock\", select model = \"<Bedrock model ID>\", and add " +
+      "[model_providers.amazon-bedrock.aws] with profile = \"<AWS profile>\" and region = \"<AWS region>\". " +
+      "Then acknowledge the manual setup.",
+  },
   "kiro-ide-chat-model": {
     label:
-      "Select the intended Amazon Bedrock chat model in the Kiro IDE model picker.",
+      "Select the intended Amazon Bedrock chat model in the Kiro IDE model picker or with /model in Kiro CLI.",
     remediation:
-      "Open Kiro IDE, choose the intended Bedrock model in the chat model picker, then rerun this check.",
+      "Choose the intended Bedrock model in the Kiro IDE chat model picker, or with /model in Kiro CLI, then rerun this check.",
   },
   "copilot-byok-configuration": {
     label:
@@ -402,11 +386,12 @@ export function normalizeProvidersRecord(value: unknown): ProvidersRecord | null
   const out: ProvidersRecord = { schemaVersion: 1 };
   if (value.provider !== undefined) {
     if (
+      value.provider !== "current" &&
       value.provider !== "amazon-bedrock" &&
       value.provider !== "builtin" &&
       value.provider !== "other"
     ) {
-      throw new Error("providers.provider must be amazon-bedrock, builtin, or other");
+      throw new Error("providers.provider must be current, amazon-bedrock, builtin, or other");
     }
     out.provider = value.provider;
   }
@@ -491,9 +476,26 @@ export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnost
         `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
     );
   }
+  const distribution = value.distribution;
+  if (
+    distribution !== "claude" &&
+    distribution !== "codex" &&
+    distribution !== "copilot" &&
+    distribution !== "cursor" &&
+    distribution !== "kiro" &&
+    distribution !== "kiro-ide" &&
+    distribution !== "opencode"
+  ) {
+    throw new Error(`${path}: distribution must name a supported harness`);
+  }
+  const providers = normalizeProvidersRecord(value.providers);
   return {
     runtime: normalizeRuntimeRecord(value.runtime),
-    providers: normalizeProvidersRecord(value.providers),
+    providers: providers
+      ? harnessOwnsModelAccess(distribution)
+        ? providers
+        : reconcileProviderActions(providers, distribution, false)
+      : null,
     trust: normalizeTrustRecord(value.trust),
     project: normalizeProjectChoicesRecord(value.project),
   };
@@ -505,7 +507,7 @@ function defaultRun(
 ): { status: number; stdout: string } {
   const result = spawnSync(command, [...args], {
     encoding: "utf-8",
-    timeout: 5_000,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
   });
   return {
     status: result.status ?? -1,
@@ -733,7 +735,22 @@ function runtimePathSurfaces(platform: NodeJS.Platform): string {
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
+  status: "interactive-only" | "missing" = "missing",
+  foundAt?: string,
 ): string {
+  if (status === "interactive-only" && platform !== "win32") {
+    // Found on this shell's PATH: a harness started from a terminal hands that
+    // PATH to its hooks, so only a desktop or service launch can miss it. The
+    // baseline reads no shell rc file, so editing one never clears this row.
+    const channel = name === "bun"
+      ? "This project is a copy-channel projection, so its hooks run through Bun; " +
+        "a native install runs them through the aidlc command instead. "
+      : "";
+    const dir = foundAt ? dirname(foundAt) : name === "bun" ? "~/.bun/bin" : "~/.local/bin";
+    return `${channel}A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. ` +
+      `If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart the harness. ` +
+      "Editing .bashrc or .zshrc does not change this check.";
+  }
   if (name === "bun") {
     // Only a copy-channel projection runs its hooks through bun; a native
     // install routes them through `aidlc`. Say so, because a user who never
@@ -778,7 +795,7 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform),
+      remediation: runtimeRemediation(name, platform, "interactive-only", interactive),
     };
   }
   return {
@@ -825,9 +842,12 @@ const HARNESS_CLI: Record<
     required: true,
     install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
   },
+  // Probed so a machine with only Kiro CLI detects this row next to the kiro
+  // row: first-run setup then asks instead of silently choosing the legacy one.
   "kiro-ide": {
+    command: "kiro-cli",
     required: false,
-    install: "Kiro IDE has no required separate CLI for this project surface.",
+    install: "Kiro CLI is optional here: install it only to run AI-DLC from a terminal, and ensure `kiro-cli --version` works.",
   },
   opencode: {
     command: "opencode",
@@ -886,7 +906,9 @@ export function probeHarnessCli(
   const run = options.run ?? defaultRun;
   const result = run(path, ["--version"]);
   const version = result.stdout.trim();
-  if (result.status !== 0) {
+  // A floor needs a version: a reply with none is a stand-in, not the CLI.
+  // VS Code's `copilot` prints "Cannot find GitHub Copilot CLI" and exits 0 (#1411).
+  if (result.status !== 0 || (spec.minimumVersion && !versionTuple(version))) {
     return {
       harness,
       command: spec.command,
@@ -1089,6 +1111,7 @@ export function requiredProviderActions(
   if (record.provider === "builtin") return [];
   if (record.provider !== "amazon-bedrock") return [];
   const actions: ProviderPendingActionId[] = ["bedrock-model-access"];
+  if (harness === "codex") actions.push("codex-provider-configuration");
   if (harness === "copilot") actions.push("copilot-byok-configuration");
   if (harness === "cursor") actions.push("cursor-provider-configuration");
   return actions;
@@ -1097,6 +1120,7 @@ export function requiredProviderActions(
 export function reconcileProviderActions(
   record: ProvidersRecord,
   harness: ModelHarness,
+  acknowledging: boolean,
 ): ProvidersRecord {
   const current = new Map(
     (record.pendingActions ?? []).map((action) => [action.id, action.status]),
@@ -1104,12 +1128,15 @@ export function reconcileProviderActions(
   const required = requiredProviderActions(record, harness);
   const pendingActions = required.map((id) => {
     const acknowledgeGated =
+      id === "codex-provider-configuration" ||
       id === "copilot-byok-configuration" ||
       id === "cursor-provider-configuration" ||
       id === "non-bedrock-provider-configuration";
+    // Only an explicit acknowledgement of this mutation can complete a newly
+    // required action; a stored generic acknowledgement is not sufficient.
     return {
       id,
-      status: record.acknowledged && acknowledgeGated
+      status: acknowledging && record.acknowledged && acknowledgeGated
         ? "done"
         : current.get(id) ?? "pending",
     } as ProviderPendingAction;
@@ -1149,6 +1176,8 @@ function writeClaudeProvider(
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
   const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
+  stripLegacyClaudeModelAliases(env);
+  env.CLAUDE_CODE_USE_BEDROCK = "1";
   env.AWS_REGION = record.region;
   if (record.profile) env.AWS_PROFILE = record.profile;
   else delete env.AWS_PROFILE;
@@ -1172,26 +1201,160 @@ function writeClaudeProvider(
   writeJson(mcpPath, mcp);
 }
 
-function writeCodexProvider(
+const CLAUDE_BEDROCK_MODEL_KEYS = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+] as const;
+
+const LEGACY_CLAUDE_BEDROCK_ENV: Readonly<Record<string, string>> = {
+  CLAUDE_CODE_USE_BEDROCK: "1",
+  AWS_REGION: "us-east-1",
+  ANTHROPIC_DEFAULT_FABLE_MODEL: "global.anthropic.claude-fable-5[1m]",
+  ANTHROPIC_DEFAULT_OPUS_MODEL: "global.anthropic.claude-opus-4-8[1m]",
+  ANTHROPIC_DEFAULT_SONNET_MODEL: "global.anthropic.claude-sonnet-4-6[1m]",
+  ANTHROPIC_DEFAULT_HAIKU_MODEL:
+    "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+};
+
+export function stripLegacyClaudeModelAliases(env: Record<string, unknown>): string[] {
+  const removed: string[] = [];
+  for (const key of CLAUDE_BEDROCK_MODEL_KEYS) {
+    if (key !== "CLAUDE_CODE_USE_BEDROCK" && env[key] === LEGACY_CLAUDE_BEDROCK_ENV[key]) {
+      delete env[key];
+      removed.push(key);
+    }
+  }
+  return removed;
+}
+
+export function hasLegacyClaudeProviderConfig(
+  env: Record<string, unknown>,
+): boolean {
+  return Object.entries(LEGACY_CLAUDE_BEDROCK_ENV).every(
+    ([key, value]) => env[key] === value,
+  );
+}
+
+function clearClaudeProvider(
   projectionRoot: string,
   harnessDir: string,
-  record: ProvidersRecord,
+): void {
+  const settingsPath = join(projectionRoot, harnessDir, "settings.json");
+  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const env = isRecord(settings.env) ? { ...settings.env } : {};
+  const legacy = hasLegacyClaudeProviderConfig(env);
+  let changed = false;
+  if (legacy || env.CLAUDE_CODE_USE_BEDROCK === "1") {
+    changed = stripLegacyClaudeModelAliases(env).length > 0;
+  }
+  if (legacy) {
+    delete env.CLAUDE_CODE_USE_BEDROCK;
+    delete env.AWS_REGION;
+    changed = true;
+  }
+  if (!changed) return;
+  settings.env = env;
+  writeJson(settingsPath, settings);
+}
+
+const LEGACY_CODEX_BEDROCK_COMMENT =
+  /^(?:# Model: these session defaults are what judgment-tier agent roles inherit\r?\n# \(their TOMLs omit model\/model_reasoning_effort by design - see the tier\r?\n# projection\); balanced roles pin gpt-5\.6-terra\/medium, while templated roles inherit\.\r?\n)?# D-9: Amazon Bedrock is the shipped default provider \(web_search is\r?\n# unavailable there; the market-research stage degrades gracefully\)\. For\r?\n# OpenAI-auth setups, comment out model_provider and the \[model_providers\]\r?\n# block\.\r?\n/m;
+
+const LEGACY_CODEX_MODEL_PROVIDER = /^(#[ \t]?)?model_provider\s*=\s*"amazon-bedrock"\s*$/m;
+
+function legacyCodexAwsTablePattern(profile: string, region: string, commented = false): RegExp {
+  const escapedProfile = profile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedRegion = region.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const prefix = commented ? "#[ \\t]?" : "";
+  return new RegExp(
+    `^${prefix}\\[model_providers\\.amazon-bedrock\\.aws\\]\\r?\\n` +
+      `(?:${prefix}# Set to your AWS profile/region with Bedrock model access\\.\\r?\\n)?` +
+      `${prefix}profile = "${escapedProfile}"\\r?\\n${prefix}region = "${escapedRegion}"` +
+      `(?:\\r?\\n(?:\\r?\\n)?|(?![\\s\\S]))`,
+    "m",
+  );
+}
+
+const LEGACY_CODEX_AWS_TABLE = legacyCodexAwsTablePattern("default", "us-east-1");
+const LEGACY_CODEX_COMMENTED_AWS_TABLE = legacyCodexAwsTablePattern("default", "us-east-1", true);
+
+function clearCodexProvider(
+  projectionRoot: string,
+  harnessDir: string,
+  previousProvider: ProvidersRecord | null,
 ): void {
   const path = join(projectionRoot, harnessDir, "config.toml");
-  const content = readFileSync(path, "utf-8");
-  const section = /(\[model_providers\.amazon-bedrock\.aws\]\r?\n)([\s\S]*?)(?=\r?\n\[|$)/;
-  const match = section.exec(content);
-  if (!match) throw new Error(`${path}: missing amazon-bedrock aws provider section`);
-  const profile = record.profile ?? "default";
-  const lines = match[2].split(/\r?\n/).map((line) => {
-    if (/^profile\s*=/.test(line)) return `profile = ${JSON.stringify(profile)}`;
-    if (/^region\s*=/.test(line)) return `region = ${JSON.stringify(record.region)}`;
-    return line;
-  });
-  writeFileSync(
-    path,
-    content.replace(section, () => `${match[1]}${lines.join("\n")}`),
+  const original = readFileSync(path, "utf-8");
+  if (!hasLegacyCodexProviderConfig(original, previousProvider)) return;
+  let content = original;
+  content = content.replace(LEGACY_CODEX_BEDROCK_COMMENT, "");
+  content = content.replace(
+    /^model\s*=\s*"openai\.gpt-5\.5"\s*(?:\r?\n|$)/m,
+    "",
   );
+  content = content.replace(
+    /^(?:#[ \t]?)?model_provider\s*=\s*"amazon-bedrock"\s*(?:\r?\n|$)/m,
+    "",
+  );
+  content = content.replace(
+    /^model_context_window\s*=\s*1000000\s*(?:\r?\n|$)/m,
+    "",
+  );
+  content = content.replace(
+    /^model_reasoning_effort\s*=\s*"high"\s*(?:\r?\n|$)/m,
+    "",
+  );
+  // Remove only the exact shipped or previously written table and its separator.
+  const commented = !!LEGACY_CODEX_MODEL_PROVIDER.exec(original)?.[1];
+  const shippedTable = commented ? LEGACY_CODEX_COMMENTED_AWS_TABLE : LEGACY_CODEX_AWS_TABLE;
+  if (shippedTable.test(original)) {
+    content = content.replace(shippedTable, "");
+  } else if (previousProvider?.provider === "amazon-bedrock" && previousProvider.region) {
+    content = content.replace(
+      legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region, commented),
+      "",
+    );
+  }
+  writeFileSync(path, content.replace(/\n{3,}/g, "\n\n"));
+}
+
+export function hasLegacyCodexProviderConfig(
+  content: string,
+  previousProvider: ProvidersRecord | null = null,
+): boolean {
+  const provider = LEGACY_CODEX_MODEL_PROVIDER.exec(content);
+  if (
+    !LEGACY_CODEX_BEDROCK_COMMENT.test(content) ||
+    !/^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(content) ||
+    !provider ||
+    !/^model_context_window\s*=\s*1000000\s*$/m.test(content) ||
+    !/^model_reasoning_effort\s*=\s*"high"\s*$/m.test(content)
+  ) return false;
+  // The provider line and every table line must all be active or all commented.
+  const commented = !!provider[1];
+  const shippedTable = commented ? LEGACY_CODEX_COMMENTED_AWS_TABLE : LEGACY_CODEX_AWS_TABLE;
+  const table = shippedTable.exec(content) ?? (
+    previousProvider?.provider === "amazon-bedrock" && previousProvider.region
+      ? legacyCodexAwsTablePattern(previousProvider.profile ?? "default", previousProvider.region, commented).exec(content)
+      : null
+  );
+  if (!table) return false;
+  // A TOML table continues across blank lines and comments until the next header.
+  let inCommentedBody = commented;
+  for (const line of content.slice(table.index + table[0].length).split(/\r?\n/)) {
+    if (line.startsWith("[")) return true;
+    if (inCommentedBody) {
+      if (/^#[ \t]?(?:profile|region)\s*=/.test(line)) return false;
+      // An ordinary comment ends the commented body; later active keys are
+      // still foreign until the next real TOML header, just as for active tables.
+      if (/^\s*#/.test(line)) inCommentedBody = false;
+    }
+    if (!/^\s*(?:#.*)?$/.test(line)) return false;
+  }
+  return true;
 }
 
 // The `aws-mcp` region in `.kiro/settings/mcp.json` is plain MCP configuration.
@@ -1276,6 +1439,55 @@ function writeOpenCodeProvider(
   writeJson(path, value);
 }
 
+function openCodeProviderMatchesRecord(
+  value: unknown,
+  record: ProvidersRecord | null,
+): boolean {
+  if (
+    record?.provider !== "amazon-bedrock" ||
+    record.opencodeDefault !== true ||
+    !isRecord(value)
+  ) {
+    return false;
+  }
+  const options = isRecord(value.options) ? value.options : {};
+  return (
+    options.region === record.region &&
+    (
+      record.profile
+        ? options.profile === record.profile
+        : !Object.hasOwn(options, "profile")
+    )
+  );
+}
+
+function clearOpenCodeProvider(
+  projectionRoot: string,
+  previousProvider: ProvidersRecord | null,
+): void {
+  const path = join(projectionRoot, "opencode.json");
+  if (!existsSync(path)) return;
+  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  if (!isRecord(value.provider)) return;
+  const providers = { ...value.provider };
+  if (!openCodeProviderMatchesRecord(
+    providers["amazon-bedrock"],
+    previousProvider,
+  )) {
+    return;
+  }
+  const provider = providers["amazon-bedrock"] as Record<string, unknown>;
+  const options = isRecord(provider.options) ? provider.options : {};
+  delete options.region;
+  if (previousProvider?.profile) delete options.profile;
+  if (Object.keys(options).length > 0) provider.options = options;
+  else delete provider.options;
+  if (Object.keys(provider).length === 0) delete providers["amazon-bedrock"];
+  if (Object.keys(providers).length > 0) value.provider = providers;
+  else delete value.provider;
+  writeJson(path, value);
+}
+
 function writeClaudeFlags(
   projectionRoot: string,
   harnessDir: string,
@@ -1306,17 +1518,39 @@ export function applyConfigDiagnosticRecords(
   harnessDir: string,
   harness: ModelHarness,
   records: ConfigDiagnosticRecords,
+  previousProvider: ProvidersRecord | null = null,
 ): void {
   // Owned harnesses record no provider answer; a legacy record is not applied
   // anywhere. The Kiro CLI MCP region is carried by preserveKiroMcpRegion from
   // the project's own file during staging, not from a record.
   if (harnessOwnsModelAccess(harness)) return;
   const provider = records.providers;
-  if (provider?.provider !== "amazon-bedrock" || !provider.region) return;
+  if (!provider?.provider) {
+    if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
+    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir, previousProvider);
+    else if (harness === "opencode") {
+      clearOpenCodeProvider(projectionRoot, previousProvider);
+    }
+    return;
+  }
+  if (provider.provider === "current" || provider.provider === "other") {
+    if (harness === "claude") clearClaudeProvider(projectionRoot, harnessDir);
+    else if (harness === "codex") clearCodexProvider(projectionRoot, harnessDir, previousProvider);
+    else if (harness === "opencode") {
+      clearOpenCodeProvider(projectionRoot, previousProvider);
+    }
+    return;
+  }
+  if (
+    harness === "opencode" && provider.provider === "amazon-bedrock" &&
+    provider.opencodeDefault === false
+  ) {
+    clearOpenCodeProvider(projectionRoot, previousProvider);
+    return;
+  }
+  if (!provider.region) return;
   if (harness === "claude") {
     writeClaudeProvider(projectionRoot, harnessDir, provider);
-  } else if (harness === "codex") {
-    writeCodexProvider(projectionRoot, harnessDir, provider);
   } else if (harness === "opencode") {
     writeOpenCodeProvider(projectionRoot, provider);
   }
@@ -1333,7 +1567,33 @@ export function providerFiles(
     setting: "provider answers and pending actions",
     file: harnessData,
   }];
-  if (harnessOwnsModelAccess(harness) || record?.provider !== "amazon-bedrock") return files;
+  if (harnessOwnsModelAccess(harness)) return files.map((entry) => ({
+    ...entry,
+    file: resolve(projectDir, entry.file),
+  }));
+  if (record?.provider === "current" || record?.provider === "other") {
+    if (harness === "claude") {
+      files.push({
+        setting: "Claude project environment",
+        file: join(harnessDir, "settings.json"),
+      });
+    } else if (harness === "codex") {
+      files.push({
+        setting: "Codex project configuration",
+        file: join(harnessDir, "config.toml"),
+      });
+    } else if (harness === "opencode") {
+      files.push({
+        setting: "opencode project configuration",
+        file: "opencode.json",
+      });
+    }
+    return files.map((entry) => ({
+      ...entry,
+      file: resolve(projectDir, entry.file),
+    }));
+  }
+  if (record?.provider !== "amazon-bedrock") return files;
   if (harness === "claude") {
     files.push({
       setting: "AWS region and profile",
@@ -1345,11 +1605,6 @@ export function providerFiles(
         file: ".mcp.json",
       });
     }
-  } else if (harness === "codex") {
-    files.push({
-      setting: "Bedrock AWS region and profile",
-      file: join(harnessDir, "config.toml"),
-    });
   } else if (harness === "opencode" && record.opencodeDefault) {
     files.push({
       setting: "amazon-bedrock provider options",
@@ -1389,6 +1644,7 @@ const FLAG_ENV_FIELDS: Array<{
   { env: "AIDLC_USE_SWARM", field: "swarm" },
   { env: "AIDLC_HOOK_DEBUG", field: "hookDebug" },
   { env: "AIDLC_SENSOR_TIMEOUT_MS", field: "sensorTimeoutMs" },
+  { env: "AIDLC_QUESTION_RETENTION_DAYS", field: "questionRetentionDays" },
 ];
 
 export function recordedFlagValue(
@@ -1734,13 +1990,12 @@ export function projectChoiceIssues(
   return issues;
 }
 
-function providerValueIssues(
+export function providerSurfaceIssues(
   projectDir: string,
   harnessDir: string,
   harness: ModelHarness,
   record: ProvidersRecord,
 ): DiagnosticIssue[] {
-  if (record.provider !== "amazon-bedrock" || !record.region) return [];
   const issues: DiagnosticIssue[] = [];
   const mismatch = (id: string, file: string, message: string): void => {
     issues.push({
@@ -1749,13 +2004,149 @@ function providerValueIssues(
       remediation: `Run aidlc config providers again to reapply the recorded answer to ${file}.`,
     });
   };
+  const warning = (id: string, message: string, remediation: string): void => {
+    issues.push({ id, message, remediation, severity: "warn" });
+  };
   try {
-    if (harness === "claude") {
+    if (record.provider === "current" || record.provider === "other") {
+      if (harness === "claude") {
+        const path = join(projectDir, harnessDir, "settings.json");
+        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const env = isRecord(value.env) ? value.env : {};
+        if (hasLegacyClaudeProviderConfig(env)) {
+          mismatch(
+            "provider-claude-project-override",
+            path,
+            "Claude settings still carry the legacy AI-DLC Bedrock defaults",
+          );
+        } else if (env.CLAUDE_CODE_USE_BEDROCK === "1") {
+          const projectOverrides = ["CLAUDE_CODE_USE_BEDROCK"];
+          for (const key of ["AWS_REGION", "AWS_PROFILE"]) {
+            if (Object.hasOwn(env, key)) projectOverrides.push(key);
+          }
+          warning(
+            "provider-claude-project-override",
+            `Claude project settings enable Bedrock despite the recorded ${record.provider} choice with: ${projectOverrides.join(", ")}`,
+            `Review ${path}. Leave the entries in place if the project override is intentional.`,
+          );
+        }
+        const localPath = join(projectDir, harnessDir, "settings.local.json");
+        if (existsSync(localPath)) {
+          const local = JSON.parse(
+            readFileSync(localPath, "utf-8"),
+          ) as Record<string, unknown>;
+          const localEnv = isRecord(local.env) ? local.env : {};
+          const localOverrides: string[] = CLAUDE_BEDROCK_MODEL_KEYS.filter(
+            (key) => Object.hasOwn(localEnv, key),
+          );
+          if (localOverrides.length > 0) {
+            for (const key of ["AWS_REGION", "AWS_PROFILE"]) {
+              if (Object.hasOwn(localEnv, key)) localOverrides.push(key);
+            }
+            warning(
+              "provider-claude-local-override",
+              `Claude local settings override the recorded project choice with: ${localOverrides.join(", ")}`,
+              `Review ${localPath}. Leave the entries in place if the personal override is intentional.`,
+            );
+          }
+        }
+      } else if (harness === "codex") {
+        const path = join(projectDir, harnessDir, "config.toml");
+        const text = readFileSync(path, "utf-8");
+        if (hasLegacyCodexProviderConfig(text)) {
+          mismatch(
+            "provider-codex-project-override",
+            path,
+            "Codex project configuration still contains the legacy AI-DLC Bedrock defaults",
+          );
+        } else {
+          const entries: string[] = [];
+          if (/^model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(text)) {
+            entries.push("model_provider");
+          }
+          // Report a fixed identifier, never the project-authored header text:
+          // diagnostics are read by agents and must not relay file content.
+          if (/^\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.test(text)) {
+            entries.push("[model_providers.amazon-bedrock] table");
+          }
+          if (/^model\s*=\s*"openai\.gpt-5\.5"\s*$/m.test(text)) {
+            entries.push("legacy shipped model pin");
+          }
+          if (/^model_context_window\s*=\s*1000000\s*$/m.test(text)) {
+            entries.push("legacy shipped context-window pin");
+          }
+          if (/^#[ \t]*model_provider\s*=\s*"amazon-bedrock"\s*$/m.test(text)) {
+            entries.push("commented model_provider");
+          }
+          if (/^#[ \t]*\[model_providers\.amazon-bedrock[^\]]*\]\s*$/m.test(text)) {
+            entries.push("commented [model_providers.amazon-bedrock] table");
+          }
+          if (entries.length > 0) {
+            warning(
+              "provider-codex-project-override",
+              `Codex project configuration still names the amazon-bedrock provider despite the recorded ${record.provider} choice with: ${entries.join(", ")}`,
+              `AI-DLC removes only the exact shipped Bedrock block. Review ${path} and remove the entries, or leave them in place if the project override is intentional.`,
+            );
+          }
+        }
+      } else if (harness === "opencode" && record.provider === "other") {
+        const path = join(projectDir, "opencode.json");
+        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const providers = isRecord(value.provider) ? value.provider : {};
+        if (Object.hasOwn(providers, "amazon-bedrock")) {
+          warning(
+            "provider-opencode-project-override",
+            "opencode project configuration still defines an amazon-bedrock provider despite the recorded other choice",
+            `Review ${path}. Leave the provider in place if the multi-provider configuration is intentional.`,
+          );
+        }
+      }
+      return issues;
+    }
+    if (record.provider !== "amazon-bedrock" || !record.region) return issues;
+    if (harness === "codex") {
+      warning(
+        "provider-codex-self-attested",
+        "Codex provider setup is self-attested because AI-DLC cannot resolve the effective user configuration or alternate credential channels",
+        PROVIDER_PENDING_ACTIONS["codex-provider-configuration"].remediation,
+      );
+    } else if (harness === "claude") {
       const settingsPath = join(projectDir, harnessDir, "settings.json");
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
       const env = isRecord(settings.env) ? settings.env : {};
-      if (env.AWS_REGION !== record.region || (record.profile && env.AWS_PROFILE !== record.profile)) {
-        mismatch("provider-claude-settings", settingsPath, "Claude settings do not reflect the recorded AWS region/profile");
+      if (
+        env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
+        env.AWS_REGION !== record.region ||
+        (record.profile && env.AWS_PROFILE !== record.profile)
+      ) {
+        mismatch("provider-claude-settings", settingsPath, "Claude settings do not enable Bedrock with the recorded AWS region/profile");
+      }
+      const localPath = join(projectDir, harnessDir, "settings.local.json");
+      if (existsSync(localPath)) {
+        const local = JSON.parse(readFileSync(localPath, "utf-8")) as Record<string, unknown>;
+        const localEnv = isRecord(local.env) ? local.env : {};
+        const conflicts = [
+          ...(Object.hasOwn(localEnv, "CLAUDE_CODE_USE_BEDROCK") &&
+              localEnv.CLAUDE_CODE_USE_BEDROCK !== "1"
+            ? ["CLAUDE_CODE_USE_BEDROCK"]
+            : []),
+          ...(Object.hasOwn(localEnv, "AWS_REGION") &&
+              localEnv.AWS_REGION !== record.region
+            ? ["AWS_REGION"]
+            : []),
+          ...(record.profile &&
+              Object.hasOwn(localEnv, "AWS_PROFILE") &&
+              localEnv.AWS_PROFILE !== record.profile
+            ? ["AWS_PROFILE"]
+            : []),
+        ];
+        if (conflicts.length > 0) {
+          mismatch(
+            "provider-claude-local-override",
+            localPath,
+            `Claude local settings override the recorded Bedrock choice with: ${conflicts.join(", ")}`,
+          );
+        }
       }
       const mcpPath = join(projectDir, ".mcp.json");
       if (existsSync(mcpPath)) {
@@ -1766,15 +2157,6 @@ function providerValueIssues(
         ) {
           mismatch("provider-claude-mcp", mcpPath, "Claude AWS MCP settings do not reflect the recorded region");
         }
-      }
-    } else if (harness === "codex") {
-      const path = join(projectDir, harnessDir, "config.toml");
-      const text = readFileSync(path, "utf-8");
-      if (
-        !text.includes(`region = ${JSON.stringify(record.region)}`) ||
-        !text.includes(`profile = ${JSON.stringify(record.profile ?? "default")}`)
-      ) {
-        mismatch("provider-codex", path, "Codex Bedrock settings do not reflect the recorded region/profile");
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
@@ -1806,7 +2188,7 @@ export function providerIssues(
   if (harnessOwnsModelAccess(harness) || !record) return [];
   const issues = [
     ...pendingProviderIssues(record, harness),
-    ...providerValueIssues(projectDir, harnessDir, harness, record),
+    ...providerSurfaceIssues(projectDir, harnessDir, harness, record),
   ];
   if (record.provider === "amazon-bedrock" && !credentials.hasCredentials) {
     issues.push({
@@ -1817,6 +2199,47 @@ export function providerIssues(
     });
   }
   return issues;
+}
+
+// The Copilot CLI keeps folder trust in config.json under COPILOT_HOME, else
+// <home>/.copilot, and finds home the way Node does: USERPROFILE on Windows,
+// HOME elsewhere. A Windows desktop process usually has no HOME at all, and a
+// HOME that is set (a network drive, say) is not where the CLI looks.
+export function copilotConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
+}
+
+// True when a trustedFolders entry covers the project the way the CLI judges
+// it: the folder itself or any folder above it, after resolving links and
+// dropping trailing separators. On Windows the CLI also ignores case and
+// separator style, so `c:/work` covers `C:\work\app` there.
+export function copilotFolderTrusted(
+  projectDir: string,
+  trustedFolders: readonly unknown[],
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  const windows = platform === "win32";
+  const separator = windows ? "\\" : "/";
+  const norm = (path: string): string => {
+    let out = path;
+    try {
+      out = realpathSync(path);
+    } catch {
+      // keep the recorded form; a recorded-but-deleted path never matches
+    }
+    if (windows) out = out.replaceAll("/", "\\").toLowerCase();
+    return out.replace(/[/\\]+$/, "");
+  };
+  const project = norm(projectDir);
+  return trustedFolders.some((entry) => {
+    if (typeof entry !== "string" || entry === "") return false;
+    const folder = norm(entry);
+    return project === folder || project.startsWith(`${folder}${separator}`);
+  });
 }
 
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
@@ -1936,12 +2359,23 @@ export function trustFilesForHarness(
       join(process.env.CODEX_HOME || join(process.env.HOME || homedir(), ".codex"), "config.toml"),
     );
   }
-  if (harness === "kiro" || harness === "kiro-ide") {
+  const kiroLayout = harness === "kiro-ide"
+    ? "kas"
+    : harness === "kiro"
+      ? kiroTreeLayout(join(projectDir, harnessDir)) ?? "agent-v1"
+      : null;
+  if (kiroLayout) {
+    // The agent-v1 layout grants trust in JSON agents and registers legacy hooks;
+    // the KAS layout grants it in the Markdown agents' permissions and registers
+    // v1 hook JSON, and pins the Kiro CLI engine in settings/cli.json. A `kiro`
+    // project can carry either, so its installed tree decides.
+    const agentSuffix = kiroLayout === "agent-v1" ? ".json" : ".md";
+    const hookSuffix = kiroLayout === "agent-v1" ? ".kiro.hook" : ".json";
     const agentsDir = join(projectDir, harnessDir, "agents");
     if (existsSync(agentsDir)) {
       files.push(
         ...readdirSync(agentsDir)
-          .filter((name) => name.endsWith(".json"))
+          .filter((name) => name.endsWith(agentSuffix))
           .sort()
           .map((name) => join(agentsDir, name)),
       );
@@ -1950,14 +2384,14 @@ export function trustFilesForHarness(
     if (existsSync(hooksDir)) {
       files.push(
         ...readdirSync(hooksDir)
-          .filter((name) => name.endsWith(".kiro.hook"))
+          .filter((name) => name.endsWith(hookSuffix))
           .sort()
           .map((name) => join(hooksDir, name)),
       );
     }
   }
-  if (harness === "kiro-ide") {
-    files.push(join(projectDir, ".vscode", "settings.json"));
+  if (kiroLayout === "kas") {
+    files.push(join(projectDir, harnessDir, "settings", "cli.json"));
   }
   if (harness === "cursor") {
     files.push(
@@ -1970,6 +2404,44 @@ export function trustFilesForHarness(
   return [...new Set(files)];
 }
 
+// A real `.git` pointer file is one short line.
+const GIT_POINTER_MAX_BYTES = 64 * 1024;
+
+// True iff `dir` or one of its ancestors holds a git checkout marker: a `.git`
+// directory with a HEAD entry, or (a submodule or linked worktree) a small
+// regular `.git` file reading `gitdir: <path>`. Only entries of these folders
+// are examined, links are not followed, and a pointer's target is never opened,
+// so a crafted project cannot send the check to another machine. An empty
+// `.git` left behind is not a repository. Searched from the real path so a
+// symlinked project reaches its real parents. Cursor may skip project hooks in
+// a folder outside any git repository (#976).
+export function insideGitRepository(dir: string): boolean {
+  const checkout = (candidate: string): boolean => {
+    const dotGit = join(candidate, ".git");
+    try {
+      if (lstatSync(dotGit).isDirectory()) {
+        lstatSync(join(dotGit, "HEAD"));
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return /^gitdir: \S/.test(readBoundedRegularFile(dotGit, GIT_POINTER_MAX_BYTES) ?? "");
+  };
+  let current: string;
+  try {
+    current = realpathSync(dir);
+  } catch {
+    current = resolve(dir);
+  }
+  for (;;) {
+    if (checkout(current)) return true;
+    const parent = dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+}
+
 export function trustStatus(
   projectDir: string,
   harnessDir: string,
@@ -1979,28 +2451,6 @@ export function trustStatus(
   const issues = workspaceSiblingIssues(projectDir, harness, harnessDir);
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
-  }
-  if (harness === "kiro-ide") {
-    const path = join(projectDir, ".vscode", "settings.json");
-    try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-      const trusted = value["kiroAgent.trustedCommands"];
-      if (!Array.isArray(trusted) || !trusted.includes("aidlc engine *")) {
-        issues.push({
-          id: "kiro-ide-trusted-command-missing",
-          message: `${path} does not include aidlc engine * in kiroAgent.trustedCommands`,
-          remediation:
-            "Run aidlc config from the native install channel or add aidlc engine * to kiroAgent.trustedCommands without replacing other settings.",
-        });
-      }
-    } catch {
-      issues.push({
-        id: "kiro-ide-trust-unreadable",
-        message: `${path} is missing or malformed`,
-        remediation:
-          "Restore .vscode/settings.json and include aidlc engine * in kiroAgent.trustedCommands.",
-      });
-    }
   }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),
@@ -2113,6 +2563,29 @@ function instructionStates(
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
+  let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  try {
+    const descriptor: unknown = JSON.parse(readFileSync(
+      join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
+      "utf-8",
+    ));
+    if (
+      isRecord(descriptor) &&
+      isSafeOnboardingPath(descriptor.onboarding, harnessDir)
+    ) {
+      onboardingPath = descriptor.onboarding;
+    }
+  } catch {
+    // Legacy installations may not have a readable onboarding descriptor.
+  }
+  let onboardingConflict = false;
+  if (onboardingPath) {
+    try {
+      assertProjectionPathHasNoSymlinks(projectDir, onboardingPath);
+    } catch {
+      onboardingConflict = true;
+    }
+  }
   const baselinePath = join(
     projectDir,
     harnessDir,
@@ -2121,16 +2594,23 @@ function instructionStates(
     "aidlc-manifest.json",
   );
   if (!existsSync(baselinePath)) {
-    const instructionPath = harness === "claude"
-      ? `${harnessDir}/CLAUDE.md`
-      : "AGENTS.md";
-    return [{
-      path: instructionPath,
-      kind: "whole-file",
-      state: existsSync(join(projectDir, instructionPath))
-        ? "intact"
-        : "missing",
-    }];
+    const instructionPaths = harness === "claude" ? [] : ["AGENTS.md"];
+    if (onboardingPath && !instructionPaths.includes(onboardingPath)) {
+      instructionPaths.push(onboardingPath);
+    }
+    return instructionPaths.map((path) => {
+      if (path === onboardingPath && onboardingConflict) {
+        return { path, kind: "whole-file", state: "conflict" };
+      }
+      const target = join(projectDir, path);
+      return {
+        path,
+        kind: "whole-file",
+        state: existsSync(target) && lstatSync(target).isFile()
+          ? "intact"
+          : "missing",
+      };
+    });
   }
   const baseline = JSON.parse(
     readFileSync(baselinePath, "utf-8"),
@@ -2149,24 +2629,24 @@ function instructionStates(
       tracked.push({ path, contribution });
     }
   }
-  if (harness === "claude") {
-    const path = `${harnessDir}/CLAUDE.md`;
-    const hash = baseline.files?.[path];
-    if (hash) {
-      tracked.push({
-        path,
-        contribution: { policy: "whole-file", hash },
-      });
-    }
+  const onboardingHash = onboardingPath ? baseline.files?.[onboardingPath] : undefined;
+  if (onboardingPath && onboardingHash) {
+    tracked.push({
+      path: onboardingPath,
+      contribution: { policy: "whole-file", hash: onboardingHash },
+    });
   }
-  if (tracked.length === 0) {
+  if (tracked.length === 0 && !onboardingPath) {
     return [{
       path: baselinePath,
       kind: "whole-file",
       state: "missing",
     }];
   }
-  return tracked.map(({ path, contribution }) => {
+  const states: InstructionState[] = tracked.map(({ path, contribution }) => {
+    if (path === onboardingPath && onboardingConflict) {
+      return { path, kind: "whole-file", state: "conflict" };
+    }
     const target = join(projectDir, path);
     if (!existsSync(target) || !lstatSync(target).isFile()) {
       return {
@@ -2205,6 +2685,14 @@ function instructionStates(
       state: sha256Bytes(block) === contribution.hash ? "intact" : "conflict",
     };
   });
+  if (onboardingPath && !onboardingHash) {
+    states.push({
+      path: onboardingPath,
+      kind: "whole-file",
+      state: onboardingConflict ? "conflict" : "missing",
+    });
+  }
+  return states;
 }
 
 export function instructionFileDoctorCheck(
@@ -2290,6 +2778,11 @@ function selectedHarness(
 export function runtimeDoctorChecks(
   projectDir: string,
   harnessDirHint?: string,
+  evidence: {
+    /** The newest heartbeat of this project's hooks, when they are firing (not stale). */
+    hooksLastFired?: string;
+    runtime?: RuntimeProbeOptions;
+  } = {},
 ): DiagnosticDoctorCheck[] {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -2302,26 +2795,40 @@ export function runtimeDoctorChecks(
     projectDir,
     selected.harnessDir,
     selected.harness,
+    evidence.runtime,
   );
-  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => ({
-    pass: binary.status === "found" || binary.status === "not-required",
-    ...(binary.status === "found" || binary.status === "not-required"
-      ? {}
-      : { severity: "warn" as const }),
-    label: binary.status === "found"
-      ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
-      : binary.status === "not-required"
-      ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
-      : binary.status === "interactive-only"
-      ? `Runtime hook PATH: ${binary.name} is interactive-only at ${binary.interactivePath}`
-      : `Runtime hook PATH: ${binary.name} is missing`,
-    fix: binary.remediation,
-  }));
+  const checks: DiagnosticDoctorCheck[] = diagnostics.binaries.map((binary) => {
+    // A projection's hooks run through one runtime, so hooks that are firing
+    // found it on the PATH the harness really gives them: that settles what the
+    // system-wide PATH can only predict.
+    if (binary.status === "interactive-only" && evidence.hooksLastFired) {
+      return {
+        pass: true,
+        label: `Runtime hook PATH: ${binary.name} -> ${binary.interactivePath} (this project's hooks found it; last fired ${evidence.hooksLastFired})`,
+      };
+    }
+    return {
+      pass: binary.status === "found" || binary.status === "not-required",
+      ...(binary.status === "found" || binary.status === "not-required"
+        ? {}
+        : { severity: "warn" as const }),
+      label: binary.status === "found"
+        ? `Runtime hook PATH: ${binary.name} -> ${binary.baselinePath} (non-interactive baseline)`
+        : binary.status === "not-required"
+        ? `Runtime hook PATH: ${binary.name} is not required by the selected projection`
+        : binary.status === "interactive-only"
+        ? `Runtime hook PATH: ${binary.name} is on this shell's PATH (${binary.interactivePath}) but not on the system-wide PATH`
+        : `Runtime hook PATH: ${binary.name} is missing`,
+      fix: binary.remediation,
+    };
+  });
   const cli = diagnostics.cli;
+  // Never a fail: a missing or old required CLI warns, and an optional one
+  // passes when absent and warns only when present but too old.
   checks.push({
     pass: cli.status === "found" || cli.status === "not-applicable" ||
       (!cli.required && cli.status === "missing"),
-    ...(cli.required && (cli.status === "missing" || cli.status === "too-old")
+    ...(cli.status === "too-old" || (cli.required && cli.status === "missing")
       ? { severity: "warn" as const }
       : {}),
     label: cli.status === "found"
@@ -2329,13 +2836,160 @@ export function runtimeDoctorChecks(
       : cli.status === "not-applicable"
       ? `Harness CLI: none required for ${cli.harness}`
       : cli.status === "too-old"
-      ? `Harness CLI: ${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
+      ? `Harness CLI: ${cli.required ? "" : "optional "}${cli.command} ${cli.version || "unknown"} is below ${cli.minimumVersion}`
       : cli.required
       ? `Harness CLI: ${cli.command} is missing`
       : `Harness CLI: optional ${cli.command} is not installed`,
     fix: cli.remediation,
   });
   return checks;
+}
+
+// VS Code pauses agent mode after `chat.agent.maxRequests` requests in one
+// turn to ask "Continue to iterate?", and the chat waits silently until
+// someone answers. Its default (50) stops a Construction stage part way, so a
+// Copilot project should allow 100 or more; config adds 200 when unset (#1411).
+const VSCODE_REQUEST_CAP_KEY = "chat.agent.maxRequests";
+const VSCODE_REQUEST_CAP_FLOOR = 100;
+
+export function vscodeRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap:";
+  const where = ".vscode/settings.json";
+  let text: string | null = null;
+  try {
+    text = readFileSync(join(projectDir, ".vscode", "settings.json"), "utf-8");
+  } catch {
+    // Absent: VS Code's default applies.
+  }
+  if (text?.trim() && !jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} could not be read as JSONC`,
+      fix: `correct ${where}, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more (AI-DLC suggests 200); ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = text?.trim() ? jsoncSettingValue(text, VSCODE_REQUEST_CAP_KEY) : undefined;
+  // A key AI-DLC added once and the team then took out of a file it kept is
+  // the team's choice: config does not add it back, and doctor does not ask.
+  if (value === undefined && text !== null && requestCapAddedBefore(selected.root)) {
+    return { pass: true, label: `${label} the team removed ${VSCODE_REQUEST_CAP_KEY} from ${where}, so AI-DLC leaves it out` };
+  }
+  return requestCapRow(label, where, value);
+}
+
+// A multi-root window reads window-scoped settings from its .code-workspace
+// file instead of a folder's .vscode/settings.json, so when the project has
+// the multi-root file workspace-sync generates, doctor checks it as well: it
+// is the file in charge whenever the person opens that workspace.
+export function vscodeWorkspaceRequestCapDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "copilot") return null;
+  const label = "VS Code agent request cap (multi-root workspace):";
+  const where = "aidlc.code-workspace";
+  let text: string;
+  try {
+    text = readFileSync(join(projectDir, where), "utf-8");
+  } catch {
+    return null;
+  }
+  if (!jsoncRootMembers(text)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} could not be read as JSONC`,
+      fix: `correct ${where}, then set "${VSCODE_REQUEST_CAP_KEY}" to 100 or more in its "settings" (AI-DLC suggests 200); ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const settings = jsoncSettingValue(text, "settings");
+  if (settings === undefined) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} ${where} has no settings, so a window opened from it uses your user setting or VS Code's default of 50`,
+      fix: `run aidlc system workspace-sync, which adds "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 } to ${where}, or add it yourself; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `${label} "settings" in ${where} is not an object, so VS Code reads no settings from it`,
+      fix: `make "settings" an object, for example "settings": { "${VSCODE_REQUEST_CAP_KEY}": 200 }; ${REQUEST_CAP_PAUSES}`,
+    };
+  }
+  const value = (settings as Record<string, unknown>)[VSCODE_REQUEST_CAP_KEY];
+  // workspace-sync adds the key only to a file with no settings yet, so a
+  // settings object without it is the team's choice.
+  if (value === undefined) {
+    return { pass: true, label: `${label} the team's settings in ${where} leave out ${VSCODE_REQUEST_CAP_KEY}, so AI-DLC leaves it out` };
+  }
+  return requestCapRow(label, where, value);
+}
+
+const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers';
+
+// The install's added-once record for .vscode/settings.json.
+function requestCapAddedBefore(harnessRoot: string): boolean {
+  try {
+    const baseline = JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "aidlc-manifest.json"), "utf-8")) as {
+      rootContributions?: Record<string, { policy?: string; entries?: Record<string, string>; added?: string[] }>;
+    };
+    const record = baseline.rootContributions?.[".vscode/settings.json"];
+    return record?.policy === "jsonc-settings" &&
+      (record.added?.includes(VSCODE_REQUEST_CAP_KEY) === true || Object.hasOwn(record.entries ?? {}, VSCODE_REQUEST_CAP_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function requestCapRow(label: string, where: string, value: unknown): DiagnosticDoctorCheck {
+  const pauses = REQUEST_CAP_PAUSES;
+  const suggested = `"${VSCODE_REQUEST_CAP_KEY}": 200`;
+  const warn = (detail: string, fix: string): DiagnosticDoctorCheck => ({
+    pass: false,
+    severity: "warn",
+    label: `${label} ${detail}`,
+    fix,
+  });
+  if (typeof value === "number" && value >= VSCODE_REQUEST_CAP_FLOOR) {
+    return { pass: true, label: `${label} ${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}` };
+  }
+  // Every fix is an edit to the file itself, which works on every channel: a
+  // copied project's runtime ships no settings file for config to merge.
+  if (value === undefined) {
+    return warn(
+      `${where} does not set ${VSCODE_REQUEST_CAP_KEY}, so your user setting or VS Code's default of 50 applies`,
+      `add ${suggested} to ${where} (any number of 100 or more works); ${pauses}`,
+    );
+  }
+  if (typeof value === "number") {
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${value} in ${where}`,
+      `raise "${VSCODE_REQUEST_CAP_KEY}" in ${where} to 100 or more (AI-DLC suggests 200); ${pauses}`,
+    );
+  }
+  if (typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*$/.test(value)) {
+    const number = Number(value.trim());
+    return warn(
+      `${VSCODE_REQUEST_CAP_KEY} is ${JSON.stringify(value)} in ${where}, text rather than a number`,
+      number >= VSCODE_REQUEST_CAP_FLOOR
+        ? `write it as a number without quotes: "${VSCODE_REQUEST_CAP_KEY}": ${number}, because VS Code reads this setting as a number`
+        : `write it as a number of 100 or more without quotes, for example ${suggested}; ${pauses}`,
+    );
+  }
+  return warn(
+    `${VSCODE_REQUEST_CAP_KEY} in ${where} is not a number`,
+    `set it to a number of 100 or more, for example ${suggested}; ${pauses}`,
+  );
 }
 
 export function providerDoctorCheck(
@@ -2348,29 +3002,42 @@ export function providerDoctorCheck(
   }
   try {
     const record = readConfigDiagnosticRecords(selected.root).providers;
-    // Read first so a corrupt harness.json is still reported below; a legacy
-    // answer on an owned harness is otherwise ignored, pending actions included.
+    // Read first so corrupt harness data is still reported below. Legacy
+    // answers on Kiro are ignored because those harnesses own model access.
     if (harnessOwnsModelAccess(selected.harness)) {
       return {
         pass: true,
         label: "Providers: harness-managed model access; no answer needed",
       };
     }
-    const issues = pendingProviderIssues(record, selected.harness);
-    return issues.length === 0
+    const issues = providerIssues(
+      projectDir,
+      selected.harnessDir,
+      selected.harness,
+      record,
+    );
+    const blockers = issues.filter((issue) => issue.severity !== "warn");
+    if (issues.length === 0) {
+      return {
+        pass: true,
+        // Same rule as the map row and `--check`: an unrecorded section is a
+        // gap only where AI-DLC configures the provider.
+        label: record
+          ? "Providers: recorded answers have no unmet actions"
+          : "Providers: using shipped fallback; no recorded answers",
+      };
+    }
+    return blockers.length === 0
       ? {
           pass: true,
-          // Same rule as the map row and `--check`: an unrecorded section is a
-          // gap only where AI-DLC configures the provider.
-          label: record
-            ? "Providers: recorded answers have no unmet actions"
-            : "Providers: using shipped fallback; no recorded answers",
+          severity: "warn",
+          label: `Providers: ${issues.length} warning(s)`,
+          fix: issues.map((issue) => issue.message).join("; "),
         }
       : {
           pass: false,
-          severity: "warn",
-          label: `Providers: ${issues.length} unmet item(s)`,
-          fix: issues.map((issue) => issue.message).join("; "),
+          label: `Providers: ${blockers.length} unmet item(s)`,
+          fix: blockers.map((issue) => issue.message).join("; "),
         };
   } catch (error) {
     const path = join(selected.root, "tools", "data", "harness.json");
@@ -2379,7 +3046,8 @@ export function providerDoctorCheck(
       label: "Providers: could not read recorded answers",
       fix:
         `restore ${path} from git or re-copy dist/${selected.harness}/${selected.harnessDir}/tools/data/harness.json ` +
-        `from the aidlc-workflows checkout, then run \`${invocationForHarness(selected.harnessDir)} doctor\` ` +
+        // Not the doctor command itself: VS Code drops output up to a line that repeats it (#1411).
+        "from the aidlc-workflows checkout, then run doctor again " +
         `(${error instanceof Error ? error.message : String(error)})`,
     };
   }
@@ -2456,7 +3124,7 @@ export function settingsDoctorChecks(
       {
         cwd: projectDir,
         encoding: "utf-8",
-        timeout: 5_000,
+        timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       },
     ).status === 0;
     checks.push({

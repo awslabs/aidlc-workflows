@@ -13,6 +13,8 @@
 // The Cursor adapter additionally sends `rebind_check: true` with source=resume
 // on beforeSubmitPrompt because Cursor's sessionStart has no resume source.
 // That internal probe emits no session event and returns only a rebind offer.
+// The Kiro IDE adapter sends startup or resume from a chat's prompt, because
+// Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts.
 //
 // Mapping (SESSION_COMPACTED is emitted by validate-state.ts PreCompact,
 // NOT here — firing it twice would pollute the audit trail):
@@ -35,6 +37,10 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
+  isBindableIntentRecordName,
+  isSafeIntentRecordName,
+  intentDisplayLabel,
+  readUnitScopeStamp,
   activeIntent,
   activeIntentUuid,
   activeSpace,
@@ -45,6 +51,7 @@ import {
   harnessDir,
   getField,
   hooksHealthDir,
+  humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
   intentUuidForSelection,
@@ -52,6 +59,9 @@ import {
   readSessionRebindOffer,
   readSessionIntentUuid,
   recordHookDrop,
+  clearSessionPlanApprovalBypass,
+  recordSessionPlanApprovalBypass,
+  recordSessionPresenceBypass,
   recoveryFilePath,
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
@@ -59,6 +69,10 @@ import {
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
+  workflowParticipation,
+  readActiveIntentCursor,
+  listIntents,
+  type SessionBindingSource,
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
@@ -127,6 +141,13 @@ try {
 // intent it creates. Separate from the per-session intent stamp below.
 if (sessionId) {
   writeCurrentSessionId(projectDir, sessionId);
+  try {
+    if (humanPresenceGuardDisabled()) recordSessionPresenceBypass(projectDir, sessionId);
+    if (process.env.AIDLC_DISABLE_PLAN_APPROVAL_GUARD === "1") recordSessionPlanApprovalBypass(projectDir, sessionId);
+    else clearSessionPlanApprovalBypass(projectDir, sessionId);
+  } catch {
+    // Presence bypass bookkeeping must never break session startup.
+  }
   writeSessionPidAncestry(projectDir, sessionId);
 }
 
@@ -152,7 +173,7 @@ const stampedTarget =
   source === "resume" && !preExistingBinding && preExistingStamp
     ? findIntentByUuid(projectDir, preExistingStamp)
     : null;
-const selection = stampedTarget
+const resolved = stampedTarget
   ? {
       space: stampedTarget.space,
       intent: stampedTarget.dirName,
@@ -161,11 +182,42 @@ const selection = stampedTarget
     }
   : resolveWorkflowSelection(projectDir, { sessionId });
 
-// Persist the resolved fallback before any early return. A cold session must
-// retain intent:null instead of later following a cursor moved by another
-// session that creates the first workflow.
+// Resolving a record is not joining it. A lone committed record in a fresh clone
+// is a teammate's, so it binds this conversation to intent:null and its hooks
+// stay out of that record. A resumed session's own UUID stamp does join it: only
+// a joined session is stamped, and a chat left open across an upgrade carries
+// only that stamp. A record name the binding cannot carry does not join.
+const joinsByStamp = stampedTarget !== null && isBindableIntentRecordName(stampedTarget.dirName);
+const joined =
+  joinsByStamp || (!stampedTarget && workflowParticipation(projectDir, resolved) === "participant");
+const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
+// The record a previously bound conversation can rejoin explicitly.
+const rejoinRecord =
+  !joined && resolved.intent !== null && preExistingBinding?.intent === resolved.intent
+    ? resolved
+    : null;
+
+function bindingSource(): SessionBindingSource | undefined {
+  if (!joined) {
+    return resolved.intent === null ? preExistingBinding?.source ?? "none" : "unjoined";
+  }
+  if (joinsByStamp) return "stamp";
+  // An unchanged binding keeps its source, and an absent one stays absent.
+  if (preExistingBinding?.space === selection.space && preExistingBinding.intent === selection.intent) {
+    return preExistingBinding.source;
+  }
+  if (readActiveIntentCursor(projectDir, selection.space) === selection.intent) return "cursor";
+  const unitScope = readUnitScopeStamp(projectDir);
+  return unitScope?.space === selection.space && unitScope.intent_uuid === intentUuidForSelection(projectDir, selection)
+    ? "unit-claim"
+    : "worktree";
+}
+
+// Persist the selection before any early return. A cold session must retain
+// intent:null instead of later following a cursor moved by another session that
+// creates the first workflow.
 if (sessionId) {
-  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent);
+  writeSessionBinding(projectDir, sessionId, selection.space, selection.intent, bindingSource());
 }
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
@@ -179,13 +231,36 @@ try {
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
-// No workflow active — retain only the session identity recorded above.
+// No workflow joined — retain only the session identity recorded above.
 if (!existsSync(stateFile)) {
   if (sessionId) {
+    let rejoin = "";
+    // The per-prompt rebind probe relays an offer through a blocking channel, so
+    // it offers a given rejoin once.
+    const rejoinSignature = rejoinRecord?.intent ? `rejoin:${rejoinRecord.space}/${rejoinRecord.intent}` : "";
+    const offerNow = rejoinSignature !== "" &&
+      (!rebindCheckOnly || readSessionRebindOffer(projectDir, sessionId) !== rejoinSignature);
+    if (rejoinRecord?.intent && isSafeIntentRecordName(rejoinRecord.intent) && offerNow) {
+      if (rebindCheckOnly) writeSessionRebindOffer(projectDir, sessionId, rejoinSignature);
+      const slug = intentDisplayLabel(
+        listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent) ??
+          { dirName: rejoinRecord.intent },
+      );
+      const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+      // The record name selects exactly this record; the label is display only.
+      const command =
+        rejoinRecord.space === activeSpace(projectDir)
+          ? `\`${entrySkill} intent ${rejoinRecord.intent}\``
+          : `\`${entrySkill} space ${rejoinRecord.space}\`, then \`${entrySkill} intent ${rejoinRecord.intent}\``;
+      rejoin =
+        `\nINTENT REBIND OFFER: This conversation was working ${slug}, but it has not joined that workflow on this machine. ` +
+        `Rejoin ${slug}? [Y/n] - on Yes, run ${command}; on No, continue without a workflow.`;
+    }
     process.stdout.write(`${JSON.stringify({
       additionalContext:
         `AIDLC Runtime Session: ${sessionId}\n` +
-        "Use this exact value for any Plan Approval --session argument in this conversation.",
+        "Use this exact value for any Plan Approval --session argument in this conversation." +
+        rejoin,
     })}\n`);
   }
   return 0;
@@ -280,26 +355,27 @@ if (sessionId) {
     const ownedUuid = binding ? selectedUuid : stampedUuid;
     if (ownedUuid && ownedUuid !== liveUuid) {
       const was = findIntentByUuid(projectDir, ownedUuid);
-      if (was) {
+      // The offer's commands carry the record name, so only a name in the record-name shape is offered.
+      if (was && isSafeIntentRecordName(was.dirName)) {
         const signature =
           `${was.space}/${was.dirName}->${activeSp}/${liveDir ?? "(none)"}`;
         const alreadyOffered =
           readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
-        const liveSlug = live ? live.slug : "(none)";
+        const liveSlug = live ? intentDisplayLabel(live) : "(none)";
         const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
         // The cursor verb switches within the active space. When the stamped
         // intent lives elsewhere, prefix the space switch. Use the harness's
         // native entry skill so Codex never receives a slash command.
         const switchInstruction =
           was.space === activeSp
-            ? `run \`${entrySkill} intent ${was.slug}\``
-            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.slug}\``;
+            ? `run \`${entrySkill} intent ${was.dirName}\``
+            : `first run \`${entrySkill} space ${was.space}\`; after it completes, run \`${entrySkill} intent ${was.dirName}\``;
         if (!alreadyOffered) {
           rebindOffer =
-            `INTENT REBIND OFFER: This conversation is bound to ${was.slug}, but the shared cursor names ${liveSlug}. ` +
-            `Move the shared cursor back to ${was.slug}? [Y/n] - on Yes, ${switchInstruction}; ` +
-            `on No, keep working ${was.slug} through this session binding. This changes only machine-local navigation.\n`;
+            `INTENT REBIND OFFER: This conversation is bound to ${intentDisplayLabel(was)}, but the shared cursor names ${liveSlug}. ` +
+            `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
+            `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
         }
       }
@@ -406,9 +482,10 @@ Next Action: ${next}
 ${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
-- The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.
+- The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
 - STEP 1 — YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` → you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` → \`next --stage X\`. \`/aidlc\` alone → \`next\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command — a bare \`next\` when the user gave arguments is a bug.
-- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.`;
+- When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.
+- After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, stage work, or resume menu. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.`;
 
 // Output additionalContext as JSON
 const output = JSON.stringify({ additionalContext: context });

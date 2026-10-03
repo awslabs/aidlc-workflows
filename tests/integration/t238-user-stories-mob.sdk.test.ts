@@ -13,6 +13,12 @@
 // It SPENDS TOKENS: driveAidlc runs the real user-stories stage, its three mob
 // participants, and product-lead reviewer through the Claude Agent SDK.
 
+import {
+  liveCaseTimeoutMs,
+  LIVE_LONG_OPERATION_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+  fileCleanupReserveMs,
+} from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -34,11 +40,16 @@ import {
   driveAidlc,
   readStateField,
   type CapturedToolResult,
+  type DriveResult,
 } from "../harness/sdk-drive.ts";
 
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "1800", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 1800) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(180_000, TEST_TIMEOUT_MS - 15_000);
+import { targetsStateFile } from "../harness/state-file-target.ts";
+
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
+const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
+  ? TIMEOUT_S * 1000 : LIVE_LONG_OPERATION_TIMEOUT_MS;
+// Setup and cleanup allowances belong to the case; calls share its remaining work.
+const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const SUPPORT_AGENTS = [
   "aidlc-design-agent",
@@ -296,6 +307,12 @@ function dispatchedAgent(result: CapturedToolResult): string | undefined {
 }
 
 function inputMentions(result: CapturedToolResult, value: string): boolean {
+  // Read/Write/Edit report native file_path values. Compare decoded paths so a
+  // Windows separator does not hide an actual tool call in the captured trace.
+  if (
+    typeof result.input.file_path === "string" &&
+    result.input.file_path.replaceAll("\\", "/").includes(value.replaceAll("\\", "/"))
+  ) return true;
   return JSON.stringify(result.input).includes(value);
 }
 
@@ -340,10 +357,77 @@ function seedLiveKnowledge(projectDir: string): void {
   );
 }
 
+function logKnowledgeReadDiagnostics(result: DriveResult): void {
+  // Driver NDJSON is removed from hosted artifacts. Retain only fixed labels,
+  // counts, marker booleans and tool-result order in the ordinary test log.
+  // Never print tool inputs/results, commands, paths, IDs or assistant prose.
+  const knownTools = ["Read", "Bash", "Shell", "Task", "Agent", "Write", "Edit",
+    "MultiEdit", "Skill", "AskUserQuestion", "Glob", "Grep", "TodoWrite"];
+  const targets = [
+    ["persona", ".claude/agents/aidlc-product-agent.md"],
+    ["knowledge", LIVE_KNOWLEDGE_REL],
+    ["stage", ".claude/aidlc-common/stages/inception/user-stories.md"],
+    ["requirements", "requirements.md"],
+    ["stories", "inception/user-stories/stories.md"],
+    ["personas", "inception/user-stories/personas.md"],
+    ["assessment", "inception/user-stories/user-stories-assessment.md"],
+  ] as const;
+  const events = result.toolResults.map((entry, index) => ({
+    index,
+    tool: knownTools.includes(entry.toolName) ? entry.toolName : entry.toolName ? "other" : "missing",
+    isError: entry.isError,
+    targets: targets.filter(([, path]) => inputMentions(entry, path) ||
+      shellCommand(entry)?.replaceAll("\\", "/").includes(path)).map(([label]) => label),
+    markerInResult: entry.resultText.includes(LIVE_KNOWLEDGE_MARKER),
+    markerInInput: JSON.stringify(entry.input).includes(LIVE_KNOWLEDGE_MARKER),
+    supportDispatch: SUPPORT_AGENTS.some(agent => dispatchedAgent(entry) === agent),
+  }));
+  const first = (predicate: (event: typeof events[number]) => boolean) => events.find(predicate)?.index ?? -1;
+  const relevant = events.filter(event => event.tool === "Read" || event.targets.length ||
+    event.markerInResult || event.markerInInput || event.supportDispatch);
+  const observedTools = [...new Set(events.map(event => event.tool))].sort();
+  const terminal = result.resultEvent;
+  const terminalKinds = ["success", "error_during_execution", "error_max_turns",
+    "error_max_budget_usd", "error_max_structured_output_retries"];
+  console.error(`t238 knowledge-read diagnostics: ${JSON.stringify({
+    order: "tool-result-stream",
+    timedOut: result.timedOut,
+    stoppedAfterToolResult: result.stoppedAfterToolResult,
+    stoppedAfterAskUserQuestion: result.stoppedAfterAskUserQuestion,
+    terminal: terminal ? {
+      subtype: terminalKinds.includes(terminal.subtype) ? terminal.subtype : "other",
+      isError: terminal.is_error,
+      turns: terminal.num_turns,
+      errorCount: terminal.errors?.length ?? 0,
+      permissionDenials: terminal.permissionDenialsCount,
+    } : null,
+    toolResultCount: events.length,
+    toolCounts: Object.fromEntries(observedTools.map(tool => [tool, events.filter(event => event.tool === tool).length])),
+    markerResultCount: events.filter(event => event.markerInResult).length,
+    markerInputCount: events.filter(event => event.markerInInput).length,
+    firstMarkerResult: events.find(event => event.markerInResult) ?? null,
+    first: {
+      personaRead: first(event => event.tool === "Read" && event.targets.includes("persona")),
+      knowledgeRead: first(event => event.tool === "Read" && event.targets.includes("knowledge")),
+      markerRead: first(event => event.tool === "Read" && event.markerInResult),
+      stageRead: first(event => event.tool === "Read" && event.targets.includes("stage")),
+      requirementsRead: first(event => event.tool === "Read" && event.targets.includes("requirements")),
+      supportDispatch: first(event => event.supportDispatch),
+      artifactWrite: first(event => ["Write", "Edit", "MultiEdit"].includes(event.tool) &&
+        event.targets.some(target => ["stories", "personas", "assessment"].includes(target))),
+    },
+    // Aggregate indices cover the entire run even when the event sample omits
+    // the middle. The emitted sample contains at most 24 fixed-shape records.
+    observations: relevant.length <= 24 ? relevant : [...relevant.slice(0, 12), ...relevant.slice(-12)],
+    omittedObservations: Math.max(0, relevant.length - 24),
+  })}`);
+}
+
 describe("t238 user-stories mob topology (Claude SDK live)", () => {
   test(
     "readable project knowledge is opened before mob stage work",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
       try {
         seedUserStoriesProject(projectDir);
@@ -351,13 +435,16 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
 
         const result = await driveAidlc("/aidlc", {
           projectDir,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           stopAfterToolResult: {
             toolName: "Read",
             resultIncludes: LIVE_KNOWLEDGE_MARKER,
           },
         });
 
+        logKnowledgeReadDiagnostics(result);
         expect(result.timedOut).toBe(false);
         expect(result.stoppedAfterToolResult).toBe(true);
         const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
@@ -392,6 +479,7 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
   test(
     "three mutually blind supports write evidence, the lead integrates, and approval then succeeds",
     async () => {
+      const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       const projectDir = setupIntegrationProject({ withAudit: true });
       try {
         seedUserStoriesProject(projectDir);
@@ -413,7 +501,9 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         const result = await driveAidlc("/aidlc", {
           projectDir,
           answerScript: APPROVE_ALL,
-          timeoutMs: DRIVE_TIMEOUT_MS,
+          timeoutMs: remainingOperationTimeoutMs(LIVE_WORK_TIMEOUT_MS, {
+            deadlineMs, reserveMs: fileCleanupReserveMs(TEST_TIMEOUT_MS), phase: "integration SDK drive",
+          }),
           // The approved report is the deterministic terminal boundary for
           // this fixture. aidlc-state approve auto-completes a final stage, so
           // the report tool_result arrives only after WORKFLOW_COMPLETED and
@@ -477,8 +567,15 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         ).toEqual([]);
         for (const toolResult of result.toolResults) {
           if (toolResult.toolName !== "Write" && toolResult.toolName !== "Edit") continue;
+          const stateTarget = targetsStateFile(toolResult, projectDir, seededStateFile(projectDir));
+          if (stateTarget) {
+            console.error(`t238 state-write target: ${JSON.stringify({
+              tool: toolResult.toolName,
+              sdkResultIsError: toolResult.isError,
+            })}`);
+          }
           expect(
-            inputMentions(toolResult, "aidlc-state.md"),
+            stateTarget,
             `${toolResult.toolName} must not mutate aidlc-state.md directly`,
           ).toBe(false);
         }

@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -42,11 +42,17 @@
 //   aidlc-log.ts handleAnswer (the interview-path twin),
 //   aidlc-audit.ts append (records the HUMAN_TURN event the mint hook emits).
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC,
+  REPO_ROOT,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
@@ -61,14 +67,19 @@ import {
   findStageBySlug,
   readAllAuditShards,
   readAuditShardEvents,
+  writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const KIRO_IDE_STATE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-state.ts");
+const KIRO_CLI_STATE = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
-const MINT_HOOK = join(AIDLC_SRC, "hooks", "aidlc-record-human-turn.ts");
+const MINT_HOOK = join(AIDLC_SRC, "tools", "aidlc.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 
 // Drive a state subcommand with the PRESENCE guard ENABLED (clear the suite's
@@ -78,6 +89,7 @@ function guarded(
   proj: string,
   args: string[],
   unattended = false,
+  state = STATE,
 ): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
@@ -85,7 +97,8 @@ function guarded(
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
-  const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+  const r = spawnSync(BUN, [state, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -104,6 +117,7 @@ function guardedLog(
   if (unattended) env.AIDLC_UNATTENDED = "1";
   else delete env.AIDLC_UNATTENDED;
   const r = spawnSync(BUN, [LOG, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -120,6 +134,7 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -131,6 +146,29 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
 // active-intent shard the gate later reads, in real ledger order.
 function recordHumanTurn(proj: string): void {
   appendAuditEntry("HUMAN_TURN", {}, proj);
+}
+
+// Leave a hook heartbeat where hook liveness reads it, as the post-shell hook
+// does after every shell command in a workflow.
+function writeHeartbeat(proj: string, timestampMs: number): void {
+  const health = join(seededRecordDir(proj), ".aidlc-engine", "hooks-health");
+  mkdirSync(health, { recursive: true });
+  writeFileSync(
+    join(health, "rebuild-stage-graph.last"),
+    new Date(timestampMs).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    "utf-8",
+  );
+}
+
+// Stamp the human-turn marker, as the prompt hook does on each prompt it handles.
+function stampPrompt(proj: string, timestampMs: number): void {
+  const engine = join(seededRecordDir(proj), ".aidlc-engine");
+  mkdirSync(engine, { recursive: true });
+  writeFileSync(
+    join(engine, "human-turn"),
+    `${new Date(timestampMs).toISOString().replace(/\.\d{3}Z$/, "Z")}\n`,
+    "utf-8",
+  );
 }
 
 function field(proj: string, name: string): string {
@@ -234,6 +272,95 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
+  // A Kiro IDE window that is not running the hooks never records the reply,
+  // so Kiro IDE's tools (its shipped hookActivation) add the steps that turn
+  // the hooks on; Claude's tools do not.
+  test("A2: on Kiro IDE the refusal names the trust, reload, and agent steps", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("This needs a fresh human turn");
+    expect(claude.out).not.toContain("Kiro may not be running AIDLC hooks");
+    expect(claude.out).not.toContain("Reload Window");
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
+    expect(r.rc).not.toBe(0);
+    const refusal = JSON.parse(r.out).error as string;
+    expect(refusal).toContain(
+      "If the person already replied, Kiro may not be running AIDLC hooks in this window",
+    );
+    expect(refusal).toContain(
+      "trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+    );
+    expect(refusal).toContain('run "Developer: Reload Window" from the Command Palette');
+    expect(refusal).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
+    expect(refusal).toContain(
+      "In Kiro CLI, ask them to exit and start `kiro-cli` again in this folder, then reply again.",
+    );
+    // #1487: an ACP client gets neither the v3 pin nor hooks unless it asks.
+    // The model passes that on rather than starting an ACP server itself.
+    expect(refusal).toContain(
+      "If they use an ACP client, tell them their client runs these hooks only when it starts `kiro-cli acp --agent-engine v3`",
+    );
+    expect(refusal).toContain("`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }`");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // #1487: the kiro tree's hooks run only on Kiro CLI's v2 engine, so a
+  // session on v3 never records the reply. Its tools name v2 itself (a Kiro CLI
+  // that defaults to v3 would restart on v3 again), not a bare restart.
+  test("A3: on Kiro CLI the refusal names the v2 engine and the ACP flag", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_CLI_STATE);
+    expect(r.rc).not.toBe(0);
+    const refusal = JSON.parse(r.out).error as string;
+    expect(refusal).toContain("This needs a fresh human turn");
+    expect(refusal).toContain(
+      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session",
+    );
+    expect(refusal).toContain(
+      "a session on the v3 engine does not run them as shipped, so it never records the reply",
+    );
+    expect(refusal).toContain(
+      "Ask them to exit and start `kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder",
+    );
+    expect(refusal).toContain("an ACP client starts `kiro-cli acp --agent-engine v2`");
+    expect(refusal).not.toContain("Reload Window");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  // Nothing on record tells a reply not sent yet from one the prompt hook
+  // failed to record: an earlier turn was spent, the prompt hook stamped its
+  // marker (it does so even when the mint fails), and another hook left a
+  // heartbeat seconds ago. The refusal still carries the restart steps.
+  test("A4: fresh hook activity does not take the restart steps out of the refusal", () => {
+    const first = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${first}=in-progress`]);
+    recordHumanTurn(proj);
+    guarded(proj, ["gate-start", first]);
+    expect(guarded(proj, ["approve", first, "--user-input", "Approve"]).rc).toBe(0);
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    stampPrompt(proj, Date.now());
+    writeHeartbeat(proj, Date.now());
+    for (const [state, steps] of [
+      [KIRO_CLI_STATE, "If the person already replied, Kiro CLI may not be running AIDLC hooks in this session"],
+      [KIRO_IDE_STATE, "If the person already replied, Kiro may not be running AIDLC hooks in this window"],
+    ] as const) {
+      const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
+      expect(r.rc).not.toBe(0);
+      expect(JSON.parse(r.out).error as string).toContain(steps);
+    }
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
   // --- Scenario B: LEGIT (human turn after gate-open) ------------------------
   //
   // The realistic flow: the human types (HUMAN_TURN), then the agent opens the
@@ -268,7 +395,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve (Recommended)");
+    ).toContain("**User Input**: Approve\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
@@ -312,7 +439,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
         expect(
           readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-        ).toContain(`**User Input**: ${reply}`);
+        ).toContain("**User Input**: Accept as-is\n");
         expect(field(proj, "Current Stage")).not.toBe(slug);
       }
     },
@@ -351,6 +478,93 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
     },
   );
+
+  // A conductor that reports a gated stage complete before asking its approval
+  // question gets the question opened for the person, not an error; nothing is
+  // approved until they answer.
+  test.each(["completed", "complete", "done"])(
+    "report --result %s with no reply on an in-progress gated stage opens its approval question",
+    (result) => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      const report = guardedReport(proj, ["--stage", slug, "--result", result]);
+      expect(report.rc, report.out).toBe(0);
+      const directive = JSON.parse(report.out);
+      expect(directive.kind, report.out).toBe("print");
+      expect(directive.message).toContain(`"${slug}" has not asked for approval yet`);
+      expect(directive.message).not.toContain("Recorded");
+      expect(directive.message).toContain("nothing is approved until they answer");
+      expect(eventCount(proj, "STAGE_AWAITING_APPROVAL")).toBe(1);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${slug}`);
+      expect(field(proj, "Current Stage")).toBe(slug);
+    },
+  );
+
+  // --- Scenario H: persisted per-work switches cannot lower the key holder ---
+  test("H: a persisted human-presence Guards Off entry is ignored", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    const sf = seededStateFile(proj);
+    writeFileSync(
+      sf,
+      `${readFileSync(sf, "utf-8").trimEnd()}\n- **Guards Off**: human-presence (set by you)\n`,
+      "utf-8",
+    );
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]); // ledger non-empty, still no HUMAN_TURN
+    const rowsBefore = eventCount(proj, "GUARD_STOOD_ASIDE");
+    const before = readFileSync(sf, "utf-8");
+    const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(r.rc, r.out).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(r.out).toContain("This needs a fresh human turn");
+    expect(r.out).not.toContain("guard.human-presence");
+    expect(r.out).not.toContain("Continuing past the human-presence check");
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(rowsBefore);
+    expect(readFileSync(sf, "utf-8")).toBe(before);
+  });
+
+  test("H: the human-presence config switch refuses without changing state or fences", () => {
+    const beforeState = readFileSync(seededStateFile(proj), "utf-8");
+    const r = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc-utility.ts"),
+      "config-change", "--guard.human-presence", "off", "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
+    expect(r.status, r.stderr).toBe(1);
+    expect(JSON.parse(r.stderr)).toEqual({
+      error: "Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.",
+    });
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(beforeState);
+    expect(eventCount(proj, "GUARD_DISABLED")).toBe(0);
+    expect(eventCount(proj, "GUARD_RESTORED")).toBe(0);
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(0);
+  });
+
+  // --- Scenario I: the machine-wide variable is the SILENT layer ------------
+  //
+  // AIDLC_SKIP_HUMAN_PRESENCE_GUARD is set once by whoever runs the machine
+  // (this suite sets it globally); no person chose it at this gate, so a row per
+  // invocation would record nothing anyone decided. It commits, and says nothing.
+  test("I: the environment variable commits without a stand-aside line or row", () => {
+    const slug = field(proj, "Current Stage"); // feasibility
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    const env = { ...process.env };
+    env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+    env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+    env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(
+      BUN,
+      [STATE, "approve", slug, "--user-input", "Approve", "--project-dir", proj],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
+    );
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    expect(r.status, out).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(out).not.toContain("Continuing past the human-presence check");
+    expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(0);
+  });
 
   // --- Scenario C: CASCADE (load-bearing) ------------------------------------
   //
@@ -448,6 +662,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // contract under test, and the flag is set by a parent for the whole child.
   describe("unattended prompt submit (AIDLC_UNATTENDED)", () => {
     function fireMintHook(p: string, unattended: boolean): number {
+      writeSessionPidEntry(p, process.pid, "01995000-0188-7000-8000-000000000001");
       const env = { ...process.env };
       // The hook derives the project from its OWN path (it ships inside the
       // project), so point the dist copy at the fixture explicitly — the same
@@ -455,7 +670,15 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       env.AIDLC_PROJECT_DIR = p;
       if (unattended) env.AIDLC_UNATTENDED = "1";
       else delete env.AIDLC_UNATTENDED;
-      const r = spawnSync(BUN, [MINT_HOOK], { encoding: "utf-8", env, input: "{}" });
+      const r = spawnSync(BUN, [MINT_HOOK, "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: "01995000-0188-7000-8000-000000000001",
+        }),
+      });
       return r.status ?? -1;
     }
 
@@ -649,7 +872,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "**Checkpoint**: Consolidated Summary Confirmation",
       );
       expect(audit).toContain("**Questions SHA-256**:");
-      expect(audit).toContain("**Hash Scope**: confirmed-content-v1");
+      expect(audit).toContain("**Hash Scope**: confirmed-content-v2");
     });
 
     test("summary confirmation refuses a same-second cross-shard human turn", () => {
@@ -912,6 +1135,57 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       // HUMAN_TURN refuses (one answer per human turn).
       const r2 = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
       expect(r2.rc).not.toBe(0);
+      // The person did reply, and the first answer used that reply: the refusal
+      // says so rather than asking them to reply again.
+      expect(r2.out).toContain("the person's latest reply is already recorded as an answer");
+      expect(r2.out).toContain("single answer entry");
+      expect(r2.out).not.toContain("no new human reply has arrived");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
+    test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {
+      const slug = field(proj, "Current Stage");
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Choose", "--options", "A,B"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("a reply an approval used keeps the no-reply refusal", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      // An approval, not an answer, used the reply: "already recorded as an answer" would be false.
+      appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
+    test("a question logged after an answered reply keeps the no-reply refusal", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
+      // A new question is shown; its reply never reached the hooks, so no turn follows it.
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Next question", "--options", "A,B"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).not.toContain("already recorded as an answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+    });
+
+    test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]).rc).toBe(0);
+      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"], true);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Unset AIDLC_UNATTENDED");
+      expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
 
@@ -947,9 +1221,35 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain(`**User Input**: ${reply}`);
+      ).toContain("**User Input**: Approve\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
+
+    for (const event of ["GATE_APPROVED", "GATE_REJECTED"]) {
+      for (const [label, checkpoint, fingerprint, pending] of [
+        ["another kind", "construction-unit", "current", true],
+        ["older evidence", "walking-skeleton", "previous", true],
+        ["the asked checkpoint", "walking-skeleton", "current", false],
+      ] as const) {
+        test(`${event} for ${label} preserves the gate-time answer route`, () => {
+          const slug = field(proj, "Current Stage");
+          guarded(proj, ["checkbox", `${slug}=in-progress`]);
+          guarded(proj, ["gate-start", slug]);
+          appendAuditEntry("DECISION_RECORDED", {
+            Stage: slug, Checkpoint: "Construction Unit Approval",
+            Unit: "alpha", Kind: "skeleton", Fingerprint: "current",
+          }, proj);
+          appendAuditEntry(event, {
+            Stage: slug, Checkpoint: checkpoint, Unit: "alpha", Fingerprint: fingerprint,
+          }, proj);
+          recordHumanTurn(proj);
+          const answer = guardedLog(proj, ["answer", "--stage", slug, "--details", "Approve"]);
+          expect(answer.rc, answer.out).toBe(0);
+          expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(pending ? 1 : 0);
+          expect(answer.out.includes('"skipped":"QUESTION_ANSWERED"')).toBe(!pending);
+        });
+      }
+    }
 
     test("a paraphrased approval is a no-op and report refuses it", () => {
       const slug = field(proj, "Current Stage");

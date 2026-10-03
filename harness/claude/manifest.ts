@@ -114,9 +114,7 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The onboarding doc (CLAUDE.md) renders from the shared skeleton
-  // core/templates/onboarding.md with Claude's fills, then the standard
-  // {{HARNESS_DIR}} → .claude transform. Single source across every harness.
+  // Claude keeps neutral guidance and native setup together in its always-on file.
   onboarding: { dst: "CLAUDE.md", fills: onboardingFills },
 
   // Claude renames no core dir.

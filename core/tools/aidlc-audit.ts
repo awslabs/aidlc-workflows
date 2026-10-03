@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   closeSync,
   constants as fsConstants,
@@ -18,6 +19,12 @@ import {
   acquireAuditLock,
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
+  auditBlockField,
+  readActiveAuditShardEvents,
+  UNTRUSTED_AUDIT_NOTICE,
+  sortAttemptEvents,
+  attemptEventIsCrossShardTied,
+  BoltIdentityError,
   claimAttemptFields,
   cloneIdPath,
   errorMessage,
@@ -32,13 +39,14 @@ import {
   refuseEngineObserverWrite,
   releaseAuditLock,
   requireLiveClaimForTeamUnit,
+  resolveBoltIdentity,
   resolveProjectDir,
+  resolveWorkflowSelection,
   validateBoltSlug,
   validateLiveUnitScope,
   worktreeClaimBoundaryMatches,
   worktreeAuditFilePath,
   worktreeDocsDir,
-  worktreePath,
   writeBufferAtomic,
 } from "./aidlc-lib.ts";
 
@@ -92,6 +100,8 @@ const VALID_EVENT_TYPES = new Set([
   // `answer --override`; the receipt binds to content and attempt only.
   // Emitted by aidlc-log.ts beside PLAN_APPROVAL_RECORDED (Override: yes).
   "PLAN_APPROVAL_OVERRIDDEN",
+  // Plan approval was off, so the engine built the plan without asking.
+  "PLAN_APPROVAL_SKIPPED",
   // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
   // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
   // reviewer-bearing stage cannot complete without a terminal REVIEW_COMPLETED
@@ -110,16 +120,22 @@ const VALID_EVENT_TYPES = new Set([
   // evidence checked AT the receipt, never the transition itself); UNIT_PAUSED
   // carries Reason + Next Action so a resumed session lands on the exact
   // checkpoint. The autonomous swarm path keeps its own SWARM_UNIT_* ledger.
+  // UNIT_SKIPPED is the unit-major conditional skip of one (stage, Unit),
+  // emitted only through `aidlc-orchestrate.ts report --result skipped --unit`.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   // Artifact events (hook-emitted)
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
   // Subagent (hook-emitted)
   "SUBAGENT_COMPLETED",
+  // Advisory, never a HUMAN_TURN: a Copilot prompt arrived right after a
+  // subagent started in that chat and matched no recorded subagent brief.
+  "SUBAGENT_PROMPT_UNMATCHED",
   // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
   // tool call was refused for reaching into sibling units' construction/ paths.
   "REVIEWER_SCOPE_BLOCKED",
@@ -155,20 +171,38 @@ const VALID_EVENT_TYPES = new Set([
   // Per-run review-class override changed (config-change --review). The
   // effective class each stage runs at is resolved at directive emission.
   "REVIEW_CLASS_CHANGED",
-  // Change Control: config-change/scope-change set the per-intent value, and
-  // governed checkpoints observe memory changes or accept changed input.
+  // Guard Policy (formerly Change Control): config-change/scope-change set the
+  // per-intent value (GUARD_POLICY_SET; CHANGE_CONTROL_SET is the retired name
+  // still read from older ledgers), and governed checkpoints observe memory
+  // changes or accept changed input. GUARD_RESTORED is the per-run fence switch
+  // going back on; GUARD_DISABLED (above) is it going off.
+  "GUARD_POLICY_SET",
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  "GUARD_RESTORED",
+  // A fence let an action through instead of refusing it, because the fence was
+  // lowered: for this piece of work by the guard policy word or the human's own
+  // switch, or machine-wide by its environment kill switch (GUARD_FENCE_ENV in
+  // aidlc-lib.ts). The row IS the evidence that stands in for the refusal; its
+  // Authority field records who was working, not what lowered the fence.
+  "GUARD_STOOD_ASIDE",
   // Per-intent ceremony settings, emitted by utility config-change/scope-change.
   "CEREMONY_SET",
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // A piece of work's plan kept as a reusable scope. Emitted by
+  // aidlc-utility.ts handleScopeSave.
+  "SCOPE_SAVED",
   // Jump events owned by STAGE_JUMPED — JUMP_COMPLETED was deleted as a
   // redundant alias.
   // Error/Recovery
   "ERROR_LOGGED",
   "RECOVERY_COMPLETED",
+  // The Copilot adapter could not find or trust its coordination record for an
+  // AI-DLC command, so it let the command reach the engine, which answers from
+  // disk, instead of refusing it. Advisory; it never carries the command text.
+  "COORDINATION_STOOD_ASIDE",
   // Construction Bolt execution
   "BOLT_STARTED",
   "BOLT_COMPLETED",
@@ -262,6 +296,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   CHECKPOINT_VERIFICATION_RECORDED: "Checkpoint Verification Recorded",
   PLAN_APPROVAL_RECORDED: "Plan Approval Recorded",
   PLAN_APPROVAL_OVERRIDDEN: "Plan Approval Overridden",
+  PLAN_APPROVAL_SKIPPED: "Plan Approval Skipped",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
   PIPELINE_LINK_COMPLETED: "Pipeline Link Completed",
@@ -269,10 +304,12 @@ const EVENT_HEADINGS: Record<string, string> = {
   UNIT_PAUSED: "Unit Paused",
   UNIT_RESUMED: "Unit Resumed",
   UNIT_COMPLETED: "Unit Completed",
+  UNIT_SKIPPED: "Unit Skipped",
   ARTIFACT_CREATED: "Artifact Created",
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
+  SUBAGENT_PROMPT_UNMATCHED: "Subagent Prompt Unmatched",
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
@@ -287,12 +324,17 @@ const EVENT_HEADINGS: Record<string, string> = {
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
   REVIEW_CLASS_CHANGED: "Review Class Change",
+  GUARD_POLICY_SET: "Guard Policy Set",
   CHANGE_CONTROL_SET: "Change Control Set",
   CHANGE_ACCEPTED: "Change Accepted",
+  GUARD_RESTORED: "Guard Restored",
+  GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
+  COORDINATION_STOOD_ASIDE: "Coordination Stood Aside",
   BOLT_STARTED: "Bolt Started",
   BOLT_COMPLETED: "Bolt Completed",
   BOLT_FAILED: "Bolt Failed",
@@ -351,6 +393,7 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
@@ -413,6 +456,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "QUESTION_ANSWERED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
   "PIPELINE_LINK_COMPLETED",
@@ -426,11 +470,13 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
-  // would skip that verification. Owned by `aidlc-state.ts unit`.
+  // would skip that verification. Owned by `aidlc-state.ts unit`; the
+  // UNIT_SKIPPED settle receipt is owned by the engine's skip transition.
   "UNIT_STARTED",
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   "UNIT_MERGED",
   // DocumentKB provenance: the knowledge tool emits these through the library
   // inside its catalog transaction. A CLI-forged DOCUMENT_INDEXED whose
@@ -445,11 +491,17 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // row would suppress the genuine derived anchor the same way a forged
   // DOCUMENT_INDEXED suppresses provenance repair.
   "SOURCE_COMMITTED",
-  // Change Control provenance: a governed checkpoint owns the acceptance row
-  // and the verb owns the setting row. A CLI-forged CHANGE_ACCEPTED would make
-  // a change look already reported and suppress the genuine row.
+  // Guard Policy provenance: a governed checkpoint owns the acceptance row and
+  // the verb owns the setting and fence-switch rows. A CLI-forged
+  // CHANGE_ACCEPTED would make a change look already reported and suppress the
+  // genuine row.
+  "GUARD_POLICY_SET",
   "CHANGE_CONTROL_SET",
   "CHANGE_ACCEPTED",
+  "GUARD_RESTORED",
+  // A stand-aside row is a guard's own account of what it let through; a forged
+  // one would make an unauthorized action look covered.
+  "GUARD_STOOD_ASIDE",
   // Ceremony provenance belongs to the setting verb, not a public audit append.
   "CEREMONY_SET",
 ]);
@@ -483,6 +535,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "CHECKPOINT_VERIFICATION_RECORDED",
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
+  "PLAN_APPROVAL_SKIPPED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
@@ -491,6 +544,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_PAUSED",
   "UNIT_RESUMED",
   "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
   // Referee/conductor bookkeeping, emitted against main only.
   "AUDIT_FORKED",
   "AUDIT_MERGED",
@@ -630,7 +684,7 @@ export function appendAuditEntry(
 
   // Lock + audit shard both pin to the same (intent, space) record so a fork/
   // merge pair targets ONE intent end-to-end; omitted -> default-resolution.
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
 
@@ -638,6 +692,61 @@ export function appendAuditEntry(
     return appendAuditEntryUnlocked(eventType, fields, projectDir, intent, space);
   } finally {
     releaseAuditLock(projectDir, intent, space);
+  }
+}
+
+// The Copilot adapter's advisory row (#1411). VS Code delivers a runSubagent
+// brief as a prompt right after the subagent starts; the adapter matches it to
+// the brief recorded at launch and never counts it as the person's turn. A
+// prompt that arrives within seconds of a subagent start in the same chat and
+// matches no record lands here, so a change in the text the host sends is
+// noticed. Such a prompt is almost certainly that subagent's brief, so it is
+// never counted as the person's turn (Counted: no); the Reason says whether
+// the record was read and matched nothing, or could not be read at all. The
+// prompt text is never written.
+export function appendSubagentPromptUnmatched(
+  projectDir: string,
+  row: { session: string; agent: string; recordRead: boolean },
+): void {
+  appendAuditEntry("SUBAGENT_PROMPT_UNMATCHED", {
+    ...(row.session ? { Session: row.session } : {}),
+    Agent: row.agent || "unknown",
+    Counted: "no",
+    Reason: row.recordRead
+      ? "no recorded subagent brief matched this prompt right after a subagent started, so it was not counted as the person's turn"
+      : "the subagent brief record could not be read right after a subagent started, so this prompt was not counted as the person's turn",
+  }, projectDir);
+}
+
+// The Copilot adapter's coordination check stood aside (#1411). When the claim
+// ledger cannot find or trust its own record for an AI-DLC command (no record
+// for this project and intent, a record it cannot read, or a workflow state that
+// moved since the record was written), refusing only sends the agent back to a
+// fresh `next`, which re-issues the same step. The adapter lets the command
+// through instead, and the engine answers from its own view of disk. This row is
+// the trace of that pass. It is written only into a shard that already exists,
+// takes the audit lock with a tight bound (a busy lock skips the row rather
+// than hold the person's command), and never throws: a missing trace must not
+// block the command either. The command text and receipt are never written.
+export function appendCoordinationStoodAside(
+  projectDir: string,
+  row: { session: string; command: string; reason: string },
+): boolean {
+  try {
+    if (!existsSync(auditFilePath(projectDir))) return false;
+    if (!acquireAuditLock(projectDir, 2, 25)) return false;
+    try {
+      appendAuditEntryUnlocked("COORDINATION_STOOD_ASIDE", {
+        ...(row.session ? { Session: row.session } : {}),
+        Command: row.command,
+        Reason: row.reason,
+      }, projectDir);
+    } finally {
+      releaseAuditLock(projectDir);
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -900,7 +1009,7 @@ export function appendAuditEntries(
   // write. In that transaction the validated one-write batch is already
   // serialized; attempting the non-reentrant acquisition would deadlock.
   if (holdsAuditLock(projectDir, intent, space)) return append();
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
   try {
@@ -1242,7 +1351,14 @@ function handleAuditFork(args: string[], projectDir: string): void {
   // fork used). recordPrefix is the worktree mirror's relative record dir
   // (null -> flat-legacy mirror, today's behaviour).
   const { intent, space } = parseSelectorFlags(args);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const priorForkVerification = existsSync(wtPath)
     ? worktreeClaimBoundaryMatches(projectDir, wtPath, slug)
     : null;
@@ -1271,7 +1387,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
     );
   }
 
-  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+  if (!acquireAuditLock(projectDir, undefined, undefined, intent, space)) {
     jsonError("Failed to acquire audit lock after retries");
   }
   let boundary = 0;
@@ -1518,7 +1634,14 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
-  const wtPath = worktreePath(projectDir, slug);
+  const selection = resolveWorkflowSelection(projectDir, { intent, space });
+  let wtPath: string;
+  try {
+    wtPath = resolveBoltIdentity(projectDir, slug, selection).dir;
+  } catch (e) {
+    if (e instanceof BoltIdentityError) jsonError(e.message);
+    throw e;
+  }
   const scopeStamp = requireLiveClaimForTeamUnit(projectDir, slug, {
     intent,
     space,
@@ -1560,11 +1683,12 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   }
 
   // Acquire outer lock with extended budget for parallel-Bolt contention.
-  // Defaults: 200 retries × 100ms = 20s, sized for N=4-8 contention. The
-  // AIDLC_AUDIT_LOCK_RETRIES env var lets tests dial this down so the
-  // lock-timeout failure path is testable without 20-second waits.
+  // The compound backstop accommodates valid live merge work. Explicit
+  // AIDLC_AUDIT_LOCK_RETRIES / AIDLC_AUDIT_LOCK_RETRY_MS values still control
+  // acquisition, including short lock-timeout calibration cases.
   const lockRetries = parseInt(
-    process.env.AIDLC_AUDIT_LOCK_RETRIES ?? "200",
+    process.env.AIDLC_AUDIT_LOCK_RETRIES ??
+      String(Math.ceil(LONG_SUBPROCESS_TIMEOUT_MS / 100)),
     10,
   );
   const lockRetryMs = parseInt(
@@ -1728,6 +1852,60 @@ function handleAuditMerge(args: string[], projectDir: string): void {
   });
 }
 
+// --- Subcommand: history ---
+
+function handleHistory(args: string[], projectDir: string): void {
+  let stage: string | undefined;
+  let limit: number | undefined;
+  const events = new Set<string>();
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i];
+    if (!["--stage", "--event", "--limit"].includes(flag)) {
+      jsonError(`Unknown history argument: ${flag}`);
+    }
+    const value = args[i + 1];
+    if (!value || value.startsWith("--")) jsonError(`${flag} expects a value.`);
+    if (flag === "--stage") stage = value;
+    if (flag === "--event") events.add(value);
+    if (flag === "--limit") {
+      if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        jsonError("--limit must be a positive integer.");
+      }
+      limit = Number(value);
+    }
+  }
+  try {
+    const rows = sortAttemptEvents(readActiveAuditShardEvents(projectDir, { includeNotes: true }));
+    const history = rows.map((row, index) => {
+      const entry = {
+        timestamp: row.timestamp,
+        event: row.event,
+        ...(attemptEventIsCrossShardTied(rows, index) ? { unordered: true } : {}),
+      };
+      if ("heading" in row) {
+        return { ...entry, heading: row.heading, text: row.text };
+      }
+      const fields: Record<string, string> = Object.create(null);
+      for (const match of row.block.matchAll(/^(?:- )?\*\*([^*\n]+)\*\*:/gm)) {
+        const name = match[1];
+        if (name !== "Timestamp" && name !== "Event") {
+          fields[name] = auditBlockField(row.block, name)!;
+        }
+      }
+      return { ...entry, fields };
+    }).filter(
+      (entry) => (stage === undefined || ("fields" in entry && entry.fields.Stage === stage)) &&
+        (events.size === 0 || events.has(entry.event)),
+    );
+    jsonSuccess({
+      data_notice: UNTRUSTED_AUDIT_NOTICE,
+      events: limit === undefined ? history : history.slice(-limit),
+    });
+  } catch (e) {
+    jsonError(errorMessage(e));
+  }
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -1749,10 +1927,14 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|audit-fork|audit-merge> [args...]");
+    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|audit-fork|audit-merge> [args...]");
   }
 
   switch (subcommand) {
+    case "history":
+      handleHistory(filteredArgs.slice(1), projectDir);
+      break;
+
     case "append": {
       const eventType = filteredArgs[1];
       if (!eventType) {
@@ -1795,7 +1977,7 @@ export function main(argv: string[]): void {
       break;
 
     default:
-      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, audit-fork, audit-merge`);
+      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, audit-fork, audit-merge`);
   }
 }
 

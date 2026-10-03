@@ -49,7 +49,12 @@
 //   aidlc-log.ts    handleAnswer non-answer floor,
 //   aidlc-state.ts  handleApprove / handleReject non-answer floors.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -68,6 +73,8 @@ import {
   readAllAuditShards,
   selfAttributedDecisionMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -90,6 +97,7 @@ function guarded(
   delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
   Object.assign(env, extraEnv);
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -169,6 +177,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     "UNIT_PAUSED",
     "UNIT_RESUMED",
     "UNIT_COMPLETED",
+    "UNIT_SKIPPED",
   ];
 
   test("append refuses every protected event type", () => {
@@ -558,7 +567,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
 
   test("summary confirmation refusal quotes and truncates the reply and names both valid choices", () => {
     proj = ideationProject();
-    const invalid = `Use the defaults ${"x".repeat(180)}`;
+    const invalid = `Maybe the defaults ${"x".repeat(180)}`;
     const r = guarded(
       LOG,
       [
@@ -575,12 +584,10 @@ describe("t261 cancellation boilerplate is not a decision", () => {
       proj,
     );
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain('reply \\"Use the defaults ');
+    expect(r.out).toContain('reply \\"Maybe the defaults ');
     expect(r.out).toContain('...\\"');
     expect(r.out).not.toContain(invalid);
-    expect(r.out).toContain(
-      'Present \\"Looks correct\\" and \\"Request changes\\"',
-    );
+    expect(r.out).toContain("Looks correct (1), or Request changes (2)");
     expect(readAllAuditShards(proj)).not.toContain("SUMMARY_CONFIRMATION_RECORDED");
   });
 
@@ -606,7 +613,7 @@ describe("t261 cancellation boilerplate is not a decision", () => {
     expect(ap.rc).not.toBe(0);
     expect(ap.out).toContain('the reply \\"cancelled\\"');
     expect(ap.out).toContain("cancellation boilerplate");
-    expect(ap.out).toContain("original question with every choice again");
+    expect(ap.out).toContain("original held gate with every offered choice");
 
     const rj = guarded(
       STATE,

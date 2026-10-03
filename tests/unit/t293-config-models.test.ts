@@ -1,4 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -34,6 +39,8 @@ import {
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
@@ -67,7 +74,7 @@ function run(
       ...env,
     },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   if (result.error) throw result.error;
   return {
@@ -470,7 +477,7 @@ describe("t293 config models CLI", () => {
       schemaVersion: 1,
       preset: "balanced",
     });
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("show, JSON, check, drift, refresh carry-forward, profile derivation, agent exception, and reset", () => {
     const project = install("claude");
@@ -685,7 +692,7 @@ describe("t293 config models CLI", () => {
       project,
       "--check",
     ], project, runtimeEnv()).status).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unknown config positionals are usage errors with no passthrough", () => {
     const project = temp("aidlc-t293-unknown-");
@@ -733,6 +740,7 @@ describe("t293 config models CLI", () => {
 
   test("misspelled config section help remains a usage error", () => {
     const result = spawnSync(BUN, [DISPATCHER, "config", "modles", "--help"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: REPO_ROOT,
       encoding: "utf-8",
     });
@@ -773,7 +781,7 @@ describe("t293 config models CLI", () => {
     expect(result.stdout).toContain("refusing to refresh while 1 workflow(s) are active");
     expect(existsSync(projectSettingsPath(project))).toBe(false);
     expect(harnessData(project, ".claude").models).toBeUndefined();
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro reports unsupported group effort and applies model-bound exceptions", () => {
     const project = install("kiro");
@@ -840,7 +848,7 @@ describe("t293 config models CLI", () => {
       "kiro",
       resolvedPolicy(project, "kiro"),
     )).toEqual([]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   test("global settings roll back when the coordinated project refresh cannot lock", () => {
     const project = install("claude");
     const machine = temp("aidlc-t293-global-rollback-");
@@ -883,7 +891,7 @@ describe("t293 config models CLI", () => {
     expect(readFileSync(settingsPath)).toEqual(priorSettings);
     expect(readFileSync(agentPath)).toEqual(priorAgent);
     rmSync(join(project, ".aidlc-transaction.lock"));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("global rollback preserves a newer concurrent machine setting", () => {
     const project = install("claude");
@@ -915,7 +923,7 @@ describe("t293 config models CLI", () => {
     expect(failed.status).not.toBe(0);
     expect(readFileSync(settingsPath, "utf-8")).toBe(newer);
     expect(`${failed.stdout}${failed.stderr}`).toContain("rollback was incomplete");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t293 doctor model policy advisory", () => {

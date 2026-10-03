@@ -225,21 +225,24 @@ The host owns published-versus-installed state. AIDLC compares that installed
 state with project-local composition state, entirely offline:
 
 - Claude reads schema-v2 `~/.claude/plugins/installed_plugins.json` and
-  `enabledPlugins` from `~/.claude/settings.json`.
+  `enabledPlugins` from `~/.claude/settings.json`. When the registry exists
+  but that settings file cannot be read, Claude falls back to the current root
+  and `plugin list` and doctor flag the file as needing attention. Without a
+  registry the settings file is not read (see the fallback below).
 - Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
   their exact cache paths under
   `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
-- Kiro has no proved host store. It accepts only the plugin root injected into
-  the current hook and reports aggregate inventory unavailable outside that
-  invocation. Claude and Codex use the same fallback if their registry source
-  disappears.
-- OpenCode has a generated compose projection, but `aidlc-plugin.ts` does not
-  yet model `.opencode-plugin` as an inventory kind. Its portable composer is
-  covered independently; do not interpret `plugin list` as a proved aggregate
-  OpenCode inventory.
+- Kiro, Cursor, Copilot, and OpenCode have no proved host store. They accept
+  only the plugin root injected into the current hook. Outside that invocation
+  a plugin composed into the project is listed as not compared (no host
+  plugin list), never as missing, and doctor passes with the composed plugins
+  and their versions. Claude and Codex use the same fallback if their registry
+  source disappears.
 
-Each adapter reads one host-native manifest (`.claude-plugin/plugin.json`,
-`.codex-plugin/plugin.json`, or `.kiro-plugin/plugin.json`). Owned manifests
+Each adapter reads one host-native manifest: `.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, `.kiro-plugin/plugin.json` (Kiro and Kiro IDE),
+`.cursor-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, or
+`.opencode-plugin/plugin.json`. Owned manifests
 must use `name: aidlc-<key>`, a safe key, and a semver version. Duplicate
 identities are rejected with every source path; no adapter recursively scans a
 home or cache directory.
@@ -253,10 +256,11 @@ edits and path-only renames are visible.
 
 `aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
 stamps. Default output deliberately has only three actions: `current`,
-`run: aidlc engine plugin sync`, or `needs attention: <remediation>`. Verbose and JSON
-output retain the internal reason: version differs, source changed, not
-composed, legacy unstamped, disabled, missing, invalid/ambiguous, or inventory
-unavailable.
+`run: aidlc config`, or `needs attention: <remediation>`. On a host with no
+plugin list, a composed plugin reads `not compared: no host plugin list` and
+needs nothing. Verbose and JSON output retain the internal reason: version differs,
+source changed, not composed, legacy unstamped, disabled, missing,
+invalid/ambiguous, or inventory unavailable.
 
 `aidlc engine plugin sync` composes every enabled installed plugin in a staged project,
 regenerates graph and runner surfaces, writes composition and ownership records,
@@ -309,7 +313,7 @@ The script writes one JSON object to stdout:
 `severity` defaults to `error`; a failing error check fails doctor, while a
 failing `advisory` check is displayed and exported without changing the exit
 code. Passing checks render normally. Doctor treats the installed plugin as the
-code trust boundary, but contains failures: a spawn error, timeout (10 seconds
+code trust boundary, but contains failures: a spawn error, timeout (five minutes
 by default, with `AIDLC_PLUGIN_DOCTOR_TIMEOUT_MS` as a positive-integer
 override), non-zero exit, invalid JSON/shape, or malformed entries becomes a
 bounded finding instead of crashing doctor. Output is capped at 50 check rows
@@ -471,7 +475,7 @@ available only for `mode: inline`. Native dispatch also requires a per-harness
 dispatch surface — a hand-authored agent-v1 JSON plus registration in the
 conductor's `trustedAgents` list on Kiro CLI, an agent config TOML (the shipped
 `aidlc-*-agent.toml` shape) on Codex, or a native `.opencode/agents/` subagent
-file on OpenCode. Kiro IDE instead dispatches the installed agent Markdown
+file on OpenCode. The `kiro-ide` row (Kiro IDE and Kiro CLI v3) instead dispatches the installed agent Markdown
 itself, but only when `tools:` is non-empty and `permissions.rules` contains at
 least one well-formed `capability`/`effect`/`match` entry; empty permissions,
 missing or empty rules, and malformed entries are rejected. Compose therefore

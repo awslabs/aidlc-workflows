@@ -72,6 +72,7 @@ import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
+  entrySkillInvocation,
   runtimeHarnessDir as harnessDir,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -173,9 +174,19 @@ that flag without this skill.
 
    The engine emits one \`run-stage\` directive for \`${node.slug}\` (carrying the
    lead agent, the resolved consumes/produces paths, the rules and sensors in
-   context, and — on this first directive — the conductor persona). Run the stage
-   exactly as the directive describes; do not load the conductor persona by hand,
-   the engine delivers it.
+   context, and the conductor persona on the workflow's first run-stage). When the
+   stage's rules do not fit beside it (most stages on GitHub Copilot, and any
+   stage whose memory files have grown large), \`load-steering\` parts come
+   first instead. For each part, apply \`directive.rules_content\` in array
+   order and keep it as this stage's rules, and adopt \`conductor_persona\` when
+   the part carries it. Then run
+   \`${aidlcToolInvocation("orchestrate")} continue <directive.receipt>\` (the
+   receipt is the 8-character string printed at the top of the directive; copy
+   it, never rebuild it) and act on the directive that comes back. Do not call
+   \`report\` for a part or tell the user about it. Repeat until the
+   \`run-stage\` arrives, show its \`stage_validity\` and \`change_notices\`
+   once, and run the stage exactly as it describes; do not load the conductor
+   persona by hand, the engine delivers it.
 
 2. Before acting on the directive, read
    \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\`. Then read every
@@ -201,12 +212,17 @@ that flag without this skill.
 // `intent-create` move (which runs the whole initialization phase — mint the
 // intent + detect the workspace + build state — in one call). This is the
 // init-phase analogue of the per-stage runners: opt-in packaging over a path
-// the engine already names at creation. It drives `intent-create`, NOT
-// `--stage … --single`, so the stage-runner drift guard (which keys on the
-// `--stage`+`--single` marker) never counts it. There is no user-facing
-// `/aidlc --init` (P4): the workspace shell ships in dist/ and the engine
-// auto-creates the first intent - this runner just makes that explicit.
+// the engine already names at creation. With a named scope it drives
+// `intent-create`; a description without one goes to `next --new-intent`, so the
+// person sees the same plan offer `/aidlc` makes instead of a default scope they
+// never saw.
+// It never drives `--stage <slug> --single` or a scoped `next`, so neither the
+// stage-runner drift guard nor the scope-runner prune ever counts it. There is
+// no user-facing `/aidlc --init` (P4): the workspace shell ships in dist/ and
+// the engine auto-creates the first intent - this runner just makes that
+// explicit.
 export function renderInitRunner(): string {
+  const entrySkill = entrySkillInvocation();
   return `---
 name: ${INIT_RUNNER_DIR}
 generated-by: aidlc-runner-gen
@@ -214,7 +230,7 @@ description: >
   Start an AI-DLC workflow — run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
   stage. The engine normally auto-creates the first intent; this is opt-in
-  packaging over that move. Pass \`--scope <name>\` to seed the initial scope, or a freeform description of what to build.
+  packaging over that move. Pass \`--scope <name>\` to seed the initial scope. A freeform description without a scope first gets the same plan offer as \`${entrySkill}\`, then continues as \`${entrySkill}\` does.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
 ${nativeRunnerFrontmatter()}\
@@ -232,30 +248,49 @@ no standalone meaning.
 
 ## Steps
 
-1. Create the intent (run the initialization phase). Parse the user's
-   \`$ARGUMENTS\`: forward any recognized flags
-   (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`)
-   as-is, and pass any freeform description text via \`--arguments "<text>"\`
-   (\`intent-create\` reads the description from the \`--arguments\` flag, NOT a
-   positional — forwarding it bare would silently drop it). ALSO derive a short
-   **\`--label\`**: a 2-3 word kebab-case essence of what's being built
-   (\`"I would like to build a simple calculator application"\` → \`--label
-   "simple calc"\`). The label becomes the readable, date-prefixed record dir name
-   (\`<YYMMDD>-simple-calc\`); the full \`--arguments\` text is preserved separately
-   in the audit + state. Omit \`--label\` only when there is no description (the
-   tool then falls back to the scope token):
+1. Read the user's \`$ARGUMENTS\`. The recognized flags are \`--scope <name>\`,
+   \`--depth <level>\`, and \`--test-strategy <level>\`; the rest is a freeform
+   description of what to build.
+
+2. **The user named a scope** with \`--scope <name>\`: create the intent (run
+   the initialization phase). Forward the recognized flags as-is, and pass any
+   freeform description text via \`--arguments "<text>"\` (\`intent-create\` reads
+   the description from the \`--arguments\` flag, NOT a positional: forwarding
+   it bare would silently drop it). ALSO derive a short **\`--label\`**: a 2-3
+   word kebab-case essence of what's being built (\`"I would like to build a
+   simple calculator application"\` gives \`--label "simple calc"\`). The label
+   becomes the readable, date-prefixed record dir name (\`<YYMMDD>-simple-calc\`);
+   the full \`--arguments\` text is preserved separately in the audit + state.
+   When only a scope was supplied, omit \`--arguments\` and \`--label\` (the tool
+   then falls back to the scope token):
 
    \`\`\`bash
    ${aidlcDispatcherInvocation("intent create")} --scope <scope> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
-   Pass the user's \`--scope <name>\` when they named one; otherwise omit
-   \`--scope\` — the tool resolves the implicit default itself
-   (\`AWS_AIDLC_DEFAULT_SCOPE\`, else \`classic\`). If the user gave neither a
-   scope nor a description, do not run a bare \`intent-create\`: ask what they
-   want to build or which scope to use. When only a scope was supplied, omit
-   \`--arguments\` and \`--label\`. Print the tool's output and stop. This does
-   not advance a stage; run \`/aidlc\` afterwards to continue.
+   Print the tool's output and stop. This does not advance a stage; run
+   \`${entrySkill}\` afterwards to continue.
+
+3. **The user described the work but gave no \`--scope\`** (even when the
+   description starts with a scope name, as in \`feature flags for billing\`):
+   do not create it on a scope they have not seen. Pass the arguments to the engine as new
+   work; it proposes the plan that fits the description (for example \`bugfix\`
+   for a described bug) or offers to compose one, and asks the user to choose.
+   Work already in progress is left as it is:
+
+   \`\`\`bash
+   ${aidlcToolInvocation("orchestrate")} next --new-intent $ARGUMENTS
+   \`\`\`
+
+   Before acting on each directive, read
+   \`${harnessDir()}/aidlc-common/protocols/stage-protocol.md\` once per session,
+   then every \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\`
+   named by \`directive.protocol_modules\`. Act on the directive exactly as the
+   \`aidlc\` skill's forwarding loop describes. From here the flow IS the
+   \`${entrySkill}\` flow - continue its loop until the directive says stop.
+
+4. If the user gave neither a scope nor a description, do not run a bare
+   \`intent-create\`: ask what they want to build or which scope to use.
 `;
 }
 
@@ -595,12 +630,12 @@ export function renderRunner(scope: string, description: string): string {
   const dir = scopeRunnerDirName(scope, front ?? {});
   const activeHarnessDir = harnessDir();
   const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
-  const entrySkill = activeHarnessDir === ".codex" ? "$aidlc" : "/aidlc";
+  const entrySkill = entrySkillInvocation();
   const freshSessionFlow = (() => {
     if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
     if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
     if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
-    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat";
+    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat or start a new Kiro CLI session";
     if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
     if (harnessName === "cursor") {
       return "start a new Cursor chat (IDE) or restart agent (CLI)";
@@ -637,8 +672,9 @@ ${nativeRunnerFrontmatter()}\
 Drive the AI-DLC engine with the **${scope}** scope fixed. This is the same
 deterministic forwarding loop the \`${entrySkill}\` orchestrator runs, with \`--scope
 ${scope}\` baked into the first \`next\` so scope detection is skipped. The
-engine owns all routing; the conductor persona arrives on the first directive's
-\`conductor_persona\` field — adopt it for the whole run.
+engine owns all routing; the conductor persona arrives in the \`conductor_persona\`
+field of the first \`run-stage\`, or of the first rules part when it is sent
+ahead of that run-stage. Adopt it for the whole run.
 
 ## The loop
 
@@ -649,12 +685,53 @@ engine owns all routing; the conductor persona arrives on the first directive's
    \`${harnessDir()}/aidlc-common/protocols/stage-protocol-<module>.md\` named by
    \`directive.protocol_modules\`. Load every listed module before acting; skip
    only a module already loaded earlier in this session. Then act on
-   \`directive.kind\` exactly as the orchestrator does (run-stage / invoke-swarm /
-   ask / print / error / done).
-3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` when the directive names a stage; omit \`--stage\` only for non-stage report round-trips.
-4. Repeat from step 1 until \`directive.kind == done\`.
+   \`directive.kind\` exactly as the orchestrator does (load-steering / run-stage /
+   invoke-swarm / ask / print / error / done). A \`load-steering\` directive
+   brings a stage's rules in parts ahead of its \`run-stage\` (most stages on
+   GitHub Copilot): apply \`directive.rules_content\` in array order and keep it
+   as that stage's rules, adopt \`conductor_persona\` when the part carries it,
+   then run \`${aidlcToolInvocation("orchestrate")} continue <directive.receipt>\`
+   (copy the 8-character receipt printed at the top of the directive, never
+   rebuild it) and act on the directive it returns. Never \`report\` a part or
+   tell the user about it. Every engine \`ask\` carries \`ask_type\` and
+   \`response_route\`: \`next\` follows the chosen command, \`command\` runs
+   \`resume_command\` only when the human chooses to resume and then re-runs
+   \`next\` (otherwise it waits for their direction), \`claim\` follows the Unit claim
+   contract, and \`execute-remedy\` offers only executable guard remedies and
+   executes the human-selected command or action. An empty remedy list is
+   terminal; wait for the human and invent no report, receipt, reset, or decision.
+   For \`intent-pick\`, choose the \`select_commands\` entry by its exact
+   \`selector\` and execute its complete \`command\` verbatim, never by selector
+   interpolation. Scope and compose commands retain \`--request <8hex id>\`;
+   never append the request text. The ask names the request only by id (a
+   pasted \`<document>\` block stays in the question store as data),
+   while \`question\` echoes at most 240 characters, ending in \`...\`. The engine
+   carries the request through a second \`new-work-routing\` ask (a question of
+   its own) on any harness and through compose/creation handoffs until creation
+   succeeds; a repeated answer carries on with the work it started instead of
+   creating it twice.
+   That ask carries its routes as \`new_intent_command\`, \`scope_commands\`,
+   \`compose_command\`, and \`continue_command\` for the active workflow or (with
+   \`available_intents\`) \`select_commands\` and \`reshape_commands\`; run the chosen one verbatim and
+   preserve its description and scope; an unselected intent with new work waiting
+   is not an \`intent-pick\`.
+   Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.
+   Never use \`report\` as a fallback for an engine ask answer; a selected guard
+   remedy may still explicitly name a stage report.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. The prompt-rendered resume menu is the sole non-stage report round-trip and uses \`report --result resumed --user-input "<choice>"\`.
+4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
+   bare \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
+   \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
+   already asked for). Keep going until \`directive.kind == done\`. A \`done\`
+   without \`directive.workflow_continues\` is the real end: present the
+   completion summary and stop. A \`done\` that carries it only recorded a step:
+   run that bare \`next\` at once and act on what it returns, with no completion
+   summary. If the person's reply that led to that step also asked to stop the
+   workflow there for now (not to pause on one decision inside the work), run
+   \`${aidlcToolInvocation("orchestrate")} park\` instead and act on its
+   \`parked\` directive.
 
-Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
+On that first \`next\`, pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
 any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the
 state file always wins on an existing workflow, so re-running a started workflow
 resumes it. To run a different scope, use \`${entrySkill} --scope <other>\` instead.
@@ -665,9 +742,13 @@ Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
 judgment the \`${entrySkill}\` orchestrator makes: does this input **continue** the
 active intent, or does it describe a **genuinely new, unrelated** piece of work?
 This matters most when the active intent is already **complete**: then \`next\`
-correctly returns \`done\` (the engine is read-only and never creates alongside a
-live intent), and the loop above would simply stop. New work is NOT a
+correctly returns \`done\` (the engine never creates alongside a live intent
+without the confirmed new-work route), and the loop above would simply stop. New work is NOT a
 continuation; the escape hatch is \`next --new-intent\`.
+
+This recognition and conductor-authored offer apply only before an engine ask
+is emitted. Once an ask exists, follow its typed route and supplied commands,
+preserving any \`--request\` id rather than rebuilding the request.
 
 - **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
   names a distinct feature/bug/unit unrelated to the active intent's subject

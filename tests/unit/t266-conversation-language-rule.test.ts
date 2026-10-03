@@ -39,7 +39,12 @@
 // calls the shipped hook's exported pure entry in-process. Zero tokens, zero
 // network.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,6 +52,8 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { augmentDispatchRules } from "../../dist/claude/.claude/hooks/aidlc-deliver-stage-rules.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTILITY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
@@ -300,7 +307,7 @@ describe("t266 conversation-language rule layer", () => {
     const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
@@ -860,7 +867,7 @@ describe("t266 conversation-language rule layer", () => {
     const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 
@@ -971,7 +978,7 @@ describe("t266 conversation-language rule layer", () => {
     const creation = spawnSync(
       BUN,
       [UTILITY, "intent-create", "--scope", "poc", "--arguments", "x", "--project-dir", proj],
-      { encoding: "utf-8" },
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(creation.status, `intent-create failed: ${creation.stdout}\n${creation.stderr}`).toBe(0);
 

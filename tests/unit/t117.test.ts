@@ -71,7 +71,12 @@
 // AWS_AIDLC_DEFAULT_SCOPE so a developer's exported value can't shadow the
 // fixtures; the env-scope case (t10) sets it explicitly in the spawn env only.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -85,6 +90,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -152,6 +159,7 @@ function run(
     delete childEnv.AWS_AIDLC_DEFAULT_SCOPE;
   }
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: childEnv,
   });
@@ -271,7 +279,13 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("code-generation");
-    expect(r.steering.length).toBeGreaterThan(0);
+    // The rules ride inline on the run-stage (no load-steering hop): the
+    // delivered paths are exactly the rules the directive names.
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 
   // --- Test 6: resume over a mid-phase fixture → current stage ---
@@ -280,9 +294,19 @@ describe("t117 explicit resume routing", () => {
     const r = runOrchestrateNext(ORCH, p, ["--resume"]);
     expect(r.directive?.kind).toBe("run-stage");
     expect(r.directive?.stage).toBe("feasibility");
-    expect(r.steering.length).toBeGreaterThan(0);
+    expect(r.steering.length).toBe(0);
+    expect(inlineRulePaths(r.directive)).toEqual(
+      r.directive?.rules_in_context as string[],
+    );
+    expect(inlineRulePaths(r.directive).length).toBeGreaterThan(0);
   });
 });
+
+// The deduplicated rule paths a run-stage delivers inline through rules_content.
+function inlineRulePaths(directive: Record<string, unknown> | null): string[] {
+  const entries = (directive?.rules_content ?? []) as Array<{ path: string }>;
+  return [...new Set(entries.map((entry) => entry.path))];
+}
 
 // ============================================================
 // Init branch — guard rejection (state exists) and clean-workspace print.

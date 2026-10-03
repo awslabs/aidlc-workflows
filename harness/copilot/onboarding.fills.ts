@@ -1,8 +1,7 @@
 // harness/copilot/onboarding.fills.ts — Copilot's onboarding-doc fills.
-// Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/copilot/AGENTS.md (project root — BOTH Copilot surfaces auto-read it:
-// Copilot CLI and VS Code agent mode). {{HARNESS_DIR}} → .aidlc is applied by
-// the packager transform afterwards.
+// The packager concatenates onboarding-harness.md, filled here, then neutral
+// onboarding in dist/copilot/AGENTS.md. Both Copilot surfaces auto-read it;
+// the native method imports must remain in this exclusive root file.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
 
@@ -15,7 +14,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets: `- **Copilot CLI ≥ 1.0.74 and/or VS Code ≥ 1.130**: the hook surface this install relies on (PascalCase-registered lifecycle hooks in \`.github/hooks/aidlc.json\`, blocking PreToolUse deny, blocking Stop) and \`.github/{skills,agents}\` discovery are current-line features. Check with \`copilot --version\` / \`code --version\`.
 - **bun**: Required for the CLI tools and hook scripts (tracking progress, writing the decision log, deciding what runs next). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the shells Copilot spawns.
-- **Folder trust (hooks are silent without it)**: repo hooks run only when this project's absolute path is listed in \`trustedFolders\` in \`~/.copilot/config.json\` (the CLI prompts on first interactive run). Headless \`copilot -p\` runs ADDITIONALLY need \`GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1\` in the environment — without it every hook silently no-ops. \`/aidlc --doctor\` checks both.
+- **Folder trust (each Copilot surface checks its own)**: the Copilot CLI runs repo hooks only in a folder its \`trustedFolders\` list covers (this folder or one above it), in \`config.json\` under \`COPILOT_HOME\`, else \`~/.copilot\` (\`%USERPROFILE%\\.copilot\` on Windows); an interactive run asks you to confirm folder trust first. VS Code agent mode never reads that list: its hooks run only in a trusted workspace with the **Chat: Use Hooks** setting on (your organization can switch it off), and a skipped hook leaves no message in the chat. Headless \`copilot -p\` runs ADDITIONALLY need \`GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1\` in the environment; without it every hook silently no-ops. \`/aidlc --doctor\` checks the CLI list and reminds you of the headless variable; it cannot see the VS Code switches.
 - **Model/provider**: no model is pinned anywhere in this install — agents inherit the session model on both surfaces. On the CLI, BYOK env vars select the provider (e.g. Amazon Bedrock's Anthropic-compatible endpoint via \`COPILOT_PROVIDER_BASE_URL\`/\`COPILOT_PROVIDER_TYPE=anthropic\`; \`copilot help providers\` documents the set); in VS Code, use the model picker or a Custom Endpoint provider.`,
 
     prereq_bullets_tail: "",
@@ -23,8 +22,6 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
     agents_note: `On Copilot the expert roles are native custom agents (\`.github/agents/aidlc-<role>-agent.md\`); the \`/aidlc\` session takes on those roles itself for most stages and hands work off to them for the delegated stages (2.1, 2.2, 2.4, 3.5). They carry no \`model:\` pin — the two Copilot surfaces disagree on model-value syntax, so agents always inherit the session model.`,
 
     structure_extra: "",
-
-    guide_pointer: `The Copilot-specific guide (install, what differs, verification) is \`docs/guide/harnesses/copilot.md\`.`,
 
     sections_before_resumption: `## What's different on this harness
 
@@ -40,6 +37,8 @@ This is the same AI-DLC core that ships to every harness: the same ordered steps
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
 - **MCP servers**: none ship (configure your own via \`copilot mcp add\` / \`.vscode/mcp.json\` if needed — note the two surfaces use different MCP config files).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between harness installs (supported but untested — keep the trees in sync via the framework's packaging if you do this).
+
+The Copilot-specific guide (install, what differs, verification) is \`docs/guide/harnesses/copilot.md\`.
 `,
 
     sections_after_resumption: `## Method include (do not remove)
@@ -56,8 +55,6 @@ active space's method layers into ambient context (the native include —
 @aidlc/spaces/default/memory/phases/construction.md
 @aidlc/spaces/default/memory/phases/operation.md
 `,
-
-    gitignore_extra: "",
   },
 };
 

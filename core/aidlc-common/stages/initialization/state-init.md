@@ -87,7 +87,7 @@ Update aidlc-state.md with the routing decision:
 ### Step 5: Update State and Audit
 
 1. Mark state-init as `[x]` completed in `<record>/aidlc-state.md`
-2. Append WORKSPACE_INITIALISED event to `<record>/audit/<host>-<clone>.md` with project type and tech stack summary
+2. The engine records WORKSPACE_INITIALISED in the audit trail, with the project type and tech stack summary; never append it yourself
 
 ### Step 6: Auto-Proceed
 

@@ -47,6 +47,11 @@
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   afterEach,
   beforeEach,
   describe,
@@ -83,7 +88,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 
 const BUN = process.execPath;
 
-setDefaultTimeout(30_000);
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -105,6 +110,7 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -120,6 +126,7 @@ function guardedReport(proj: string, args: string[]): { rc: number; out: string 
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
   delete env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE;
   const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -134,6 +141,7 @@ function guardedNoBackstop(proj: string, args: string[]): { rc: number; out: str
   env.AIDLC_SKIP_REVISION_BACKSTOP = "1";
   env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -152,7 +160,7 @@ function recordStageStarted(proj: string, slug: string): void {
   const r = spawnSync(
     BUN,
     [AUDIT, "append", "STAGE_STARTED", "--field", `Stage=${slug}`, "--project-dir", proj],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordStageStarted failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
@@ -188,7 +196,7 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, args, { encoding: "utf-8", env: process.env });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`recordReview request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -209,6 +217,7 @@ function recordReview(proj: string, slug: string, iteration: number): void {
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: process.env,
   });
@@ -267,6 +276,7 @@ function recordPipelineLinks(proj: string, repos: string[] = []): void {
         );
       }
       const result = spawnSync(BUN, args, {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         encoding: "utf-8",
         env: process.env,
       });
@@ -287,7 +297,7 @@ function recordPipelineLinks(proj: string, repos: string[] = []): void {
 function fireArtifact(proj: string, absFile: string): void {
   const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
   const json = JSON.stringify({ tool_name: "Edit", tool_input: { file_path: absFile } });
-  spawnSync(BUN, [HOOK], { input: json, encoding: "utf-8", env });
+  spawnSync(BUN, [HOOK], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input: json, encoding: "utf-8", env });
 }
 
 // Absolute path of a stage artifact under the seeded record:

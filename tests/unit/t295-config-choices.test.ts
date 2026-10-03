@@ -1,5 +1,5 @@
 // covers: function:normalizeProjectFlagsRecord, function:projectFlags, function:resolveProjectFlag, function:availableScopeNames, function:flagFiles, function:flagIssues, function:discoverInstalledPluginNames, function:readPluginSelection, function:completionInstruction, function:projectChoiceFiles, function:projectChoiceIssues, function:normalizeProjectChoicesRecord, function:flagsDoctorCheck
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import {
   applyConfigDiagnosticRecords,
   availableScopeNames,
   completionInstruction,
@@ -27,6 +32,10 @@ import {
   invalidateSettingsCache,
   resolveAidlcSettings,
 } from "../../core/tools/aidlc-settings.ts";
+
+// Cases install and refresh multiple harness projections. Their aggregate
+// workload needs the shared fixture backstop, separate from each subprocess.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
@@ -60,11 +69,19 @@ function run(
       ...env,
     },
     encoding: "utf-8",
-    timeout: 60_000,
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+      phase: "config choice command",
+    }),
   });
-  if (result.error) throw result.error;
+  if (result.error || result.status === null) {
+    throw new Error(
+      `Config choice subprocess did not exit normally: status=${result.status}, signal=${result.signal}\n` +
+        (result.stdout ?? "") + (result.stderr ?? ""),
+      { cause: result.error },
+    );
+  }
   return {
-    status: result.status ?? -1,
+    status: result.status,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
   };
@@ -122,7 +139,9 @@ function runScopeConsumer(
       cwd: project,
       env,
       encoding: "utf-8",
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+        phase: "config scope consumer",
+      }),
     },
   );
   return {
@@ -151,6 +170,11 @@ describe("t295 config choice dispatch", () => {
       expect(help.stdout).toContain(
         `bun .claude/tools/aidlc.ts config ${section}`,
       );
+      if (section === "flags") {
+        expect(help.stdout).toContain(
+          "--question-retention-days <days|unlimited>",
+        );
+      }
     }
     const project = temp("aidlc-t295-dispatch-");
     mkdirSync(join(project, ".git"));
@@ -228,6 +252,8 @@ describe("t295 flags section", () => {
       "on",
       "--sensor-timeout-ms",
       "12345",
+      "--question-retention-days",
+      "30",
       "--bypass",
       "AIDLC_SKIP_ARTIFACT_GUARD",
       "--yes",
@@ -240,6 +266,7 @@ describe("t295 flags section", () => {
       swarm: true,
       hookDebug: true,
       sensorTimeoutMs: 12345,
+      questionRetentionDays: 30,
       bypasses: ["AIDLC_SKIP_ARTIFACT_GUARD"],
     });
     expect(harnessData(project).flags).toBeUndefined();
@@ -266,7 +293,8 @@ describe("t295 flags section", () => {
     const payload = JSON.parse(show.stdout) as {
       data: {
         files: Array<{ file: string }>;
-        record: { bypasses: string[] };
+        effective: Record<string, string>;
+        record: { bypasses: string[]; questionRetentionDays: number };
         sources: Record<string, string>;
       };
     };
@@ -279,7 +307,35 @@ describe("t295 flags section", () => {
     expect(payload.data.record.bypasses).toEqual([
       "AIDLC_SKIP_ARTIFACT_GUARD",
     ]);
+    expect(payload.data.record.questionRetentionDays).toBe(30);
     expect(payload.data.sources.AIDLC_USE_SWARM).toBe("project");
+    expect(payload.data.sources.AIDLC_QUESTION_RETENTION_DAYS).toBe("project");
+    expect(payload.data.effective.AIDLC_QUESTION_RETENTION_DAYS).toBe("30");
+
+    const resolvedRetention = spawnSync(
+      BUN,
+      [
+        "-e",
+        'import { resolveProjectFlag } from "./core/tools/aidlc-lib.ts"; process.stdout.write(resolveProjectFlag("AIDLC_QUESTION_RETENTION_DAYS") ?? "undefined");',
+      ],
+      {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          AIDLC_PROJECT_DIR: project,
+          AIDLC_INSTALL_ROOT: temp("aidlc-t295-resolve-machine-"),
+        },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+          phase: "resolve recorded question retention",
+        }),
+      },
+    );
+    expect(
+      resolvedRetention.status,
+      resolvedRetention.stdout + resolvedRetention.stderr,
+    ).toBe(0);
+    expect(resolvedRetention.stdout).toBe("30");
 
     const targetEnv: NodeJS.ProcessEnv = {
       ...process.env,
@@ -301,6 +357,9 @@ describe("t295 flags section", () => {
         cwd: REPO_ROOT,
         env: targetEnv,
         encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+          phase: "config flags from another cwd",
+        }),
       },
     );
     expect(fromOtherCwd.status).toBe(0);
@@ -324,6 +383,9 @@ describe("t295 flags section", () => {
         cwd: REPO_ROOT,
         env: targetEnv,
         encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, {
+          phase: "config flags from another cwd with env override",
+        }),
       },
     );
     expect(envFromOtherCwd.status).toBe(0);
@@ -343,6 +405,39 @@ describe("t295 flags section", () => {
     expect(envHuman.stdout).toContain("Swarm: off [env]");
     expect(envHuman.stdout).toContain(
       "overrides the recorded answer on",
+    );
+
+    const retentionEnv = run([
+      "config",
+      "flags",
+      "--project-dir",
+      project,
+      "--show",
+      "--json",
+    ], project, runtimeEnv({
+      AIDLC_QUESTION_RETENTION_DAYS: "7",
+    }));
+    expect(retentionEnv.status).toBe(0);
+    const retentionPayload = JSON.parse(retentionEnv.stdout);
+    expect(retentionPayload.data.effective.AIDLC_QUESTION_RETENTION_DAYS)
+      .toBe("7");
+    expect(retentionPayload.data.sources.AIDLC_QUESTION_RETENTION_DAYS)
+      .toBe("env");
+    const retentionHuman = run([
+      "config",
+      "flags",
+      "--project-dir",
+      project,
+      "--show",
+    ], project, runtimeEnv({
+      AIDLC_QUESTION_RETENTION_DAYS: "7",
+    }));
+    expect(retentionHuman.status).toBe(0);
+    expect(retentionHuman.stdout).toContain(
+      "Question retention days: 7 [env]",
+    );
+    expect(retentionHuman.stdout).toContain(
+      "AIDLC_QUESTION_RETENTION_DAYS=\"7\" overrides the recorded answer \"30\"",
     );
 
     const checkOverride = run([
@@ -376,7 +471,28 @@ describe("t295 flags section", () => {
     ], project, runtimeEnv()).status).toBe(0);
     expect(resolvedFlags(project))
       .toEqual(flags);
-  }, 60_000);
+  });
+
+  test("question retention rejects non-positive and non-integer values", () => {
+    const project = install();
+    for (const value of ["0", "-1", "1.5"]) {
+      const result = run([
+        "config",
+        "flags",
+        "--project-dir",
+        project,
+        "--project",
+        "--question-retention-days",
+        value,
+        "--yes",
+      ], project, runtimeEnv());
+      expect(result.status, value).toBe(2);
+      expect(result.stdout, value).toContain(
+        "--question-retention-days must be a positive integer or unlimited",
+      );
+      expect(resolvedFlags(project), value).toBeNull();
+    }
+  });
 
   test("bypasses require explicit opt-in and reset restores shipped bytes", () => {
     const project = install();
@@ -431,7 +547,7 @@ describe("t295 flags section", () => {
     expect(current.env.AWS_AIDLC_DEFAULT_SCOPE).toBe(
       shipped.env.AWS_AIDLC_DEFAULT_SCOPE,
     );
-  }, 60_000);
+  });
 });
 
 describe("t295 project section", () => {
@@ -505,7 +621,7 @@ describe("t295 project section", () => {
     expect(completionInstruction(copy, ".claude", "bash")).toBe(
       'eval "$(bun .claude/tools/aidlc.ts system completions bash)"',
     );
-  }, 60_000);
+  });
 
   test("MCP consent is rerunnable and --yes never adds defaults", () => {
     const project = install("claude", "none");
@@ -567,7 +683,7 @@ describe("t295 project section", () => {
     expect(readConfigDiagnosticRecords(join(project, ".claude")).project)
       .toBeNull();
     expect(harnessData(project).plugins).toBeUndefined();
-  }, 60_000);
+  });
 
   test("MCP checks use the selected harness surface", () => {
     const kiro = install("kiro", "defaults");
@@ -658,7 +774,7 @@ describe("t295 project section", () => {
       "--json",
     ], codex, env).stdout) as { data: { mcpNote: string } };
     expect(codexShow.data.mcpNote).toContain("no shipped MCP surface");
-  }, 60_000);
+  });
 
   test("plugin changes inherit the active workflow refresh refusal", () => {
     const project = install();
@@ -692,7 +808,7 @@ describe("t295 project section", () => {
     expect(result.stdout).toContain(
       "refusing to refresh while 1 workflow(s) are active",
     );
-  }, 60_000);
+  });
 });
 
 describe("t295 invariants", () => {

@@ -1,6 +1,11 @@
 // covers: subcommand:aidlc-utility:document-input subcommand:aidlc-utility:project-description function:readProjectDescriptionAuthority
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import {
   copyFileSync,
   existsSync,
@@ -32,6 +37,8 @@ import {
   resolveContainedFile,
 } from "../../core/tools/aidlc-knowledge.ts";
 
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const created: string[] = [];
 
@@ -57,6 +64,7 @@ function runCommand(dir: string, command: string): {
   stderr: string;
 } {
   const result = Bun.spawnSync({
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cmd: [process.execPath, UTILITY, command, "--project-dir", dir],
     stdout: "pipe",
     stderr: "pipe",
@@ -110,6 +118,7 @@ describe("t329 project-description and document-input boundaries", () => {
         join(dir, ".gitignore"),
       );
       const init = Bun.spawnSync({
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cmd: ["git", "init", "-q"],
         cwd: dir,
         stdout: "pipe",
@@ -126,6 +135,7 @@ describe("t329 project-description and document-input boundaries", () => {
 
       const check = (path: string) =>
         Bun.spawnSync({
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cmd: ["git", "check-ignore", "-q", relative(dir, path)],
           cwd: dir,
           stdout: "pipe",
@@ -253,8 +263,11 @@ describe("t329 project-description and document-input boundaries", () => {
 
   test("metacharacters remain filename data and never reach shell evaluation", () => {
     const dir = project();
-    const filename =
-      "brief ' \" $(touch shell-expanded) `touch backtick-expanded`.md";
+    // Windows forbids a double quote in filenames. Exercise its legal shell
+    // metacharacters too, while retaining the original POSIX filename intact.
+    const filename = process.platform === "win32"
+      ? "brief ' $(touch shell-expanded) `touch backtick-expanded` & echo %PATH% !literal!.md"
+      : "brief ' \" $(touch shell-expanded) `touch backtick-expanded`.md";
     writeFileSync(join(dir, filename), "# Literal filename\n");
     writeRequest(dir, filename);
 

@@ -2,7 +2,12 @@
 // Execute the shipped command through Claude's shell syntax, not a direct
 // absolute-path spawn that would hide a relative hook entry-point regression.
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, relative } from "node:path";
@@ -16,6 +21,8 @@ import {
   REPO_ROOT,
   seededStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 interface Settings {
   hooks: Record<string, Array<{ matcher: string; hooks: Array<{ command: string }> }>>;
@@ -102,7 +109,7 @@ describe("Claude hook project-root anchoring", () => {
             cwd,
           }),
           encoding: "utf-8",
-          timeout: 15_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       const read = run("cat source.ts");
@@ -112,7 +119,7 @@ describe("Claude hook project-root anchoring", () => {
       const blocked = run("printf changed > source.ts");
       expect(blocked.error).toBeUndefined();
       expect(blocked.status, blocked.stderr).toBe(2);
-      expect(blocked.stderr).toContain("Approve Plan");
+      expect(blocked.stderr).toContain("the engine asks the person to approve it");
       expect(blocked.stderr).toContain(join(cwd, "source.ts"));
       expect(blocked.stdout.trim()).toBe(cwd);
       expect(readFileSync(join(cwd, "source.ts"), "utf-8")).toBe("export const value = 1;\n");
@@ -127,5 +134,5 @@ describe("Claude hook project-root anchoring", () => {
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

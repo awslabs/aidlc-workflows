@@ -1,6 +1,11 @@
 // covers: function:compileStageGraph, function:loadScopeMetadata, function:loadAgents, subcommand:aidlc-utility:doctor
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +23,8 @@ import {
   setupIntegrationProject,
   withEnvAndFreshCaches,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const UTIL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
@@ -216,6 +223,7 @@ describe("t223 naming enforcement", () => {
     writeScope(scopes, "wrong-scope.md", "right-scope");
 
     const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env: {
         ...process.env,
@@ -233,7 +241,7 @@ describe("t223 naming enforcement", () => {
     expect(out).toContain('stem "wrong-scope"');
     expect(out).toContain('declares name "right-scope"');
     expect(out).toContain("Rename the file or fix the name.");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("doctor fails active selection coverage when stage frontmatter cannot be parsed", () => {
     const project = setupIntegrationProject();
@@ -248,6 +256,7 @@ describe("t223 naming enforcement", () => {
     writeFileSync(brokenPath, "not frontmatter\n", "utf-8");
 
     const res = spawnSync(BUN, [join(project, ".claude", "tools", "aidlc-utility.ts"), "doctor"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: {
@@ -261,5 +270,5 @@ describe("t223 naming enforcement", () => {
     expect(res.stdout).toContain("bad-frontmatter");
     expect(res.stdout).toContain(brokenPath);
     expect(res.stdout).toContain("frontmatter parse failed");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

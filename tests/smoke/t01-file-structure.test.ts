@@ -38,6 +38,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 // AIDLC_SRC === <repo>/dist/claude/.claude — the same tree the .sh resolved as
 // CLAUDE_DIR. Resolve every shipped path relative to it.
@@ -136,6 +137,12 @@ const STAGES: Record<string, readonly string[]> = {
 };
 
 describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () => {
+  test("ships the onboarding destination for every harness", () => {
+    for (const harness of HARNESS_MATRIX) {
+      expect(existsSync(harness.harnessOnboardingDist), harness.name).toBe(true);
+    }
+  });
+
   test("ships skills/aidlc/SKILL.md [.sh L12]", () => {
     expect(existsSync(at("skills", "aidlc", "SKILL.md"))).toBe(true);
   });

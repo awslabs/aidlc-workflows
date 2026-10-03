@@ -65,6 +65,28 @@ const HARNESS_NAME = (() => {
   }
   return HARNESS_LEAF.replace(/^\./, "");
 })();
+// Whether the .kiro tree is the KAS layout (Markdown agents, standalone hook
+// JSON) rather than the agent-v1 JSON layout. Same reading as the runtime's
+// kiroTreeLayout (core/tools/aidlc-runtime-paths.ts), which this template ships
+// without: harness.json's kiroLayout, else the row name trees carried before it,
+// else the conductor file. `kiro-ide` names only the KAS adapter.
+const KIRO_KAS_LAYOUT = (() => {
+  if (HARNESS_LEAF !== ".kiro") return false;
+  if (process.env.AIDLC_HARNESS_NAME?.trim() === "kiro-ide") return true;
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8"),
+    ) as { kiroLayout?: unknown; name?: unknown; distribution?: unknown };
+    if (parsed.kiroLayout === "kas" || parsed.kiroLayout === "agent-v1") {
+      return parsed.kiroLayout === "kas";
+    }
+    const row = typeof parsed.name === "string" ? parsed.name : parsed.distribution;
+    if (row === "kiro-ide" || row === "kiro") return row === "kiro-ide";
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  return existsSync(join(HARNESS_DIR, "agents", "aidlc.md"));
+})();
 const IS_COPILOT = HARNESS_NAME === "copilot";
 const IS_OPENCODE = HARNESS_NAME === "opencode";
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
@@ -72,7 +94,6 @@ const SKILLS_DIR = IS_COPILOT
   ? join(PROJECT_DIR, ".github", "skills")
   : join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
-const COMPOSE_LOCK_RETRIES = 600;
 const NATIVE_RUNTIME = Boolean(process.env.AIDLC_COMPILED_EXECUTABLE?.trim());
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -102,6 +123,19 @@ function installedAidlcLib(): Promise<InstalledAidlcLib | null> {
     .then((module) => module as InstalledAidlcLib)
     .catch(() => null);
   return installedLibPromise;
+}
+
+async function composeLockRetries(): Promise<number> {
+  // Resolve from the installed engine: this template is copied into plugins,
+  // so repository-relative imports would break emitted hooks.
+  try {
+    const budget = await import(join(HARNESS_DIR, "tools", "aidlc-runtime-budget.ts"));
+    if (Number.isSafeInteger(budget.LONG_SUBPROCESS_TIMEOUT_MS) &&
+      budget.LONG_SUBPROCESS_TIMEOUT_MS > 0) {
+      return Math.ceil(budget.LONG_SUBPROCESS_TIMEOUT_MS / 100);
+    }
+  } catch { /* Older source installs do not contain the shared policy module. */ }
+  return 9000; // Fifteen-minute compatibility backstop, at the existing 100ms cadence.
 }
 
 function installedStageSchema(): Promise<InstalledStageSchema | null> {
@@ -480,9 +514,9 @@ if (
   await flushDrops();
   return;
 }
-// A sibling compose can legitimately hold the lock for compile + runner
-// regeneration, so queue for ~60s rather than skipping after the default ~5s.
-if (!lockLib.acquireAuditLock(PROJECT_DIR, COMPOSE_LOCK_RETRIES)) {
+// A sibling compose can hold the lock across compilation and runner generation.
+// Use the installed compound-work backstop without changing owner/reaper rules.
+if (!lockLib.acquireAuditLock(PROJECT_DIR, await composeLockRetries())) {
   recordDrop("plugin compose skipped: could not acquire the shared workspace lock");
   await flushDrops();
   return;
@@ -1253,7 +1287,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  const isKiroIde = HARNESS_NAME === "kiro-ide";
+  const isKiroIde = KIRO_KAS_LAYOUT;
   const isKiroCli = HARNESS_LEAF === ".kiro" && !isKiroIde;
   const surfaceExt = isKiroIde
     ? ".md"

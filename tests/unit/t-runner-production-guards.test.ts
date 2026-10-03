@@ -1,7 +1,12 @@
 // covers:
 // Runner configuration plus real child-runner contracts in isolated fixture trees.
 // Child runners use the public shell entrypoint and real Bun JUnit, without packaging.
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync,
@@ -13,10 +18,15 @@ import { REPO_ROOT, resetAidlcEnv } from "../harness/fixtures.ts";
 import {
   GUARD_PROFILE_ENV,
   parseRunnerArgs,
+  preflightVerdict,
   PRODUCTION_GUARD_OFF_SWITCHES,
   RunnerArgsError,
+  runnerFileTimeoutSeconds,
   testGuardEnvironment,
 } from "../harness/runner-profile.ts";
+import { assertRunnerFixtureImports } from "../lib/runner-fixture-imports.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // The runner sets the profile marker; a direct `bun test` launch has none to assert.
 const runnerTest = process.env[GUARD_PROFILE_ENV] === undefined ? test.skip : test;
@@ -88,11 +98,41 @@ describe("runner guard profile options", () => {
     }
   });
 
+  test("file and run budgets apply to ordinary tiers and cannot extend an isolated deadline", () => {
+    const ordinary = parseRunnerArgs(["--integration", "--file-timeout", "2400", "--run-timeout", "2700"], {});
+    expect(ordinary.isolatedE2e).toBe(false);
+    expect(ordinary.runTimeout).toBe(2700);
+    expect(runnerFileTimeoutSeconds(ordinary, false)).toBe(2400);
+    const isolated = parseRunnerArgs([
+      "--e2e", "--isolated-e2e", "--e2e-file-timeout", "900", "--file-timeout", "2400",
+    ], {});
+    expect(runnerFileTimeoutSeconds(isolated, true)).toBe(900);
+    isolated.fileTimeout = 600;
+    expect(runnerFileTimeoutSeconds(isolated, true)).toBe(600);
+    for (const flag of ["--file-timeout", "--run-timeout"]) {
+      for (const value of ["0", "-1", "1.5", "Infinity", "2147484"]) {
+        expect(() => parseRunnerArgs([flag, value], {})).toThrow(RunnerArgsError);
+      }
+    }
+  });
+
   test("a filter value is not interpreted as a guard option; help still exits parsing", () => {
     expect(parseRunnerArgs(["--filter", "--production-guards"], {}).guardProfile)
       .toBe("fixture");
     expect(parseRunnerArgs(["--production-guards", "--help", "--unknown"], {}).help)
       .toBe(true);
+  });
+
+  test("fresh file isolation accepts integration/e2e and bounds explicit retries", () => {
+    for (const tier of ["--integration", "--e2e"]) {
+      expect(parseRunnerArgs([tier, "--isolated-files", "--file-retries", "1"], {}))
+        .toMatchObject({ isolatedE2e: true, isolatedFiles: true, fileRetries: 1 });
+    }
+    for (const argv of [
+      ["--unit", "--isolated-files"], ["--isolated-files"],
+      ["--e2e", "--file-retries", "1"], ["--e2e", "--isolated-files", "--file-retries", "2"],
+      ["--integration", "--isolated-files", "--file-retries"],
+    ]) expect(() => parseRunnerArgs(argv, {})).toThrow(RunnerArgsError);
   });
 
   test("invalid arguments retain the existing exit-code contract", () => {
@@ -117,11 +157,63 @@ describe("runner guard profile options", () => {
   });
 });
 
+describe("runner Claude preflight verdict", () => {
+  const optional = { liveRequested: false, requireCoverage: false };
+  const policies = [
+    optional,
+    { liveRequested: true, requireCoverage: false },
+    { liveRequested: false, requireCoverage: true },
+  ];
+  const passed = {
+    status: "PASS" as const, cases: { total: 2, skipped: 0 },
+    evidenceComplete: true, timedOut: false,
+  };
+  const unavailable = {
+    status: "SKIP" as const, cases: { total: 0, skipped: 0 }, timedOut: false,
+  };
+
+  test("an unavailable Claude substrate skips without opting into live coverage", () => {
+    expect(preflightVerdict(unavailable, optional)).toBe("skip");
+    expect(preflightVerdict({
+      ...unavailable, cases: { total: 2, skipped: 2 }, evidenceComplete: true,
+    }, optional)).toBe("skip");
+  });
+
+  test("live opt-in and required coverage each reject a skipped prerequisite", () => {
+    expect(preflightVerdict(unavailable, policies[1]!)).toBe("fail");
+    expect(preflightVerdict(unavailable, policies[2]!)).toBe("fail");
+  });
+
+  test("complete non-skipped passing evidence opens the gate in every mode", () => {
+    for (const policy of policies) expect(preflightVerdict(passed, policy)).toBe("pass");
+  });
+
+  test("assertion failures, timeouts and cleanup errors fail even optional preflights", () => {
+    for (const policy of policies) {
+      expect(preflightVerdict({ ...passed, status: "FAIL" }, policy)).toBe("fail");
+      for (const result of [passed, unavailable]) {
+        expect(preflightVerdict({ ...result, timedOut: true }, policy)).toBe("fail");
+        expect(preflightVerdict({ ...result, cleanupError: "worker still running" }, policy)).toBe("fail");
+      }
+    }
+  });
+
+  test("missing, empty, partial and mixed-skip PASS evidence cannot satisfy a prerequisite", () => {
+    for (const policy of policies) {
+      expect(preflightVerdict(undefined, policy)).toBe("fail");
+      expect(preflightVerdict({ ...passed, cases: { total: 0, skipped: 0 } }, policy)).toBe("fail");
+      expect(preflightVerdict({ ...passed, evidenceComplete: false }, policy)).toBe("fail");
+      expect(preflightVerdict({ ...passed, cases: { total: 2, skipped: 1 } }, policy)).toBe("fail");
+    }
+  });
+});
+
 // Copy the runner unchanged, then give it a tiny discovered suite. No planted
 // files enter the checkout's test directories, and no model/guard setup runs.
 // Keep child logs, stamps and XML for inspection alongside the outer evidence.
 function runnerFixture(files: Record<string, string>) {
   const git = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: REPO_ROOT, encoding: "utf8",
   });
   expect(git.status).toBe(0);
@@ -133,12 +225,23 @@ function runnerFixture(files: Record<string, string>) {
     "tests/run-tests.sh",
     "tests/run-tests.ts",
     "tests/harness/runner-profile.ts",
+    "tests/harness/test-budget.ts",
+    "tests/gen-coverage-registry.ts",
+    "tests/harness/tui-runtime.ts",
+    "tests/harness/tui-record-file.ts",
+    "tests/harness/tui-windows-private-file.ts",
+    "tests/lib/e2e-plan.ts",
+    "tests/lib/e2e-scheduler.ts",
+    "tests/lib/e2e-workers.ts",
+    "tests/lib/e2e-deferred-cleanup.ts",
+    "tests/lib/e2e-process.ts",
     "tests/lib/bun-junit-to-meta.ts",
     "tests/lib/test-sharding.ts",
   ]) {
     mkdirSync(dirname(join(root, file)), { recursive: true });
     copyFileSync(join(REPO_ROOT, file), join(root, file));
   }
+  assertRunnerFixtureImports(root);
   for (const [file, source] of Object.entries(files)) {
     mkdirSync(dirname(join(root, "tests", file)), { recursive: true });
     writeFileSync(join(root, "tests", file), source);
@@ -150,7 +253,7 @@ function runnerFixture(files: Record<string, string>) {
   let runs = 0;
   return {
     root,
-    run(argv: string[], overrides: NodeJS.ProcessEnv = {}) {
+    run(argv: string[], overrides: NodeJS.ProcessEnv = {}, bare = false) {
       const log = join(root, `runner-${++runs}.log`);
       const env: NodeJS.ProcessEnv = {
         ...process.env,
@@ -161,17 +264,24 @@ function runnerFixture(files: Record<string, string>) {
       };
       delete env.BUN_OPTIONS;
       const fd = openSync(log, "w");
+      const command = bare
+        ? [process.execPath, "tests/run-tests.ts"]
+        : ["bash", "tests/run-tests.sh", "--debug", "-P", "8", ...argv];
       let child: ReturnType<typeof spawnSync>;
       try {
-        child = spawnSync("bash", ["tests/run-tests.sh", "--debug", "-P", "8", ...argv], {
-          cwd: root, env, stdio: ["ignore", fd, fd], timeout: 30_000,
+        child = spawnSync(command[0]!, command.slice(1), {
+          cwd: root, env, stdio: ["ignore", fd, fd], timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         });
       } finally {
         closeSync(fd);
       }
       const out = readFileSync(log, "utf8");
-      console.log(`Runner command: bash tests/run-tests.sh --debug -P 8 ${argv.map((arg) => JSON.stringify(arg)).join(" ")} (cwd: ${root}; exit: ${child.status})`);
+      console.log(`Runner command: ${command.map((arg) => JSON.stringify(arg)).join(" ")} (cwd: ${root}; exit: ${child.status})`);
       console.log(`Runner log: ${log}`);
+      if (bare) {
+        expect(child.error, out).toBeUndefined();
+        return { status: child.status, out, stamp: "", summary: "", failures: "" };
+      }
       const stamp = out.match(/^Verbose mode: logging to (.+)$/m)?.[1];
       expect(stamp, out).toBeDefined();
       const summaryPath = join(stamp!, "summary.txt");
@@ -212,6 +322,35 @@ describe("production journeys", () => {
 const PASSING_CASE = 'import { test } from "bun:test"; test("runs without expect calls", () => {});\n';
 
 describe("explicit runner coverage uses real JUnit execution evidence", () => {
+  test("the bare no-flag runner stays green when Claude is absent", () => {
+    const fixture = runnerFixture({
+      "smoke/t-smoke.test.ts": PASSING_CASE,
+      "unit/t-unit.test.ts": PASSING_CASE,
+      "integration/t-sibling.test.ts": PASSING_CASE,
+      "integration/t19.test.ts": 'throw new Error("unavailable preflight must not launch");\n',
+      "integration/t-live.test.ts": 'throw new Error("unavailable live file must not launch");\n',
+    });
+    writeFileSync(join(fixture.root, "tests/harness/claude-gate.ts"),
+      'console.log("tests/integration/t19.test.ts\\ntests/integration/t-live.test.ts");\n');
+    // Settings replace PATH after the runner's home-bin prepend. Its absolute
+    // Bun entrypoint remains usable, but no host Claude CLI can satisfy the gate.
+    const bin = join(fixture.root, "empty-bin");
+    mkdirSync(bin);
+    mkdirSync(join(fixture.root, ".claude"));
+    writeFileSync(join(fixture.root, ".claude/settings.json"), JSON.stringify({ env: { PATH: bin } }));
+    const run = fixture.run([], {}, true);
+    expect(run.status, run.out).toBe(0);
+    expect(run.out).toContain("=== DONE t19.test.ts (SKIP) ===");
+    expect(run.out).toContain("PREFLIGHT SKIP -- skipping remaining Claude-dependent tests");
+    expect(run.out).toContain("=== DONE t-live.test.ts (SKIP) ===");
+    for (const file of ["t-smoke.test.ts", "t-unit.test.ts", "t-sibling.test.ts"]) {
+      expect(run.out).toContain(`=== DONE ${file} (PASS) ===`);
+    }
+    expect(run.out).toContain("Executed test cases: 3");
+    expect(run.out).toContain("Skipped files: 2");
+    expect(run.out).toContain("RESULT: PASS");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("missing --production-guards fails the selected journey file despite a passing sibling", () => {
     const fixture = runnerFixture({
       "unit/t-journeys.test.ts": PRODUCTION_JOURNEYS,
@@ -242,7 +381,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(proper.failures.trim()).toBe("");
     expect(readFileSync(join(fixture.root, "executed.txt"), "utf8"))
       .toBe("summary\nrecovery\n");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unfiltered fixture suites truthfully skip production journeys", () => {
     const fixture = runnerFixture({
@@ -257,7 +396,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Skipped files: 1");
     expect(run.failures.trim()).toBe("");
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("partially skipped files pass when a case really executes, without requiring expect calls", () => {
     const fixture = runnerFixture({
@@ -268,7 +407,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Executed test cases: 1");
     expect(run.summary).toContain("Skipped test cases: 1");
     expect(run.summary).toContain("Result: PASS");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an explicitly selected empty file fails without inventing failed assertions", () => {
     const fixture = runnerFixture({ "unit/t-empty.test.ts": 'import "bun:test";\n' });
@@ -279,7 +418,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Failed assertions: 0");
     expect(run.summary).toContain("Executed test cases: 0");
     expect(run.failures).toContain("executed no test cases");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("live opt-in alone cannot turn all skipped cases into requested coverage", () => {
     const fixture = runnerFixture({
@@ -289,7 +428,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.status).toBe(1);
     expect(run.summary).toContain("Skipped test cases: 1");
     expect(run.failures).toContain("install/authenticate its CLI");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("--no-llm permits mixed deterministic selections but cannot pass a wholly excluded selection", () => {
     const fixture = runnerFixture({
@@ -306,7 +445,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(excluded.summary).toContain("Failed files: 0");
     expect(excluded.summary).toContain("Result: FAIL");
     expect(excluded.failures).toContain("--no-llm excludes Claude-dependent files");
-  }, 90_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a missing Claude substrate fails a requested file even alongside passing deterministic coverage", () => {
     const fixture = runnerFixture({
@@ -331,7 +470,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.out).not.toContain("=== START t-live.test.ts ===");
     expect(run.failures).toContain("FAIL: t-live");
     expect(run.failures).toContain("Install/authenticate Claude");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unmatched filter fails with truthful zero-file rollup and a diagnostic", () => {
     const fixture = runnerFixture({ "unit/t-sibling.test.ts": PASSING_CASE });
@@ -342,7 +481,7 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(run.summary).toContain("Result: FAIL");
     expect(run.failures).toContain("matched no test files");
     expect(run.out).not.toContain("RESULT: PASS");
-  }, 45_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("runner guard child environment", () => {
@@ -445,5 +584,133 @@ describe("runner guard child environment", () => {
         expect(process.env[key], key).toBe(value);
       }
     }
+  });
+});
+
+function isolatedRunnerFixture(files: Record<string, string>) {
+  const fixture = runnerFixture(files);
+  writeFileSync(join(fixture.root, ".gitignore"), "tests/logs/\nrunner-*.log\nobserver/\n");
+  writeFileSync(join(fixture.root, "clean.txt"), "seed");
+  mkdirSync(join(fixture.root, "observer"));
+  for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]]) {
+    const child = spawnSync("git", args, {
+      cwd: fixture.root, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(child.status, child.stderr).toBe(0);
+  }
+  return fixture;
+}
+
+const FRESH_FILE_CASE = `
+import { expect, test } from "bun:test";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { createServer } from "node:net";
+const observer = process.env.AIDLC_ISOLATION_OBSERVER!;
+test("fresh file state", async () => {
+  const name = process.env.AIDLC_TEST_NAME!;
+  const listener = join(observer, "listener");
+  if (name === "t-a.test.ts") {
+    spawn(process.execPath, [join(import.meta.dir, "..", "fixtures", "linger.ts")], { stdio: "ignore" }).unref();
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(listener) && Date.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(listener)).toBe(true);
+  } else {
+    // The previous file left a real listening child. Rebinding its port proves
+    // the worker retired that process before dispatching another file.
+    const port = Number(readFileSync(listener, "utf8"));
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => server.close(error => error ? reject(error) : resolve()));
+    });
+  }
+  expect(readFileSync("clean.txt", "utf8")).toBe("seed");
+  expect(existsSync("untracked.txt")).toBe(false);
+  expect(existsSync(join(process.env.HOME!, "dirty"))).toBe(false);
+  expect(readFileSync(process.env.GIT_CONFIG_GLOBAL!, "utf8")).not.toContain("contamination");
+  expect(existsSync(process.env.AIDLC_MANAGED_SETTINGS_PATH!)).toBe(false);
+  writeFileSync("clean.txt", "dirty");
+  writeFileSync("untracked.txt", "dirty");
+  writeFileSync(join(process.env.HOME!, "dirty"), "dirty");
+  appendFileSync(process.env.GIT_CONFIG_GLOBAL!, "\\n[contamination]\\nvalue = dirty\\n");
+  writeFileSync(process.env.AIDLC_MANAGED_SETTINGS_PATH!, "{}");
+  appendFileSync(join(observer, "runs"), name + "\\n");
+  if (name.includes("t-b-retry") && !existsSync(join(observer, "retry"))) {
+    writeFileSync(join(observer, "retry"), "first attempt");
+    expect(false).toBe(true);
+  }
+});
+`;
+
+describe("bounded file workers through the public runner", () => {
+  test("restores state between files and retries only the failed file with retained attempts", () => {
+    const fixture = isolatedRunnerFixture({
+      ...Object.fromEntries(["a", "b-retry", "c"].map(name => [`integration/t-${name}.test.ts`, FRESH_FILE_CASE])),
+      "fixtures/linger.ts": `import { createServer } from "node:net";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        const server = createServer();
+        server.listen(0, "127.0.0.1", () => writeFileSync(join(process.env.AIDLC_ISOLATION_OBSERVER!, "listener"), String(server.address().port)));`,
+    });
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_ISOLATION_OBSERVER: join(fixture.root, "observer"),
+    });
+    expect(result.status, result.out + result.failures).toBe(0);
+    const runs = readFileSync(join(fixture.root, "observer", "runs"), "utf8").trim().split("\n");
+    expect(runs.map(name => name.replace(/\.test\.ts$/, ""))).toEqual(["t-a", "t-b-retry", "t-b-retry", "t-c"]);
+    expect(readFileSync(join(fixture.root, "clean.txt"), "utf8")).toBe("seed");
+    expect(existsSync(join(fixture.root, "untracked.txt"))).toBe(false);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.state).toBe("COMPLETE");
+    expect(report.coverageComplete).toBe(true);
+    expect(report.files.map((file: { attempts: unknown[] }) => file.attempts.length)).toEqual([1, 2, 1]);
+    const retry = report.files[1];
+    expect(retry.passedOnRetry).toBe(true);
+    expect(retry.attempts.map((attempt: { status: string }) => attempt.status)).toEqual(["FAIL", "PASS"]);
+    for (const attempt of retry.attempts) {
+      expect(existsSync(join(attempt.artifacts, "runner.log"))).toBe(true);
+      expect(existsSync(join(attempt.artifacts, "runner.execution.json"))).toBe(true);
+    }
+  });
+
+  test("cleanup uncertainty stops reuse and leaves the remaining file incomplete", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-a-dirty.test.ts": `import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        import { join } from "node:path";
+        test("unexpected transport state", () => writeFileSync(join(process.env.AIDLC_TUI_BUN_ROOT!, "unexpected"), "retain"));`,
+      "integration/t-b-pending.test.ts": `import { test } from "bun:test";
+        import { writeFileSync } from "node:fs";
+        test("must not run", () => writeFileSync(process.env.AIDLC_ISOLATION_OBSERVER!, "ran"));`,
+    });
+    const marker = join(fixture.root, "observer", "pending");
+    const result = fixture.run(["--integration", "--isolated-files", "--file-retries", "1", "-P", "1"], {
+      AIDLC_TUI_BACKEND: "bun", AIDLC_ISOLATION_OBSERVER: marker,
+    });
+    expect(result.status).not.toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    const report = JSON.parse(readFileSync(join(result.stamp, "e2e-results.json"), "utf8"));
+    expect(report.state).toBe("ERROR");
+    expect(report.coverageComplete).toBe(false);
+    expect(report.files[0].cleanupError).toContain("unexpected");
+    expect(report.files[0].attempts).toHaveLength(1);
+    expect(report.files[1].state).toBe("INCOMPLETE");
+  });
+
+  test("isolated integration files apply production guards independently", () => {
+    const fixture = isolatedRunnerFixture({
+      "integration/t-a-production.test.ts": PRODUCTION_JOURNEYS,
+      "integration/t-b-fixture.test.ts": `import { expect, test } from "bun:test";
+        test("fixture guards", () => expect(process.env.AIDLC_SKIP_ARTIFACT_GUARD).toBe("1"));`,
+    });
+    const result = fixture.run(["--integration", "--isolated-files", "-P", "2", "--require-coverage"], {
+      AIDLC_TUI_BACKEND: "bun",
+    });
+    expect(result.status, result.out + result.failures).toBe(0);
+    const events = readFileSync(join(result.stamp, "e2e-events.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(events.some(event => event.running === 2)).toBe(true);
+    expect(events.every(event => event.running <= 2)).toBe(true);
   });
 });

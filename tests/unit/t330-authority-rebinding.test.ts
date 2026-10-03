@@ -591,6 +591,29 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     expect(stateDigest(STATE.replace("## Unit Progress\n", ""))).not.toBe(baseline);
   });
 
+  test("a retired Guard Policy field rename preserves authority but value, source, and conflicts remain bound", () => {
+    const retired = STATE.replace(
+      "- **Scope**: feature",
+      "- **Scope**: feature\n- **Change Control**: relaxed (from scope feature)",
+    );
+    const current = retired.replace(
+      "- **Change Control**: relaxed (from scope feature)",
+      "- **Guard Policy**: relaxed (from scope feature)",
+    );
+    expect(stateDigest(current)).toBe(stateDigest(retired));
+    expect(stateDigest(current.replace(
+      "Guard Policy**: relaxed (from scope feature)",
+      "Guard Policy**: off (from scope feature)",
+    ))).not.toBe(stateDigest(retired));
+    expect(stateDigest(current.replace(
+      "Guard Policy**: relaxed (from scope feature)",
+      "Guard Policy**: relaxed (set by you)",
+    ))).not.toBe(stateDigest(retired));
+    expect(stateDigest(`${current}\n- **Change Control**: off (set by you)`)).not.toBe(
+      stateDigest(retired),
+    );
+  });
+
   test("an empty state file projects to an empty string", () => {
     expect(projectStateForDigest("")).toBe("");
   });

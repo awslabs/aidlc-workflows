@@ -91,7 +91,12 @@
 // fed via the env seams; nothing is written under tests/fixtures/**. All temp
 // dirs cleaned in afterAll.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,6 +126,9 @@ import {
   seedStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
+
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -158,6 +166,7 @@ interface DoctorResult {
  */
 function doctor(p: string, env: Record<string, string> = {}): DoctorResult {
   const res = spawnSync(BUN, [UTIL, "doctor", "--verbose", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env, ...env },
   });
@@ -166,6 +175,7 @@ function doctor(p: string, env: Record<string, string> = {}): DoctorResult {
 
 function doctorDefault(p: string): DoctorResult {
   const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: { ...process.env },
   });
@@ -634,9 +644,13 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(concise.out).toMatch(/ok\s+all \d+ checks passed/);
     expect(concise.out).not.toContain("aidlc-write-audit-log.ts present");
     expect(concise.out).not.toContain("Schema validation:");
-    expect(concise.out).toContain(
-      "Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.",
-    );
+    expect(concise.out).toContain("Add --verbose to see every check.");
+    // VS Code's terminal tool deletes a command's output up to the line that
+    // repeats the command, so a report quoting `... doctor` reached the agent
+    // empty (#1411).
+    for (const commandLine of doctorCommandLines(".claude")) {
+      expect(vscodeVisibleOutput(concise.out, commandLine), commandLine).toBe(concise.out);
+    }
     const expanded = doctor(p);
     expect(expanded.out).toContain("aidlc-write-audit-log.ts present");
     expect(expanded.out).toContain("Schema validation:");

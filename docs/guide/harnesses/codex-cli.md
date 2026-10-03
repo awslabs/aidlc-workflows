@@ -7,6 +7,18 @@ byte-identical across every distribution — only the shell differs. The
 source/development tree is **generated** into ignored local `dist/codex/` from
 `core/` + `harness/codex/` by `bun scripts/package.ts codex`; never hand-edit it.
 
+The project's `.codex/config.toml` sets `developer_instructions` to the Codex
+onboarding, as documented in the
+[Codex configuration reference](https://developers.openai.com/codex/config-reference/).
+A trusted-project Codex session receives this onboarding without reading a file.
+`.codex/onboarding.md` keeps the same content as a human-readable copy. The
+harness-neutral root `AGENTS.md` block lists that copy and is shared with other
+installed harnesses whose engine directories differ.
+
+In a fresh Codex session ask for the AI-DLC commands for this harness — the answer
+should name `$aidlc` and `.agents/skills/` without reading `.codex/onboarding.md`;
+`$aidlc --doctor` verifies the readable copy.
+
 ## Prerequisites
 
 - **Codex CLI >= 0.145.0** - earlier releases defer compact-source
@@ -20,11 +32,15 @@ source/development tree is **generated** into ignored local `dist/codex/` from
 - **A Git repository for the target project** — Codex discovers project
   `.codex/hooks.json` only inside one. The native installer and AI-DLC runtime
   themselves do not depend on Git.
-- **A model provider** — the shipped `config.toml` defaults to **Amazon
-  Bedrock** (`openai.gpt-5.5`; agents on `openai.gpt-5.6-terra`). Set the AWS
-  profile/region in `[model_providers.amazon-bedrock.aws]`. For OpenAI auth,
-  comment out the provider lines. Note: `web_search` is unavailable on
-  Bedrock; the market-research stage degrades gracefully.
+- **A model provider** — the shipped project `config.toml` does not select one.
+  Codex inherits provider, credentials, model, context window, and reasoning
+  effort from `~/.codex/config.toml`. Agent roles inherit the selected model;
+  balanced reviewers retain only their medium reasoning-effort cap.
+  Configure the model provider in that user-level file; Codex ignores
+  project-level `model_provider` and `model_providers`. Other settings, such as
+  `model`, in a trusted project's `.codex/config.toml` take precedence over user
+  configuration, so add project-level model keys only for intentional shared
+  overrides.
 
 ## Install
 
@@ -46,9 +62,9 @@ codex
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. An interactive run may omit the flag;
-redirected input, `pwsh -NonInteractive`, `--yes`, `--json`, and `--quiet`
-require it. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
@@ -63,8 +79,18 @@ trust action before those hooks run:
   `$CODEX_HOME/config.toml`. Replace an existing set for that hooks path rather
   than appending duplicate TOML tables.
 
-Merge the generated `.codex/config.toml` settings into your user config as
-needed. Then run `$aidlc --doctor` in Codex.
+Keep the generated `.codex/config.toml` project-scoped; do not merge it into
+`~/.codex/config.toml`, because `developer_instructions` carries this project's
+AI-DLC onboarding. Keep provider and model settings in your user config. Then
+run `$aidlc --doctor` in Codex.
+
+The generated `sandbox_mode = "workspace-write"` is a top-level TOML setting,
+not a member of `[shell_environment_policy]`. AI-DLC tracks it as a framework-owned
+entry alongside `developer_instructions`: provider answers leave it unchanged,
+and an ordinary refresh reports a conflict if it was edited or removed. An explicit
+`aidlc config --force` restores the shipped value while preserving user-owned
+provider tables. Selecting the current provider removes only attributable legacy
+Bedrock defaults; it does not change the sandbox policy.
 
 ### Versioned manual-copy alternative
 
@@ -132,9 +158,10 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    including upgrades that add a new matcher. Replace the old tables before
    opening a fresh Codex session; otherwise Codex silently skips the new hook.
 
-4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
-   the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
-   it project-level — trusted projects read it). Verify with:
+4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), keep
+   the shipped config at `.codex/config.toml` in the trusted project. Do not
+   merge it into `~/.codex/config.toml`: its `developer_instructions` carries
+   this project's AI-DLC onboarding. Verify with:
 
    ```bash
    cd your-project
@@ -193,6 +220,15 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   (always `< /dev/null`), with the
   same deterministic referee. `AIDLC_USE_SWARM=1` has no Workflow tool here
   and loud-degrades (`SWARM_DEGRADED` is audited).
+- **Only what you type in the main chat counts as your reply.** Codex sends a
+  subagent's brief, and every follow-up the agent sends it, through the same
+  prompt hook as your messages, and does the same for its own reviewers
+  (`/review`, auto-review), marked with the subagent's id or its own thread's
+  transcript. AI-DLC never
+  counts those as your turn: they do not satisfy an approval and are not read
+  as your answer or your requested changes. If you switch to a subagent's own
+  thread (`/subagents`) and type there, that message is for the worker, so it
+  does not answer the main chat's question either.
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
   is reconciled as an inferred `SESSION_ENDED` audit row at the next session
   start. After compaction, Codex emits SessionStart with `source=compact`;

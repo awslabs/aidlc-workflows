@@ -5,10 +5,11 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_SPACE = "default";
@@ -32,6 +33,26 @@ type StatuslineIntent = {
   dirName: string | null;
 };
 
+// The compiled engine falls back to the statusline in its runtime payload
+// (<install>/runtime/<distribution>/<harness>/hooks/). That tree is the install,
+// never a project, so it must not name the project being rendered.
+function inCompiledPayload(root: string): boolean {
+  if (basename(process.execPath).toLowerCase().startsWith("bun")) return false;
+  const payload = join(dirname(process.execPath), "runtime");
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  };
+  return [[payload, root], [real(payload), real(root)]].some(([base, path]) => {
+    const rel = relative(base, path);
+    return rel === "" ||
+      (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+  });
+}
+
 function resolveStatuslineProjectDir(
   importMetaUrl: string,
   workspaceProjectDir?: string,
@@ -48,7 +69,12 @@ function resolveStatuslineProjectDir(
   const scriptDir = dirname(fileURLToPath(importMetaUrl));
   if (basename(scriptDir) === "hooks") {
     const harnessRoot = dirname(scriptDir);
-    if (basename(harnessRoot).startsWith(".")) return dirname(harnessRoot);
+    if (
+      basename(harnessRoot).startsWith(".") &&
+      !inCompiledPayload(dirname(harnessRoot))
+    ) {
+      return dirname(harnessRoot);
+    }
   }
   const cwd = process.cwd();
   for (const harness of KNOWN_HARNESS_DIRS) {
@@ -137,7 +163,9 @@ function activeIntent(
 // readSessionBinding / resolveWorkflowSelection / stateFilePathForSelection:
 // a per-session binding (written by the session hooks) pins the displayed
 // space/intent; anything malformed or stale degrades to the shared cursors.
-type StatuslineSelection = { space: string; intent: string | null };
+// `hidden` marks a bound session that shows no workflow. It is distinct from
+// `intent: null` alone, which also names the space-root workflow.
+type StatuslineSelection = { space: string; intent: string | null; hidden?: true };
 
 function validSessionId(sessionId: string | undefined): string | null {
   const raw = sessionId ?? "";
@@ -147,6 +175,18 @@ function validSessionId(sessionId: string | undefined): string | null {
     .slice(0, 180);
   if (!safe || safe === "." || safe === "..") return null;
   return safe === raw ? raw : null;
+}
+
+// Mirrors isBindableIntentRecordName: the record names a binding can carry.
+function isBindableIntentRecordName(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
+  if (value === "." || value === ".." || value.includes("/")) return false;
+  if (process.platform === "win32" && value.includes("\\")) return false;
+  // No control character: C0, DEL, or C1.
+  return [...value].every((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return code >= 0x20 && code !== 0x7f && (code < 0x80 || code > 0x9f);
+  });
 }
 
 function readSessionBinding(
@@ -171,11 +211,7 @@ function readSessionBinding(
     if (typeof space !== "string" || !/^[a-z][a-z0-9-]*$/.test(space)) {
       return null;
     }
-    if (
-      intent !== null &&
-      (typeof intent !== "string" ||
-        !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(intent))
-    ) {
+    if (intent !== null && !isBindableIntentRecordName(intent)) {
       return null;
     }
     if (typeof record.boundAt !== "string" || record.boundAt.length === 0) {
@@ -187,10 +223,16 @@ function readSessionBinding(
     ) {
       return null;
     }
+    // An archived bound record is not displayed, and neither is whatever the
+    // shared cursor names or the space root holds: this session is bound, so it
+    // shows no workflow. The same holds once archiving rebinds it to no record.
     if (intent !== null && intentIsArchived(projectDir, space, intent)) {
-      return null;
+      return { space, intent: null, hidden: true };
     }
-    return { space, intent: intent as string | null };
+    if (intent === null && record.source === "archive") {
+      return { space, intent: null, hidden: true };
+    }
+    return { space, intent };
   } catch {
     return null;
   }
@@ -210,6 +252,7 @@ function stateFilePathForSelection(
   projectDir: string,
   selection: StatuslineSelection,
 ): string {
+  if (selection.hidden) return "";
   const root = selection.intent === null
     ? intentsDir(projectDir, selection.space)
     : join(intentsDir(projectDir, selection.space), selection.intent);

@@ -18,7 +18,12 @@
 // Mechanism: CLI spawn of the shipped dist engine (t198's convention) - no LLM,
 // unit tier.
 
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +36,8 @@ import {
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
@@ -90,6 +97,7 @@ interface RunResult {
 
 function runNext(proj: string, args: string[], env: Record<string, string> = {}): RunResult {
   const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
     env: {
@@ -105,6 +113,7 @@ function runNext(proj: string, args: string[], env: Record<string, string> = {})
 
 function runUtility(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     cwd: proj,
   });
@@ -151,7 +160,7 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
 });
 
 describe("t214 compose offer carries the example counts (no feature-workflow trap)", () => {
-  test("offer names express/classic/feature counts and avoids the t198 pinned substring", () => {
+  test("offer names bugfix/express/classic/feature counts and avoids the t198 pinned substring", () => {
     proj = createTestProject();
     const d = directiveOf(
       runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out,
@@ -159,11 +168,13 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
     expect(d.kind).toBe("ask");
     const q = String(d.question);
     expect(q).toContain("compose");
+    const bugfix = counts(GRID.bugfix.stages, true);
     const express = counts(GRID.express.stages, true);
     const classic = counts(GRID.classic.stages, true);
     const feature = counts(GRID.feature.stages, true);
+    // bugfix leads, so a bug the description gave no word for is still offered.
     expect(q).toContain(
-      `express = ${express.execute} of ${express.total} stages`,
+      `e.g. bugfix = ${bugfix.execute} of ${bugfix.total} stages, express = ${express.execute}`,
     );
     expect(q).toContain(`classic = ${classic.execute}`);
     expect(q).toContain(`feature = all ${feature.execute}`);

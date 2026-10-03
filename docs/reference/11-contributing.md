@@ -91,20 +91,40 @@ uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
 Stable releases start from pushed version tags in `.github/workflows/release.yml`.
+Before tagging, merge the release-preparation PR and confirm its required branch
+checks. Stable publication validates the exact tag source and release assets and
+requires a passing Full Suite for the tagged commit: `release.yml` reuses a
+passing `full-suite-result` or calls `full-suite.yml` itself.
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
-manually dispatches preview builds from `main`, gates them through callable CI,
+manually dispatches preview builds from `main`, gates them through contract
+checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),
 stamps `AIDLC_BUILD_VERSION`, and publishes an annotated-tag prerelease that is
 never "latest". Scheduled and manual runs share `release-preview` workflow
-concurrency; each later run re-reads releases and skips when the newest
-published preview already uses the same source commit. When `main` advances
+concurrency; each later run re-reads releases and skips publication when the
+newest published preview already uses the same source commit, or a newer commit
+that contains it; its checks and Full Suite still run. When `main` advances
 again on the same UTC date, the planner allocates the next unoccupied `.N`
 counter. Drafts and orphan tags reserve their ids, so retries also advance past
-them.
+them. A failing Full Suite does not block preview publication: the preview notes end
+with a Full Suite failure report. The separate Full Suite run retains its
+failed status without failing the Preview Release workflow.
 
 Stable and preview publication use the `release` and `preview` environments
 respectively and serialize independently. The full trust design, including
 same-day counter allocation, is [Supply-Chain
 Security](19-supply-chain-security.md).
+
+## Markdown structure
+
+Use `markdownBlocks` in `core/tools/aidlc-lib.ts` for block visibility,
+containers, link reference definitions, and claim splitting. It is backed by
+the built-in `Bun.markdown` renderer; its `visibleMarkdownLines` projection
+preserves consumer-specific visibility options. Do not add a Markdown
+dependency, a hand-rolled block scanner, or a reference-definition grammar.
+`Bun.markdown.render` review-authority rendering is a deliberate separate path;
+do not fold that security boundary into the block adapter. See
+[Markdown structure](01-architecture.md#markdown-structure) for how the adapter
+recovers source lines from the renderer.
 
 ## Testing
 
@@ -119,7 +139,7 @@ bun tests/run-tests.ts
 # L2 Stage -- CI pipeline (requires claude CLI tool)
 bun tests/run-tests.ts --ci
 
-# L3 Acceptance -- release gate (requires claude CLI tool)
+# L3 Acceptance -- explicit local full acceptance (requires claude CLI tool)
 bun tests/run-tests.ts --release
 
 # POSIX compatibility wrapper
@@ -154,6 +174,24 @@ behavior accidentally:
 5. If authored prose invokes the command, use `{{INVOKE}}` or
    `{{TOOL_PREFIX}}` so copy and native projections stay distinct. Regenerate
    both local channels and run the package determinism guard.
+6. Declare `mutationScope` and `networkPolicy` truthfully: they also decide
+   whether VS Code runs the command with no Allow prompt. The Copilot adapter
+   answers `allow` in VS Code for an `engine` or `public` route whose
+   `mutationScope` is `none` or `project` and whose `networkPolicy` is
+   `forbidden`, after every guard passes; hook, adapter, and statusline routes
+   never qualify. A route that changes the machine or reaches the network keeps
+   the person's own approval. A verb that deletes, overwrites, or merges the
+   person's work or git history (for example `worktree discard`, `unit land`),
+   changes which stages, gates, or reviews the person sees (for example
+   `jump execute`; `recompose` keeps it only until the person has replied
+   since the last gate), switches the active intent or space, needs the
+   person's consent (for example `bolt abort`), reaches a remote, or runs code
+   AI-DLC does not ship (for example `knowledge onboard`, which runs the
+   configured extractor) must also be added to `keepsPrompt` in
+   `harness/copilot/hooks/aidlc-copilot-adapter.ts`, so the person sees the
+   prompt before it runs. An option that hands AI-DLC a command or script to
+   run belongs in `CALLER_RUNS` there. Arguments that read as paths outside the
+   project already keep the prompt.
 
 ## Adding an Install-Mechanism Mutation
 
@@ -186,40 +224,59 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 4. Handle audit logging inside the script via `appendAuditEntry` or `appendAuditEntries` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks). Multi-setting mutations use one caller-held lock and append the complete audit batch before the single state write.
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
 
+Text a command prints must not repeat that command's own command line. VS
+Code's terminal tool drops a command's output up to the line that repeats the
+command it ran, so a doctor fix line that said "rerun `aidlc doctor`" reached
+the chat agent empty. Name a rerun in words ("run doctor again") instead;
+`tests/harness/vscode-output-trim.ts` models the rule for regression tests.
+
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
 
 The intent-configuration handlers share a single mutation path:
 
 | Dispatcher route | Utility handler | Contract |
 |------------------|-----------------|----------|
-| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation` |
-| `aidlc engine config list [--json]` | `config-list` | Read all seven settings in that order; Change Control and ceremony values include effective sources |
+| `aidlc engine config get <key>` | `config-get` | Read one of `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, or one of the four `guard.<fence>` keys; the retired key `change-control` resolves to `guard-policy` |
+| `aidlc engine config list [--json]` | `config-list` | Read all twelve settings in that order; Guard Policy, fence, and ceremony values include effective sources |
 | `aidlc engine config set <key> <value> [--key value ...]` | `config-change --<key> <value> ...` | Apply all supplied setting flags in one transaction; every key uses this route |
-| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same seven settings in the same transaction, including when the requested scope is already current |
+| `aidlc engine scope change --scope <name> [--key value ...]` | `scope-change --scope <name> ...` | Re-plan scope and apply any of the same eleven settings in the same transaction, including when the requested scope is already current |
 
-`config-change` accepts only the seven setting flags plus `--intent`, `--space`,
+`config-change` accepts only the eleven setting flags plus `--intent`, `--space`,
 and `--project-dir`, and requires at least one setting. Reject unknown flags by
 name and validate all values before any mutation. A shared utility applier
 returns candidate content, `AuditEntryInput[]`, and output lines in canonical
 key order; it does not write. Both mutation handlers hold one `withAuditLock`
 across state read, apply, `appendAuditEntries` in caller-held-lock mode, and a
-single state write. If Change Control changes, call
+single state write. When the Guard Policy value moves, call
 `assertChangeControlLedgerWritable` before any write. A memory layer's
-`Mode: strict` refuses an explicit `--change-control relaxed` for the entire
-command, including companion settings and scope changes. Under that memory
-policy, an implicit scope change still updates the scope-owned Change Control
-line and records the change; memory continues to control the effective value.
+`Mode: strict` refuses an explicit `--guard-policy relaxed` or `--guard-policy
+off` for the entire command, including companion settings and scope changes.
+Scope changes may raise a scope-owned Guard Policy automatically, but preserve
+the current stored value when the new default is lower; memory continues to
+control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
-`Review Override`; explicit Change Control and ceremony values use
-`(set by you)`, while inherited scope defaults retain scope provenance. A
-scope change preserves explicit human overrides and absent legacy Change
-Control/ceremony rows. Only real stored field or source changes produce setting
-events or update `Last Updated`. The utility applier builds `CHANGE_CONTROL_SET`
-and `CEREMONY_SET` entries directly; `aidlc-lib.ts` still uses
-`appendChangeControlSetRow` when a governed checkpoint observes an effective
-memory-policy change. Do not add separate setter wrappers or split a combined
-request into multiple dispatcher calls.
+`Review Override`; explicit Guard Policy values use `(set by you)`, explicit
+ceremony values use `(set by you)` from a typed switch and `(set by a command)`
+otherwise, while inherited scope defaults retain scope provenance. A
+scope change preserves explicit overrides and absent legacy Guard
+Policy/ceremony rows. Only real stored field or source changes produce setting
+events or update `Last Updated`. The utility applier builds `GUARD_POLICY_SET`,
+`CEREMONY_SET`, and the fence-switch `GUARD_DISABLED`/`GUARD_RESTORED` entries
+directly; `aidlc-lib.ts` still uses `appendGuardPolicySetRow` when a governed
+checkpoint observes an effective memory-policy change. Do not add separate setter
+wrappers or split a combined request into multiple dispatcher calls.
+
+A new setting writes its line through a named writer rather than a bare
+`setField`, so a record from an earlier release is migrated in place: the Guard
+Policy writer is `setGuardPolicyLine`, which renames a surviving `Change Control`
+line instead of adding a second one, and `setGuardsOffLine` inserts the `Guards
+Off` line under it when a fence is first switched. A retired key, flag, heading,
+or state field is read for one release and never written. The retired FLAG and
+CONFIG KEY paths call `noteGuardPolicyRename`, so a caller who types one sees
+exactly one deprecation line per process; a retired state field, memory heading,
+or scope frontmatter key is read silently, because the person reading a record
+written by an earlier release did not choose the old spelling.
 
 The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `codekb-scope-diff` handlers are **direct utility verbs**: stage prose invokes
@@ -264,18 +321,18 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 1. **Create `core/scopes/aidlc-hotfix.md`** — the scope's identity. Frontmatter:
    - `name` (required): the scope name; must equal the filename stem.
    - `depth` (required): `Minimal` | `Standard` | `Comprehensive`.
-   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist; plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
+   - `keywords` (optional): NL triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form. Word-boundary matched, alphabetical-scope tie-break. Empty list opts out of inference. Descriptions longer than five words require an affirmative match from the core high-specificity allowlist or a fix request (`fix` or `bugfix` used as the request itself); plugin-specific tokens retain the length heuristic. See [scope auto-detection](../guide/05-scopes-and-depth.md#auto-detection-from-freeform-intent).
    - `description` (optional): one-line summary rendered in `/aidlc --help` and in SKILL.md's compiled scope-table.
    - `testStrategy` (optional): override test strategy independent of depth. Defaults to matching depth.
    - `review_cap` (optional): `adversarial` | `advisory` | `none`. Caps stage review classes for this scope; absence means no scope-level lowering. The cap can lower but never raise a stage declaration. Autonomous swarm reviews are exempt.
    - `runner` (optional): set `true` to include the scope in the default generated runner set.
    - `freeform_default` (optional): set `true` to nominate this scope when the preferred core default (`classic`) is not enabled. At most one enabled scope may claim it; graph compilation rejects ambiguous selected plugin sets. Unknown explicit `AWS_AIDLC_DEFAULT_SCOPE` values still fail validation.
-   - `change_control` (optional): `strict` | `relaxed`. The Change Control default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed records the change once and continues). Absence means strict. Validated like `skeleton` (the loader names the file and the two values). A memory layer's `## Change Control` `Mode: strict` wins over any scope default.
+   - `guard_policy` (optional): `strict` | `relaxed` | `off`. The Guard Policy default every new intent on the scope starts with: what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once and continue), and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. Validated like `skeleton` (the loader names the file and the three values). A memory layer's `## Guard Policy` `Mode: strict` wins over any scope default. `change_control` is the retired spelling, read for one release; naming both keys with different values is rejected.
    - `sensors` (optional): `on` | `off`, absent means on. Controls sensor execution and sensor gate checks. Per-intent flag: `/aidlc --sensors on|off`; global kill switch: `AIDLC_DISABLE_SENSORS=1`.
    - `learnings` (optional): `on` | `off`, absent means on. Controls the stage learnings ritual. Per-intent flag: `/aidlc --learnings on|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`.
    - `summary_confirmation` (optional): `on` | `off`, absent means on. Controls the separate pre-output summary confirmation, not stage approval. Per-intent flag: `/aidlc --summary-confirmation on|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. Scope values are distinct from the stage's `required` | `if-present` declaration.
 
-   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Classic enables sensors and learnings and disables summary confirmation; other shipped scopes inherit on. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
+   Ceremony keys reject values other than on/off. Resolution is global kill switch (`1`) → valid intent state line → scope default → on. Every shipped scope declares all three explicitly: classic enables sensors and learnings and disables summary confirmation, express disables all three, and the other nine enable all three. The kill switches are recordable with `aidlc config flags --bypass <NAME>`.
 
    The body is prose intent — "why these stages, why skip those". `validScopes()` derives from `.claude/scopes/*.md` presence, so the scope is valid the moment the file lands. Run `/aidlc --doctor` after editing to catch structural issues.
 
@@ -414,7 +471,11 @@ When adding, removing, or renaming files, directories, commands, or flags:
 
 Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
 attempt, never to the identity of the directive that issued a prompt and never to
-event order. The two rules are stated in
+event order. Plan Approval is held by the engine, not the conductor: `next`
+publishes the question and records what was asked, never an answer, and only the
+human-turn hook records the answer, taking the fingerprint of the plan files as
+they are when the person answers. No conductor-run command writes a Plan Approval
+answer, receipt, or fingerprint tag in that flow. The two rules are stated in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
 submitting, answer these:
 
@@ -422,9 +483,12 @@ submitting, answer these:
    Name the human-visible change that input detects. If no human action changes
    it (a re-run of `next`, a probe, a status query, a marker rewrite, a metadata
    refresh), it does not belong in an identity: record it as provenance instead.
-2. Does this change make a query path write? `next`, the Stop-hook probe, the
-   route check, `--status`, `--doctor`, and `team-board` never write authority
-   state. The engine observers additionally hit a typed barrier at the durable
+2. Does this change make a query path write? `next` publishes directives, and
+   for Plan Approval the question, but never an answer, and a receipt only as
+   the skipped record when plan approval is off (its authority is the setting,
+   not an answer); the
+   Stop-hook probe, the route check, `--status`, `--doctor`, and `team-board`
+   never write authority state. The engine observers additionally hit a typed barrier at the durable
    write primitives, so an accidental write fails loudly rather than silently.
 3. Does this change make a guard delete evidence? A guard's only move is to
    refuse. It does not clear a receipt, a challenge, or a marker to express a

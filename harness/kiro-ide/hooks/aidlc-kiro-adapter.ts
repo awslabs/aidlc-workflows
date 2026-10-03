@@ -27,7 +27,9 @@
 //   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc. IDE 1.0.242's UserPromptSubmit payload
 //      carries prompt:"", but its PreToolUse payload carries the exact shell
-//      command as execute_pwsh. Newer builds may provide the prompt directly.
+//      command as execute_pwsh. IDE 1.1.14's UserPromptSubmit carries the
+//      typed prompt text (measured live), so only older builds such as
+//      1.0.242 take the prompt-empty path below.
 //
 // Payload acquisition is GATED to tool-payload targets, the deterministic
 // terminal-command seams, and lifecycle boundaries that carry modern session
@@ -46,11 +48,22 @@
 //   - log-subagent: recovers the delegate's identity from the result prose or
 //     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
 //   - verb-intercept: when UserPromptSubmit exposes `/aidlc ...`, run terminal
-//     utilities before the model and inject sanitized UTF-8 plain text.
+//     utilities before the model, as the prompt's session, and inject sanitized
+//     UTF-8 plain text.
 //   - terminal-command-guard: when the prompt is empty, recognize the exact
 //     first `aidlc-orchestrate.ts next` PreToolUse call, run the same terminal
 //     utility once per session/turn, and refuse the duplicate shell call with
-//     its output. Payloads without session_id share the explicit legacy bucket.
+//     its output. Missing session_id uses the host-derived or retained identity.
+//     First, it refuses an execute_pwsh `aidlc` command that would put one of
+//     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, that
+//     holds a %NAME% pair cmd.exe would expand, that passes a value through a
+//     PowerShell variable or expression, or that it cannot read far enough to
+//     check.
+//   - guard-switch capability: an empty-prompt turn notes the limitation once
+//     per session and refuses lowering (summary confirmation off included)
+//     before a shell command runs. Non-empty
+//     prompts need no special shell path: the core human-turn hook applied the
+//     person's typed switch when the prompt arrived.
 //   - plan-approval-guard: populated inputs use exact target enforcement.
 //     Legacy argument-less inputs permit only single-file planning writes,
 //     hard-stop opaque shell/append/mutators, mediate Testing Contract +
@@ -59,6 +72,10 @@
 //     records.
 //   - session-start: retain the modern session_id or derive a legacy identity
 //     from the measured IDE host-instance environment.
+//   - record-human-turn: Kiro IDE 1.1.14 runs no SessionStart hook when a chat
+//     starts, so a prompt whose session_id is not the retained one, or was
+//     never started, runs the core session-start first and prints its context
+//     ahead of its own.
 //   - stop: prefer the event-local modern session_id; use retained identity for
 //     the legacy channel and broken modern payloads.
 //   - session-end: read retained identity without probing payload.
@@ -76,27 +93,37 @@
 //                  session-end | verb-intercept | terminal-command-guard
 
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  hookOutsideGate,
+  enterHookWorkflow,
   classifyTerminalCommand,
   decodeHarnessPlainText,
+  fenceCommandOutput,
   hasOpenGate,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
   getField,
+  hookChildEnv,
   hookDebug,
+  hooksHealthDir,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  isSwitchableGuardFence,
+  isoTimestamp,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
+  recordDir,
   recordHookDrop,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
   readActiveDirectiveMarker,
+  readSessionBinding,
+  readSessionIntentUuid,
   resolveProjectDirFromHook,
   sanitizeHarnessPlainText,
   writePlanApprovalLegacyWindow,
@@ -117,11 +144,11 @@ import {
   resolveCodeGenerationAuthority,
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
+import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
 // stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
 // { toolName, toolArgs, toolResult, toolSuccess }. PostToolUse write/shell
@@ -148,6 +175,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
+  // The approval gate reads the payload session: concurrent chats in one IDE
+  // process each have their own workflow and gate.
+  "enforce-approval-gate",
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
@@ -203,19 +233,103 @@ function isKiroShellTool(toolName: string): boolean {
   return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
 }
 
-// Kiro IDE's delegation surface: `invoke_sub_agent` (generic dispatch) and
-// `subagent_<agent>` (named dispatch). `subagent_response` is excluded because it is
-// the completion shell, not a dispatch — the same exclusion the SUBAGENT_COMPLETED
-// matcher makes, for the same reason.
+// Kiro's delegation surface has three dispatch tools. `subagent_<agent>` is the
+// named dispatch an agent gets from the `subagent` tool category; the conductor's
+// tools list selects the other two instead, `invoke_sub_agent` on Kiro IDE and
+// `orchestrate_subagent` (a pipeline of stages) on Kiro CLI, because only those
+// two run a delegate under its own permissions. `subagent_response` is excluded
+// because it is the completion shell, not a dispatch — the same exclusion the
+// SUBAGENT_COMPLETED matcher makes, for the same reason.
 //
-// A delegation call carries `name` + `prompt` and no file path, so the opaque-mutation
+// A delegation call carries an agent + prompt and no file path, so the opaque-mutation
 // test below reads it as unattributable and refuses it. It is not: the target agent IS
 // the attribution, and the forward further down translates the call into a synthetic
 // `Task` payload for the core guard, which consults approval state properly. Naming the
 // shape here is what lets control reach that forward (#1175).
 function isKiroDelegationTool(toolName: string): boolean {
   return toolName === "invoke_sub_agent" ||
+    toolName === "orchestrate_subagent" ||
     (toolName.startsWith("subagent_") && toolName !== "subagent_response");
+}
+
+function firstNonBlank(values: unknown[]): string {
+  return values.find((value): value is string =>
+    typeof value === "string" && value.trim().length > 0
+  )?.trim() ?? "";
+}
+
+interface KiroDelegationTarget {
+  agent: string;
+  prompt: string;
+  stage: string;
+}
+
+// One entry per delegate the dispatch starts, in the order the platform runs
+// them. `subagent_<agent>` names its delegate in the tool name, `invoke_sub_agent`
+// in `tool_input.name`, and `orchestrate_subagent` per stage in
+// `tool_input.stages[].role`; an `orchestrate_subagent` stage's own
+// `prompt_template` is what that delegate receives. `agent` is "" when the
+// payload names no delegate.
+// Whether the workflow is at Code Generation: the state's Current Stage or the
+// active directive names it. Unreadable state is not Code Generation, matching
+// the core guard's fail-open outside that stage.
+function codeGenerationIsCurrent(projectDir: string): boolean {
+  try {
+    const statePath = stateFilePath(projectDir);
+    if (!existsSync(statePath)) return false;
+    const state = readFileSync(statePath, "utf-8");
+    const marker = readActiveDirectiveMarker(projectDir, state);
+    return getField(state, "Current Stage")
+        ?.trim()
+        .toLowerCase()
+        .replace(/\s+/g, "-") === "code-generation" ||
+      marker?.stage === "code-generation";
+  } catch {
+    return false;
+  }
+}
+
+function kiroDelegationTargets(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+): KiroDelegationTarget[] {
+  if (toolName === "orchestrate_subagent") {
+    const stages = Array.isArray(toolArgs.stages) ? toolArgs.stages : [];
+    return stages.filter(isRecord).map((stage) => ({
+      agent: firstNonBlank([stage.role, stage.name]),
+      prompt: firstNonBlank([stage.prompt_template, toolArgs.task]),
+      stage: firstNonBlank([stage.name]),
+    }));
+  }
+  const suffix =
+    toolName.startsWith("subagent_") && toolName !== "subagent_response"
+      ? toolName.slice("subagent_".length).trim()
+      : "";
+  return [{
+    agent: suffix ||
+      firstNonBlank([
+        toolArgs.name,
+        toolArgs.subagent_type,
+        toolArgs.agent,
+        toolArgs.agent_name,
+        toolArgs.role,
+      ]),
+    prompt: firstNonBlank([toolArgs.prompt, toolArgs.task, toolArgs.description]),
+    stage: "",
+  }];
+}
+
+// `orchestrate_subagent` reports every stage in one result, each under a
+// `## <stage name>` heading after a "Pipeline completed" line. Return that
+// stage's section, or the whole result when the heading is absent.
+function orchestrateStageOutput(result: string, stage: string): string {
+  if (!stage) return result;
+  const lines = result.split("\n");
+  const start = lines.findIndex((line) => line.trim() === `## ${stage}`);
+  if (start < 0) return result;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => /^## \S/.test(line));
+  return (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
 }
 
 function upsertTestingContract(plan: string, rendered: string): string {
@@ -282,6 +396,21 @@ function resolvedPlanApprovalSessionId(ide: IdeHookContext): string {
   }
 }
 
+// Whether this conversation stands outside the workflow the default resolution
+// selects: that workflow's gates and local Plan Approval latches do not hold it.
+let standsOutsideMemo: boolean | undefined;
+function ideStandsOutside(pd: string, sessionId: string): boolean {
+  if (standsOutsideMemo === undefined) {
+    const workflow = enterHookWorkflow(pd, sessionId);
+    try {
+      standsOutsideMemo = hookOutsideGate(workflow);
+    } finally {
+      workflow.restore();
+    }
+  }
+  return standsOutsideMemo;
+}
+
 function runLegacyRecoveryNext(
   projectDir: string,
   sessionId: string,
@@ -333,7 +462,7 @@ function runLegacyRecoveryNext(
     let directive: {
       kind?: string;
       ask_type?: string;
-      continue_token?: string;
+      receipt?: string;
       recovery_choice?: string;
     };
     try {
@@ -380,12 +509,12 @@ function runLegacyRecoveryNext(
       }
       return { ok: true, detail: stdout };
     }
-    if (!directive.continue_token) {
-      return { ok: false, detail: "load-steering recovery omitted its token" };
+    if (!directive.receipt) {
+      return { ok: false, detail: "load-steering recovery omitted its receipt" };
     }
     args = [
       "continue",
-      directive.continue_token,
+      directive.receipt,
       "--project-dir",
       projectDir,
     ];
@@ -582,6 +711,424 @@ function processLegacyPlanApprovalWrite(
   return null;
 }
 
+// --- cmd.exe metacharacters in an execute_pwsh `aidlc` command ---
+//
+// Native Windows `aidlc` is aidlc.cmd, so cmd.exe reads the command line that
+// Windows PowerShell 5.1 builds for it. PowerShell 5.1 drops an empty
+// argument, wraps an argument that holds a space or tab in double quotes, and
+// leaves the argument's own double quotes as they are. cmd.exe then toggles
+// its quote state at every double quote and acts on & | < > ^ outside quotes.
+// So `--details 'Use "R & D" team'` (or the same with \") reaches cmd.exe as
+// `--details "Use "R & D" team"`, and cmd.exe runs `D" team"` as a separate
+// command; with > it would write a file. cmd.exe also replaces a %NAME% pair
+// with that environment variable's value, even inside its quotes. The engine
+// never sees the value as written, so this adapter refuses such a command
+// before it runs. It also refuses an aidlc argument PowerShell resolves first
+// (a variable or expression, whose result it cannot see) and an aidlc command
+// it cannot read far enough to check. `bun .kiro/tools/...` invocations never
+// pass through cmd.exe and are not checked.
+
+// What cmd.exe does with each character it acts on outside its quotes.
+const CMD_OPERATOR_EFFECTS: Record<string, string> = {
+  "&": "run the rest as a separate command",
+  "|": "send the output to the rest as another command",
+  "<": "read input from a file named by the rest",
+  ">": "write output to a file named by the rest",
+  "^": "drop the character as an escape",
+};
+
+interface PowerShellWord {
+  source: string; // the word as written in the command
+  value: string; // the argument PowerShell passes, when `opaque` is false
+  opaque: boolean; // PowerShell would expand or evaluate part of it
+  redirect: boolean; // a PowerShell redirection, not an argument
+}
+
+// Splits a PowerShell command line into statements of words, as far as this
+// check needs: single-quoted parts ('' is a literal '), double-quoted parts
+// ("" is a literal "; $ or a backtick makes the word opaque), barewords, the
+// statement ends ; | and newline, a leading & or . call operator,
+// redirections, comments (# at the start of a word runs to the end of the
+// line; <# ... #> is a block comment), and (...), $(...), @(...), @{...} and
+// {...} groupings, whose statements are read as well, nested too (a $(...)
+// inside a double-quoted string is not). A statement it cannot read to the end
+// goes to `unreadable` with the words read before that point: one that uses
+// the --% stop-parsing token (PowerShell passes the rest of that line as
+// written, and the next line is read as usual), or the one holding an
+// unterminated quote or block comment, where reading stops.
+interface PowerShellReading {
+  statements: PowerShellWord[][];
+  unreadable: PowerShellWord[][];
+}
+
+// The index of the quote that closes the quoted string opening at `open`:
+// '' and "" are literal quotes, and a backtick escapes the next character
+// inside double quotes. -1 when it is not closed.
+function quotedEnd(text: string, open: number): number {
+  const quote = text[open];
+  for (let j = open + 1; j < text.length; j++) {
+    if (quote === '"' && text[j] === "`") {
+      j++;
+      continue;
+    }
+    if (text[j] !== quote) continue;
+    if (text[j + 1] === quote) {
+      j++;
+      continue;
+    }
+    return j;
+  }
+  return -1;
+}
+
+// The index of the ) or } that closes the grouping opening at `open` (a ( or
+// {), past nested groupings, quoted strings, escapes and comments. -1 when it
+// is not closed.
+function groupEnd(text: string, open: number): number {
+  let depth = 0;
+  for (let j = open; j < text.length; j++) {
+    const c = text[j];
+    if (c === "'" || c === '"') {
+      const close = quotedEnd(text, j);
+      if (close < 0) return -1;
+      j = close;
+    } else if (c === "`") {
+      j++;
+    } else if (c === "#" && /[\s;({|]/.test(text[j - 1] ?? " ")) {
+      while (j < text.length && text[j] !== "\n" && text[j] !== "\r") j++;
+    } else if (c === "<" && text[j + 1] === "#") {
+      const close = text.indexOf("#>", j + 2);
+      if (close < 0) return -1;
+      j = close + 1;
+    } else if (c === "(" || c === "{") {
+      depth++;
+    } else if (c === ")" || c === "}") {
+      depth--;
+      if (depth === 0) return j;
+    }
+  }
+  return -1;
+}
+
+function powerShellStatements(command: string): PowerShellReading {
+  const statements: PowerShellWord[][] = [];
+  const unreadable: PowerShellWord[][] = [];
+  let words: PowerShellWord[] = [];
+  let i = 0;
+  let skipNextWord = false;
+  const endStatement = () => {
+    if (words.length > 0) statements.push(words);
+    words = [];
+    skipNextWord = false;
+  };
+  const stopReading = (): PowerShellReading => {
+    unreadable.push(words);
+    return { statements, unreadable };
+  };
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === " " || ch === "\t") {
+      i++;
+      continue;
+    }
+    // A backtick before a line break continues the statement on the next
+    // line; CRLF, LF and CR are each one line break.
+    if (ch === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) {
+      i += command[i + 1] === "\r" && command[i + 2] === "\n" ? 3 : 2;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
+      endStatement();
+      i++;
+      continue;
+    }
+    // A # that starts a word starts a comment, which runs to the end of the
+    // line; the statement before it is still read. <# ... #> is a block
+    // comment.
+    if (ch === "#") {
+      while (i < command.length && command[i] !== "\n" && command[i] !== "\r") i++;
+      continue;
+    }
+    if (ch === "<" && command[i + 1] === "#") {
+      const close = command.indexOf("#>", i + 2);
+      if (close < 0) return stopReading();
+      i = close + 2;
+      continue;
+    }
+    // A leading & or . is the call operator; anywhere else & ends the command
+    // and . is an argument.
+    if (
+      (ch === "&" || (ch === "." && words.length === 0)) &&
+      /[ \t'"]/.test(command[i + 1] ?? " ")
+    ) {
+      if (words.length > 0) endStatement();
+      i++;
+      continue;
+    }
+    const redirect = /^(?:[0-9*]?>>?(?:&[0-9])?|<)/.exec(command.slice(i));
+    if (redirect) {
+      i += redirect[0].length;
+      // `2>&1` merges streams and names no file; `2>$null` names its target
+      // in the same word, `> out.txt` in the next one.
+      if (!redirect[0].includes("&")) {
+        if (i >= command.length || command[i] === " " || command[i] === "\t") skipNextWord = true;
+        else {
+          while (i < command.length && !/[ \t;|\n\r]/.test(command[i])) i++;
+        }
+      }
+      words.push({ source: redirect[0], value: "", opaque: false, redirect: true });
+      continue;
+    }
+    const start = i;
+    let value = "";
+    let opaque = false;
+    while (i < command.length && !/[ \t;|\n\r>]/.test(command[i])) {
+      const c = command[i];
+      if (c === "'") {
+        const close = (() => {
+          for (let j = i + 1; j < command.length; j++) {
+            if (command[j] !== "'") continue;
+            if (command[j + 1] === "'") {
+              j++;
+              continue;
+            }
+            return j;
+          }
+          return -1;
+        })();
+        if (close < 0) return stopReading();
+        value += command.slice(i + 1, close).replaceAll("''", "'");
+        i = close + 1;
+      } else if (c === '"') {
+        let j = i + 1;
+        let closed = false;
+        while (j < command.length) {
+          const d = command[j];
+          if (d === "`") {
+            opaque = true;
+            j += 2;
+            continue;
+          }
+          if (d === "$") opaque = true;
+          if (d === '"') {
+            if (command[j + 1] === '"') {
+              value += '"';
+              j += 2;
+              continue;
+            }
+            closed = true;
+            break;
+          }
+          value += d;
+          j++;
+        }
+        if (!closed) return stopReading();
+        i = j + 1;
+      } else if (c === "$" && command[i + 1] === "{") {
+        // ${name} is a variable, not a script block.
+        const close = command.indexOf("}", i + 2);
+        if (close < 0) return stopReading();
+        opaque = true;
+        i = close + 1;
+      } else if (c === "(" || c === "{" || ((c === "$" || c === "@") && (command[i + 1] === "(" || command[i + 1] === "{"))) {
+        // A grouping, subexpression, array or script block: PowerShell runs
+        // the statements inside it (read here like any others, so an aidlc
+        // call there is checked too) and passes their result, which this
+        // check cannot see, so the word is opaque. Its text is not the word's.
+        const open = c === "(" || c === "{" ? i : i + 1;
+        const close = groupEnd(command, open);
+        if (close < 0) return stopReading();
+        const inner = powerShellStatements(command.slice(open + 1, close));
+        statements.push(...inner.statements);
+        unreadable.push(...inner.unreadable);
+        opaque = true;
+        i = close + 1;
+      } else {
+        // A backtick before a line break ends the word and continues the
+        // statement; the loop above consumes it.
+        if (c === "`" && (command[i + 1] === "\n" || command[i + 1] === "\r")) break;
+        if (c === "`" || c === "$" || c === "@" || c === ")" || c === "}") opaque = true;
+        value += c;
+        i++;
+      }
+    }
+    const source = command.slice(start, i);
+    if (source === "--%") {
+      unreadable.push(words);
+      words = [];
+      skipNextWord = false;
+      while (i < command.length && command[i] !== "\n" && command[i] !== "\r") i++;
+      continue;
+    }
+    if (skipNextWord) {
+      skipNextWord = false;
+      continue;
+    }
+    words.push({ source, value, opaque, redirect: false });
+  }
+  endStatement();
+  return { statements, unreadable };
+}
+
+// The arguments of a statement whose program (its first word after a leading
+// `$x =` assignment) is `aidlc` or `aidlc.cmd`, bare or by path; a & or .
+// call operator is already dropped. Null for any other program.
+function aidlcCommandArgs(words: PowerShellWord[]): PowerShellWord[] | null {
+  const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+  const program = words[start];
+  if (program === undefined || program.opaque || !/(?:^|[\\/])aidlc(?:\.cmd)?$/i.test(program.value)) return null;
+  return words.slice(start + 1);
+}
+
+// A %NAME% pair: cmd.exe replaces it with that environment variable's value,
+// quoted or not, whenever NAME is defined, so the engine would record
+// something else (or a secret). The name runs to the next % or to a :modifier
+// (%NAME:~0,3%, %NAME:a=b%). A name that starts or ends with a space is not
+// counted, so prose such as "between 10% and 20%" passes; no variable is
+// named like that in practice.
+const CMD_VARIABLE_PAIR = /%[^%\s=:](?:[^%\r\n=:]*[^%\s=:])?(?::[^%\r\n]*)?%/;
+
+// The flag an `aidlc` argument is the value of: `--flag=value`, or the
+// `--flag` word before it. Only a plain flag name is ever returned, so the
+// refusal below never repeats text from the value itself.
+function valueFlag(args: PowerShellWord[], index: number): string | null {
+  const inline = /^(--[A-Za-z0-9][A-Za-z0-9-]*)=/.exec(args[index].source);
+  if (inline) return inline[1];
+  const previous = args[index - 1];
+  if (previous !== undefined && !previous.opaque && /^--[A-Za-z0-9][A-Za-z0-9-]*$/.test(previous.value)) {
+    return previous.value;
+  }
+  return null;
+}
+
+// The aidlc flags whose value carries a person's words, from the Kiro IDE
+// skill and the stage protocols: --details (log answer), --decision and
+// --rationale (log decision), --reason (report, bolt checkpoint),
+// --user-input (report, bolt and unit gates), --feedback (rejection feedback),
+// --override (the typed break-glass reason), and --arguments (intent create,
+// whose text is recorded as the request). --label is left out: intent create
+// slugifies it into a folder name, so it never reaches the record as written.
+// A value for one of these, or the request after `next`, must be written
+// literally; a variable or expression for any other flag, or for a positional
+// token (a receipt, slug or id the engine printed), is agent work and passes.
+const FREE_TEXT_FLAGS: ReadonlySet<string> = new Set([
+  "--details",
+  "--decision",
+  "--rationale",
+  "--reason",
+  "--user-input",
+  "--feedback",
+  "--override",
+  "--arguments",
+]);
+
+type CmdHazard =
+  | { kind: "metacharacter"; flag: string | null; char: string }
+  | { kind: "variable"; flag: string | null }
+  | { kind: "expression"; flag: string | null; request: boolean }
+  | { kind: "unchecked" };
+
+// Whether the opaque word at `index` carries a person's words: the value of a
+// free-text flag, or (after `orchestrate next`) a positional word, which is
+// the request. A word right after any other --flag is that flag's value.
+function freeTextOpaque(args: PowerShellWord[], index: number): CmdHazard | null {
+  const flag = valueFlag(args, index);
+  if (flag !== null) return FREE_TEXT_FLAGS.has(flag) ? { kind: "expression", flag, request: false } : null;
+  const next = args.findIndex(
+    (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
+  );
+  return next >= 0 && index > next ? { kind: "expression", flag: null, request: true } : null;
+}
+
+// The first `aidlc` (or `aidlc.cmd`, bare or by path) argument that cmd.exe
+// would not pass on as written, in any statement, including one inside a
+// grouping: a person's words that PowerShell resolves from a variable or
+// expression before aidlc.cmd runs ($x, $env:X, $(...), or a double-quoted
+// string holding $ or a backtick), whose result this check cannot see; one
+// that puts a cmd.exe metacharacter outside cmd.exe's quotes (named by its
+// flag, with that character); or one that holds a %NAME% pair, quoted or not.
+// The literal text of any other opaque word is checked for the same two. A
+// statement this check cannot read to the end is "unchecked" when its program
+// is aidlc, so it fails closed; any other statement passes as before.
+function cmdMetacharacterHazard(command: string): CmdHazard | null {
+  const reading = powerShellStatements(command);
+  for (const words of reading.statements) {
+    const found = aidlcCommandArgs(words);
+    if (found === null) continue;
+    const args = found.filter((word) => !word.redirect);
+    for (let index = 0; index < args.length; index++) {
+      const word = args[index];
+      if (!word.opaque) continue;
+      const freeText = freeTextOpaque(args, index);
+      if (freeText !== null) return freeText;
+      // An opaque word's own text (not a grouping's) still counts: cmd.exe
+      // expands a %NAME% pair in it whatever PowerShell resolves, and a
+      // metacharacter in it may land outside cmd.exe's quotes.
+      if (CMD_VARIABLE_PAIR.test(word.value)) return { kind: "variable", flag: valueFlag(args, index) };
+      if (/[&|<>^]/.test(word.value)) return { kind: "expression", flag: valueFlag(args, index), request: false };
+    }
+    let line = "";
+    const owners: number[] = [];
+    args.forEach((word, index) => {
+      if (word.opaque || word.value === "") return;
+      const passed = /[ \t]/.test(word.value) ? `"${word.value}"` : word.value;
+      line += `${line === "" ? "" : " "}${passed}`;
+      while (owners.length < line.length) owners.push(index);
+    });
+    let quoted = false;
+    for (let at = 0; at < line.length; at++) {
+      const c = line[at];
+      if (c === '"') quoted = !quoted;
+      else if (!quoted && /[&|<>^]/.test(c)) {
+        return { kind: "metacharacter", flag: valueFlag(args, owners[at]), char: c };
+      }
+    }
+    const variable = CMD_VARIABLE_PAIR.exec(line);
+    if (variable !== null) return { kind: "variable", flag: valueFlag(args, owners[variable.index]) };
+  }
+  if (reading.unreadable.some((words) => aidlcCommandArgs(words) !== null)) return { kind: "unchecked" };
+  return null;
+}
+
+// A fixed template: only a plain flag name and one of & | < > ^ are filled
+// in, never the value, so text in the value cannot add lines to the reason.
+function cmdMetacharacterRefusal(hazard: CmdHazard): string {
+  if (hazard.kind === "unchecked") {
+    return (
+      "AIDLC stopped this command before it ran. Its aidlc arguments could not be checked for characters " +
+      "cmd.exe would act on (the aidlc command runs through aidlc.cmd). Run it again without the --% " +
+      "stop-parsing token or a block comment, with each value in quotes and every quote closed.\n"
+    );
+  }
+  const subject = hazard.kind === "expression" && hazard.request
+    ? "The request after next"
+    : hazard.flag === null
+    ? "A value"
+    : `The ${hazard.flag} value`;
+  if (hazard.kind === "expression") {
+    return (
+      `AIDLC stopped this command before it ran. ${subject} comes from a PowerShell variable or expression, ` +
+      "so AIDLC cannot check what cmd.exe would do with it (the aidlc command runs through aidlc.cmd). " +
+      "Write the value itself in single quotes, then run the command again.\n"
+    );
+  }
+  if (hazard.kind === "variable") {
+    return (
+      `AIDLC stopped this command before it ran. ${subject} holds a %NAME% pair, which cmd.exe ` +
+      "(the aidlc command runs through aidlc.cmd) would replace with that environment variable's value " +
+      "before AI-DLC sees it. Write it without the surrounding percent signs (for example APPDATA instead " +
+      "of %APPDATA%), then run the command again.\n"
+    );
+  }
+  return (
+    `AIDLC stopped this command before it ran. ${subject} would reach cmd.exe ` +
+    `(the aidlc command runs through aidlc.cmd) with ${hazard.char} outside its quotes, so cmd.exe would ` +
+    `${CMD_OPERATOR_EFFECTS[hazard.char]} instead of passing it as text. Write that value's inner double ` +
+    "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
+    "a label you wrote, then run the command again.\n"
+  );
+}
+
 export async function run(
   target: string,
   input: string,
@@ -590,7 +1137,9 @@ export async function run(
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core write-audit-log's record-root check needs — the core fix of this
-// harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
+// harness. It also feeds hookDebug/recordHookDrop. Do not remove it. Kiro IDE
+// sets no project variable, and a compiled engine runs this file from its
+// runtime payload, so there it is the directory Kiro IDE ran the hook in.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Normalize the hook context for the payload-dependent targets. IDE 1.x
@@ -707,8 +1256,10 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
   sessionId: ide.sessionId ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
 });
+const promptEmpty = ide.prompt !== undefined && ide.prompt.trim() === "" &&
+  (ide.malformedFields?.length ?? 0) === 0;
 
-// Persist the effective SessionStart identity under the existing gitignored
+// Persist the effective startup or event-local prompt identity under the existing gitignored
 // runtime dir so separate adapter processes can forward it to payload-free
 // SessionEnd and use it when a legacy or broken-channel Stop has no event-local
 // session_id. A legacy promptSubmit writes its host-derived id, replacing any
@@ -721,6 +1272,23 @@ function rememberKiroIdeSessionId(sessionId: string): void {
     writeFileSync(join(dir, KIRO_IDE_SESSION_FILE), `${sessionId}\n`, "utf-8");
   } catch {
     // Per-user runtime state; lifecycle hooks retain the legacy fallback.
+  }
+}
+
+// Before the first workflow no core hook writes a heartbeat, so doctor could
+// not tell a folder nobody has chatted in from one whose hooks Kiro IDE is not
+// running (untrusted or not reloaded). A chat message leaves the heartbeat the
+// core hooks write, only while no intent record resolves: inside one,
+// heartbeats feed the Plan Approval staleness refusal (hookLiveness) and stay
+// the core hooks' own.
+function recordPromptHeartbeat(hook: string): void {
+  try {
+    if (recordDir(projectDir) !== null) return;
+    const healthDir = hooksHealthDir(projectDir);
+    mkdirSync(healthDir, { recursive: true });
+    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
+  } catch {
+    // Advisory: without it doctor keeps its "not run yet" warning.
   }
 }
 
@@ -771,7 +1339,7 @@ function promptTerminalInvocation(prompt: string): TerminalInvocation {
 
 function toolTerminalInvocation(command: string): TerminalInvocation | null {
   const match = command.trim().match(
-    /^(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?\.kiro[\\/]tools[\\/]aidlc-orchestrate\.ts["']?\s+next(?:\s+([\s\S]*))?$/i,
   );
   if (match === null) return null;
   const runner = match[1] ?? match[2] ?? match[3] ?? "";
@@ -789,6 +1357,13 @@ function terminalTyped(
     : (command.display ?? [command.subcommand, ...forwarded].join(" "));
 }
 
+// The read-only flags that name one of the aidlc binary's public commands.
+// They have no `engine` spelling: under it the binary reports an unknown command.
+const PUBLIC_TERMINAL_COMMANDS: ReadonlySet<string> = new Set([
+  "doctor",
+  "version",
+]);
+
 function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   const forwarded =
     command.args ?? (command.arg !== undefined ? [command.arg] : []);
@@ -803,6 +1378,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
   }
 
   const compiledArgs = (() => {
+    // The /aidlc chat help, which source mode prints for `help` and `plugin
+    // help` alike (`aidlc-utility.ts help`). The binary's own `help` is its
+    // terminal CLI help, and its `plugin help` the engine command list.
+    if (command.subcommand === "help" && command.source !== "knowledge-verb") {
+      return ["orchestrate", "help"];
+    }
     if (command.source === "plugin-verb") {
       if (command.subcommand === "plugin-list") {
         return ["plugin", "list", ...forwarded];
@@ -819,7 +1400,6 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
       if (command.subcommand === "plugin-build") {
         return ["plugin", "build", ...forwarded];
       }
-      if (command.subcommand === "help") return ["plugin", "help"];
     }
     if (command.source === "knowledge-verb") {
       if (command.subcommand === "help") return ["knowledge", "help"];
@@ -837,11 +1417,18 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
     ? "aidlc-knowledge.ts"
     : "aidlc-utility.ts";
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  // A native install runs the aidlc binary, which files every other terminal
+  // command under its `engine` namespace, as the Kiro CLI adapter spawns them.
+  const nativeArgs =
+    command.source === "read-only-flag" &&
+      PUBLIC_TERMINAL_COMMANDS.has(command.subcommand)
+      ? compiledArgs
+      : ["engine", ...compiledArgs];
 
   try {
     const result = Bun.spawnSync(
       executable
-        ? [executable, ...compiledArgs]
+        ? [executable, ...nativeArgs]
         : [
             process.execPath,
             join(".kiro", "tools", toolFile),
@@ -852,11 +1439,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
         cwd: projectDir,
         stdout: "pipe",
         stderr: "pipe",
-        env: {
-          ...process.env,
+        // The command acts for the chat that typed it, even when this hook
+        // runs before record-human-turn has started that chat's session.
+        env: hookChildEnv(projectDir, ide.sessionId?.trim(), {
           AIDLC_PROJECT_DIR: projectDir,
           CLAUDE_PROJECT_DIR: projectDir,
-        },
+        }),
       },
     );
     return {
@@ -874,7 +1462,12 @@ function runTerminalCommand(command: TerminalCommand): TerminalResult | null {
 }
 
 function terminalSessionId(): string {
-  return ide.sessionId?.trim() || LEGACY_SESSION_ID;
+  if (ide.sessionId?.trim()) return ide.sessionId.trim();
+  try {
+    return legacyPlanApprovalSessionId();
+  } catch {
+    return rememberedKiroIdeSessionId();
+  }
 }
 
 function terminalSessionDir(sessionId: string): string {
@@ -888,6 +1481,27 @@ function turnCounterPath(sessionId: string): string {
 
 function terminalLatchPath(sessionId: string): string {
   return join(terminalSessionDir(sessionId), "latch.json");
+}
+
+// Written once the core session-start has run for a chat's session, from
+// SessionStart or from the chat's first prompt. The retained marker is no
+// evidence of a start: earlier adapters wrote it on every prompt without one.
+function sessionStartedPath(sessionId: string): string {
+  return join(terminalSessionDir(sessionId), "session-started");
+}
+
+function sessionStarted(sessionId: string): boolean {
+  return existsSync(sessionStartedPath(sessionId));
+}
+
+function markSessionStarted(sessionId: string): void {
+  if (!sessionId) return;
+  try {
+    mkdirSync(terminalSessionDir(sessionId), { recursive: true });
+    writeFileSync(sessionStartedPath(sessionId), `${new Date().toISOString()}\n`, "utf-8");
+  } catch {
+    // Without the record the chat's next prompt starts the session again.
+  }
 }
 
 function readTurn(sessionId: string): number {
@@ -911,6 +1525,117 @@ function bumpTurn(sessionId: string): number {
     return 0;
   }
   return turn;
+}
+
+
+function recordPromptEmpty(sessionId: string, turn: number): void {
+  if (turn <= 0) return;
+  try {
+    writeFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      promptEmpty ? `${turn}\n` : "",
+      "utf-8",
+    );
+  } catch {
+    // Without the marker, core setters still refuse to lower fences on their own.
+  }
+}
+
+function notePromptCapability(sessionId: string): void {
+  if (!promptEmpty) return;
+  try {
+    writeFileSync(join(terminalSessionDir(sessionId), "capability-noted"), "", { flag: "wx" });
+  } catch {
+    return;
+  }
+  process.stdout.write(
+    "Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
+      `${summaryConfirmationWayOut()} ${PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
+  );
+}
+
+// An updated build carries the typed switch again. The recorded kill switch is
+// the person's own terminal command, but config refuses it while any workflow
+// is still active, so it is named only as the route once the work is complete.
+function summaryConfirmationWayOut(): string {
+  return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. Once every piece of work in this project is complete, you can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
+}
+
+// Plan approval off is read from what the person types or says, so this build
+// keeps asking about every plan; an update is what enables the switch.
+const PLAN_APPROVAL_WAY_OUT =
+  "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+
+// "summary" when the only lowering is summary confirmation off, which skips
+// the person's `Looks correct` check; "plan" when it is plan approval off;
+// "guard" when any guard setting lowers.
+type GuardLowering = "guard" | "summary" | "plan" | null;
+
+function loweringGuardSwitch(key: string, value: string | undefined): GuardLowering {
+  if (key === "guard-policy" || key === "change-control") {
+    return value === "relaxed" || value === "off" ? "guard" : null;
+  }
+  if (key === "summary-confirmation") return value === "off" ? "summary" : null;
+  // `guard.plan-approval` is the same switch as `plan-approval`.
+  if (key === "plan-approval" || key === "guard.plan-approval") return value === "off" ? "plan" : null;
+  return key.startsWith("guard.") &&
+    isSwitchableGuardFence(key.slice("guard.".length)) && value === "off" ? "guard" : null;
+}
+
+function loweringGuardFlags(args: string[], allowFences: boolean): GuardLowering {
+  let lowering: GuardLowering = null;
+  for (const [index, arg] of args.entries()) {
+    const key = arg.toLowerCase();
+    if (!key.startsWith("--")) continue;
+    if (!allowFences && key !== "--guard-policy" && key !== "--change-control") continue;
+    const found = loweringGuardSwitch(key.slice(2), args[index + 1]?.toLowerCase());
+    if (found === "guard") return found;
+    lowering ??= found;
+  }
+  return lowering;
+}
+
+function loweringGuardInvocation(
+  rawCommand: string,
+): GuardLowering {
+  const match = rawCommand.trim().match(
+    /^(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s"']*)\s+)*(?:(?:"([^"]+)"|'([^']+)'|(\S+))\s+)?["']?(\.kiro[\\/]tools[\\/]aidlc(?:-utility)?\.ts)["']?(?:\s+([\s\S]*))?$/i,
+  );
+  if (match === null) return null;
+  const runner = match[1] ?? match[2] ?? match[3] ?? "";
+  if (runner && !/(^|[\\/])bun(?:\.exe)?$/i.test(runner)) return null;
+  const args = splitKiroCommandArgs(match[5] ?? "");
+  if (match[4].toLowerCase().endsWith("aidlc-utility.ts")) {
+    const verb = args[0]?.toLowerCase();
+    if (verb === "config-change" || verb === "scope-change") return loweringGuardFlags(args.slice(1), true);
+    return verb === "intent-create" ? loweringGuardFlags(args.slice(1), false) : null;
+  }
+  // The intent setter lives under the dispatcher's `engine` namespace; the
+  // public `aidlc config <section>` is machine configuration and never lowers.
+  if (args[0]?.toLowerCase() !== "engine") return null;
+  const noun = args[1]?.toLowerCase();
+  const verb = args[2]?.toLowerCase();
+  if (noun === "config" && verb === "set") {
+    // `next` folds further settings into the same set as `--<key> <value>` pairs.
+    const first = loweringGuardSwitch(args[3]?.toLowerCase() ?? "", args[4]?.toLowerCase());
+    const rest = loweringGuardFlags(args.slice(5), true);
+    return first === "guard" || rest === "guard" ? "guard" : first ?? rest;
+  }
+  if (noun === "scope" && verb === "change") return loweringGuardFlags(args.slice(3), true);
+  return noun === "intent" && verb === "create" ? loweringGuardFlags(args.slice(3), false) : null;
+}
+
+
+function promptWasEmpty(sessionId: string, turn: number): boolean {
+  if (turn <= 0) return false;
+  try {
+    return readFileSync(
+      join(terminalSessionDir(sessionId), "prompt-empty"),
+      "utf-8",
+    ).trim() === String(turn);
+  } catch {
+    return false;
+  }
 }
 
 function readTerminalLatch(sessionId: string): TerminalLatch | null {
@@ -966,8 +1691,7 @@ function terminalContext(result: TerminalResult): string {
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
     "It carries no workflow work. Relay the output below verbatim, then STOP. " +
     "Do not call any AIDLC tool this turn.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
@@ -978,14 +1702,17 @@ function terminalRefusal(result: TerminalResult): string {
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another AIDLC command this turn. Relay the output below " +
     "verbatim to the user, then stop.\n\n" +
-    `--- OUTPUT (exit ${result.exitCode}) ---\n${result.output}\n` +
-    "--- END OUTPUT ---\n"
+    fenceCommandOutput(result.output, result.exitCode)
   );
 }
 
 if (target === "verb-intercept") {
+  // Before a doctor request below runs, so it sees this message.
+  recordPromptHeartbeat("terminal-command");
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
+  recordPromptEmpty(sessionId, turn);
+  notePromptCapability(sessionId);
   const invocation = promptTerminalInvocation(ide.prompt ?? "");
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
@@ -1005,14 +1732,32 @@ if (target === "terminal-command-guard") {
   const rawCommand = typeof ide.toolArgs?.command === "string"
     ? ide.toolArgs.command
     : "";
+  // Before anything below runs a command: this call would not reach the
+  // engine as written (see cmdMetacharacterHazard).
+  const cmdHazard = tool === "execute_pwsh" ? cmdMetacharacterHazard(rawCommand) : null;
+  if (cmdHazard !== null) {
+    process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
+    return 2;
+  }
   const invocation = toolTerminalInvocation(rawCommand);
+  const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
   const turn = readTurn(sessionId) || bumpTurn(sessionId);
+  const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
+  if (promptWasEmpty(sessionId, turn) && refused !== null) {
+    process.stderr.write(refused === "summary"
+      ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
+      : refused === "plan"
+      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${PLAN_APPROVAL_WAY_OUT}\n`
+      : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
+    return 2;
+  }
   const existing = readTerminalLatch(sessionId);
   if (
     existing?.turn === turn &&
     (
       invocation !== null ||
+      lowering ||
       /aidlc-(?:orchestrate|utility|knowledge)\.ts/i.test(rawCommand)
     )
   ) {
@@ -1022,6 +1767,10 @@ if (target === "terminal-command-guard") {
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args);
   if (command === null) return 0;
+  // Kiro runs every PreToolUse hook even after one blocks, so while the
+  // approval-gate hook refuses this call, running the command here would still
+  // act, for example archive an intent, before the person replies.
+  if (approvalGateAwaitsHuman()) return 0;
   const result = runTerminalCommand(command);
   if (result === null) return 0;
   writeTerminalLatch(sessionId, turn, invocation, result);
@@ -1029,25 +1778,11 @@ if (target === "terminal-command-guard") {
   return 2;
 }
 
-// --- mint: record a HUMAN_TURN event on prompt submit ---
-//
-// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
-// reads stdin — a mint must never wait on it), so resolve the project dir
-// from process.cwd() — appendAuditEntry then resolves the
-// active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
-// using only that dir, so the event lands in the correct per-intent shard with
-// no payload. One ledger event per human turn; no marker file, no turn counter.
-// Gated on workflow state existing (same self-gate as the core mint hook) so a
-// prompt in a project that never ran the framework does not scaffold audit
-// shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
-// human's turn.
-//
-// The seam ALSO touches the .aidlc-engine/human-turn marker (markHumanTurn), which is
-// what makes the Stop hook's conversational carve-out work on this harness. The
-// IDE delivers no `transcript_path`, so the carve-out cannot read the turn
-// history; it compares this marker's mtime against .aidlc-engine/engine-touch instead.
-// Both writes ride this one seam so the ledger and the marker can never
-// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
+// UserPromptSubmit forwards to the core human-turn hook below. That hook
+// applies typed switches before its state-file gate, then records HUMAN_TURN
+// and the conversational Stop marker only when workflow state exists.
+// The adapter separately tracks empty prompts against the terminal turn so
+// lowering is refused when IDE 1.0.242 hides what the person typed.
 // --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
@@ -1060,26 +1795,45 @@ if (target === "terminal-command-guard") {
 // Construction (swarm/Bolt has no human at the gate) and the deterministic
 // off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
 // All read from disk. Fail-open on any read/parse error (advisory).
-if (target === "enforce-approval-gate") {
+function approvalGateAwaitsHuman(): boolean {
+  const pd = process.cwd();
+  // The payload session stays pinned for the whole check, so the gate state and
+  // the human-turn evidence come from the workflow this conversation selects,
+  // not the one the shared cursor or process ancestry names.
+  const workflow = enterHookWorkflow(pd, resolvedPlanApprovalSessionId(ide));
   try {
-    const pd = process.cwd();
+    if (hookOutsideGate(workflow)) return false;
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
     // and no-open-gate (nothing awaits approval, so nothing to floor).
-    if (isAutonomousMode(content)) return 0;
-    if (humanPresenceGuardDisabled()) return 0;
-    if (!hasOpenGate(content)) return 0;
-    if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
+    if (isAutonomousMode(content)) return false;
+    if (humanPresenceGuardDisabled()) return false;
+    if (!hasOpenGate(content)) return false;
+    return !humanActedSinceGate(pd); // a human acted at this gate
+  } catch {
+    return false; // advisory - any read/parse failure fails open
+  } finally {
+    workflow.restore();
+  }
+}
+
+if (target === "enforce-approval-gate") {
+  if (approvalGateAwaitsHuman()) {
+    const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
-        "gate as a human, then continue.\n",
+        "gate as a human, then continue. If you already replied, Kiro may not be " +
+        "running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
+        "banner shows at the top of the window (select Manage, then Trust), run " +
+        `"Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
+        "the aidlc agent in the chat panel's agent picker, then reply again. In Kiro " +
+        "CLI, exit and start `kiro-cli` again in this folder, then reply again.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  } catch {
-    return 0; // advisory - any read/parse failure fails open
   }
+  return 0;
 }
 
 // Extract the absolute path of the file a write tool just touched from the
@@ -1169,6 +1923,10 @@ function inputPaths(input: Record<string, unknown>): string[] {
   add(input.path);
   add(input.file_path);
   add(input.filePath);
+  // `delete_file` names its target `targetFile` and carries no other path field
+  // (every captured payload is {explanation, targetFile}). Without it a delete
+  // had no target, so Plan Approval treated it as an opaque mutation.
+  add(input.targetFile);
   if (Array.isArray(input.paths)) for (const path of input.paths) add(path);
   if (Array.isArray(input.operations)) {
     for (const operation of input.operations) {
@@ -1180,23 +1938,19 @@ function inputPaths(input: Record<string, unknown>): string[] {
 
 // Recover the delegated agent's identity from the hook payload.
 //
-// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
-// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
-// platform-provided identity the delegate cannot author. It therefore WINS over
-// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
-// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
-// to a different persona while a more authoritative identity is available.
+// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. The platform
+// names the delegate in the dispatch itself — the `subagent_<agent>` tool name
+// (#543), `invoke_sub_agent`'s `tool_input.name`, or an `orchestrate_subagent`
+// stage's `role` — an identity the delegate cannot author. It therefore WINS
+// over the result prose: an incorrect or prompt-injected `**Agent:** <other>`
+// line in agent-written output must not be able to misattribute a
+// SUBAGENT_COMPLETED row to a different persona while a more authoritative
+// identity is available.
 //
 // The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
-// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
-// shape, which carries no structured identity. They also still cover a
-// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
-function extractAgentIdentity(toolResult: string, toolName = ""): string {
-  const structured =
-    toolName.startsWith("subagent_") && toolName !== "subagent_response"
-      ? toolName.slice("subagent_".length).trim()
-      : "";
-  if (structured !== "") return structured;
+// the fallback for a dispatch that names no delegate. With neither, "unknown".
+function extractAgentIdentity(toolResult: string, structured = ""): string {
+  if (structured.trim() !== "") return structured.trim();
   const lines = toolResult.split("\n").slice(0, 8);
   for (const line of lines) {
     const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
@@ -1207,6 +1961,10 @@ function extractAgentIdentity(toolResult: string, toolName = ""): string {
 
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
+// The chat session a prompt starts, when the prompt names a session other than
+// the one this adapter last saw. Set by the record-human-turn route.
+let promptSessionStart = "";
+
 function buildForward(): Forward {
   if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
     recordHookDrop(
@@ -1214,7 +1972,7 @@ function buildForward(): Forward {
       "kiro-adapter",
       `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
     );
-    if (target === "plan-approval-guard") {
+    if (target === "plan-approval-guard" && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
       const malformedToolName = ide.toolName ?? "";
       if (
         readPlanApprovalLegacyWindows(projectDir).length > 0 &&
@@ -1231,23 +1989,7 @@ function buildForward(): Forward {
           },
         };
       }
-      let codeGenerationRelevant = false;
-      try {
-        const statePath = stateFilePath(projectDir);
-        if (existsSync(statePath)) {
-          const state = readFileSync(statePath, "utf-8");
-          const marker = readActiveDirectiveMarker(projectDir, state);
-          codeGenerationRelevant =
-            getField(state, "Current Stage")
-              ?.trim()
-              .toLowerCase()
-              .replace(/\s+/g, "-") === "code-generation" ||
-            marker?.stage === "code-generation";
-        }
-      } catch {
-        codeGenerationRelevant = false;
-      }
-      if (!codeGenerationRelevant) return null;
+      if (!codeGenerationIsCurrent(projectDir)) return null;
       return {
         hook: "__legacy_plan_approval_block__",
         input: {
@@ -1292,15 +2034,51 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
-      const sessionId =
-        ide.sessionId?.trim() ||
-        (() => {
-          try {
-            return legacyPlanApprovalSessionId();
-          } catch {
-            return rememberedKiroIdeSessionId();
+      recordPromptHeartbeat("record-human-turn");
+      const eventSessionId = ide.sessionId?.trim();
+      const sessionId = terminalSessionId();
+      // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a
+      // chat's first prompt is the first event that names its session. A prompt
+      // from a chat other than the last one seen, or from a chat never started,
+      // starts it. A host that does run SessionStart has already started it.
+      if (
+        eventSessionId &&
+        (eventSessionId !== rememberedKiroIdeSessionId() || !sessionStarted(eventSessionId))
+      ) {
+        promptSessionStart = eventSessionId;
+      }
+      // Some IDE sessions submit real prompt events without a workspace
+      // SessionStart callback. Retain only an event-supplied identity here;
+      // never manufacture a current-session marker from the legacy fallback.
+      if (eventSessionId) rememberKiroIdeSessionId(eventSessionId);
+      recordPromptEmpty(sessionId, readTurn(sessionId) || bumpTurn(sessionId));
+      if (promptEmpty && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
+        try {
+          const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
+          if (migration.normalized) {
+            process.stdout.write(
+              `SYSTEM (AIDLC Guard Policy migration): kept ${migration.value} and renamed the active intent's retired Change Control field to Guard Policy.\n`,
+            );
           }
-        })();
+        } catch (error) {
+          // The prompt must remain usable; an unchanged field keeps the normal
+          // repeating migration notice as its recovery path.
+          recordHookDrop(
+            projectDir,
+            "kiro-adapter",
+            `Guard Policy field migration failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          if (process.env.AIDLC_DEBUG === "1") {
+            process.stderr.write(
+              `Guard Policy field migration failed: ${
+                error instanceof Error ? error.message : String(error)
+              }\n`,
+            );
+          }
+        }
+      }
       if (ide.channel === "legacy") {
         markKiroIdeLegacyPlanApprovalHost(projectDir, sessionId);
       }
@@ -1332,7 +2110,8 @@ function buildForward(): Forward {
       const activeWriteWindows = readPlanApprovalLegacyWindows(projectDir);
       if (
         activeWriteWindows.length > 0 &&
-        (toolName === "" || mutationCapableTool(toolName))
+        (toolName === "" || mutationCapableTool(toolName)) &&
+        !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))
       ) {
         let recoverySession = resolvedPlanApprovalSessionId(ide);
         try {
@@ -1376,7 +2155,7 @@ function buildForward(): Forward {
             )
           )
         );
-      if (opaqueMutation) {
+      if (opaqueMutation && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
         const approvalSession = resolvedPlanApprovalSessionId(ide);
         const state = legacyPlanApprovalGuardState(projectDir);
         const writeWindows = readPlanApprovalLegacyWindows(projectDir);
@@ -1641,52 +2420,56 @@ function buildForward(): Forward {
                 typeof toolArgs.command === "string" ? toolArgs.command : "",
             },
             cwd: projectDir,
+            // The guard reads a PowerShell command the way PowerShell runs it.
+            ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
           },
         };
       }
-      let directAgent =
-        [
-          toolArgs.name,
-          toolArgs.subagent_type,
-          toolArgs.agent,
-          toolArgs.agent_name,
-          toolArgs.role,
-        ].find((value): value is string =>
-          typeof value === "string" && value.trim().length > 0
-        )?.trim() ??
-        (
-          toolName.startsWith("subagent_") &&
-            toolName !== "subagent_response"
-            ? toolName.slice("subagent_".length).trim()
-            : ""
-        );
-      if (toolName === "invoke_sub_agent" && directAgent === "") {
-        // The old generic dispatch shape does not always expose the target.
-        // Treat it as guarded generation rather than letting an ambiguous
-        // trusted-agent dispatch bypass the Code Generation floor.
-        directAgent = "aidlc-developer-agent";
-      }
-      if (
-        directAgent === "aidlc-developer-agent" ||
-        toolName === "invoke_sub_agent"
-      ) {
-        const prompt =
-          [toolArgs.prompt, toolArgs.task, toolArgs.description]
-            .find((value): value is string =>
-              typeof value === "string" && value.trim().length > 0
-            ) ?? "";
-        return {
-          hook: "aidlc-plan-approval-guard.ts",
-          input: {
-            hook_event_name: "PreToolUse",
-            tool_name: "Task",
-            tool_input: {
-              subagent_type: directAgent,
-              prompt,
+      if (isKiroDelegationTool(toolName)) {
+        const generic =
+          toolName === "invoke_sub_agent" || toolName === "orchestrate_subagent";
+        const named = kiroDelegationTargets(toolName, toolArgs);
+        // A generic dispatch that names no delegate (or a pipeline with no
+        // stage) is treated as guarded generation rather than letting an
+        // ambiguous trusted-agent dispatch bypass the Code Generation floor.
+        const targets = (named.length > 0
+          ? named
+          : [{ agent: "", prompt: firstNonBlank([toolArgs.task]), stage: "" }]
+        ).map((t) => generic && t.agent === "" ? { ...t, agent: "aidlc-developer-agent" } : t);
+        const taskInput = (t: KiroDelegationTarget) => ({
+          hook_event_name: "PreToolUse",
+          tool_name: "Task",
+          tool_input: { subagent_type: t.agent, prompt: t.prompt },
+          cwd: projectDir,
+        });
+        const developers = targets.filter((t) => t.agent === "aidlc-developer-agent");
+        // The core guard decides, and starts generation for, one dispatch at a
+        // time. A pipeline carrying two developer stages would be decided stage
+        // by stage, so a later refusal could leave an earlier start recorded;
+        // during Code Generation, refuse it before any stage is decided. Outside
+        // that stage the core guard allows every dispatch, so the pipeline goes
+        // through as it would without AI-DLC.
+        if (developers.length > 1 && codeGenerationIsCurrent(projectDir) && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
+          return {
+            hook: "__legacy_plan_approval_block__",
+            input: {
+              reason:
+                "Plan Approval decides one aidlc-developer-agent per dispatch: " +
+                "send each developer stage in its own orchestrate_subagent call.",
             },
-            cwd: projectDir,
-          },
-        };
+          };
+        }
+        // Outside Code Generation, several developer stages go to the core guard
+        // as one dispatch carrying every developer stage's prompt: a plan marker
+        // on any stage then makes the whole pipeline a guarded dispatch, rather
+        // than the first stage's prompt deciding for the rest.
+        const forwarded = developers.length > 1
+          ? { ...developers[0], prompt: developers.map((t) => t.prompt).join("\n") }
+          : developers[0] ?? (generic ? targets[0] : undefined);
+        if (forwarded) {
+          return { hook: "aidlc-plan-approval-guard.ts", input: taskInput(forwarded) };
+        }
+        if (generic) return null;
       }
       return {
         hook: "aidlc-plan-approval-guard.ts",
@@ -1816,6 +2599,7 @@ function buildForward(): Forward {
         hook: "__audit_and_sensors__", // handled specially below (two hooks)
         input: {
           hook_event_name: "PostToolUse",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_name: canon,
           tool_input: { file_path: filePath },
         },
@@ -1850,6 +2634,7 @@ function buildForward(): Forward {
         hook: "aidlc-sync-workflow-state.ts",
         input: {
           hook_event_name: "PostToolUse",
+          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
           tool_name: "TaskUpdate",
           tool_input: { source: "ide-audit-sync" },
         },
@@ -1857,11 +2642,11 @@ function buildForward(): Forward {
     }
 
     case "log-subagent": {
-      // IDE 1.x has emitted both `invoke_sub_agent` and `subagent_<agent>` for
-      // real delegate completions (#543, live on 1.0.89-1.0.138).
+      // Kiro has emitted `invoke_sub_agent`, `subagent_<agent>` and, on Kiro CLI,
+      // `orchestrate_subagent` for real delegate completions (#543).
       //
       // DIVISION OF RESPONSIBILITY: the v2 matcher is deliberately BROAD
-      // (`^(subagent_.+|invoke_sub_agent)$`) so a fork-added delegate whose
+      // (`^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$`) so a fork-added delegate whose
       // name does not end in `-agent` still reaches this adapter; narrowing the
       // regex there would silently drop those completions. The exclusion of
       // `subagent_response` — the empty "Response recorded." shell that carries
@@ -1883,16 +2668,12 @@ function buildForward(): Forward {
         return null;
       }
 
-      const isSubagentCompletion =
-        toolName === "invoke_sub_agent" ||
-        (toolName.startsWith("subagent_") && toolName !== "subagent_response");
-      if (!isSubagentCompletion) return null;
+      if (!isKiroDelegationTool(toolName)) return null;
 
-      // Identity comes from the structured `subagent_<agent>` tool name when the
+      // Identity comes from the dispatch's own structured field when the
       // platform supplies one, and only otherwise from the result's
-      // `**Reviewer:**` / `**Agent:**` prose (#459) — the sole signal on the 0.12
-      // `invoke_sub_agent` shape. Agent-authored prose must not override a
-      // platform-provided identity. Forward the result text so
+      // `**Reviewer:**` / `**Agent:**` prose (#459). Agent-authored prose must
+      // not override a platform-provided identity. Forward the result text so
       // SUBAGENT_COMPLETED also carries an output snippet.
       //
       // An EMPTY result on an otherwise recognized completion must NOT
@@ -1906,16 +2687,41 @@ function buildForward(): Forward {
         );
         return null;
       }
-      return {
-        hook: "aidlc-log-subagent.ts",
-        input: {
+      const sessionId = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
+      const completion = (t: KiroDelegationTarget | undefined) => {
+        const output = toolName === "orchestrate_subagent"
+          ? orchestrateStageOutput(result, t?.stage ?? "")
+          : result;
+        return {
           hook_event_name: "SubagentStop",
-          session_id: ide.sessionId?.trim() || rememberedKiroIdeSessionId(),
-          agent_type: extractAgentIdentity(result, toolName),
+          session_id: sessionId,
+          agent_type: extractAgentIdentity(output, t?.agent ?? ""),
           agent_id: "",
-          last_assistant_message: result,
-        },
+          last_assistant_message: output,
+        };
       };
+      const targets = kiroDelegationTargets(toolName, ide.toolArgs ?? {});
+      if (targets.length === 0) {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "log-subagent: orchestrate_subagent payload names no stage — SUBAGENT_COMPLETED not recorded",
+        );
+        return null;
+      }
+      // A pipeline finishes every stage in one result: one row per stage, the
+      // last through the ordinary forward.
+      for (const t of targets.slice(0, -1)) {
+        const r = runCore("aidlc-log-subagent.ts", completion(t));
+        if (r.code !== 0) {
+          recordHookDrop(
+            projectDir,
+            "kiro-adapter",
+            `log-subagent: stage ${t.stage || t.agent} not recorded: ${r.stderr.trim() || `exit ${r.code}`}`,
+          );
+        }
+      }
+      return { hook: "aidlc-log-subagent.ts", input: completion(targets.at(-1)) };
     }
 
     case "continue-workflow":
@@ -1988,13 +2794,35 @@ function runCore(
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+  const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
   const command = executable
-    ? [executable, "engine", "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
-    : [process.execPath, join(HOOKS_DIR, hookFile)];
+    ? authorityToken
+      ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
+      : [executable, "engine", "hook", hook]
+    : authorityToken
+      ? [
+          process.execPath,
+          join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
+          "--internal-aidlc-record-human-turn",
+          join(HOOKS_DIR, hookFile),
+        ]
+      : [process.execPath, join(HOOKS_DIR, hookFile)];
+  // The core hook runs from the same payload, so hand it this adapter's project
+  // rather than let it derive one from its own path.
+  const env = {
+    ...process.env,
+    AIDLC_PROJECT_DIR: projectDir,
+    CLAUDE_PROJECT_DIR: projectDir,
+  };
   const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
+    cwd: projectDir,
+    env: authorityToken
+      ? { ...env, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
+      : env,
   });
   return {
     stdout: new TextDecoder("utf-8").decode(
@@ -2026,7 +2854,8 @@ if (fwd.hook === "__audit_and_sensors__") {
     (fwd.input.tool_input as { file_path?: string } | undefined)?.file_path ?? "";
   if (
     filePath &&
-    Object.keys(ide.toolArgs ?? {}).length === 0
+    Object.keys(ide.toolArgs ?? {}).length === 0 &&
+    !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))
   ) {
     let mediationFailure: string | null = null;
     try {
@@ -2070,21 +2899,54 @@ if (fwd.hook === "__audit_and_sensors__") {
   return 0;
 }
 
+// The core guard judges the workflow of the session named in its payload; the
+// routes above build its input from the tool call alone. Legacy events carry no
+// session id, so send the host-derived identity SessionStart bound instead.
+if (fwd.hook === "aidlc-plan-approval-guard.ts") {
+  fwd.input.session_id = resolvedPlanApprovalSessionId(ide);
+}
+// A prompt that starts its chat's session runs session-start first, as
+// SessionStart would have: the core hook binds the session, records its process
+// ancestry, and returns the `AIDLC Runtime Session:` line or the workflow
+// context, which go ahead of the prompt hook's own text. A session this adapter
+// started before resumes, and so does one a SessionStart started before this
+// record existed: it left a binding, or on older releases only an intent stamp,
+// which the core hook follows only on resume.
+const sessionStartResult = promptSessionStart
+  ? runCore("aidlc-session-start.ts", {
+      hook_event_name: "SessionStart",
+      source:
+        sessionStarted(promptSessionStart) ||
+        readSessionBinding(projectDir, promptSessionStart) ||
+        readSessionIntentUuid(projectDir, promptSessionStart)
+          ? "resume"
+          : "startup",
+      session_id: promptSessionStart,
+    })
+  : null;
+if (sessionStartResult?.code === 0) markSessionStarted(promptSessionStart);
 const result = runCore(fwd.hook, fwd.input);
+if (target === "session-start" && result.code === 0) {
+  markSessionStarted(String(fwd.input.session_id ?? ""));
+}
 
 if (target === "session-start" || target === "record-human-turn") {
   // Unwrap {"additionalContext": ...} → plain text on stdout (Kiro's context
   // channels). Anything unparseable passes through untouched.
-  try {
-    const parsed = JSON.parse(result.stdout) as { additionalContext?: string };
-    if (parsed.additionalContext) {
-      process.stdout.write(sanitizeHarnessPlainText(parsed.additionalContext));
+  const contextText = (stdout: string): string => {
+    try {
+      const parsed = JSON.parse(stdout) as { additionalContext?: string };
+      return parsed.additionalContext
+        ? sanitizeHarnessPlainText(parsed.additionalContext)
+        : "";
+    } catch {
+      return stdout ? sanitizeHarnessPlainText(stdout) : "";
     }
-  } catch {
-    if (result.stdout) {
-      process.stdout.write(sanitizeHarnessPlainText(result.stdout));
-    }
-  }
+  };
+  const texts = [sessionStartResult?.stdout ?? "", result.stdout]
+    .map(contextText)
+    .filter((text) => text !== "");
+  process.stdout.write(texts.join("\n"));
   return 0;
 }
 

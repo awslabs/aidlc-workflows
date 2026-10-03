@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -29,6 +34,8 @@ import {
   type PluginInventory,
   type ProjectEvidence,
 } from "../../core/tools/aidlc-plugin.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const FIXTURES = join(REPO_ROOT, "tests", "fixtures", "plugin-inventory");
@@ -228,26 +235,38 @@ describe("t242 fixture-proved host inventories", () => {
     expect(existsSync(root)).toBe(true);
   });
 
-  test("Claude downgrades malformed enablement settings to unavailable inventory", () => {
+  test("Claude downgrades malformed enablement settings and names the settings file", () => {
     const root = pluginRoot();
     withClaudeFixture(root);
-    writeFileSync(process.env.AIDLC_CLAUDE_SETTINGS as string, "{not-json");
+    const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
     process.env.AIDLC_PLUGIN_ROOT = "";
     process.env.CLAUDE_PLUGIN_ROOT = "";
     process.env.PLUGIN_ROOT = "";
 
-    const result = discoverPluginInventory(".claude");
-    expect(result).toEqual(expect.objectContaining({
-      capability: "current-root-only",
-      installed: [],
-      invalid: [],
-    }));
-    expect(comparePluginState(result, evidence(), null)).toEqual([
-      expect.objectContaining({
-        state: "inventory-unavailable",
+    for (const [body, reason] of [
+      ["{not-json", "invalid Claude settings: not valid JSON"],
+      // The parser would quote this unquoted value; the message must not.
+      ['{"env":{"NOTE": SECRETSECRETSECRET}}', "invalid Claude settings: not valid JSON"],
+      ["[]", "invalid Claude settings: expected a JSON object"],
+      ['{"enabledPlugins":[]}', "invalid Claude settings: enabledPlugins must be an object"],
+    ]) {
+      writeFileSync(settings, body);
+      const result = discoverPluginInventory(".claude");
+      expect(result).toEqual(expect.objectContaining({
+        capability: "current-root-only",
+        installed: [],
+        invalid: [{ paths: [settings], message: reason }],
+      }));
+      // A broken settings file is something the person can fix, so it warns
+      // and names the file instead of passing.
+      const rows = comparePluginState(result, evidence(), null);
+      expect(rows).toEqual([expect.objectContaining({
+        state: "invalid-installed",
         action: "attention",
-      }),
-    ]);
+        paths: [settings],
+      })]);
+      expect(renderPluginStatuses(rows)).toContain(`needs attention: ${reason}`);
+    }
   });
 
   test("Codex enumerates declared IDs and their fixed semver cache path", () => {
@@ -492,12 +511,30 @@ describe("t242 pure status comparator", () => {
       capability: "current-root-only",
       harness: "kiro",
       installed: [installed("test-pro", "1.0.0", "sha256:a")],
-      invalid: [],
-    }, evidence([stamp("missing", "1.0.0", "sha256:b")]), null);
-    expect(rows).toEqual([expect.objectContaining({
-      state: "inventory-unavailable",
-      action: "attention",
-    })]);
+      invalid: [{ paths: ["/broken"], message: "invalid manifest" }],
+    }, evidence([
+      stamp("test-pro", "1.0.0", "sha256:a"),
+      stamp("unseen", "1.0.0", "sha256:b"),
+    ], ["legacy"]), null);
+    expect(rows).toEqual([
+      expect.objectContaining({ key: null, state: "invalid-installed", action: "attention" }),
+      expect.objectContaining({
+        key: "legacy",
+        composedVersion: null,
+        state: "inventory-unavailable",
+        action: "current",
+      }),
+      expect.objectContaining({ key: "test-pro", state: "current", action: "current" }),
+      expect.objectContaining({
+        key: "unseen",
+        composedVersion: "1.0.0",
+        state: "inventory-unavailable",
+        action: "current",
+      }),
+    ]);
+    const table = renderPluginStatuses(rows);
+    expect(table).toMatch(/unseen +- +1\.0\.0 +not compared: no host plugin list/);
+    expect(table).not.toContain("installed plugin missing");
   });
 });
 
@@ -526,7 +563,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     ]);
     const second = await syncPlugins(project, [], ".claude");
     expect(second.operations).toBe(0);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("concurrent syncs converge and the loser replans as an idempotent no-op", async () => {
     const project = installedProject();
@@ -544,7 +581,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
       expect.objectContaining({ key: "test-pro", state: "current" }),
     ]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public JSON and doctor expose the shared exact comparator state", () => {
     const project = installedProject();
@@ -558,6 +595,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "--project-dir",
       project,
     ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: process.env,
@@ -574,6 +612,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "--project-dir",
       project,
     ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: project,
       encoding: "utf-8",
       env: process.env,
@@ -585,7 +624,105 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       label: "Plugins: 1 require sync",
       fix: "run `aidlc config`",
     }));
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor on a host without a plugin list passes and names what the project has", () => {
+    const project = temp("aidlc-plugin-copilot-");
+    cpSync(join(REPO_ROOT, "dist", "copilot"), project, { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      AIDLC_HARNESS_DIR: ".aidlc",
+      AIDLC_HARNESS_NAME: "copilot",
+      AIDLC_INSTALL_ROOT: join(project, ".doctor-install"),
+    };
+    for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
+    const tool = (name: string, args: string[], extra: NodeJS.ProcessEnv = {}) =>
+      spawnSync(process.execPath, [join(project, ".aidlc", "tools", name), ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: project,
+        encoding: "utf-8",
+        env: { ...env, ...extra },
+      });
+    const pluginRows = () => {
+      const doctor = tool("aidlc.ts", ["doctor", "--json", "--project-dir", project]);
+      expect([0, 1], doctor.stdout + doctor.stderr).toContain(doctor.status ?? -1);
+      return (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>)
+        .filter((check) => check.label.startsWith("Plugins:"));
+    };
+
+    // A fresh install: nothing to compare and nothing for the person to do.
+    expect(pluginRows()).toEqual([
+      expect.objectContaining({ pass: true, label: "Plugins: none in this project" }),
+    ]);
+
+    // The plugin's SessionStart hook route composes it; doctor still cannot
+    // compare versions, so it reports the plugin instead of warning.
+    const synced = tool("aidlc-plugin.ts", ["sync", "--project-dir", project], {
+      AIDLC_PLUGIN_ROOT: join(REPO_ROOT, "dist", "plugins", "test-pro", "copilot"),
+    });
+    expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    expect(pluginRows()).toEqual([
+      expect.objectContaining({
+        pass: true,
+        label: "Plugins: test-pro 0.1.0 in this project (no host plugin list to compare versions with)",
+      }),
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("doctor names a malformed Claude settings file without quoting its content", () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const settings = process.env.AIDLC_CLAUDE_SETTINGS as string;
+    const secret = "SECRETSECRETSECRET";
+    // Unquoted, so a JSON parser message would name it.
+    writeFileSync(settings, `{"env":{"NOTE": ${secret}}}`);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of ["AIDLC_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT"]) delete env[key];
+    const run = (args: string[]) => {
+      const result = spawnSync(process.execPath, [
+        join(REPO_ROOT, "core", "tools", "aidlc.ts"),
+        ...args,
+        "--project-dir",
+        project,
+      ], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: project,
+        encoding: "utf-8",
+        env,
+      });
+      const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+      expect(output, args.join(" ")).not.toContain(secret);
+      return { result, output };
+    };
+
+    const json = run(["doctor", "--json"]);
+    expect([0, 1], json.output).toContain(json.result.status ?? -1);
+    expect(JSON.parse(json.result.stdout).data.checks).toContainEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Plugins: 1 need attention",
+      fix: `invalid Claude settings: not valid JSON: ${settings}`,
+    }));
+    expect(run(["doctor"]).output).toContain(`invalid Claude settings: not valid JSON: ${settings}`);
+    expect(run(["engine", "plugin", "list"]).output)
+      .toContain(`needs attention: invalid Claude settings: not valid JSON: ${settings}`);
+    expect(JSON.parse(run(["engine", "plugin", "list", "--json"]).result.stdout).data.statuses)
+      .toEqual([expect.objectContaining({ message: `invalid Claude settings: not valid JSON: ${settings}` })]);
+
+    const exported = join(project, "out");
+    run(["doctor", "--export", "--output", exported]);
+    const files: string[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory)) {
+        const path = join(directory, entry);
+        if (lstatSync(path).isDirectory()) walk(path);
+        else if (!entry.endsWith(".tar.gz")) files.push(path);
+      }
+    };
+    walk(exported);
+    expect(files.some((path) => path.endsWith("report.json"))).toBe(true);
+    for (const path of files) expect(readFileSync(path, "utf-8"), path).not.toContain(secret);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one transaction rolls back all plugin bytes on an injected commit fault", async () => {
     const project = installedProject();
@@ -596,7 +733,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(surfaceSnapshot(project)).toEqual(before);
     expect(existsSync(join(project, ".aidlc-transaction.lock"))).toBe(false);
     expect(readdirSync(project).some((entry) => entry.startsWith(".aidlc-txn-"))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync rejects content whose plugin owner differs from the host manifest key", async () => {
     const project = installedProject();
@@ -632,7 +769,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "data",
       "plugin-contrib-test-pro.json",
     ))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a version upgrade replaces prior hash-proven primitive files", async () => {
     const project = installedProject();
@@ -671,7 +808,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
         state: "current",
       }),
     ]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("same-version source drift replaces prior hash-proven primitive files", async () => {
     const project = installedProject();
@@ -696,7 +833,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
       expect.objectContaining({ key: "test-pro", state: "current" }),
     ]);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("sync refuses to replace a locally modified owned primitive", async () => {
     const project = installedProject();
@@ -714,7 +851,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     await expect(syncPlugins(project, [], ".claude"))
       .rejects.toThrow("cannot sync test-pro: owned path changed since composition");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("plain sync retains missing content; explicit prune removes only hash-proven ownership", async () => {
     const project = installedProject();
@@ -746,7 +883,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "data",
       "plugin-compose-test-pro.json",
     ))).toBe(false);
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("prune refuses a locally modified owned file without deleting it", async () => {
     const project = installedProject();
@@ -768,7 +905,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     await expect(syncPlugins(project, ["--prune-missing", "--yes"], ".claude"))
       .rejects.toThrow("owned path changed since composition");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
-  }, 60_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("interactive prune confirmation resolves on a line without waiting for EOF", async () => {
     const input = new PassThrough() as PassThrough & { isTTY: boolean };
@@ -777,14 +914,21 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     const confirmation = confirmPrune([], ["test-pro"], input, output);
     input.write("y\n");
 
-    await expect(Promise.race([
-      confirmation,
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("confirmation waited for EOF")), 1_000)
-      ),
-    ])).resolves.toBeUndefined();
-    expect(output.read()?.toString() ?? "").toContain("Prune composed content");
-    input.destroy();
-    output.destroy();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(Promise.race([
+        confirmation,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("confirmation waited for EOF")),
+            remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
+        }),
+      ])).resolves.toBeUndefined();
+      expect(input.readableEnded).toBe(false);
+      expect(output.read()?.toString() ?? "").toContain("Prune composed content");
+    } finally {
+      clearTimeout(timer);
+      input.destroy();
+      output.destroy();
+    }
   });
 });

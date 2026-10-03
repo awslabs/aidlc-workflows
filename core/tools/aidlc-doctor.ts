@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
@@ -26,7 +27,11 @@ import {
   type UpdateState,
 } from "./aidlc-update.ts";
 import { collectPluginStatus } from "./aidlc-plugin.ts";
-import { scanWindowsUninstallJournals } from "./aidlc-windows-uninstall.ts";
+import {
+  describeWindowsUninstallFailure,
+  scanWindowsUninstallJournals,
+  windowsUninstallContinuationState,
+} from "./aidlc-windows-uninstall.ts";
 import {
   aidlcInvocation,
   discoverProjectHarnesses,
@@ -49,6 +54,8 @@ import {
   flagsDoctorCheck,
   providerDoctorCheck,
   settingsDoctorChecks,
+  vscodeRequestCapDoctorCheck,
+  vscodeWorkspaceRequestCapDoctorCheck,
   workspaceSiblingDoctorCheck,
 } from "./aidlc-config-diagnostics.ts";
 import {
@@ -59,18 +66,31 @@ import {
 function windowsRecoveryCheck(): DoctorCheck | null {
   if (process.platform !== "win32") return null;
   const recovery = scanWindowsUninstallJournals();
-  const paths = [
-    ...recovery.pending.map((item) => item.path),
-    ...recovery.invalid,
+  const failed = recovery.pending.filter(({ journal }) =>
+    windowsUninstallContinuationState(journal) === "failed"
+  );
+  const waiting = recovery.pending.length - failed.length + recovery.finished.length;
+  if (waiting + failed.length + recovery.invalid.length === 0) {
+    return { pass: true, label: "Windows uninstall recovery: no pending continuations" };
+  }
+  // The failure message can quote file paths; keep it escaped and on one line.
+  const details = [
+    ...failed.map(({ journal }) => journal.failure
+      ? describeWindowsUninstallFailure(journal.failure)
+      : "stopped without a result after repeated attempts"),
+    ...recovery.invalid.map((path) => `invalid: ${JSON.stringify(path)}`),
   ];
   return {
-    pass: paths.length === 0,
-    label: paths.length === 0
-      ? "Windows uninstall recovery: no pending continuations"
-      : `Windows uninstall recovery: ${recovery.pending.length} pending and ${recovery.invalid.length} invalid continuation(s): ${paths.join(", ")}`,
-    fix: paths.length === 0
-      ? undefined
-      : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
+    pass: false,
+    label: `Windows uninstall recovery: ${waiting} pending, ${failed.length} failed, and ${recovery.invalid.length} invalid continuation(s)${
+      details.length > 0 ? `; ${details.join("; ")}` : ""
+    }`,
+    // By full path: a failed PATH or final step can leave aidlc off PATH.
+    fix: failed.length > 0
+      ? `resolve the reported problem, then run \`& '${failed[0].journal.commandPath.replaceAll("'", "''")}' uninstall${failed[0].journal.purge ? " --purge" : ""}\` to retry (or reinstall if that command is gone); a cleanup that stopped before removing files is planned again from what is on disk`
+      : recovery.invalid.length > 0
+        ? "keep the listed journal, cleanup script, and fence for inspection; see Troubleshooting"
+        : "finish active AI-DLC commands, then run `aidlc version` to resume cleanup",
   };
 }
 
@@ -89,7 +109,9 @@ export async function doctorUpdateState(
       (update.stale === true ||
         ["stale", "absent", "unavailable"].includes(update.state)))
   ) {
-    update = await refreshUpdateState(explicit ? 15_000 : 750, {
+    // An automatic refresh is opportunistic UI work. Its short fallback keeps
+    // doctor responsive; a requested --check-updates is required network work.
+    update = await refreshUpdateState(explicit ? DEFAULT_SUBPROCESS_TIMEOUT_MS : 750, {
       offline: flags.offline === "true" ? true : undefined,
       baseUrl: flags["release-base-url"],
       caBundle: flags["ca-bundle"],
@@ -117,7 +139,7 @@ function updateCheck(state: UpdateState): DoctorCheck {
 }
 
 function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
-  const { statuses } = collectPluginStatus(projectDir);
+  const { inventory, statuses } = collectPluginStatus(projectDir);
   const attention = statuses.filter((status) => status.action === "attention");
   const drift = statuses.filter((status) => status.action === "sync");
   const detail = verbose && statuses.length > 0
@@ -137,6 +159,19 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
       severity: "warn",
       label: `Plugins: ${drift.length} require sync${detail}`,
       fix: "run `aidlc config`",
+    };
+  }
+  if (inventory.capability !== "full-inventory") {
+    // No host plugin list to compare against: report what this project has.
+    // A warning here could never be cleared by anything the person does.
+    const composed = statuses.map((status) =>
+      [status.key, status.composedVersion].filter(Boolean).join(" ")
+    );
+    return {
+      pass: true,
+      label: composed.length === 0
+        ? "Plugins: none in this project"
+        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${detail}`,
     };
   }
   return {
@@ -230,14 +265,19 @@ function humanReport(
       ? failVerdict(padded, out)
       : okVerdict(padded, out);
   };
-  const invoke = aidlcInvocation();
+  // Never quote the doctor command itself: VS Code's terminal tool deletes a
+  // command's output up to the line that repeats it, so the agent got nothing (#1411).
   const fallbackFix =
-    `run \`${invoke} doctor --verbose\`, correct the named condition, then rerun \`${invoke} doctor\``;
+    "add --verbose to see the details, correct the named condition, then run doctor again";
   const renderCheck = (check: DoctorCheck): string => {
     const verdict = status(check);
-    let row = `  ${colorVerdict(verdict)} ${check.label}\n`;
+    // Labels can carry project-derived text (file names); never relay control
+    // characters to the terminal.
+    const label = check.label.replace(/\p{Cc}/gu, "?");
+    let row = `  ${colorVerdict(verdict)} ${label}\n`;
     if (verdict !== "ok") {
-      row += `        ${fixLabel("fix:", out)} ${check.fix ?? fallbackFix}\n`;
+      const fix = (check.fix ?? fallbackFix).replace(/\p{Cc}/gu, "?");
+      row += `        ${fixLabel("fix:", out)} ${fix}\n`;
     }
     return row;
   };
@@ -304,10 +344,7 @@ function humanReport(
     output += `${success("Your install is ready.", out)}\n`;
   }
   if (!verbose) {
-    output += `${dim(
-      `Run '${aidlcInvocation()} doctor --verbose' to see every check.`,
-      out,
-    )}\n`;
+    output += `${dim("Add --verbose to see every check.", out)}\n`;
   }
   return output;
 }
@@ -450,6 +487,10 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(flagsDoctorCheck(projectDir, harnessDir()));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
+  const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());
+  if (requestCap) checks.push(requestCap);
+  const workspaceRequestCap = vscodeWorkspaceRequestCapDoctorCheck(projectDir, harnessDir());
+  if (workspaceRequestCap) checks.push(workspaceRequestCap);
   const report = await collectDoctorReport(projectDir, checks);
   // One fresh analysis, shared by the live report AND the --export writer
   // (issue #575): the structured condition->remedy findings and the

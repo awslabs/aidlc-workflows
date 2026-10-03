@@ -75,7 +75,7 @@ can also open `<record>/verification-command.txt`. The canonical command is a
 nonblank single line of at most 1024 characters. Control characters and
 display-spoofing characters (Unicode format characters, including zero-width and
 bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-Record the human's exact **Approve** / **Request Changes** reply in that session;
+Record the human's **Approve** / **Request Changes** reply in that session;
 only **Approve** authorizes the receipt, not an unrelated reply, **Request Changes**,
 or a reply from another session. Never write `--details "Approve"` unless the human chose it.
 
@@ -179,17 +179,23 @@ named review/receipt repair, consulting the human as needed, never invented
 verification or an unverified checkpoint approval question.
 
 Plan Approval remains individually bound even when its presentation is grouped.
-The `log decision`/`answer --checkpoint plan-approval --batch-file <JSON>
---session <ID>` flow binds exactly the live swarm Unit set and current
-plan/questions fingerprints with unchanged source. One actual **Approve Plans**
-answer produces individual receipts. Legacy mediation and unsupported harnesses
-fall back to the single-Unit flow. See the
-[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval)
-for the manifest and commands.
+When several Units' plans are ready together, `next` asks about them in one
+engine question, and the human-turn hook records one approval per Unit, bound
+to that Unit's own plan: "approve all" approves every Unit, and a change naming
+one Unit sends only that Unit back. See the
+[CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval).
 
 After a partial landing, `next` names the remaining Units and valid prepared
 workers retain the original group's approval and worktrees. Verify their parent
-and worktree approval before continuing; do not repeat initial preparation just
+and worktree execution permission before continuing: `testing-posture verify`
+uses `execution_allowed: true` (exit 0) for current approval or content-change
+continuation under a lowered plan-approval fence. `ok: false` still means the
+edited content was not approved; preserve the original approval evidence.
+For allowed continuation, `reason` explains why work can continue and
+`approval_reason` holds diagnostic detail. Delegated workers use their verified
+parent intent's live fence, so lowering or raising it applies to already
+prepared workers on their next check.
+Do not repeat initial preparation just
 because the emitted Unit set became smaller. Failure still stops for the human
 Retry/Abort decision, and a checkpoint Request Changes starts a fresh revision.
 Once that revision's native preparation is recorded, subsequent directives

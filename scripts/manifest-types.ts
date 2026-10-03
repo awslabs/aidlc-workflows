@@ -51,19 +51,17 @@ export type EmitContext = {
 };
 
 /**
- * How this harness's onboarding doc (CLAUDE.md / AGENTS.md) is generated from
- * the shared skeleton core/templates/onboarding.md. The packager renders the
- * skeleton with these fills (scripts/onboarding.ts), then applies the standard
- * {{HARNESS_DIR}} transform + rules-rename, and writes it to <dst>. Codex
- * generates its onboarding doc inside emit() instead (it merges a Codex-specific
- * header), so codex leaves this null. A harness that sets neither this nor a
- * harnessFiles CLAUDE.md/AGENTS.md ships no onboarding doc.
+ * Render neutral onboarding from core/templates/onboarding.md and native setup
+ * from core/templates/onboarding-harness.md with this harness's fills.
+ * Without harnessDst, both parts are concatenated into dst.
  */
 export type OnboardingSpec = {
   /** Destination filename, e.g. "CLAUDE.md" or "AGENTS.md". */
   dst: string;
   /** Land at the dist tree root (beside the harness dir) instead of inside it. */
   projectRoot?: boolean;
+  /** Harness-tree-relative destination for native setup; dst then stays neutral. */
+  harnessDst?: string;
   /** This harness's slot/invoke fills (imported by the manifest). */
   fills: OnboardingFills;
 };
@@ -71,19 +69,27 @@ export type OnboardingSpec = {
 export type RootIntegration = {
   /** Project-root path emitted by this distribution. */
   path: string;
-  /** Merge policy used by `aidlc config`; never inferred from the filename. */
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file";
+  /**
+   * Merge policy used by `aidlc config`; never inferred from the filename.
+   * jsonc-settings edits a team's JSONC settings file in place: it adds each
+   * shipped top-level key that is absent, never changes a key someone else
+   * set, and keeps other keys, comments, and layout.
+   */
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
   /**
-   * Managed-block content has line-set semantics, combined by `aidlc config`
-   * across every installed harness. Absence is exclusive: only one installed
-   * harness may ship this path.
+   * union combines line-set content across installed harnesses (.gitignore).
+   * identical declares byte-identical content every declaring harness ships,
+   * so any of them may own the block. Absence is exclusive.
    */
-  shared?: "union";
+  shared?: "union" | "identical";
   /** Top-level object key merged for json-map integrations. */
   jsonKey?: string;
-  /** Optional integrations may be omitted by an init mode such as --mcp none. */
+  /**
+   * Optional integrations may be omitted by an init mode such as --mcp none,
+   * or by the copy runtime, which leaves out editor-owned jsonc-settings files.
+   */
   optional?: boolean;
   /**
    * Exact historical signatures that `aidlc config` may adopt as framework-owned.
@@ -117,6 +123,37 @@ export type HarnessManifest = {
   productName: string;
   /** Exact host action printed after `aidlc config` completes. */
   configNextStep: string;
+  /**
+   * Lines the first-run wizard prints under "Start your first workflow",
+   * instead of its default open-then-/aidlc pair. An empty string prints a
+   * blank line.
+   */
+  firstRunSteps?: string[];
+  /**
+   * Lower-case name of this harness's own VS Code-based editor, for an editor
+   * with no CLI to probe. When `aidlc config` runs in that editor's terminal
+   * (TERM_PROGRAM is exactly this name, or the git askpass helper in
+   * VSCODE_GIT_ASKPASS_NODE is the editor's executable), first-run setup
+   * offers this harness first.
+   */
+  editorTerminalApp?: string;
+  /**
+   * For a host that runs no project hooks until the person acts (for example
+   * trusts the folder and reloads the window, or starts the engine that reads
+   * this tree's hook registrations): what to tell them.
+   */
+  hookActivation?: {
+    /** Doctor's fix when the hooks are not running. */
+    recovery: string;
+    /** Sentence added to the engine's attended "no new human reply" refusals. */
+    missedReply: string;
+    /**
+     * Doctor's fix when no hook heartbeat exists yet. Set only when this
+     * harness's hooks leave a heartbeat on the first chat message; doctor then
+     * warns with this text instead of passing.
+     */
+    notRunYet?: string;
+  };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /** Explicit project-root reconciliation policies consumed by `aidlc config`. */
@@ -137,6 +174,14 @@ export type HarnessManifest = {
    * never infers it from the harness name.
    */
   tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot" | "cursor";
+  /**
+   * Kiro rows only: which tree layout this row ships. `agent-v1` is the Kiro CLI
+   * agent-JSON layout (JSON agents with hooks embedded in them); `kas` is the
+   * layout Kiro IDE 1.x and Kiro CLI v3 run (Markdown agents and standalone
+   * `.kiro/hooks/*.json`). Written to harness.json so code that depends on the
+   * layout reads it from the installed tree instead of from the row name.
+   */
+  kiroLayout?: "agent-v1" | "kas";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
@@ -149,10 +194,10 @@ export type HarnessManifest = {
    * output path (e.g. "agents/aidlc-composer-agent.md"). The packager errors
    * on an unmatched file (typo guard), a missing frontmatter block, and a
    * key the core file already declares (so core later adding the key is a
-   * loud conflict, never a silent double). Example: the Kiro IDE resolves a
-   * delegated subagent's tool grants from the agent .md frontmatter
-   * (`tools: ["read", "write", "shell"]`), not from the CLI's agent-v1
-   * JSON - without the injected line an IDE delegate runs toolless.
+   * loud conflict, never a silent double). Example: Kiro resolves a delegated
+   * subagent's tool grants from the agent .md frontmatter
+   * (`tools: ["read", "write", "shell"]`), not from the CLI row's
+   * agent-v1 JSON - without the injected line a delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
   /**
@@ -162,8 +207,8 @@ export type HarnessManifest = {
    */
   runnerFrontmatterAdditions?: string[];
   /**
-   * How to render this harness's onboarding doc from core/templates/onboarding.md.
-   * null when the harness generates it elsewhere (codex, via emit) or ships none.
+   * How to render this harness's neutral and harness-specific onboarding.
+   * null when the harness generates it elsewhere or ships none.
    */
   onboarding?: OnboardingSpec | null;
   /** Rename core's rules/ dir to this (kiro: "steering", codex: "aidlc-rules", claude: null). */
@@ -184,6 +229,19 @@ export type HarnessManifest = {
    * invocation, and `$IN` is the only substitution.
    */
   documentExtractors?: Record<string, { argv: string[]; timeoutMs?: number }> | null;
+  /**
+   * The largest directive, in UTF-8 bytes, the engine may print as one shell
+   * result on this host, for a host that keeps less of a result than the
+   * engine's common 28 KiB cap. Emitted into <harnessDir>/tools/data/harness.json
+   * and read by the engine, which then keeps stage rules inline only while they
+   * fit and cuts load-steering parts to fit. A native engine also takes it from
+   * its own runtime for a project whose harness.json predates the field, and
+   * caps a larger project value at it; a project with several harnesses
+   * installed takes the smallest. A larger value
+   * is ignored. Size it below the host's cut with room for the trailing
+   * newline: a UTF-8 byte count is never below the character count.
+   */
+  directiveMaxBytes?: number;
   /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside

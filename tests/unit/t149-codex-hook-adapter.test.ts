@@ -24,12 +24,19 @@
 //                       response (the ×2 idempotency contract) — the audit
 //                       gains NO second row.
 //   malformed stdin   → fail-open exit 0 (advisory contract).
+//   record-human-turn -> a subagent's prompt (it carries agent_id) is not the
+//                       person's turn: no HUMAN_TURN, no kept words (#1411).
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
 // (Same idiom as kiro's t142.)
 
-import { describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -47,11 +54,17 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createIntent,
+  engineDir,
   humanActedSinceGate,
+  humanTurnMarkerPath,
+  humanTurnState,
+  personsGateFeedback,
+  readSessionBinding,
   sessionsDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
   writeSessionBinding,
+  writeSessionPidEntry,
   writeActiveDirectiveMarker,
   stateDigest,
 } from "../../core/tools/aidlc-lib.ts";
@@ -59,10 +72,14 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedAidlcMemory,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
+import { envWithoutCommandOnPath } from "../harness/test-command-paths.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -113,10 +130,28 @@ function seedShell(dir: string): void {
 // an active workflow state. cwd in the fixture payloads points at the spike rig —
 // the adapter must use ITS project (the scratch dir): we rewrite the fixture's
 // cwd to the scratch dir, exactly what a real install sees.
+// A plan-approval-guard stand-in that records what the adapter forwards.
+function recordingGuard(capture: string): string {
+  return [
+    'import { appendFileSync } from "node:fs";',
+    "export async function run(input: string): Promise<number> {",
+    `  appendFileSync(${JSON.stringify(capture)}, input + "\\n");`,
+    "  return 0;",
+    "}",
+    "if (import.meta.main) process.exit(await run(await Bun.stdin.text()));",
+  ].join("\n");
+}
+
+function forwardedSessions(capture: string): unknown[] {
+  return readFileSync(capture, "utf-8").trim().split("\n")
+    .map((line) => (JSON.parse(line) as { session_id?: unknown }).session_id);
+}
+
 function scratchProject(withState: boolean): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t149-")));
   cpSync(CODEX_TREE, join(dir, ".codex"), { recursive: true });
   seedShell(dir);
+  seedAidlcMemory(dir);
   if (withState) {
     writeFileSync(
       seededStateFile(dir),
@@ -192,6 +227,7 @@ function activeRecord(dir: string): string {
 function runIntentCreate(
   dir: string,
   description: string,
+  sessionId?: string,
 ): { code: number; stdout: string } {
   const result = spawnSync(
     "bun",
@@ -208,8 +244,12 @@ function runIntentCreate(
     {
       cwd: dir,
       encoding: "utf-8",
-      env: { ...process.env, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: undefined,
+        ...(sessionId ? { AIDLC_SESSION_OVERRIDE: sessionId, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" } : {}),
+      } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -246,6 +286,10 @@ function runAdapter(
   payload: unknown,
   envOverrides: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; code: number } {
+  if (target === "record-human-turn" && payload !== null && typeof payload === "object") {
+    const session = (payload as { session_id?: unknown }).session_id;
+    if (typeof session === "string") writeSessionPidEntry(projectDir, process.pid, session);
+  }
   const r = spawnSync(
     "bun",
     [join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts"), target],
@@ -259,7 +303,7 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: undefined,
         ...envOverrides,
       } as NodeJS.ProcessEnv,
-      timeout: 30_000,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     },
   );
   return {
@@ -400,7 +444,7 @@ describe("t149 Codex structured request_user_input presence", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a valid selection outside an active workflow is a no-op", () => {
     const dir = scratchProject(false);
@@ -410,6 +454,213 @@ describe("t149 Codex structured request_user_input presence", () => {
       }));
       expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(humanTurnCount(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t149 Codex typed guard switch", () => {
+  test("a typed $aidlc summary-confirmation off prompt turns it off as the person's choice", () => {
+    const dir = scratchProject(true);
+    try {
+      const typed = runAdapter(dir, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "codex-typed-session",
+        turn_id: "typed-summary-off",
+        cwd: dir,
+        prompt: "$aidlc config set summary-confirmation off",
+      });
+      expect(typed.code, typed.stderr).toBe(0);
+      const state = readFileSync(seededStateFile(dir), "utf-8");
+      expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+      const audit = readAudit(dir);
+      const ceremonyRows = audit.split("**Event**: CEREMONY_SET").slice(1);
+      expect(ceremonyRows).toHaveLength(1);
+      expect(ceremonyRows[0]).toContain("**Source**: you");
+
+      // An agent-run repeat is a no-op: the saved line is already the person's off.
+      const repeated = spawnSync(
+        "bun",
+        [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "config", "set", "summary-confirmation", "off"],
+        {
+          cwd: dir,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        },
+      );
+      expect(repeated.status, repeated.stderr).toBe(0);
+      expect(repeated.stdout).toContain("Summary Confirmation is already off (set by you)");
+      expect(readFileSync(seededStateFile(dir), "utf-8")).toBe(state);
+      expect(readAudit(dir).split("**Event**: CEREMONY_SET").slice(1)).toEqual(ceremonyRows);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// #1411: Codex runs UserPromptSubmit for every user input in a thread,
+// including a subagent's: the brief spawn_agent sends, and every follow-up the
+// agent sends it, arrive as `prompt` under the ROOT session id. Codex marks
+// them: a thread-spawned subagent's payload carries agent_id and agent_type,
+// the root thread's never does (codex-rs hook_runtime.rs
+// thread_spawn_subagent_hook_context; upstream test
+// subagent_start_replaces_session_start_and_injects_context). Only what the
+// person types in the main chat is their turn.
+describe("t149 Codex subagent prompts are not the person's turn", () => {
+  const ROOT_SESSION = "019f0000-0000-7000-8000-000000001411";
+  const BRIEF =
+    "You are performing an ADVISORY architecture review of the NFR Requirements stage.\n" +
+    "Read the stage artifacts and return your findings. Approve if nothing blocks. t149-brief-marker";
+  let turn = 0;
+
+  function prompt(
+    dir: string,
+    text: string,
+    subagent = false,
+    transcriptPath: string | null = null,
+  ): { code: number; stderr: string } {
+    turn += 1;
+    return runAdapter(dir, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit",
+      session_id: ROOT_SESSION,
+      turn_id: `019f0000-0000-7000-8000-${String(turn).padStart(12, "0")}`,
+      transcript_path: transcriptPath,
+      cwd: dir,
+      model: "gpt-5.5",
+      permission_mode: "default",
+      prompt: text,
+      ...(subagent
+        ? { agent_id: "019f0000-0000-7000-8000-0000000c4114", agent_type: "aidlc-architecture-reviewer-agent" }
+        : {}),
+    });
+  }
+
+  function appendEvent(dir: string, event: string, stage: string): void {
+    writeFileSync(
+      join(seededAuditDir(dir), pinnedShardName()),
+      `${readFileSync(join(seededAuditDir(dir), pinnedShardName()), "utf-8")}\n## ${event}\n` +
+        `**Timestamp**: 2026-08-03T18:57:53Z\n**Event**: ${event}\n**Stage**: ${stage}\n\n---\n`,
+    );
+  }
+
+  function keptWords(dir: string): string {
+    const wordsDir = join(engineDir(dir), "gate-words");
+    return existsSync(wordsDir)
+      ? readdirSync(wordsDir).map((name) => readFileSync(join(wordsDir, name), "utf-8")).join("\n")
+      : "";
+  }
+
+  test("a subagent's brief records no turn; the person's prompt, typed while it runs, does", () => {
+    const dir = scratchProject(true);
+    try {
+      appendEvent(dir, "STAGE_STARTED", "requirements-analysis");
+      const brief = prompt(dir, BRIEF, true);
+      expect(brief.code, brief.stderr).toBe(0);
+      // A follow-up the agent sends the running subagent is the agent too.
+      prompt(dir, "Also read the NFR design notes before you answer.", true);
+      expect(humanTurnCount(dir)).toBe(0);
+      expect(humanTurnState(dir)).toBe("none");
+      expect(keptWords(dir)).toBe("");
+      expect(existsSync(humanTurnMarkerPath(dir))).toBe(false);
+
+      const typed = prompt(dir, "Also check the p99 latency budget, please.");
+      expect(typed.code, typed.stderr).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      expect(humanTurnState(dir)).toBe("acted");
+      expect(keptWords(dir)).toContain("Also check the p99 latency budget, please.");
+      expect(existsSync(humanTurnMarkerPath(dir))).toBe(true);
+
+      // The person's own words count in the main chat whatever they say, even
+      // the brief's exact text.
+      prompt(dir, BRIEF);
+      expect(humanTurnCount(dir)).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a subagent's brief is never read as the person's own words at a gate", () => {
+    const dir = scratchProject(true);
+    try {
+      const gate = { stage: "requirements-analysis", acceptAsIs: false };
+      appendEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
+      prompt(dir, BRIEF, true);
+      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBeNull();
+      prompt(dir, "Please add a p99 latency budget of 200 ms.");
+      prompt(dir, BRIEF, true);
+      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+      expect(keptWords(dir)).not.toContain("t149-brief-marker");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Codex's internal reviewers (the /review reviewer, Guardian auto-review)
+  // run as their own threads under the root session id with no agent_id; the
+  // transcript_path Codex sends names the thread whose input it is
+  // (rollout-<timestamp>-<thread id>.jsonl), and the root thread's id is the
+  // session id (codex-rs core/src/session/session.rs, rollout_file_name.rs).
+  test("input to another Codex thread (an internal reviewer) is not the person's turn", () => {
+    const dir = scratchProject(true);
+    try {
+      const sessions = "/home/person/.codex/sessions/2026/10/01";
+      const reviewer = `${sessions}/rollout-2026-10-01T09-15-02-019f0000-0000-7000-8000-00000000beef.jsonl`;
+      const root = `${sessions}/rollout-2026-10-01T09-00-00-${ROOT_SESSION}.jsonl`;
+      prompt(dir, "Review the current code changes and report prioritized findings.", false, reviewer);
+      expect(humanTurnCount(dir)).toBe(0);
+      expect(keptWords(dir)).toBe("");
+      // The root thread's own rollout, an uppercase spelling of it, a reverted
+      // root's rollout, and no transcript at all are the main chat.
+      prompt(dir, "Approve", false, root);
+      prompt(dir, "Approve", false, root.toUpperCase().replace("/HOME/PERSON/.CODEX/SESSIONS", sessions));
+      prompt(dir, "Approve", false, root.replace(".jsonl", "_019f0000-0000-7000-8000-0000000000aa.jsonl"));
+      prompt(dir, "Approve", false, null);
+      expect(humanTurnCount(dir)).toBe(4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an approval after only a subagent's prompt is refused until the person replies", () => {
+    const dir = scratchProject(true);
+    try {
+      // A gate with no reviewer, so presence is the only check in play.
+      writeFileSync(
+        seededStateFile(dir),
+        readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"), "utf-8"),
+      );
+      const stage = "feasibility";
+      const state = (args: string[]) => {
+        const r = spawnSync("bun", [join(dir, ".codex", "tools", "aidlc-state.ts"), ...args, "--project-dir", dir], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_SKIP_ARTIFACT_GUARD: "1",
+            AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+            AIDLC_SKIP_HUMAN_PRESENCE_GUARD: undefined,
+            AIDLC_UNATTENDED: undefined,
+            AIDLC_PROJECT_DIR: undefined,
+            CLAUDE_PROJECT_DIR: undefined,
+          } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        return { code: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+      };
+      const opened = state(["gate-start", stage]);
+      expect(opened.code, opened.out).toBe(0);
+      prompt(dir, "Approve", true);
+      const refused = state(["approve", stage, "--user-input", "Approve"]);
+      expect(refused.code).not.toBe(0);
+      expect(refused.out).toContain("no new human reply has been received");
+      expect(readAudit(dir)).not.toContain("**Event**: GATE_APPROVED");
+
+      prompt(dir, "Approve");
+      const approved = state(["approve", stage, "--user-input", "Approve"]);
+      expect(approved.code, approved.out).toBe(0);
+      expect(readAudit(dir).split("**Event**: GATE_APPROVED").length - 1).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -425,6 +676,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         "codex-command-session",
         DEFAULT_SPACE,
         DEFAULT_RECORD_DIR,
+        "switch",
       );
       const other = createIntent(dir, "cursor-other", DEFAULT_SPACE, "feature");
       writeFileSync(
@@ -441,20 +693,28 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_input: { command },
       });
       expect(r.code, r.stderr).toBe(0);
-      const output = JSON.parse(r.stdout) as {
-        hookSpecificOutput?: {
-          hookEventName?: string;
-          permissionDecision?: string;
-          updatedInput?: { command?: string };
+      if (process.platform === "win32") {
+        // The adapter leaves Windows shell input unchanged; POSIX export syntax
+        // is emitted only on POSIX. Session-bound audit routing is checked below
+        // on both platforms.
+        expect(r.stdout).toBe("");
+        expect(r.stderr).toBe("");
+      } else {
+        const output = JSON.parse(r.stdout) as {
+          hookSpecificOutput?: {
+            hookEventName?: string;
+            permissionDecision?: string;
+            updatedInput?: { command?: string };
+          };
         };
-      };
-      expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
-      expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
-      expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
-        "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
-          "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
-          command,
-      );
+        expect(output.hookSpecificOutput?.hookEventName).toBe("PreToolUse");
+        expect(output.hookSpecificOutput?.permissionDecision).toBe("allow");
+        expect(output.hookSpecificOutput?.updatedInput?.command).toBe(
+          "export AIDLC_SESSION_OVERRIDE='codex-command-session' " +
+            "AIDLC_SESSION_OVERRIDE_SOURCE='payload'; " +
+            command,
+        );
+      }
 
       const humanTurn = runAdapter(dir, "record-human-turn", {
         hook_event_name: "UserPromptSubmit",
@@ -555,6 +815,34 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(message).toContain("first-class");
       expect(message).toContain("Given/When/Then");
       expect(message).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2b2: plan-approval guard calls carry the payload session id", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "guard-input.jsonl");
+      writeFileSync(join(dir, ".codex", "hooks", "aidlc-plan-approval-guard.ts"), recordingGuard(capture), "utf-8");
+      const env = { AIDLC_COMPILED_EXECUTABLE: "" };
+      for (const payload of [
+        {
+          tool_name: "apply_patch",
+          tool_input: { command: "*** Begin Patch\n*** Add File: src/a.ts\n+a\n*** End Patch\n" },
+        },
+        { tool_name: "spawn_agent", tool_input: { agent_type: "aidlc-developer-agent", message: "AIDLC-UNIT: todo-core" } },
+        { tool_name: "Bash", tool_input: { command: "echo hi" } },
+      ]) {
+        const r = runAdapter(
+          dir,
+          "plan-approval-guard",
+          { hook_event_name: "PreToolUse", cwd: dir, session_id: "S-CODEX", ...payload },
+          env,
+        );
+        expect(r.code).toBe(0);
+      }
+      expect(forwardedSessions(capture)).toEqual(["S-CODEX", "S-CODEX", "S-CODEX"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -810,7 +1098,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         ).code,
       ).toBe(0);
       const prior = activeRecord(dir);
-      expect(runIntentCreate(dir, "second intent").code).toBe(0);
+      // Another conversation creates the second intent.
+      expect(runIntentCreate(dir, "second intent", "next-session-0001").code).toBe(0);
       const current = activeRecord(dir);
       expect(current).not.toBe(prior);
 
@@ -935,7 +1224,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       // Move the live cursor to B in another space (the drift the resume must
       // detect). Cross-space correction must remain two skill invocations;
       // joining `$aidlc` calls with shell syntax turns the second into args.
-      const b = createIntent(dir, "intent-b", "team-b");
+      // Another conversation creates B. Without its session id, createIntent
+      // binds whichever session the test process's ancestry names, and once
+      // the 1 s ancestry cache has expired (a slow host) that is this session,
+      // which then follows B and is never offered the rebind.
+      const b = createIntent(dir, "intent-b", "team-b", undefined, undefined, "codex-other-session");
+      expect(readSessionBinding(dir, sid)?.intent).toBe(a.dirName);
       setActiveIntentCursor(dir, b.dirName, "team-b");
       setActiveSpaceCursor(dir, "team-b");
       const r = runAdapter(
@@ -951,8 +1245,8 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(ctx).toContain("INTENT REBIND OFFER");
       expect(ctx).toContain("intent-a");
       expect(ctx).toContain("first run `$aidlc space default`");
-      expect(ctx).toContain("$aidlc intent intent-a");
-      expect(ctx).not.toContain("/aidlc intent intent-a");
+      expect(ctx).toContain(`$aidlc intent ${a.dirName}`);
+      expect(ctx).not.toContain(`/aidlc intent ${a.dirName}`);
       expect(ctx).not.toContain("&&");
       expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
     } finally {
@@ -1111,13 +1405,6 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   // install dir, so the child spawn fails ENOENT and the whole hook layer dies.
   // The fix reuses the exact bun running the adapter (process.execPath).
 
-  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
-   *  environment the fix targets). Deterministic: reads real disk. */
-  function pathWithoutBun(): string {
-    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
-    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
-  }
-
   test("16: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
     // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
     // starts regardless of PATH; the contract under test is that its OWN child
@@ -1125,9 +1412,11 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     // argv[0] this session-start would ENOENT in runCore and emit nothing.
     const dir = scratchProject(true);
     try {
-      const strippedPath = pathWithoutBun();
+      const strippedEnv = envWithoutCommandOnPath("bun");
+      const strippedPath = strippedEnv.PATH ?? "";
       // Premise guard: bun must genuinely be unresolvable on the stripped PATH.
       expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      expect(Bun.which("bun", { PATH: strippedPath })).toBeNull();
       const r = spawnSync(
         process.execPath,
         [join(dir, ".codex", "hooks", "aidlc-codex-adapter.ts"), "session-start"],
@@ -1136,11 +1425,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
           input: JSON.stringify(withCwd(FIXTURES.sessionStart, dir)),
           encoding: "utf-8",
           env: {
-            ...process.env,
+            ...strippedEnv,
             CLAUDE_PROJECT_DIR: undefined,
-            PATH: strippedPath,
           } as NodeJS.ProcessEnv,
-          timeout: 30_000,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         },
       );
       expect(r.status ?? -1).toBe(0);

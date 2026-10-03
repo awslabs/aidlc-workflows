@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:set-construction-iteration
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:set-construction-iteration, audit:UNIT_SKIPPED, function:unitSkippedUnits
 //
 // CLI-contract test for opt-in UNIT-MAJOR construction design iteration.
 // mechanism = cli.
@@ -38,7 +38,12 @@
 // bolt_dag runtime-graph.json with units [alpha, beta]. Per-unit artifact dirs
 // are seeded to control coverage. All temp dirs are cleaned in afterEach.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -60,7 +65,12 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -116,6 +126,7 @@ const PRODUCES: Record<string, string[]> = {
 const REVIEW_ARTIFACTS: Record<string, string> = {
   "functional-design": "functional-spec",
   "nfr-requirements": "security-requirements",
+  "infrastructure-design": "cicd-pipeline",
 };
 // The walk's inner list in graph order: the four inline design stages, then
 // code-generation (mode: subagent, in the walk since the block filter was
@@ -268,6 +279,7 @@ function runNext(proj: string): Directive {
 /** Run `aidlc-orchestrate.ts report ...` and parse the emitted directive. */
 function runReport(proj: string, args: string[]): Directive {
   const r = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: (() => {
       const e = { ...process.env };
@@ -289,7 +301,7 @@ function setIteration(proj: string, value: string): { rc: number; out: string } 
   const r = spawnSync(
     BUN,
     [STATE, "set-construction-iteration", value, "--project-dir", proj],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -313,7 +325,7 @@ function unitVerb(
       "--project-dir",
       proj,
     ],
-    { encoding: "utf-8", env: process.env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env },
   );
   return {
     rc: r.status ?? -1,
@@ -347,7 +359,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, args, { encoding: "utf-8" });
+  const request = spawnSync(BUN, args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review request failed: ${request.stdout ?? ""}${request.stderr ?? ""}`);
   }
@@ -361,6 +373,7 @@ function logReviewReady(proj: string, stage: string, unit: string): void {
     "utf-8",
   );
   const verdict = spawnSync(BUN, [...args, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   if ((verdict.status ?? -1) !== 0) {
@@ -402,7 +415,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("1b: a kind-vacuous unit does not block the next applicable unit", () => {
     // Isolate the active stage: packaging is applicable to later unit-major
@@ -416,7 +429,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("alpha");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 2: THE PIVOTAL ORDERING ASSERTION. With functional-design/alpha covered, the
   // unit-major walk stays on alpha and moves to the NEXT block stage
@@ -435,7 +448,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/nfr-requirements/performance-requirements.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3: THE TIME-TO-FIRST-CODE ASSERTION. After alpha's four design stages, the
   // walk emits code-generation/alpha - alpha is BUILT before beta's design
@@ -453,7 +466,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.produces).toContain(
       `${RP}/construction/alpha/code-generation/code-generation-plan.md`,
     );
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 3b: only after alpha is covered for ALL FIVE block stages (design + build)
   // does the walk move to the next unit: functional-design/beta.
@@ -466,7 +479,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 4: with the whole (stage x unit) grid covered, the fully-covered walk
   // delegates to the stage-major pick === null branch for the CURRENT stage
@@ -481,7 +494,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("functional-design");
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 5: the early-approve coverage guard is unchanged. With beta uncovered,
   // approving functional-design is refused by the existing per-unit guard.
@@ -499,7 +512,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.message).toContain("functional-design");
     expect(d.message).toContain("beta");
     expect(d.message).toContain("work items are not complete");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 6: revision re-entry. From a fully-covered grid, deleting one artifact of
   // nfr-design/alpha leaves the grid uncovered again; the next `next` re-enters the
@@ -519,7 +532,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.stage).toBe("nfr-design");
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7a: subcommand validation, a bogus value is rejected with a non-zero exit.
   test("7a: set-construction-iteration rejects an invalid value", () => {
@@ -527,7 +540,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const r = setIteration(proj, "bogus");
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("Invalid construction iteration");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // 7b: subcommand write: set-construction-iteration unit-major writes the field
   // under ## Runtime State, and the engine then walks unit-major (fd/alpha covered
@@ -543,7 +556,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const d = runNext(proj);
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("alpha");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("8: stale DAG healing preserves unit kinds and warns exactly once per next", () => {
     const proj = seedProject("unit-major");
@@ -571,7 +584,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const warning =
       "runtime-graph.json bolt_dag is missing or stale; recomputed 1 unit batch(es)";
     expect(run.stderr.split(warning).length - 1).toBe(1);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9: reviews recorded during the unit-major walk survive a later STAGE_STARTED", () => {
     const proj = seedProject("unit-major");
@@ -601,7 +614,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
       "approved",
     ]);
     expect(nfr.kind).toBe("done");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("10: lifecycle receipts for a later unit-major stage survive its STAGE_STARTED", () => {
     const proj = seedProject("unit-major");
@@ -629,5 +642,327 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(nfr.stage).toBe("nfr-requirements");
     expect(nfr.unit).toBe("alpha");
     expect(nfr.gate).toBe(true);
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // 11-17: a conditional skip under unit-major. Current Stage stays on the
+  // first block stage while the walk directs one (stage, unit) beat at a time,
+  // and a stage's condition is judged for that unit. So a skip names the live
+  // beat's stage and unit and covers that unit only (a UNIT_SKIPPED receipt);
+  // every other unit still gets the stage, and the stage itself is skipped
+  // only once no unit owes it.
+  const SKIP_REASON = "No infrastructure to design: a local library with no deployment";
+
+  function skipArgs(stage: string, unit?: string): string[] {
+    return [
+      "--stage",
+      stage,
+      ...(unit ? ["--unit", unit] : []),
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ];
+  }
+
+  function countEvents(proj: string, event: string): number {
+    return readAllAuditShards(proj).split(`**Event**: ${event}\n`).length - 1;
+  }
+
+  /** Complete every block stage before `stage` and make `stage` current. */
+  function atStage(proj: string, stage: string): void {
+    const path = seededStateFile(proj);
+    let state = readFileSync(path, "utf-8");
+    for (const s of BLOCK) {
+      if (s === stage) break;
+      state = state.replace(new RegExp(`^- \\[[ -]\\] ${s} `, "m"), `- [x] ${s} `);
+    }
+    state = state
+      .replace(new RegExp(`^- \\[ \\] ${stage} `, "m"), `- [-] ${stage} `)
+      .replace("- **Current Stage**: functional-design", `- **Current Stage**: ${stage}`);
+    writeFileSync(path, state);
+  }
+
+  test("11: a skip covers the walk's unit only and the other unit still gets the stage", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "alpha", s);
+    const d = runNext(proj);
+    expect(d.stage).toBe("infrastructure-design");
+    expect(d.unit).toBe("alpha");
+
+    // The shape the fuzz run's conductor used (no --unit) names the command.
+    const unpinned = runReport(proj, skipArgs("infrastructure-design"));
+    expect(unpinned.kind).toBe("error");
+    expect(unpinned.message).toContain("covers one unit");
+    expect(unpinned.message).toContain(
+      "--stage infrastructure-design --unit alpha --result skipped",
+    );
+    expect(countEvents(proj, "UNIT_SKIPPED")).toBe(0);
+
+    const skipped = runReport(proj, skipArgs("infrastructure-design", "alpha"));
+    expect(skipped.kind).toBe("done");
+    expect(String(skipped.reason)).toContain('for unit "alpha" only');
+    // The walk goes on to alpha's next step, and the done says so.
+    expect(skipped.workflow_continues).toBe(true);
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[ \] infrastructure-design /m);
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(countEvents(proj, "UNIT_SKIPPED")).toBe(1);
+    expect(readAllAuditShards(proj)).toContain(`**Reason**: ${SKIP_REASON}`);
+    expect(countEvents(proj, "STAGE_SKIPPED")).toBe(0);
+
+    const after = runNext(proj);
+    expect(after.stage).toBe("code-generation");
+    expect(after.unit).toBe("alpha");
+
+    // beta still owes infrastructure design.
+    coverUnit(proj, "alpha", "code-generation");
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "beta", s);
+    const beta = runNext(proj);
+    expect(beta.stage).toBe("infrastructure-design");
+    expect(beta.unit).toBe("beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("11b: parking mid-walk names the Unit's real step, not the block's first stage", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "alpha", s);
+    expect(runReport(proj, skipArgs("infrastructure-design", "alpha")).workflow_continues).toBe(true);
+    const park = spawnSync(BUN, [ORCH, "park", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    const parked = JSON.parse((park.stdout ?? "").trim()) as Directive;
+    expect(parked).toMatchObject({ kind: "parked", stage: "code-generation" });
+    expect(String(parked.reason)).toContain('parked at "code-generation" for unit "alpha"');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Current Stage**: functional-design");
+    // A later plain next says the same thing.
+    expect(runNext(proj)).toMatchObject({ kind: "parked", stage: "code-generation" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("12: a skip of a step the walk is not running is refused and names the step and unit", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design");
+    coverUnit(proj, "alpha", "nfr-requirements");
+    expect(runNext(proj).stage).toBe("nfr-design");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const ahead = runReport(proj, skipArgs("infrastructure-design", "alpha"));
+    expect(ahead.kind).toBe("error");
+    expect(ahead.message).toContain('"nfr-design" for unit "alpha"');
+    expect(ahead.message).toContain(
+      "--stage nfr-design --unit alpha --result skipped",
+    );
+    expect(ahead.message).toContain("continue with `/aidlc`");
+    expect(ahead.message).not.toContain("engine");
+
+    const wrongUnit = runReport(proj, skipArgs("nfr-design", "beta"));
+    expect(wrongUnit.kind).toBe("error");
+    expect(wrongUnit.message).toContain('"nfr-design" for unit "alpha"');
+
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(countEvents(proj, "UNIT_SKIPPED")).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("13: a unit whose files for the stage are written but not completed cannot be skipped", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "alpha", s);
+    // A started unit makes the receipt the completion authority, so written
+    // files alone leave the beat on alpha.
+    expect(unitVerb(proj, "infrastructure-design", "start", "alpha").rc).toBe(0);
+    coverUnit(proj, "alpha", "infrastructure-design");
+    const d = runNext(proj);
+    expect(d.stage).toBe("infrastructure-design");
+    expect(d.unit).toBe("alpha");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const refused = runReport(proj, skipArgs("infrastructure-design", "alpha"));
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("already written");
+    expect(refused.message).not.toContain("--result skipped");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(countEvents(proj, "UNIT_SKIPPED")).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("15: alpha skips, beta does the stage, and its approval names alpha as skipped", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    atStage(proj, "infrastructure-design");
+    expect(runNext(proj).unit).toBe("alpha");
+
+    const skipped = runReport(proj, skipArgs("infrastructure-design", "alpha"));
+    expect(skipped.kind).toBe("done");
+    let state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[-\] infrastructure-design /m);
+    expect(state).toContain("- **Current Stage**: infrastructure-design");
+
+    const code = runNext(proj);
+    expect(code.stage).toBe("code-generation");
+    expect(code.unit).toBe("alpha");
+    coverUnit(proj, "alpha", "code-generation");
+    const beta = runNext(proj);
+    expect(beta.stage).toBe("infrastructure-design");
+    expect(beta.unit).toBe("beta");
+    coverUnit(proj, "beta", "infrastructure-design");
+    coverUnit(proj, "beta", "code-generation");
+
+    const gate = runNext(proj);
+    expect(gate.kind).toBe("run-stage");
+    expect(gate.stage).toBe("infrastructure-design");
+    expect(gate.unit).toBe("beta");
+    expect(gate.gate).toBe(true);
+    expect(gate.change_notices).toContain(
+      `Infrastructure Design was skipped for unit "alpha": ${SKIP_REASON}`,
+    );
+
+    // beta's review is owed; alpha, skipped, owes none.
+    logReviewReady(proj, "infrastructure-design", "beta");
+    const approved = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "approved",
+    ]);
+    expect(approved.kind).toBe("done");
+    state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[x\] infrastructure-design /m);
+    expect(countEvents(proj, "STAGE_SKIPPED")).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("16: once every unit skips a later stage the stage itself is skipped", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "alpha", s);
+    expect(runReport(proj, skipArgs("infrastructure-design", "alpha")).kind).toBe("done");
+    coverUnit(proj, "alpha", "code-generation");
+    for (const s of DESIGN_BLOCK.slice(0, 3)) coverUnit(proj, "beta", s);
+    expect(runNext(proj).unit).toBe("beta");
+
+    const last = runReport(proj, skipArgs("infrastructure-design", "beta"));
+    expect(last.kind).toBe("done");
+    expect(String(last.reason)).toContain("whole step is marked skipped");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[S\] infrastructure-design /m);
+    expect(state).toContain("- **Current Stage**: functional-design");
+    expect(countEvents(proj, "UNIT_SKIPPED")).toBe(2);
+    expect(countEvents(proj, "STAGE_SKIPPED")).toBe(1);
+    expect(readAllAuditShards(proj)).toContain("**Skip Kind**: conditional-runtime");
+
+    const after = runNext(proj);
+    expect(after.stage).toBe("code-generation");
+    expect(after.unit).toBe("beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("17: a kind-vacuous unit plus a skipped unit skip the Current Stage and route on", () => {
+    const proj = seedProject("unit-major");
+    // A spec unit owes no infrastructure design; the library unit does.
+    seedBoltDag(proj, [
+      { name: "contract", kind: "spec" },
+      { name: "lib", kind: "library" },
+    ]);
+    atStage(proj, "infrastructure-design");
+    coverUnit(proj, "contract", "code-generation");
+    const d = runNext(proj);
+    expect(d.stage).toBe("infrastructure-design");
+    expect(d.unit).toBe("lib");
+
+    const skipped = runReport(proj, skipArgs("infrastructure-design", "lib"));
+    expect(skipped.kind).toBe("done");
+    expect(String(skipped.reason)).toContain("whole step is marked skipped");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[S\] infrastructure-design /m);
+    expect(state).toMatch(/^- \[-\] code-generation /m);
+    expect(state).toContain("- **Current Stage**: code-generation");
+    expect(countEvents(proj, "UNIT_SKIPPED")).toBe(1);
+    expect(countEvents(proj, "STAGE_SKIPPED")).toBe(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("14: stage-major keeps skipping only the Current Stage", () => {
+    const proj = seedProject();
+    seedBoltDag(proj, ["alpha", "beta"]);
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+
+    const refused = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "skipped",
+      "--reason",
+      SKIP_REASON,
+    ]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain('"functional-design"');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+
+    // Stage-major directives also carry directive.unit, but here a skip always
+    // covers every unit, so a --unit pin is refused before any change.
+    const auditBefore = readAllAuditShards(proj);
+    const pinned = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--unit",
+      "alpha",
+      "--result",
+      "skipped",
+      "--reason",
+      "Simple logic changes with no new business logic",
+    ]);
+    expect(pinned.kind).toBe("error");
+    expect(pinned.message).toContain("Construction runs unit by unit");
+    expect(pinned.message).toContain("leaving out --unit");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(readAllAuditShards(proj)).toBe(auditBefore);
+
+    const skipped = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--result",
+      "skipped",
+      "--reason",
+      "Simple logic changes with no new business logic",
+    ]);
+    expect(skipped.kind).toBe("done");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    expect(state).toMatch(/^- \[S\] functional-design /m);
+    expect(state).toContain("- **Current Stage**: nfr-requirements");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("18: a rejected mixed-skip gate makes the skipped unit owe the stage again", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    atStage(proj, "infrastructure-design");
+    expect(runReport(proj, skipArgs("infrastructure-design", "alpha")).kind).toBe("done");
+    coverUnit(proj, "alpha", "code-generation");
+    coverUnit(proj, "beta", "infrastructure-design");
+    coverUnit(proj, "beta", "code-generation");
+    const gate = runNext(proj);
+    expect(gate.stage).toBe("infrastructure-design");
+    expect(gate.unit).toBe("beta");
+    expect(gate.gate).toBe(true);
+
+    // The human asks for changes: a stage-level rejection starts a new attempt
+    // for every unit, so alpha's skip no longer counts.
+    const rejected = runReport(proj, [
+      "--stage",
+      "infrastructure-design",
+      "--result",
+      "rejected",
+      "--user-input",
+      "Request Changes",
+      "--reason",
+      "alpha is deployed after all; design its infrastructure",
+    ]);
+    expect(rejected.kind, JSON.stringify(rejected)).not.toBe("error");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(
+      /^- \[R\] infrastructure-design /m,
+    );
+
+    const again = runNext(proj);
+    expect(again.kind).toBe("run-stage");
+    expect(again.stage).toBe("infrastructure-design");
+    expect(again.unit).toBe("alpha");
+    expect(again.gate).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

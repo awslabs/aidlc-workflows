@@ -3,7 +3,12 @@
 // The real engine must resolve its state and emitted record paths from a
 // session binding before consulting shared cursors.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { copyFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -23,6 +28,8 @@ import {
   FIXTURES_DIR,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
@@ -85,7 +92,7 @@ function statePath(intent: string): string {
 
 describe("t312 orchestrate session binding", () => {
   test("PID ancestry selects its binding before the shared cursor", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
 
     const result = next();
@@ -107,11 +114,12 @@ describe("t312 orchestrate session binding", () => {
   });
 
   test("headless environment pin reaches the state child end to end", () => {
-    writeSessionBinding(proj, "session-b", "default", secondDir);
+    writeSessionBinding(proj, "session-b", "default", secondDir, "switch");
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
     const firstBefore = readFileSync(statePath(firstDir), "utf-8");
 
     const result = Bun.spawnSync({
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cmd: [process.execPath, ORCH, "park", "--project-dir", proj],
       stdout: "pipe",
       stderr: "pipe",
@@ -128,7 +136,7 @@ describe("t312 orchestrate session binding", () => {
   });
 
   test("absent payload keeps an inherited override for the spawned engine", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
     rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
 
     const result = next(
@@ -152,8 +160,8 @@ describe("t312 orchestrate session binding", () => {
       "feature",
     );
     setActiveIntentCursor(proj, secondDir, "default");
-    writeSessionBinding(proj, "session-a", "default", firstDir);
-    writeSessionBinding(proj, "session-b", "default", ancestry.dirName);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
+    writeSessionBinding(proj, "session-b", "default", ancestry.dirName, "switch");
     writeSessionPidEntry(proj, process.pid, "session-b");
     writeSessionPidEntry(proj, process.ppid, "session-b");
 
@@ -167,8 +175,8 @@ describe("t312 orchestrate session binding", () => {
   });
 
   test("divergent environment and ancestry refuse before any workflow write", () => {
-    writeSessionBinding(proj, "session-a", "default", firstDir);
-    writeSessionBinding(proj, "session-b", "default", secondDir);
+    writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
+    writeSessionBinding(proj, "session-b", "default", secondDir, "switch");
     writeSessionPidEntry(proj, process.pid, "session-a");
     const firstBefore = readFileSync(statePath(firstDir), "utf-8");
     const secondBefore = readFileSync(statePath(secondDir), "utf-8");
@@ -176,6 +184,7 @@ describe("t312 orchestrate session binding", () => {
     const secondAuditBefore = readAllAuditShards(proj, secondDir, "default");
 
     const result = Bun.spawnSync({
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cmd: [process.execPath, ORCH, "park", "--project-dir", proj],
       stdout: "pipe",
       stderr: "pipe",
@@ -201,7 +210,7 @@ describe("t312 orchestrate session binding", () => {
 
   for (const invalid of [" session-a", "session-a ", "session/a"]) {
     test(`invalid environment value ${JSON.stringify(invalid)} is ignored`, () => {
-      writeSessionBinding(proj, "session-a", "default", firstDir);
+      writeSessionBinding(proj, "session-a", "default", firstDir, "switch");
       rmSync(sessionPidMapDir(proj), { recursive: true, force: true });
 
       const result = next({

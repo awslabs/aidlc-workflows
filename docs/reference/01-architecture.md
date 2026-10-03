@@ -89,7 +89,7 @@ Crossing the two axes gives four quadrants. Three are populated; one is intentio
 |  | Framework-authored | Team-authored |
 |---|---|---|
 | **Loaded continuously** (harness config) | `.claude/skills/`, `.claude/agents/`, `.claude/knowledge/`, `aidlc/spaces/<active-space>/memory/org.md`, `aidlc/spaces/<active-space>/memory/phases/*.md`, `.claude/scopes/`, `.claude/tools/data/scope-grid.json`, `.claude/tools/data/stage-graph.json` | `aidlc/spaces/<active-space>/memory/team.md`, `aidlc/spaces/<active-space>/memory/project.md` |
-| **Per-workflow artefact** | *(empty by design)* | `<record>/aidlc-state.md`, `<record>/audit/*.md` (per-clone shards), `<record>/<phase>/<stage>/*.md`, `.aidlc/worktrees/bolt-*/` |
+| **Per-workflow artefact** | *(empty by design)* | `<record>/aidlc-state.md`, `<record>/audit/*.md` (per-clone shards), `<record>/<phase>/<stage>/*.md`, `.aidlc/worktrees/bolt-<id8>_<slug>/` |
 
 The framework doesn't produce per-workflow artefacts because such outputs would have to ship with the distribution — which makes them framework-authored harness config, not per-workflow output. The empty cell is the routing rule's signature, not a gap.
 
@@ -109,7 +109,7 @@ Worked examples:
 - *"Trunk-based development is the recommended branching strategy"* — same for every project (framework opinion) and loaded continuously (read at delivery-planning). Goes to `aidlc/spaces/<active-space>/memory/org.md`.
 - *"The 5 common branching strategies and their trade-offs"* — same for every project (framework reference) and loaded continuously (aidlc-pipeline-deploy-agent reads when discovering branching strategy). Goes to `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md`.
 - *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `<record>/inception/requirements-analysis/`.
-- *"State in the worktree hosting Bolt-1 mid-Construction"* — project-specific and per-workflow (regenerated for each swarm-mode Bolt). Goes to that worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
+- *"State in the worktree hosting the payments Unit mid-Construction"* — project-specific and per-workflow (regenerated for each swarm-mode Bolt). Goes to that worktree's copy of the record dir, `.aidlc/worktrees/bolt-7c31e9a0_payments/<record>/aidlc-state.md`. The [Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity) uses the same intent UUID suffix as Unit claims.
 
 ### Sub-categories of harness config (top row)
 
@@ -294,6 +294,57 @@ committed. `package.ts --check` builds the complete projection set twice in
 independent temporary roots and byte-compares those results. CI, tests, binary
 builds, and release packaging regenerate before consuming either local root.
 
+### Markdown structure
+
+`markdownBlocks` in `core/tools/aidlc-lib.ts` is the single Markdown block
+interpreter for visibility, containers, link reference definitions, claim
+splitting, and confirmation parsing. It is backed by `Bun.markdown`, the
+CommonMark/GFM renderer built into Bun and into every native `aidlc` binary, so
+no parser is installed or vendored. `Bun.markdown` reports rendered elements,
+not source positions, so the adapter inserts a probe word on each line at a
+column where it cannot change block structure, keeps only the probes that
+leave the rendered HTML byte-identical, and reads where each probe rendered:
+its block, containers, and any inline code or raw HTML. Link reference
+definitions are located the same way. `visibleMarkdownLines` is a projection of
+that structure, not another scanner; its consumer options preserve the
+existing raw-source and invisible-boundary contracts. Raw HTML blocks of kinds
+1 to 7 never supply Markdown headings, answers, or control tags.
+
+The adapter corrects four `Bun.markdown` deviations (seen in 1.3.14 through
+at least 1.4.2) where the renderer would hide a heading or expose code:
+
+- it renders with GFM task lists off, because an empty task item such as
+  `- [x]` swallows the next line, even a heading;
+- a line that starts a heading, fence or HTML block ends a GFM table, so the
+  adapter renders it after an inserted blank line instead of as a table row;
+- a fence line outside the quote or list item that opened a fenced block
+  starts a new fence, so the adapter ends the container first with an inserted
+  HTML comment line;
+- a tag indented four or more columns under paragraph text continues the
+  paragraph (no HTML block start allows that indentation), so the adapter
+  renders that line with a no-break space in place of its last indentation
+  column.
+
+Inserted and replaced lines exist only in the adapter's rendering; every
+position still indexes the source. A line with no letter or digit outside
+markup still carries a probe, every code span carries one, and the probe word
+never appears in the source or its rendering, so an entity cannot spell it.
+A document whose probes keep changing the rendering is classified within a
+fixed number of renders; lines it cannot place stay `unknown`.
+
+Two consumers fail closed where a line is misread or left unplaced. The
+summary digest ends the excluded `Assumption Confirmation` section at any line
+spelled as a top-level `## Q<n>` or `## Requested Changes Feedback` heading,
+even one the adapter reads as raw HTML or code, so a hidden heading can only
+widen the confirmed content. The claim-sources sensor reads a nonblank line the
+adapter could not place as its own claim.
+
+Markdown behavior follows the Bun that runs the tools: the Bun
+embedded in a native release, or the Bun a copy-channel user installs
+(`Bun.markdown` needs Bun 1.3.8 or newer; the adapter refuses clearly without
+it). The review-authority check (`renderedReviewAuthority`) calls the same
+renderer directly and is deliberately a separate code path.
+
 ### Projection identity and ownership
 
 Every generated harness directory carries three distinct metadata contracts
@@ -310,14 +361,18 @@ under `tools/data/`:
   version, distribution, and harness directory.
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
-  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
-  `whole-file`). Optional integrations and exact legacy hashes are declared
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`,
+  `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
+  file key by key: it adds a shipped key only when absent, keeps every other
+  key and comment, and is left out of the copy runtime). Optional
+  integrations and exact legacy hashes are declared
   here; an unclassified top-level entry makes packaging or loading fail.
 
 `aidlc config` validates the stamp and descriptor before planning. It writes a
 fourth file, `aidlc-manifest.json`, into the installed harness as the
-project-specific ownership baseline: upstream version, per-file hashes, root
-contributions, and the selected optional-integration mode. Refresh uses that
+project-specific baseline: upstream version, per-file hashes, shipped-entry
+hashes for Claude settings and Codex tables, root contributions, and the selected
+optional-integration mode. Refresh uses that
 baseline to update unchanged framework bytes, preserve local modifications,
 merge root integrations, and remove retired owned content. Copy-channel hashes
 recorded in the native descriptor allow an exact, unmodified legacy copy install
@@ -397,7 +452,11 @@ User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
 the installed hook bytes, and probes the selected harness CLI. The recorded
 absolute paths are diagnostic evidence, not rewritten hook commands: host
-allowlists and Codex trust hashes bind the bare command prefix.
+allowlists and Codex trust hashes bind the bare command prefix. The doctor's
+runtime row also reads the project's hook heartbeats: a command found only on
+the current shell's PATH passes when those hooks fired in the last ten minutes
+(not stale, and with no `session-end` heartbeat newer than the last
+`session-start`), since they ran through it.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the
@@ -504,6 +563,34 @@ or audit failure restores committed paths in reverse order. A failed rollback
 preserves recovery evidence, and the next transaction quarantines abandoned
 staging rather than deleting it. Project init/refresh, machine lifecycle,
 project pins, plugin selection, and plugin sync all build plans for this engine.
+
+The root lock prefers hard-link publication and falls back automatically to an
+owner-stamped directory when hard links are unavailable. Both use
+`.aidlc-transaction.lock`, so a live legacy file owner still blocks the directory
+fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
+gate in the temporary directory, keyed by canonical root, around transaction
+execution, including
+acquisition, stale-owner recovery, and ownership-checked release. Directory
+recovery requires a matching host/boot identity and a dead owner PID; unknown,
+foreign, or incomplete directory owners are retained for manual diagnosis.
+
+The coordination contract covers cooperating processes on one continuously
+running mount on one host with a common local temporary directory (`TMPDIR` on
+Unix), canonical root, and PID namespace. It provides no distributed locking
+between hosts or independent mounts. Moving the gate locally does not change
+the data contract: workflow append and descriptor identity must remain coherent,
+and transaction publication still depends on atomic file replacement and
+directory rename supplied by the filesystem. No copy-and-delete rename
+fallback is added.
+
+`assertTransactionFilesystem` probes exclusive creation, regular-file `fsync`,
+mutable append/readback and descriptor identity, file/directory rename, Unix
+`chmod`, and transaction and runtime workflow locking. The first-run wizard and
+transactions using the directory fallback invoke it; unsupported directory
+`fsync` is tolerated. Successful probes cannot establish crash durability or
+rename atomicity, nor certify a driver through simulated failures. Mountpoint's
+missing directory rename/mutable-file support and s3fs's non-atomic rename
+remain outside the full transaction contract. See the [storage compatibility matrix](../guide/18-install-and-lifecycle.md#transactions-and-recovery).
 
 ### Release assembly and provenance
 
@@ -691,6 +778,32 @@ binding then precede the two shared per-user cursors:
   means "no record yet" - the signal the orchestrator uses to auto-creation the
   first intent.
 
+**Participation.** Resolution names a record; it does not decide whether this
+conversation may write into or be held by it. `workflowParticipation()` does, from
+machine-local evidence only: a binding whose `source` records a choice (`create`,
+`migration`, `switch`, `space-switch-cursor`, `cursor`, `stamp`), or the `active-intent`
+cursor naming the record; and, re-checked on every call rather than trusted as a
+stored source, a validated delegated worktree, this worktree's own metadata
+(checked against the creating repository's git common dir) and a Unit claimed on
+this machine for that intent. A creation seen only in a command's output counts
+as `create` when intent create's one-shot receipt in the record's gitignored
+engine dir is present. On resume, a session with no binding follows its own UUID
+stamp and binds that record as `stamp`: only a joined session is stamped, since
+writers that bind without a choice (`observed-create`, `space-switch-lone`) clear
+the stamp. A lone committed record and an unsourced binding whose cursor names
+another record are not evidence, so a plain
+`git worktree` without AI-DLC worktree metadata selects its intent explicitly. Hooks classify once
+per call, with the payload session pinned so their writes use the same selection;
+a conversation outside the selected workflow writes nothing into it and is not held
+by its gates, while runtime integrity, direct lifecycle-command refusals and the
+claimed-checkout write bound still apply. The engine treats such a conversation as
+having no active intent (`next` asks which intent to work on; `continue`, `report`
+and `park` refuse). When participation cannot be decided because a sibling-only
+worktree's delegated metadata is malformed or stale, no workflow is selected: hooks
+write nothing, the reviewer read scope fails open, gates do not stand aside so
+Plan Approval refuses mutations, and the engine refuses with the file to repair
+(`.aidlc/worktree-meta.json`) or the parent checkout to work from.
+
 Session bindings live at
 `aidlc/.aidlc-sessions/<safe-session-id>.binding.json`. Spawned tools discover
 their session through the nearest live entry in
@@ -699,18 +812,34 @@ the cursors remain the write-through fallback. The engine passes its resolved
 identity to child tools through `AIDLC_SESSION_OVERRIDE`, which is also the
 headless automation seam when set on the harness process.
 
-SessionStart retires each visited PID's previous session before checking its
-process identity. Until that check succeeds, a record with `sessionId: null`
-stops ancestry fallback at that PID. A failed or timed-out refresh therefore
+SessionStart retires each visited PID's previous session with a record whose
+`sessionId` is null until its identity is verified. POSIX writes that barrier
+before lookup. Windows first checks the parent edge: a verified newer or
+equal-time parent is rejected without changing its PID record, including during
+GC. If inspection is unavailable, Windows still retires the known parent slot
+and stops; it does not publish an unverified session. A failed or timed-out
+refresh therefore
 cannot restore the previous session when process inspection recovers; explicit
 payload identity, environment identity, and the shared-cursor fallback still
 apply. A later successful SessionStart replaces the null record.
 
 The Codex adapter additionally pins its validated payload identity into every
 POSIX Bash command and core-hook child, so sandboxed macOS does not depend on
-`ps` ancestry. Windows ancestry is unavailable and the POSIX command rewrite
-does not apply there; multiple Kiro IDE chats can also share one process.
-Spawned tools in those cases use shared-cursor behavior unless the harness
+`ps` ancestry. Windows x64/arm64 ancestry uses a stable `OpenProcess` handle for
+`NtQueryInformationProcess(ProcessBasicInformation)`, `GetProcessTimes`, and
+zero-time process-object liveness checks. The native 48-byte structure's returned
+length and PID are validated; process handles are closed on every path.
+Creation times stay lossless in PID receipts. Each parent must predate its child,
+so a recycled parent PID cannot join the walk to a newer process. Receipts
+without a verified Windows creation time do not establish session ownership.
+Lookup failure, an ambiguous parent edge, or exhaustion of the existing
+50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+negative cache retain their existing behavior. Linux and macOS lookups are unchanged.
+
+The POSIX command rewrite does not apply on Windows. Multiple Kiro IDE chats
+and opencode sessions can still share one process; process ancestry cannot
+distinguish those conversations. Spawned tools with unavailable or ambiguous
+ancestry use shared-cursor behavior unless a payload-bearing hook or the harness
 process supplies `AIDLC_SESSION_OVERRIDE`.
 
 Project-aware path helpers resolve through the same selection ladder: an
@@ -761,7 +890,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 102-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 110-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

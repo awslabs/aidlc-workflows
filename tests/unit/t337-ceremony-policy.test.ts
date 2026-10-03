@@ -39,6 +39,7 @@ const POLICY_ENV = {
   AIDLC_DISABLE_LEARNINGS: "0",
   AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
   AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0",
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0",
 };
 const tempDirs: string[] = [];
 
@@ -55,7 +56,7 @@ describe("t337 ceremony resolution", () => {
       mkdirSync(scopes);
       writeFileSync(join(scopes, "aidlc-quiet.md"), [
         "---", "name: quiet", "depth: Standard",
-        "sensors: off", "learnings: off", "summary_confirmation: off", "---", "",
+        "sensors: off", "learnings: off", "summary_confirmation: off", "plan_approval: off", "---", "",
       ].join("\n"));
       withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
         const intent = `- **${CEREMONY_FIELDS[key]}**: on (set by you)\n`;
@@ -108,7 +109,7 @@ describe("t337 ceremony resolution", () => {
       expect(ceremonyPolicyValues("classic", state)).toEqual({
         sensors: "off",
         learnings: "on",
-        summary_confirmation: "off",
+        summary_confirmation: "off", plan_approval: "on",
       });
       expect(resolveCeremonyPolicy("classic", state).learnings.source).toBe("you");
     });
@@ -116,7 +117,7 @@ describe("t337 ceremony resolution", () => {
 });
 
 describe("t337 ceremony grammar", () => {
-  test("setting normalization and state labels follow Change Control grammar", () => {
+  test("setting normalization and state labels follow the Guard Policy grammar", () => {
     expect(parseCeremonySetting(" **ON** ")).toBe("on");
     expect(parseCeremonySetting("off")).toBe("off");
     expect(parseCeremonyStateLine("off (from scope classic)")).toEqual({
@@ -147,14 +148,86 @@ describe("t337 scope ceremony metadata", () => {
       expect(loadScopeMetadataAll().classic).toMatchObject({
         skeleton: false,
         reviewCap: "advisory",
-        changeControl: "relaxed",
-        ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off" },
+        guardPolicy: "off",
+        ceremony: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on" },
       });
       expect(scopeCeremonyDefault("sensors", "classic")).toBe("on");
       expect(scopeCeremonyDefault("learnings", "classic")).toBe("on");
       expect(scopeCeremonyDefault("summary_confirmation", "classic")).toBe("off");
       expect(scopeCeremonyDefault("sensors", null)).toBe("on");
     });
+  });
+
+  test("express switches every ceremony off by default; every other scope keeps them on", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const all = loadScopeMetadataAll();
+      expect(all.express).toMatchObject({
+        guardPolicy: "off",
+        ceremony: { sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "off" },
+      });
+      for (const key of CEREMONY_KEYS) {
+        expect(scopeCeremonyDefault(key, "express"), key).toBe("off");
+        expect(resolveCeremony(key, "express", "")).toMatchObject({
+          value: "off",
+          source: "scope express",
+          scopeDefault: "off",
+        });
+      }
+      // poc keeps the other ceremonies but, like express, builds its plans without asking.
+      expect(all.poc.ceremony).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "off" });
+      for (const scope of Object.keys(all)) {
+        if (scope === "express" || scope === "classic" || scope === "poc") continue;
+        expect(all[scope].ceremony, scope).toEqual({ sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on" });
+      }
+    });
+  });
+
+  test("every shipped scope declares guard_policy and all four ceremony keys, so no ceremony falls back to the default", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const all = loadScopeMetadataAll();
+      expect(Object.keys(all).length).toBeGreaterThan(0);
+      for (const [scope, meta] of Object.entries(all)) {
+        expect(meta.guardPolicy, scope).toMatch(/^(strict|relaxed|off)$/);
+        expect(Object.keys(meta.ceremony ?? {}).sort(), scope).toEqual([...CEREMONY_KEYS].sort());
+        for (const key of CEREMONY_KEYS) {
+          expect(resolveCeremony(key, scope, "").source, `${scope} ${key}`).toBe(`scope ${scope}`);
+        }
+      }
+    });
+  });
+
+  test("a scope naming guard_policy and its retired spelling with different values is refused by file", () => {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    const scopes = join(proj, "scopes");
+    mkdirSync(scopes);
+    const path = join(scopes, "aidlc-torn.md");
+    writeFileSync(path, "---\nname: torn\ndepth: Standard\nguard_policy: strict\nchange_control: relaxed\n---\n");
+    expect(() => withEnvAndFreshCaches(
+      { ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes },
+      () => loadScopeMetadataAll(),
+    )).toThrow(
+      `Scope file ${path} names both guard_policy ("strict") and change_control ("relaxed") with different values. Keep guard_policy only.`,
+    );
+    // Agreeing values, the new key alone, and the retired key alone all read.
+    writeFileSync(path, "---\nname: torn\ndepth: Standard\nguard_policy: off\nchange_control: off\n---\n");
+    writeFileSync(join(scopes, "aidlc-fresh.md"), "---\nname: fresh\ndepth: Standard\nguard_policy: off\n---\n");
+    writeFileSync(join(scopes, "aidlc-old.md"), "---\nname: old\ndepth: Standard\nchange_control: relaxed\n---\n");
+    writeFileSync(join(scopes, "aidlc-bare.md"), "---\nname: bare\ndepth: Standard\n---\n");
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
+      const all = loadScopeMetadataAll();
+      expect(all.torn.guardPolicy).toBe("off");
+      expect(all.fresh.guardPolicy).toBe("off");
+      expect(all.old.guardPolicy).toBe("relaxed");
+      expect(all.bare.guardPolicy).toBeUndefined();
+    });
+    for (const key of ["guard_policy", "change_control"]) {
+      writeFileSync(path, `---\nname: torn\ndepth: Standard\n${key}: loose\n---\n`);
+      expect(() => withEnvAndFreshCaches(
+        { ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes },
+        () => loadScopeMetadataAll(),
+      )).toThrow(`Scope file ${path} has invalid ${key} value "loose". Expected "strict", "relaxed", or "off".`);
+    }
   });
 
   test("declared on has a scope source, unlike an omitted key", () => {

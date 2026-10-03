@@ -14,6 +14,7 @@
 // updateIntentStatus) is asserted in-process against the dist lib (pure reads/
 // transforms), then cross-checked against the spawned `intent`/`space --json`.
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   existsSync,
@@ -26,8 +27,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
+  seededRecordDir,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
@@ -55,8 +57,7 @@ const BUN = process.execPath;
 // Every case here spawns several dist tools in sequence; under a parallel tier
 // run that comfortably exceeds bun's 5 s default, so pin the file-wide budget
 // the way t188/t224 do.
-const TIMEOUT_MS = 60_000;
-setDefaultTimeout(TIMEOUT_MS);
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const UTIL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-utility.ts");
 const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
@@ -546,6 +547,8 @@ describe("t164 done-on-completed carries the new-work hint", () => {
     // Stage = final stage, Status = Completed) so next finds no in-scope stage and
     // emits `done` (the engine is read-only; it never auto-creates alongside it).
     seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    // This user's own intent, selected by the local cursor.
+    writeFileSync(join(dirname(seededRecordDir(proj)), "active-intent"), `${basename(seededRecordDir(proj))}\n`);
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("done");
@@ -690,6 +693,9 @@ describe("t164 --new-intent creation directive hands off to a fresh session", ()
   test("concurrent pre-workflow sessions bind only the session that invoked creation", () => {
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-a" })).toBe(0);
     expect(fireHook(SESSION_START, { source: "startup", session_id: "session-b" })).toBe(0);
+    // Both hooks ran under this test process, so its pid-map entry names B, the
+    // last to start. The creator is identified by its own PostToolUse instead.
+    rmSync(join(proj, "aidlc", ".aidlc-sessions", "pids"), { recursive: true, force: true });
 
     const created = util([
       "intent-create",

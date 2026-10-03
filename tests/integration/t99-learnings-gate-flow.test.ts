@@ -66,6 +66,7 @@
 //   .sh assert 14 (Case 6: recovery → re-write only, exit 0)         -> "Case 6: recovery re-writes the line, skips re-emit, exit 0"
 //   .sh assert 15 (Glue: candidate field contract)                  -> "Glue: candidate carries {id, summary, source_heading, default_scope}"
 
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
@@ -206,7 +207,7 @@ function teamPractices(pd: string): string {
   return join(memoryDirFor(pd), "team.md");
 }
 
-const TIMEOUT = 30000;
+const TIMEOUT = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
 
 describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-flow.sh, plan 16)", () => {
   // ===========================================================================

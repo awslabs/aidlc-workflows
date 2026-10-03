@@ -31,11 +31,18 @@ whose stdin never closes). When that variable is empty, it reads stdin for the
 2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
 milliseconds for diagnostics and deterministic latency tests. Both field
 spellings are accepted. Acquisition is gated to the payload-dependent targets,
-including `plan-approval-guard`, the two terminal-command targets, plus
-`session-start` and `continue-workflow` for their modern `session_id`, and
-`record-human-turn` for the exact approval response. Every other target
-(including the per-tool-call approval floor) touches neither channel and keeps
-its zero-latency path.
+including `plan-approval-guard`, the per-tool-call approval floor
+(`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
+that concurrent chats are held by their own gates), the two terminal-command
+targets, plus `session-start` and `continue-workflow` for their modern
+`session_id`, and `record-human-turn` for the exact approval response. Every
+other target touches neither channel and keeps its zero-latency path. The
+approval floor runs on every `PreToolUse`; on 1.x its payload arrives and the
+channel closes with the call, so the normal path does not wait, and only a
+channel that never closes holds it until the ceiling. A 0.12 payload carries no
+`session_id`, so the floor uses the identity derived from the IDE host
+instance: every chat in that host shares it and is judged by the gates of the
+workflow it is bound to.
 
 The legacy environment variable name does not imply raw user text: the measured
 0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
@@ -64,6 +71,13 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
+When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` (`--clear-bypass` undoes it) for once every piece of work is complete. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
+Before forwarding an empty prompt, the adapter renames a sole retired
+`Change Control: relaxed|off` line to `Guard Policy` automatically without
+changing its value or source label and without a policy audit row. It prints
+the migration note itself because some builds discard core hook output.
+
 ### Critical limitations
 
 1. **PostToolUse write/shell captures have empty tool inputs** on both
@@ -76,7 +90,8 @@ Result prose is identical on both channels (`toolResult` on 0.12,
    `command`, `cwd`, `run_in_background`, and `timeout`, and PostToolUse inputs
    as well. That 1.0.309 observation was reported, not measured in this
    repository; the measured base is the 0.12, 1.0.165, and 1.0.242 captures
-   described above.
+   described above, plus the 1.1.14 PreToolUse captures under "Blocking a tool
+   call" below.
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
    payload with the field absent falls through to the path check. Because that
@@ -94,6 +109,31 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 3. **Paths in the result prose are workspace-RELATIVE**, but the core hooks
    compare against an absolute record root — so the adapter resolves them to
    absolute before forwarding.
+
+### Blocking a tool call (PreToolUse)
+
+Measured live on Kiro IDE 1.1.14 (Windows) with probe hooks on `execute_pwsh`
+and `fs_write`:
+
+| Hook output | Tool call | What the model receives |
+|-------------|-----------|-------------------------|
+| reason on stderr, exit 2 | blocked, before Kiro's approval card | the stderr text, inside Kiro's "Tool ... was intercepted by PreToolUse hooks before execution" message, which says the tool was not executed |
+| reason on stdout, exit 2 | runs, after the approval card | nothing from the hook |
+| stdout and stderr, exit 2 | blocked | the stderr text only |
+| reason on stderr, exit 1 | runs | nothing from the hook |
+| `{"decision":"block","reason":...}` or `hookSpecificOutput.permissionDecision: "deny"` on stdout, exit 0 | runs | nothing from the hook |
+
+So a refusal must put its whole reason on stderr and exit 2. Every adapter
+route that refuses a tool call does, and a forwarded core hook's stderr is
+relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
+Several PreToolUse hooks run one after another in file-name order, every one
+runs even after an earlier one blocks, and a block from a hook between two
+others still delivers its reason. So `aidlc-terminal-command-guard`, which
+runs after `aidlc-enforce-approval-gate`, runs no terminal command while that
+hook's approval gate is waiting for the person: the gate hook refuses the call,
+and the command would otherwise still act. A hook with no matcher also sees Kiro's own background
+`memory` tool calls. On 1.1.14 the PreToolUse `fs_write` input is
+`{path, text}`, and the shell input matches the 1.0.242 row above.
 
 ## Consequences for each hook
 
@@ -202,18 +242,65 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   See [Guard admission and recovery asks](12-state-machine.md#guard-admission-and-recovery-asks).
 - **session-start** — reads the modern `session_id` and persists it under the
   gitignored runtime session directory; the legacy channel derives a stable
-  per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`.
+  per-host-instance ID from `VSCODE_IPC_HOOK`/`VSCODE_PID`. Kiro IDE 1.1.14
+  (checked live on Windows) runs no SessionStart hook in a new chat, so the
+  record-human-turn route below does this work for the chat's first prompt.
 - **terminal commands** — newer builds that expose the submitted `/aidlc ...`
   prompt run deterministic utilities at UserPromptSubmit. IDE 1.0.242 exposes
   an empty prompt, so the fallback recognizes the exact `execute_pwsh`
   `aidlc-orchestrate.ts next` call at PreToolUse, runs the classified utility
-  once, and refuses the duplicate shell call. Both routes decode UTF-8
+  once, and refuses the duplicate shell call. Both routes hand the utility the
+  event's `session_id` as its session, so `/aidlc intent <name>` or
+  `/aidlc space <name>` binds the chat that typed it even when this hook runs
+  before record-human-turn has started that chat. Both routes decode UTF-8
   explicitly and remove terminal protocol/control bytes only from the
   plain-text relay; structured hook JSON and unrelated refusal paths are not
   rewritten. Modern turn/latch state is keyed by a hash of `session_id`, so
   concurrent chats cannot reuse one another's output; payloads without a
-  session identity use one explicit legacy bucket. The 0.12 camelCase fallback
-  reads the command from `toolArgs.command`.
+  session identity use the host-derived identity or the retained session, with
+  an explicit legacy bucket when neither is available. The 0.12 camelCase
+  fallback reads the command from `toolArgs.command`.
+- **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
+  reads the command line Windows PowerShell 5.1 builds for it: a value holding
+  a space is wrapped in double quotes with its own double quotes left as they
+  are, and cmd.exe acts on `&`, `|`, `<`, `>` and `^` outside its quotes. So
+  `--details 'Use "R & D" team'`, or the same with `\"`, runs `D" team"` as a
+  separate command. Before anything else, `terminal-command-guard` refuses
+  (exit 2 with the reason on stderr) an `execute_pwsh` call of `aidlc` or
+  `aidlc.cmd` in which one of those characters would reach cmd.exe outside its
+  quotes, or in which a value holds a `%NAME%` pair (cmd.exe replaces it with
+  that environment variable's value, even inside its quotes; a lone `%` passes,
+  and so does a pair whose name would start or end with a space, such as the
+  one in `10% and 20%`). The reason is a fixed sentence that names the flag
+  whose value is at fault (or "A value") and the character or "a %NAME% pair",
+  and never repeats the value, so text in a value cannot add lines to it. It
+  simulates PowerShell 5.1's argument passing (an empty argument dropped, a
+  value with a space or tab wrapped in double quotes) and cmd.exe's quote
+  toggling, reading past a `#` comment and a closed `<# ... #>` block comment,
+  and joining a line that ends in a backtick continuation (CRLF, LF or CR) to
+  the next. Statements inside `(...)`, `$(...)`, `@(...)`, `@{...}` and
+  `{...}` groupings are read too, nested or not, so an `aidlc` call such as
+  `(aidlc engine orchestrate next 2>$null | Select-Object -Last 1)` is
+  checked like any other; a `$(...)` inside a double-quoted string is not.
+  Redirects (`2>$null`, `*>$null`, `>$null`, `2>&1`, `> file`) are never
+  `aidlc` values. A person's words that PowerShell resolves before
+  `aidlc.cmd` runs are refused as well, because the check cannot see what
+  reaches cmd.exe. That is the value of `--details`, `--decision`,
+  `--rationale`, `--reason`, `--user-input`, `--feedback`, `--override` or
+  `--arguments`, or the request after `next`, given as a variable such as `$x`
+  or `$env:X`, an expression such as `$(...)`, or a double-quoted string
+  holding `$` or a backtick. The reason says the value comes from a
+  PowerShell variable or expression and asks for the value itself in single
+  quotes. A variable for any other flag or for a positional token, such as
+  the receipt in `continue $obj.receipt`, passes, unless its own text holds a
+  metacharacter or a `%NAME%` pair; so does a variable in any other command.
+  A statement it cannot
+  read to the end (one using the `--%` stop-parsing token, or one holding an
+  unterminated quote or block comment) is refused when its program is `aidlc`
+  or `aidlc.cmd`, bare, by path, or after `&` or `.`, as far as the words
+  before that point show; a statement running any other program passes, even
+  when it mentions aidlc as data. `bun .kiro/tools/...` calls and other
+  programs are not checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
   own post-create handoff receipts. Legacy agentStop and broken modern channels
@@ -221,6 +308,19 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 - **record-human-turn** — reads the modern `session_id` and answer payload, or
   the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
   never reveals, rotates, or transfers another chat's protected capability.
+  When the prompt's `session_id` is not the one retained from the last event,
+  or the adapter has no record of starting that session, the adapter runs the
+  core session-start first (`resume` when it started the session before or the
+  session already has a binding or intent stamp, else `startup`) and prints its
+  context ahead of the prompt hook's own, so a new chat still gets its
+  `AIDLC Runtime Session:` line and switching back to an earlier chat rebinds
+  it. The record is a `session-started` file in the
+  session's hashed turn/latch directory, written only after session-start
+  succeeds, from this route or from a SessionStart hook that did run. The
+  retained id alone is no evidence of a start: earlier adapters retained every
+  prompt's id without starting it, so a chat open across the upgrade starts on
+  its next prompt. A later prompt from a started, retained session starts
+  nothing.
 - **session-end / block** — need no payload and never read stdin. Session-end
   reuses the identity persisted by SessionStart, with the legacy lifecycle
   fallback retained only where no approval authority is involved.

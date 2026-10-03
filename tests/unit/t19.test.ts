@@ -92,7 +92,12 @@
 // post-fire count of 1. All temp dirs cleaned in afterAll. NOTHING is written
 // under tests/fixtures/**.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -103,6 +108,8 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -146,6 +153,7 @@ interface CliResult {
 /** Spawn `bun aidlc-jump.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
 function jump(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   const stdout = res.stdout ?? "";
@@ -159,6 +167,7 @@ function jump(args: string[], p: string): CliResult {
 /** Spawn `bun aidlc-state.ts get <field> --project-dir <p>`. Mirrors `bun "$STATE_TOOL" get ...`. */
 function stateGet(field: string, p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, "get", field, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
   });
   const stdout = res.stdout ?? "";

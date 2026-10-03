@@ -45,7 +45,7 @@
 //                       worktree, stdout discarded:false (:555).
 //   :868 failJson     — prints {ok:false,slug,stage,reason,detail} JSON and
 //                       process.exit(1). The five-field halt-and-ask envelope.
-//   aidlc-lib.ts:148 worktreePath(pd,slug) = <pd>/.aidlc/worktrees/bolt-<slug>.
+//   aidlc-lib.ts worktreePath(pd, id8, slug) locates the intent-scoped Bolt.
 //
 // Old TAP -> new test parity (28 .sh assertions; 1:1, several STRONGER):
 //   .sh T1  (start --worktree no --slug exits 1)        -> "start --worktree without --slug exits 1"
@@ -77,7 +77,12 @@
 //   .sh T27 (envelope detail field non-empty prose)     -> "failure envelope detail field is non-empty user-facing prose"
 //   .sh T28 (default abort preserves worktree dir)      -> "default abort (no --discard) preserves the worktree directory"
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -88,7 +93,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { boltName, worktreePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
+  fixtureIntentId8,
   AIDLC_SRC,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -101,6 +109,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 
+setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 
@@ -111,7 +121,7 @@ interface Run {
 
 /** spawnSync the real aidlc-bolt.ts, capturing combined stdout+stderr. */
 function runBolt(args: string[]): Run {
-  const res = spawnSync(BUN, [TOOL, ...args], { encoding: "utf-8" });
+  const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   return {
     status: res.status ?? -1,
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
@@ -128,7 +138,7 @@ function setupV7Project(withWorktree?: string): string {
   seedStateFile(proj, "state-construction.md");
   seedAuditFile(proj);
   if (withWorktree) {
-    mkdirSync(join(proj, ".aidlc", "worktrees", `bolt-${withWorktree}`), {
+    mkdirSync(worktreePath(proj, fixtureIntentId8(proj), withWorktree), {
       recursive: true,
     });
   }
@@ -155,18 +165,12 @@ function readAudit(proj: string): string {
 }
 // The worktree mirror carries the SAME relative record dir as the main checkout.
 function wtStatePath(proj: string, slug: string): string {
-  return join(
-    proj,
-    ".aidlc",
-    "worktrees",
-    `bolt-${slug}`,
-    "aidlc",
-    "spaces",
-    DEFAULT_SPACE,
-    "intents",
-    DEFAULT_RECORD_DIR,
-    "aidlc-state.md",
-  );
+  return join(worktreePath(proj, fixtureIntentId8(proj), slug), "aidlc",
+  "spaces",
+  DEFAULT_SPACE,
+  "intents",
+  DEFAULT_RECORD_DIR,
+  "aidlc-state.md",);
 }
 
 let projects: string[] = [];
@@ -562,6 +566,7 @@ main(process.argv.slice(2));
 `);
       const result = spawnSync(BUN, [driver, "abort", "--name", "Legacy Park", "--slug", slug,
         "--reason", "retry after a mixed-version discard", "--discard", "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: proj, encoding: "utf-8",
         env: { ...process.env, AIDLC_HARNESS_DIR: fixture.unsafeHarness ? ".claude;echo injected" : ".claude" },
       });
@@ -594,14 +599,27 @@ main(process.argv.slice(2));
       ["add", "saved.txt"],
       ["-c", "user.name=Recovery fixture", "-c", "user.email=recovery@example.test",
         "-c", "commit.gpgsign=false", "commit", "-qm", "saved source"],
-      ["branch", `bolt-${slug}`],
+      ["branch", boltName(fixtureIntentId8(proj), slug)],
     ]) {
-      const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+      const result = spawnSync("git", args, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
       expect(result.status, result.stderr).toBe(0);
     }
+    // An intent-scoped Bolt is only discard's to park when this intent recorded
+    // creating it; model the checkout having vanished after an audit-first create.
+    const name = boltName(fixtureIntentId8(proj), slug);
+    appendAuditEntry("WORKTREE_CREATED", {
+      "Bolt slug": slug,
+      "Worktree path": `.aidlc/worktrees/${name}`,
+      "Branch name": name,
+      "Base branch": "main",
+      "Base commit": spawnSync("git", ["rev-parse", "HEAD"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" }).stdout.trim(),
+      Repo: "-",
+      "Intent record": `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`,
+    }, proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
     const env = { ...process.env, AIDLC_HARNESS_DIR: ".claude;echo injected" };
     const aborted = spawnSync(BUN, [TOOL, "abort", "--name", "Unsafe Harness", "--slug", slug,
       "--reason", "retry safely", "--discard", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       cwd: proj, encoding: "utf-8", env,
     });
     expect(aborted.status, aborted.stderr).toBe(0);
@@ -610,20 +628,20 @@ main(process.argv.slice(2));
     expect(parked.restore_hint_error).toContain("Invalid recovery harness directory");
     expect(parked.restore_operation).toEqual({
       route: "worktree",
-      args: ["restore", "--slug", slug, "--parked", parked.parked_stamp, "--repo", "."],
+      args: ["restore", "--slug", slug, "--parked", parked.parked_stamp, "--repo", ".", "--intent", DEFAULT_RECORD_DIR, "--space", DEFAULT_SPACE],
     });
     const restored = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"),
       "engine", parked.restore_operation.route, ...parked.restore_operation.args,
-      "--project-dir", proj], { cwd: proj, encoding: "utf-8", env });
+      "--project-dir", proj], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8", env });
     expect(restored.status, restored.stderr).toBe(0);
     const recovery = JSON.parse(restored.stdout);
     expect(recovery.parked_ref).toBe(parked.parked_ref);
     expect(readFileSync(join(recovery.worktree_path, "saved.txt"), "utf-8")).toBe(saved);
-  }, 30000);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("default abort (no --discard) preserves the worktree directory [.sh T28]", () => {
     const proj = track(setupV7Project("exp-pres"));
-    const wtDir = join(proj, ".aidlc", "worktrees", "bolt-exp-pres");
+    const wtDir = worktreePath(proj, fixtureIntentId8(proj), "exp-pres");
     mkdirSync(wtDir, { recursive: true });
     writeFileSync(join(wtDir, "file.txt"), "marker");
     const aborted = runBolt([

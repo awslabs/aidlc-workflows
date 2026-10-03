@@ -48,7 +48,8 @@
 // CLI compile/check seeds a fresh tempfile from the committed stage-graph.json — never
 // the real graph — exactly as the .sh did.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -77,6 +78,8 @@ import {
   withAuditLock,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 // --- Paths --------------------------------------------------------------------
 const TOOLS_DIR = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools");
@@ -579,7 +582,7 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 11 scopes)",
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 11 scopes (workshop ~26 steps, classic 18)
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // =============================================================================
@@ -603,7 +606,7 @@ describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // 11 scopes x 5 phases
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // =============================================================================
@@ -1341,7 +1344,8 @@ description: Probe sensor for canonical-emitter test
 // =============================================================================
 
 describe("t66 withAuditLock reentrancy (in-process)", () => {
-  // .sh:1149-1176 — nested same-pd is reentrant; lock held throughout; released; fast
+  // Nested calls must reuse the outer acquisition without a retry. Verify that
+  // directly; wall time also includes real owner stamping and cleanup on disk.
   test("withAuditLock: nested same-pd is reentrant; lock held throughout outer scope", () => {
     const { existsSync } = require("node:fs") as typeof import("node:fs");
     const pd = mkdtempSync(join(tmpdir(), "t66-reentrant-probe-"));
@@ -1350,18 +1354,28 @@ describe("t66 withAuditLock reentrancy (in-process)", () => {
     const start = Date.now();
     let inner = false;
     let afterInner = false;
+    let sameOwnerInside = false;
+    let sameOwnerAfter = false;
     withAuditLock(pd, () => {
+      const owner = readFileSync(join(lockDir, "owner.json"), "utf8");
       withAuditLock(pd, () => {
         inner = existsSync(lockDir);
-      });
+        sameOwnerInside = readFileSync(join(lockDir, "owner.json"), "utf8") === owner;
+      }, undefined, undefined, 0, 0);
       afterInner = existsSync(lockDir);
+      sameOwnerAfter = readFileSync(join(lockDir, "owner.json"), "utf8") === owner;
     });
     const elapsed = Date.now() - start;
     const released = !existsSync(lockDir);
+    console.log(`t66 reentrant lock evidence: ${JSON.stringify({
+      elapsedMs: elapsed, innerRetries: 0, inner, afterInner,
+      sameOwnerInside, sameOwnerAfter, released,
+    })}`);
     expect(inner).toBe(true);
     expect(afterInner).toBe(true);
+    expect(sameOwnerInside).toBe(true);
+    expect(sameOwnerAfter).toBe(true);
     expect(released).toBe(true);
-    expect(elapsed).toBeLessThan(1000);
   });
 
   // .sh:1180-1195 — sequential calls do not accumulate exit handlers (handler-leak guard)

@@ -98,7 +98,7 @@ artifact, so the record only ever lists work that produced something.
 
 ### Stage 0.2: Workspace Detection
 
-A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield.
+A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield. AI-DLC's own files, such as the harness directory, `aidlc/`, and Cursor's root `install.ts`, never count as your code, so an empty folder stays greenfield.
 
 ### Stage 0.3: State Initialization
 
@@ -129,7 +129,7 @@ On Claude Code, the custom AI-DLC status line at the bottom of your terminal upd
 
 This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops. On Claude Code, `↑<in> ↓<out> $<usd>` also appears after the first usage fold and covers only the active workflow and current transcript/session, not earlier workspace activity. Set `AIDLC_DISABLE_USAGE_TRACKING=1` to turn usage tracking (and this segment) off.
 
-> The `$<usd>` is a local estimate priced from public list prices, not a bill — under the shipped Bedrock default it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
+> The `$<usd>` is a local estimate priced from public list prices, not a bill — when Amazon Bedrock is your recorded provider it may not match what you are actually charged. See [Troubleshooting](15-troubleshooting.md#statusline-shows-a-cost-segment-you-dont-want-or-usage-tracking-concerns) to price it at your own rates or hide it.
 
 The aidlc-product-agent asks you to choose an interaction mode:
 
@@ -177,14 +177,17 @@ After the agent completes its work, you see a completion summary and an approval
   (2) Request Changes — Return to the listed artifacts
 ```
 
-The stable finding ID lets later checks show whether the same concern was
-resolved, remains open, or was accepted as a risk. Choose **Approve** to
-continue with any open findings accepted, or **Request Changes** to return to
-the listed artifacts. An approval records `Accepted risk` outside the reviewed
-artifact, so a later re-check preserves that decision. When rejecting a finding
-as inapplicable, give its ID and reason; ordinary revision feedback leaves it
-open. See [Interaction Modes](07-interaction-modes.md) for details on the
-revision process.
+The engine owns the stable finding list. Later checks report only what changed,
+while your decisions remain exactly as you made them. Choose **Approve** to
+continue with every open finding accepted, or **Request Changes** to return to
+the listed artifacts. When rejecting an open finding as inapplicable, give its
+ID and reason. If a reviewer marks one fixed and you disagree, request changes
+with that ID and explain why it is not fixed; the engine reopens it for the
+next check. Ordinary revision feedback changes no finding decision. After a
+backward jump, Keep and Modify retain this list and its decisions. Redo from
+scratch starts a fresh list at `R-01`. Upgrading mid-workflow keeps earlier
+decisions by ID. See [Interaction Modes](07-interaction-modes.md) for details
+on the revision process.
 
 After approval, a progress line appears:
 

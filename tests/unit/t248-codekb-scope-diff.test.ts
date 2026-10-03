@@ -23,7 +23,12 @@
 // `git init` the temp project — codekbScopeFingerprint returns null outside a
 // work tree, which is itself a pinned case (UNVERIFIED, never a false verdict).
 
-import { afterAll, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -38,6 +43,8 @@ import {
   parseReScope,
   scopePathCovered,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -58,7 +65,7 @@ function freshProject(): string {
 }
 
 function gitInit(dir: string): void {
-  const r = spawnSync("git", ["init", "-q", dir], { encoding: "utf-8" });
+  const r = spawnSync("git", ["init", "-q", dir], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   expect(r.status).toBe(0);
 }
 
@@ -122,7 +129,7 @@ function runVerb(proj: string, ...args: string[]) {
   return spawnSync(
     BUN,
     [UTILITY, "codekb-scope-diff", "--project-dir", proj, ...args],
-    { encoding: "utf-8", env: childEnv() },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
   );
 }
 

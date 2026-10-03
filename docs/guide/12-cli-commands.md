@@ -30,7 +30,7 @@ diagnostic and lifecycle routes.
 | `/aidlc [description]` | Start a new workflow; scope is auto-detected from your description (rich/unmatched prose gets a compose offer) |
 | `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
-| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
+| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom plan even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or creation the first intent and start new |
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
@@ -59,14 +59,16 @@ diagnostic and lifecycle routes.
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
-| `/aidlc --review <class>` | Cap stage reviews for this run (adversarial, advisory, none) |
-| `/aidlc --change-control <value>` | Set what an input change after an approval does for this piece of work (strict, relaxed) |
+| `/aidlc --review <class>` | Set stage reviews for this run, replacing the scope cap (adversarial, advisory, none) |
+| `/aidlc --guard-policy <value>` | Set how far the guards stand aside for this piece of work (strict, relaxed, off); `--change-control` is its retired name |
 | `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `change-control`, `sensors`, `learnings`, `summary-confirmation`) |
-| `/aidlc config set <key> <value> [--key value ...]` | Change one or more of the seven settings in one transaction |
-| `/aidlc config list` | List all seven active workflow settings (`--json` for structured output) |
+| `/aidlc --plan-approval <on\|off>` | Set whether each code plan is shown for approval before it is built, for this intent (only the person turns it off) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `guard.<fence>`) |
+| `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
+| `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
+| `/aidlc config list` | List all twelve active workflow settings (`--json` for structured output) |
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
@@ -184,11 +186,11 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 **Behavior:** The engine analyzes keywords in your description (e.g., "fix" suggests bugfix). A clear match asks a one-line confirm naming the MATCHED scope and its effective ceremony (stage count, approval-gate count, and any per-unit fan-out, all from the compiled grid). Greenfield work excludes reverse engineering, and a per-unit clause appears only when `units-generation` runs and creates a Unit DAG. Rich or unmatched prose gets the compose offer (see `/aidlc compose` below) instead of a silent default. You confirm or override before the workflow begins.
 
-**Example:**
+**Example** (a new project; on an existing codebase bugfix also runs Reverse Engineering, so the line says 9 of 33 stages and 6 approval gates):
 
 ```
-/aidlc Fix the null pointer in ProfileSerializer
-> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 8 of 33 stages, 5 approval gates. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
+/aidlc Fix the ProfileSerializer null pointer
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 ---
@@ -203,7 +205,7 @@ Force the composer even when a stock scope would match. Works in three moments:
 /aidlc compose            (mid-workflow: re-shape the pending stages)
 ```
 
-**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: AI-DLC creates the workflow directly for a stock match; for a custom grid, it authors a real scope (two files in the installed tree) and creates the workflow with that scope in the same turn. Every front/report proposal carries a nonblank `creationDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The creation passes it after `--` as one shell-safe argv value; a compose approval cannot continue with only a scope and no description. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
+**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, estimates the five implementation-entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), and proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a reason for every EXECUTE and SKIP. You approve, edit, or reject at a gate. On approve: AI-DLC creates the workflow directly for a stock match; for a custom plan, it creates the workflow on the nearest stock scope with the plan's own stage changes (`--skip` / `--add`), in the same turn, and writes no scope file: the plan belongs to this piece of work. A custom plan's gate also offers **Approve and save as scope**, which asks for a name and keeps the plan as a reusable scope through [`scope save`](#aidlc-engine-scope-save-keep-a-plan-as-a-scope); saying "save this plan as <name>" later does the same. Every front/report proposal carries a nonblank `creationDescription`: exact original task text when supplied, otherwise a report/plan-grounded description. The creation passes it after `--` as one shell-safe argv value; a compose approval cannot continue with only a scope and no description. An in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path. Mid-workflow you can also just say it in chat ("can we skip market research?") - the conductor recognizes a reshape request and routes it through the same gate and verb, no literal `compose` needed (on the non-Claude harnesses the literal verb remains the documented reliable path).
 
 See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer) for the full flow.
 
@@ -414,6 +416,12 @@ characters of extractor output. Past a cap the text is cut and the row records
 extraction as a partial view: "the document does not mention X" is not a safe
 conclusion from one.
 
+Each extractor probe has a five-minute backstop; extraction has fifteen minutes
+per document. A configured extractor's `timeoutMs` overrides the extraction
+budget. An extraction timeout records `extraction_failed`; it does not establish
+that the document was read successfully. These time budgets do not change the
+byte, page, or output caps above.
+
 A configured extractor's `argv` must contain **exactly one `$IN`** — the placeholder
 the document's path is substituted into. A configuration without it is refused when
 the tool starts, rather than accepted: a process that never receives the file would
@@ -446,12 +454,13 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Change Control value with where it came from (`Change Control: strict (from project.md)`, `relaxed (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), and the stage progress list. An invalid Change Control field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, the intent's Guard Policy value with where it came from (`Guard Policy: strict (from project.md)`, `off (from scope classic)`, `strict (set by you)`, or `strict (not set)` for an older intent without the field), a `Fences:` line naming all five fences with each effective setting and its source (`plan-approval on (set by you), review-freeze off (set by you), state-transition on (default), reviewer-scope on (default), human-presence on (default)`), and the stage progress list. An invalid Guard Policy field is shown as unavailable with the validation error and the repair command. It also inspects completed-stage validation receipts and reports current, drifted, revalidation, untracked, or unavailable status; these findings are advisory and do not change routing. When the current stage is awaiting approval, status includes the organic gate-open timestamp and approximate pending duration. If no workflow is active, reports that no workflow is in progress.
 
 Status also shows separate **Sensors**, **Learnings**, and **Summary Confirmation**
 rows with each effective value and its source, for example `Sensors: on (from
-scope classic)`, `Learnings: on (set by you)`, or `Summary Confirmation: off (from
-env AIDLC_DISABLE_SUMMARY_CONFIRMATION)`. A missing saved setting falls back to
+scope classic)`, `Learnings: off (set by a command)`, `Summary Confirmation: off
+(set by you)`, or `Summary Confirmation: off (from env
+AIDLC_DISABLE_SUMMARY_CONFIRMATION)`. A missing saved setting falls back to
 the current scope, then `on (from default)`; see the ceremony controls below.
 
 Under `Unit Ownership: team`, it appends a clearly labeled **Team Construction
@@ -636,7 +645,9 @@ may contact the configured git remote.
 
 Configure one of `models`, `runtime`, `providers`, `trust`, `flags`, or
 `project` without leaving the harness conversation. With no section, the
-conductor asks which sections you want to consider.
+conductor asks which sections you want to consider. With a section, it always
+asks what you want to change there, offering that section's choices and leaving
+it unchanged, even when the section is already clean.
 
 The conductor reads current state with
 `aidlc config <section> --show --json`, asks for changes conversationally, and
@@ -680,14 +691,16 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 17 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Hooks enabled (Claude Code) | `disableAllHooks: true` is not the resolved value across Claude Code's settings layers (enterprise managed file plus alphabetical `managed-settings.d/` fragments → `.claude/settings.local.json` → `.claude/settings.json` → `~/.claude/settings.json`, highest-precedence definition wins). A resolved `true` silently skips every present hook, so it fails loudly and names the layer |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
+| Kiro IDE ignore sources | On the Kiro harness with the IDE conductor (`.kiro/agents/aidlc.md`): evaluates git's global excludes file (in a git repo), `~/.kiro/settings/kiroignore`, the project `.gitignore`, and `.kiroignore` independently against the reads the engine sends the agent to make through `fs_read`: for every stage `harness.json` selects in the compiled graph, the stage file and the persona and knowledge the conductor holds inline (the engine's own roster at Standard and Minimal depth, within the directive's 8 KiB `inline_context_paths` cap), plus `stage-protocol.md` and its `stage-protocol-<name>.md` modules and the files beside each skill's `SKILL.md`. Contributor-only protocol files such as `stage-definition.md` are not loaded, so they are not counted. Plugins count however they were composed. `SKILL.md` files, the IDE conductor agent (`agents/aidlc.md`), `aidlc-common/conductor.md`, and `tools/`, `sensors/`, `hooks/`, `scopes/`, and `steering/` are loaded by the IDE or the engine, not through `fs_read`, and are not counted. A rule that hides only some of them is reported with a count and the framework folders it touches. Global-source rules that hide `.kiro/` fail, naming the source and line, because the IDE's `fs_read` guard then denies every stage, agent, and protocol read. Workspace-source matches warn: they apply only when `kiroAgent.agentIgnoreFiles` names the file (the default includes `.gitignore`; `[]` disables workspace sources), and doctor cannot read that IDE setting. A source doctor cannot evaluate (for example, `git` is not on PATH, which in a git repository also hides a custom `core.excludesFile`, or git refuses a repository that exists on disk) warns as `not evaluated` rather than passing. Rows name sources by fixed names such as `~/.config/git/ignore` and `.gitignore`, never by path, rule text, or git error text. A `!.kiro/` in another file does not undo a deny |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
+| VS Code agent request cap | Copilot only: `.vscode/settings.json` sets `chat.agent.maxRequests` to 100 or more. Unset (VS Code's default of 50), lower, not a number (a number in quotes included), or unreadable warns, because VS Code then stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers. The fix names the line to write in the file |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
 | Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions. No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with `/hooks` approval/policy guidance |
 | Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
 | Human-turn receipts | When stage/gate events exist but the audit has no `HUMAN_TURN`, reports a passing advisory that presence-gated checkpoints will refuse |
 | Hook drops | Surfaces any `.aidlc-engine/hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count and last timestamp per hook, and the remediation (inspect, then delete the file). Advisory - never fails |
-| Workspace source boundary binds | Only when workflow state exists: runs the same workspace source walk Plan Approval binds a plan to. Passes with the first 12 hex characters of the fingerprint; fails naming the reason code and path (for example `budget-entries at .`, `dangling-symlink at linked/src`, `excluded-path at node_modules/pkg`) with the repair text: shrink or exclude the offending path, declare real source under excluded directories in `.aidlc-source-paths.json`, remove the broken symlink, then re-run the fingerprint command; last resort, the human types `Override Plan Approval: <reason>` |
+| Workspace source boundary binds | Only when workflow state exists: runs the same workspace source walk Plan Approval binds a plan to. Passes with the first 12 hex characters of the fingerprint; fails naming the reason code and path (for example `budget-entries at .`, `dangling-symlink at linked/src`, `excluded-path at node_modules/pkg`) with the repair text: shrink or exclude the offending path, declare real source under excluded directories in `.aidlc-source-paths.json`, remove the broken symlink, then run `next`; last resort, the human types `Override Plan Approval: <reason>` and the conductor follows the break-glass steps in the Code Generation stage |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
 | Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
@@ -717,8 +730,8 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 AI-DLC doctor
 
 Machine
-  warn  Runtime hook PATH: bun is interactive-only at /home/user/.bun/bin/bun
-        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf), not only .zshrc or .bash_profile.
+  warn  Runtime hook PATH: bun is on this shell's PATH (/home/user/.bun/bin/bun) but not on the system-wide PATH
+        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add /home/user/.bun/bin to the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf, then restart the harness. Editing .bashrc or .zshrc does not change this check.
   warn  Update: update check unavailable while offline
         fix: run `bun .claude/tools/aidlc.ts update --check`
   ok    4 checks passed
@@ -733,7 +746,7 @@ Framework integrity
 
 0 problems, 3 warnings.
 Warnings are advisory - if everything works, ignore them.
-Run 'bun .claude/tools/aidlc.ts doctor --verbose' to see every check.
+Add --verbose to see every check.
 ```
 
 Use `--verbose` to expand every Machine, Project, graph, schema, stage, scope,
@@ -883,7 +896,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--change-control`, `--sensors`, `--learnings`, and `--summary-confirmation`; the scope and all supplied settings are applied in one transaction. Scope-sourced Change Control and ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. This also updates the scope-sourced Change Control line when memory enforces strict; memory still controls the effective value. Explicit flags in the same command take precedence over scope defaults and retain human provenance. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an explicit `--change-control relaxed` refused by strict memory policy, refuse the whole update.
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update. Stage checkboxes carry over unchanged, including an open approval (`[?]`) and a revision (`[R]`). A change that would skip a stage still waiting for approval is refused; approve it or request changes first, then change scope. A change is also refused when it would skip the current stage in a way the workflow cannot route past: a current stage that has not started, or, under team Unit Ownership, the current per-unit Construction stage (finish it for every Unit first).
 
 The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
@@ -952,10 +965,10 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 
 ---
 
-### `/aidlc --review <class>` — Cap stage reviews for this run
+### `/aidlc --review <class>` - Set stage reviews for this run
 
-Set the per-run review override: a ceiling on how heavyweight the §12a stage
-reviews run for the active workflow.
+Set the per-run review override: the ceiling on how heavyweight the §12a stage
+reviews run for the active workflow, replacing the scope's `review_cap`.
 
 **Syntax:**
 
@@ -968,17 +981,20 @@ reviews run for the active workflow.
 **Behavior:** Each reviewer-bearing stage declares a review class in its
 frontmatter — `adversarial` (the reviewer refutes the artifact and the lead
 fixes findings across up to `reviewer_max_iterations` passes) or `advisory`
-(one normal-flow review pass; findings are quoted verbatim at the approval gate
-for you to triage). The effective class per stage is the LOWEST of the stage's
-declaration, the scope's `review_cap` (bugfix, poc, classic, and workshop cap
-to `advisory`; express caps to `none`), and this override — so
-`--review advisory` turns every remaining adversarial loop into a single
-normal-flow decision-support pass, `--review none` skips
-gated stage reviewer dispatch, and `--review adversarial` clears the override
-by storing an empty `Review Override` field (it cannot raise a class above the
-stage declaration or the scope cap).
-Classic therefore runs one advisory pass per reviewer-bearing stage in the
-gated flow, with the findings presented at the approval gate. Explicit
+(one normal-flow review pass; the approval gate shows its findings from the
+engine-owned findings list for you to triage). The effective class per stage is the stage's declaration,
+lowered by one ceiling: this override when it is set, otherwise the scope's
+`review_cap` (bugfix, poc, classic, and workshop cap to `advisory`; express
+caps to `none`). So `--review advisory` turns every remaining adversarial loop
+into a single normal-flow decision-support pass, `--review none` skips gated
+stage reviewer dispatch, and `--review adversarial` runs each stage's own
+class, even on a capped scope. Setting the scope's own level (for example
+`--review advisory` on bugfix, or `--review adversarial` on feature) clears the
+override instead: the scope's cap applies again and follows later scope
+changes. No override raises a class above the stage's declaration or adds a
+reviewer a stage does not declare.
+Without an override, classic runs one advisory pass per reviewer-bearing stage
+in the gated flow, with the findings presented at the approval gate. Explicit
 autonomous construction is exempt: it retains its single pre-merge reviewer,
 including under classic. Neither the scope cap nor the ceremony switches disable that review.
 Updates the `Review Override` field in `aidlc-state.md` and logs a
@@ -995,16 +1011,19 @@ request at the next ordinal.
 ```
 /aidlc --review advisory              Single normal-flow pass, findings at the gate
 /aidlc --review none                  No gated stage reviews this run
-/aidlc --review adversarial           Clear the override (stage defaults apply)
+/aidlc --review adversarial           Each stage's own review class, above any scope cap
+/aidlc --review advisory              On bugfix: back to bugfix's normal reviews
 ```
 
 ---
 
 ### Workflow configuration — one atomic setter
 
-All seven intent settings share one setter, `config-change`. Slash flags remain
-available, and flags from different settings can be combined in **one command
-and one transaction**; do not split a combined request into successive setters.
+All eleven intent settings share one CLI setter, `config-change`.
+Flags from different settings can be combined in one atomic CLI command; do not
+split companion settings into successive setters.
+For a typed lowering command, the human-turn hook validates and applies the
+switch and its companion intent settings in one transaction at prompt time.
 This is active-intent configuration, distinct from native project configuration
 through `aidlc config flags`.
 
@@ -1013,17 +1032,33 @@ through `aidlc config flags`.
 | `depth` / `--depth` | `minimal`, `standard`, `comprehensive` | Depth |
 | `test-strategy` / `--test-strategy` | `minimal`, `standard`, `comprehensive` | Test Strategy |
 | `review` / `--review` | `adversarial`, `advisory`, `none` | Review Override |
-| `change-control` / `--change-control` | `strict`, `relaxed` | Change Control |
+| `guard-policy` / `--guard-policy` | `strict`, `relaxed`, `off` | Guard Policy |
 | `sensors` / `--sensors` | `on`, `off` | Sensors |
 | `learnings` / `--learnings` | `on`, `off` | Learnings |
 | `summary-confirmation` / `--summary-confirmation` | `on`, `off` | Summary Confirmation |
+| `plan-approval` / `--plan-approval` | `on`, `off` | Plan Approval |
+| `guard.plan-approval` / `--guard.plan-approval` | `on`, `off` | Plan Approval (another name for `plan-approval`) |
+| `guard.review-freeze` / `--guard.review-freeze` | `on`, `off` | Guards Off / Guards On |
+| `guard.state-transition` / `--guard.state-transition` | `on`, `off` | Guards Off / Guards On |
+| `guard.reviewer-scope` / `--guard.reviewer-scope` | `on`, `off` | Guards Off / Guards On |
 
-For example, each line below is a single combined update:
+The retired key `change-control` and the retired flag `--change-control` still
+resolve to `guard-policy` for one release and print one deprecation line. On the
+`config-change` and `scope-change` utility paths, naming both spellings in one
+command is refused when their values differ, and accepted when they agree.
+In `orchestrate next`, the last of the two flags wins when both values are valid.
+In `validate-grid`, `--guard-policy` takes precedence over `--change-control`
+regardless of their order; the first occurrence of the chosen flag is used.
+Either flag overrides the scope object, where a string `guardPolicy` takes
+precedence over a string `changeControl`.
+
+Each line below combines settings. When the command lowers a guard, the
+human-turn hook applies all listed intent settings together at prompt time:
 
 ```
-/aidlc --depth minimal --review none --change-control relaxed --sensors off
-/aidlc config set depth standard --test-strategy minimal --review advisory --change-control strict --sensors on --learnings on --summary-confirmation off
-/aidlc --scope bugfix --change-control relaxed --sensors off --learnings on
+/aidlc --depth minimal --review none --guard-policy relaxed --sensors off
+/aidlc config set depth standard --test-strategy minimal --review advisory --guard-policy strict --sensors on --learnings on --summary-confirmation off
+/aidlc --scope bugfix --guard-policy relaxed --sensors off --learnings on
 ```
 
 The native dispatcher form is `aidlc engine config set <key> <value>` followed
@@ -1031,89 +1066,293 @@ by the other setting flags. Every key routes to the same utility command; the
 first setting becomes `--<key> <value>`, with the remaining flags forwarded:
 
 ```bash
-aidlc engine config set change-control relaxed --sensors off --intent login-fix --space platform
-bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --change-control relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
+aidlc engine config set guard-policy relaxed --sensors off --intent login-fix --space platform
+bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
-`config-change` accepts only the seven setting flags and the `--intent`,
+`config-change` accepts only the eleven setting flags and the `--intent`,
 `--space`, and `--project-dir` selectors. At least one setting is required.
 Selectors pin the state file, memory policy, and audit shard to the same target;
 omitted intent/space selectors use the active workflow selection. They do not
 switch the active intent or space. Use `scope-change` (the `/aidlc --scope`
 route), not `config-change --scope`, when also changing the scope.
 
-All flags and values are validated before mutation. Invalid values and unknown
-flags refuse the entire request; an unknown flag is named in the error. If an
-explicit `--change-control relaxed` is refused by a memory layer's `Mode: strict`,
-none of the companion settings or scope changes are applied. The error names
+For a typed lowering switch, both
+`/aidlc config set guard-policy relaxed --intent <name> --space <name>` and
+`/aidlc --guard-policy relaxed --intent <name> --space <name> ...` make the
+human-turn hook apply it at prompt time to the named piece of work.
+The trailing `...` in the flags form stands for an optional task description.
+Omitted selectors use the session's workflow selection; a nonexistent named
+intent is refused, and a selection without a state file must be created before
+the person types the switch again.
+The hook validates all recognized companion intent settings before mutation.
+Malformed commands, unknown flags, missing values, and invalid companion values
+change nothing; the later CLI route reports its normal validation error.
+
+The CLI validates all flags and values before mutating state. Invalid values
+and unknown flags refuse that entire update; an unknown flag is named in the error. If an
+explicit `--guard-policy relaxed` or `--guard-policy off` is refused by a memory
+layer's `Mode: strict`, none of the companion settings or scope changes are
+applied. The error names
 the memory file to edit. Explicit strict and unrelated settings remain allowed.
 One lock covers reading the target state, applying all
 settings, appending the audit batch, and writing state once. Audit failure leaves
 state untouched. Changes and output follow the key order in the table; `Last
 Updated` changes only when stored state changes. Repeating an already stored
-choice is a no-op, but changing a scope-sourced value to an explicit human
-override records that provenance even if the value is the same.
+choice is a no-op, but changing a scope-sourced value to an explicit override
+records that provenance even if the value is the same.
 
-`config get` accepts every key in the table, and `config list` returns all seven
-in that order. Change Control and ceremony reads include effective values and
-sources, just like status:
+`config get` accepts every key in the table, and `config list` returns all twelve
+in that order. Guard Policy, fence, and ceremony reads include effective values
+and sources, just like status:
 
 ```
-/aidlc config get change-control
+/aidlc config get guard-policy
+/aidlc config get plan-approval
 /aidlc config get summary-confirmation
 /aidlc config list
 /aidlc config list --json
 ```
 
+The additional read-only `guard.human-presence` lookup reports `on (default)` or
+`off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)`; it is not a per-work setting and is
+not included in `config list`.
+
 Native read equivalents are `aidlc engine config get <key>` and
-`aidlc engine config list`. The following sections explain the Change Control
-and ceremony policies managed by this same setter.
+`aidlc engine config list`; `aidlc engine config --help` lists every config
+verb. The following sections explain the Guard Policy,
+fence, and ceremony policies managed by this same setter.
 
-#### `/aidlc --change-control <value>` - Change Control for this piece of work
+#### `/aidlc --guard-policy <value>` - Guard Policy for this piece of work
 
-Set the intent's Change Control value: what happens when something a human
-already approved or confirmed turns out to have changed underneath (source
-files moved after a code plan was approved, a reviewed document edited after
-its review, an output saved without the current summary confirmation).
+Set the intent's Guard Policy value: how far the framework's guards stand aside
+for the work in front of you. It decides two things. What happens when something
+a human already approved or confirmed turns out to have changed underneath
+(source files moved after a code plan was approved, a reviewed document edited
+after its review, an output saved without the current summary confirmation), and
+which of the five fences hold against an action no step of the running workflow calls for.
 
 **Syntax:**
 
 ```
-/aidlc --change-control strict
-/aidlc --change-control relaxed
+/aidlc --guard-policy strict
+/aidlc --guard-policy relaxed
+/aidlc --guard-policy off
 ```
 
-**Behavior:** `strict` reopens the approval: the run stops with a plain
-sentence naming what changed and asks for the approval again. `relaxed` records
-the change once as a `CHANGE_ACCEPTED` audit row, tells you in one line, and
-continues. Neither value removes a gate: every approval question is still
-asked, and a reviewer's verdict is never changed. The shared
-`config-change --change-control <value>` setter rewrites the `Change Control`
-line in `aidlc-state.md` as `<value> (set by you)` and adds a
-`CHANGE_CONTROL_SET` row to the command's audit batch. The value is committed
-with the intent, survives sessions, and is visible to teammates. The same
-setter repairs an invalid line and records the old text. A plain-chat request
-("stop asking me to re-approve when files change") uses the same route.
+**Behavior:** on a changed input, `strict` reopens the approval: the run stops
+with a plain sentence naming what changed and asks for the approval again.
+`relaxed` and `off` record the change once as a `CHANGE_ACCEPTED` audit row, tell
+you in one line, and continue. Code that moved after you approved a code plan is
+the exception: on every value the build continues with that one line and row;
+only an edit to the plan or its test instructions asks again under `strict`. On the fences, `strict` leaves all five up,
+`relaxed` lowers `plan-approval` (plan re-approval: an edited plan is not asked
+about again) and `review-freeze`, and `off` lowers those two
+plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
+by the policy word.
+
+Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
+move: they type `/aidlc --guard-policy relaxed` or the confirmation words
+`guard policy relaxed` (use `off` for that value), and the human-turn hook applies
+the switch when the prompt arrives, writes the state line and audit row, and
+reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
+The conductor runs `next` and relays the stand-aside line or harness note; it
+does not run the lowering setter itself.
+For `guard policy strict` or another plain-words request for strict, the conductor
+runs `config-change --guard-policy <strict|relaxed|off>` with `strict` at once,
+prints its output verbatim, and stops.
+If the harness has said this Kiro IDE build delivers no prompt text, say that
+active work cannot be lowered on that build; update Kiro IDE or start new work
+from a lower-default scope instead of inviting the confirmation words.
+In either the config or flags-first form, `--intent <name>` and `--space <name>`
+select the piece of work; omitted selectors use the hook payload session's
+workflow selection.
+A nonexistent named intent is refused, and a selection without a state file
+receives: `Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
+The `off` form names `off` instead of `relaxed`.
+Hooks run on Windows too, so the typed switch works on every harness that
+forwards the prompt without a setter-side session lookup.
+An unrelated reply opens nothing, and `AIDLC_UNATTENDED=1` suppresses prompt-time
+application and refuses CLI lowering.
+Scope defaults apply without asking.
+An already-off fence or an identical policy word already marked `set by you`
+needs no key because the CLI update is a no-op.
+After memory-strict and unattended checks, `fenceKeyBypassed` is the only way a
+CLI setter lowers without the person's prompt: it recognizes the fixture or
+harness-launch presence bypass, not an inline environment assignment.
+The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
+Approval runtime directory for an attended harness launched with
+`AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`.
+Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
+`.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
+[state-transition guard](../reference/06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
+Memory-held strict refuses first and overrides both the policy word and any
+fence lowered earlier, which `/aidlc --status` shows as
+`on (guard policy strict (from <layer>.md))` unless a machine-wide kill switch
+takes precedence.
+
+A typed `config set` lowering switch accepts `config set <key> <value>` followed
+only by optional `--intent <name>` and `--space <name>` pairs, each at most once
+and in either order; any other extra token applies no switch.
+Use flags-first syntax for combined settings. See
+[Customization](13-customization.md#the-five-fences) for the accepted grammar.
+Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
+
+A CLI setter that would change the policy to `relaxed` refuses with:
+
+> Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it. This command does not lower fences on its own.
+
+Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
+`intent create --guard-policy relaxed|off` from chat is refused when the value
+is below that default (`relaxed` on an `off` scope is a raise and applies):
+create the piece of work, then have the person type the switch. Naming the scope's own default at creation records the scope's
+value without another prompt. A running workflow preserves its stricter policy
+when moving to a scope with a lower default. Creation that would lower the
+policy to `relaxed` refuses with:
+
+> Creating this intent with Guard Policy relaxed would lower fences. Create it, then have the person type `/aidlc --guard-policy relaxed`; the harness applies it as they say it. A scope default applies without asking.
+
+The `off` refusals use `off` in place of `relaxed`; unattended runs also receive
+the driver guidance. A guard-recovery `lower-fence` choice is human-input guidance,
+not an operation or command: selecting it executes nothing and only tells the
+person to type `/aidlc config set guard.<fence> off` with that fence's name.
+
+Compose creation reads Guard Policy from the scope the plan runs on, and no
+scope file is written: a matched plan keeps its stock scope's default or a
+stricter value you asked for, and a custom plan runs on a stock scope whose
+default is the approved value or lower.
+The conductor passes `--guard-policy` for `strict` or `relaxed`, which raises a
+lower scope default, and never for `off`. If you flip a matched plan below its
+stock default at the compose gate, the composer treats it as an edit: the
+proposal becomes a custom plan on a stock scope that carries the value, and the
+intent is created from it. A flip above the default keeps the plan matched.
+Nothing is left for you to type afterwards. The
+composer never changes an in-flight intent's value.
+
+No value removes a gate: the conductor must still ask every approval question;
+a lowered fence does not enforce that prose obligation. A reviewer's verdict
+is never changed, no evidence is deleted, and an agent can never answer for a
+human. Each pass through a lowered fence writes one `GUARD_STOOD_ASIDE` row;
+delivery of its one-line notice depends on the harness, as described in
+[Customization](13-customization.md#what-you-see-when-a-guard-decides).
+
+The human-turn hook and shared `config-change --guard-policy <value>` setter use
+the same update path to rewrite the `Guard Policy` line in `aidlc-state.md` as
+`<value> (set by you)` and add a `GUARD_POLICY_SET` row to the audit batch.
+Any write of the policy line removes the retired `Change Control` line, retaining only `Guard Policy`.
+If both lines exist with different policy words, strict applies and status shows
+`strict (from conflicting state lines)` unless memory holds strict; `next` carries
+the [conflict notice](13-customization.md#where-the-value-lives) until you choose.
+If both agree, the `Guard Policy` line is used and the next policy write removes
+the retired one. A record carrying only a retired relaxed or off line is
+announced on every `/aidlc` run; re-affirm with
+`/aidlc config set guard-policy relaxed` to keep it or
+`/aidlc config set guard-policy strict` to raise the fences and stop the notice.
+Displaying this notice does not rewrite the line, and a retired strict line alone gets no notice. The value is
+committed with the intent, survives sessions, and is visible to teammates. The
+same setter repairs an invalid line and records the old text. A plain-chat request
+for strict runs directly. A request to lower the policy, such as "stop asking me
+to re-approve when files change", is not a switch: the conductor names the exact
+command for you to type (`/aidlc --guard-policy relaxed` or
+`/aidlc --guard-policy off`) and ends the turn. When your next message is that
+command, the human-turn hook applies the switch before the conductor runs `next`.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
 effective old/new values.
 An older intent without the line stays strict until it is set; a new intent
-starts from its scope's default. When a memory layer's `## Change Control`
-section says `Mode: strict`, an explicit relaxed override refuses the whole
+starts from its scope's default. When a memory layer's `## Guard Policy`
+section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still
 allowed. At creation the flag can be given with the scope
-(`/aidlc --scope poc --change-control strict "..."`).
+(`/aidlc --scope poc --guard-policy strict "..."`).
 
-**Valid values:** `strict`, `relaxed`.
+The retired flag `--change-control` and the retired config key `change-control`
+still resolve for one release and print one deprecation line naming their removal
+in the next minor version. Passing both spellings in one command is refused when
+their values differ, and accepted when they agree.
+
+**Valid values:** `strict`, `relaxed`, `off`.
 
 **Examples:**
 
 ```
-/aidlc --change-control relaxed        Record and announce input changes, keep going
-/aidlc --change-control strict         Approve again whenever an approved input changes
+/aidlc --guard-policy relaxed        Record and announce input changes, keep going
+/aidlc --guard-policy strict         Approve again whenever an approved input changes
+/aidlc --guard-policy off            Lower the four lowerable fences too (each pass-through logged)
 ```
+
+#### `/aidlc config set guard.<fence> <on|off>` - one fence, one piece of work
+
+Turn a single fence off for the work in front of you without touching the policy
+word, and turn it back on even when that word lowers it. The three per-work
+switches are `review-freeze`, `state-transition`, and `reviewer-scope`.
+`guard.plan-approval` is another name for the `plan-approval` setting (see
+[Plan approval](#aidlc-plan-approval-plan-approval)), so it writes no `Guards Off` entry. Human presence
+is the key holder and has no per-work switch.
+
+**Syntax:**
+
+```
+/aidlc config set guard.review-freeze off
+/aidlc config set guard.review-freeze on
+```
+
+**Behavior:** switching a fence off writes `- **Guards Off**: <comma list> (set
+by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row carrying
+`Guard`, `Scope`, and `Source`; switching it back on removes it from that list and
+writes `GUARD_RESTORED`. Setting `on` raises a policy-lowered fence, records it in
+`- **Guards On**: <comma list> (set by you)`, and writes `GUARD_RESTORED` with the
+same fields. Repeating a setting already in force is a no-op that says so;
+setting `on` for a policy-lowered fence is not a no-op. Neither state line accepts
+human presence, and a persisted human-presence entry is ignored.
+`/aidlc --status` prints a `Fences:` line with all five and where each setting
+came from, so nothing is lowered invisibly. Precedence is the environment kill
+switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on
+by default. Four of the five have a kill switch; `state-transition` has none,
+so the policy word and this switch are its only controls.
+
+To set `guard.<fence> off` from chat, the person types
+`/aidlc config set guard.<fence> off` or `/aidlc --guard.<fence> off`, and the
+human-turn hook applies it at prompt time, records the audit row, and reports
+`AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
+A `lower-fence` human-input choice executes nothing and only tells the person
+the exact command to type for that fence.
+Both forms accept `--intent <name>` and `--space <name>`; omitted selectors use
+the hook payload session's workflow selection.
+A nonexistent named intent is refused, and a selection without a state file
+must be created before the person types the switch again.
+The CLI setters do not lower fences from chat on their own; an already-off
+fence is a no-op and needs no key.
+Hooks run on Windows too, so every harness that forwards the prompt supports
+the typed switch without a setter-side session lookup.
+`AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering.
+After memory-strict and unattended checks, only `fenceKeyBypassed` permits CLI
+lowering without the person's prompt through the fixture or harness-launch
+presence bypass; an inline environment assignment does not establish it.
+Memory-held strict refuses first and overrides a fence lowered earlier, which
+`/aidlc --status` shows as `on (guard policy strict (from <layer>.md))` unless a
+machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
+remains and takes effect again only after the memory line no longer holds strict.
+
+A CLI setter that would turn the review-freeze fence off refuses with:
+
+> Turning the review-freeze check off is the person's move: they type `/aidlc config set guard.review-freeze off` and the harness applies it as they say it. This command does not lower a fence on its own.
+
+The other fence refusals substitute that fence's name; unattended runs also
+receive the driver guidance. This command controls the three switchable fences,
+including any the policy word leaves up. A switchable fence's main-session
+refusal names the command; a human-presence refusal names no switch and says:
+`This needs a fresh human turn: wait for the person to reply, then record it again.`
+
+Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
+`AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
+the fence. Any attempt to set `guard.human-presence` refuses the whole update
+with a non-zero exit and this message:
+`Human presence cannot be switched off: it is how AIDLC knows an approval or an answer came from a real person, so reply in the chat yourself. For a supervised session where nobody can reply, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set.`
+
+**Valid values:** `on`, `off`.
 
 #### `/aidlc --sensors`, `--learnings`, `--summary-confirmation` — Ceremony controls
 
@@ -1134,17 +1373,19 @@ Set these three independent policies to `on` or `off` for the active intent:
 **Defaults and precedence:** a kill switch set to `1` forces its policy `off`;
 otherwise the explicit per-intent setting wins, then the current scope default,
 then `on` when the scope has no setting. In short: **environment → per-intent →
-scope → on**. Classic defaults sensors and learnings to `on` and summary confirmation
-to `off`; every other shipped scope defaults all three to `on`. A new intent stores
+scope → on**. Every shipped scope declares all three explicitly: classic sets
+sensors and learnings to `on` and summary confirmation to `off`, express sets all
+three to `off`, and the other nine set all three to `on`. A scope file that omits
+a key still falls back to `on`. A new intent stores
 the scope defaults as, for example, `on (from scope classic)` for Sensors.
 Changing scopes carries scope-sourced values to the
-new defaults while preserving values explicitly set by you. Older intents
-without these fields resolve from their scope, then `on`.
-An explicit ceremony flag alongside a scope choice writes a `set by you`
-override, rather than a scope-sourced default.
+new defaults while preserving explicit values (`set by you` or `set by a
+command`). Older intents without these fields resolve from their scope, then `on`.
+An explicit ceremony flag alongside a scope choice writes an explicit override,
+rather than a scope-sourced default.
 These flags can be combined with each other and with depth, test strategy,
-review, and Change Control in one configuration transaction, with or without
-a scope change.
+review, Guard Policy, and the fence switches in one configuration transaction,
+with or without a scope change.
 An isolated `--single` run uses its selected scope's policy, recorded on its
 synthetic stage-start event, through completion; it does not inherit the main
 intent's ceremony overrides. An open isolated attempt cannot be resumed under
@@ -1152,24 +1393,49 @@ a different scope: complete the attempt or resume with its recorded scope.
 Legacy isolated starts without a recorded scope retain summary confirmation
 and do not enforce this scope comparison.
 
-An explicit ceremony setting writes `<value> (set by you)` to the corresponding
-state line and adds a `CEREMONY_SET` row to the shared audit batch with `Key`,
-`Old`, `New`, and `Source`.
+An explicit ceremony setting writes `<value> (set by a command)` to the
+corresponding state line, or `<value> (set by you)` when the human-turn hook
+applies the person's typed switch, and adds a `CEREMONY_SET` row to the shared
+audit batch with `Key`, `Old`, `New`, and `Source`.
 `Old` is the previously saved value (raw text if invalid; the scope default
 when no line existed), not a value forced off by an environment kill switch.
-The audit keys are `sensors`, `learnings`, and `summary_confirmation`; an explicit
-setter records `Source: you`. The saved override is committed with the intent
+The audit keys are `sensors`, `learnings`, and `summary_confirmation`; a command
+records `Source: command` and the person's typed switch records `Source: you`.
+A command that repeats the person's own choice is a no-op and keeps `set by
+you`. A creation flag such as `intent-create --learnings off` also records
+`set by a command`. The saved override is committed with the intent
 and survives sessions. An environment kill switch takes precedence without
 overwriting that saved choice. Turning a ceremony off does not uninstall or
 remove hooks, remove required stage gates, or disable the single pre-merge
 reviewer used when you explicitly choose autonomous construction.
 
+Turning summary confirmation off removes the person's `Looks correct`
+checkpoint, so it follows the fence rule: the person types
+`/aidlc config set summary-confirmation off` or `/aidlc --summary-confirmation
+off`, and the human-turn hook applies it at prompt time. The message must carry
+settings alone: beside a description (`/aidlc --summary-confirmation off build
+the export`) or in a question about the flag, the hook applies nothing, so the
+work already under way keeps its checkpoint and new work gets the flag only
+when it is created. A CLI setter
+(`config set`, `config-change`, or `scope-change`) run without that typed turn
+refuses with:
+
+> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so only they can do it. Ask the user to type `/aidlc config set summary-confirmation off` themselves; this command does not turn it off on its own.
+
+An off already saved as an explicit choice is a no-op. A scope-owned off (for
+example `off (from scope classic)`) still needs the person, because saving it
+as explicit would outlive a later scope change. Turning it `on`, a scope's own
+default, and a creation flag need no typed turn. A composer suggestion to turn
+it off gets the same refusal when applied, so the person types the switch after
+approving it. As for fences, `AIDLC_UNATTENDED=1` refuses the change and only
+the fixture or harness-launch presence bypass permits it without the person.
+
 The configuration commands expose these same three keys alongside depth, test
-strategy, review, and Change Control. For example, the following sets all three
-ceremonies and Change Control together:
+strategy, review, Guard Policy, and the fence switches. For example, the
+following sets all three ceremonies and Guard Policy together:
 
 ```
-/aidlc config set change-control relaxed --sensors off --learnings on --summary-confirmation off
+/aidlc config set guard-policy relaxed --sensors off --learnings on --summary-confirmation off
 ```
 
 **Environment kill switches:**
@@ -1179,6 +1445,7 @@ ceremonies and Change Control together:
 | `AIDLC_DISABLE_SENSORS` | Sensors |
 | `AIDLC_DISABLE_LEARNINGS` | Learnings |
 | `AIDLC_DISABLE_SUMMARY_CONFIRMATION` | Summary Confirmation |
+| `AIDLC_DISABLE_PLAN_APPROVAL_GUARD` | Plan Approval (also over a memory Guard Policy strict lock) |
 
 Any other value does not force the policy off. These switches can also be
 recorded explicitly through the native config bypass interface:
@@ -1192,6 +1459,52 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+
+#### `/aidlc --plan-approval` - Plan approval
+
+Set whether each code plan is shown for approval before code generation builds
+it, for the active intent:
+
+```
+/aidlc --plan-approval off
+/aidlc config set plan-approval on
+```
+
+| Flag / config key | State and status row | What `off` skips |
+|-------------------|----------------------|------------------|
+| `--plan-approval` / `plan-approval` (also `guard.plan-approval`) | Plan Approval | The Plan Approval question. Once a plan is written the person hears one line naming it and the build starts; a `PLAN_APPROVAL_SKIPPED` row records the fingerprint that was built |
+
+Express and poc ship with it off, and every other shipped scope with it on.
+Precedence matches the other ceremonies, with one addition: a memory
+`## Guard Policy` section holding `Mode: strict` keeps it on even where the
+scope or the intent says off, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` turns
+it off on the machine and wins over that memory lock. The variable counts only
+when the harness session started with it, when it is recorded with
+`config flags --bypass`, or when no harness session is recorded in the project;
+set inline on one command inside a session, it is ignored. Status then reads, for
+example, `Plan Approval: on (guard policy strict (from project.md))` or
+`Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)`.
+
+Only the person turns it off: they type `/aidlc --plan-approval off` or
+`/aidlc config set plan-approval off`, or say so in their own words ("skip plan
+approval for this work"), and the human-turn hook applies it. A CLI setter run
+without that turn refuses with:
+
+> Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type `/aidlc config set plan-approval off` themselves, or to say so in their own words; this command does not turn it off on its own.
+
+With memory holding strict, the refusal names the memory file instead. Said
+before the work exists (at the compose gate or the scope confirmation), the
+person's words answer that request: `intent create --request <id>` for it
+records `Plan Approval: off (set by you)`, with or without the flag, and the
+next creation in that chat spends them whatever it creates. A flag with no
+such turn, or a creation that names another request or none, is refused or
+keeps the scope's value. Turning it `on` needs no typed turn. A scope change carries a scope-sourced value to the
+new scope's default in both directions and keeps a value set for this intent.
+`guard.plan-approval` names the same setting, so
+`/aidlc config set guard.plan-approval off` writes the `Plan Approval` line
+rather than a `Guards Off` entry. Saying "review the plan first" while it is off
+shows that one plan for approval without changing the setting. See
+[Plan approval](13-customization.md#plan-approval) for the full behavior.
 
 ---
 
@@ -1226,6 +1539,21 @@ Versioned release runtimes use those routes. A locally generated source
 projection implements the same operations with Bun/TypeScript tools under the
 harness directory, and direct tool calls remain useful for plumbing that has no
 public route. Prefer `aidlc` whenever a route is documented below.
+
+### Read Earlier Questions and the Audit Timeline
+
+Agents use these commands to read earlier answers and the timeline. You can run
+them to inspect a workflow, but like every `aidlc engine` route they are
+harness machinery, not a stable interface for your own scripts.
+
+```bash
+aidlc engine log answers --stage requirements-analysis
+aidlc engine audit history
+```
+
+`log answers` returns JSON with paired answers, open questions, and ambiguous answers.
+`audit history` returns a JSON timeline of events and free-form notes.
+See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
 
@@ -1358,7 +1686,7 @@ preserve any backticks in the command. The human can also open
 `<record>/verification-command.txt`.
 
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session. Only **Approve** authorizes the receipt; an unrelated reply,
 **Request Changes**, or a reply from another session does not. Never write
 `--details "Approve"` unless the human chose it. Only then run:
@@ -1387,14 +1715,15 @@ Command` and `Command SHA-256`. Its JSON output includes the full canonical
 `command` and `command_sha256` alongside `challengeId` and `challengeFile`;
 `answer` also prints `command_sha256`. `answer` requires a matching pending
 decision and the human-turn hook's response bound to that command and session's current
-challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the exact choice matching
-`--details`; a later `HUMAN_TURN` alone is insufficient. Recording a new decision
+challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the choice matching the
+one `--details` names (the person's reply, read in their own words); a later `HUMAN_TURN` alone is insufficient. Recording a new decision
 replaces the session's prior challenge and response; a successful answer appends
 the audit event before consuming both. An append failure leaves the same response
 retryable; stale, mismatched, and successfully consumed responses are refused.
-`--details "Approve"` emits the tool-owned `VERIFICATION_COMMAND_RECORDED` receipt;
-`--details "Request Changes"` records only `QUESTION_ANSWERED` and means propose
-another command without setting state. Other answers are refused. The receipt
+A reply that approves (`--details "Approve"`, "1", or "approved") emits the tool-owned
+`VERIFICATION_COMMAND_RECORDED` receipt; one that asks for changes records only
+`QUESTION_ANSWERED` and means propose another command without setting state. A reply
+that picks neither is refused with the one follow-up to ask. The receipt
 carries the stage, checkpoint, session, SHA-256 of that canonical command, the
 complete canonical command as `Command Label` (never truncated), and the human's
 exact choice.
@@ -1447,7 +1776,7 @@ ID, and authorized command digest in the invoking SessionStart session:
 aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
 ```
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
@@ -1538,7 +1867,7 @@ complete canonical `command` from the verification-command tool output into a
 code span without abbreviation, preserving any backticks with a longer delimiter.
 
 
-Wait for the human's exact **Approve** / **Request Changes** reply in that
+Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
@@ -1569,8 +1898,8 @@ approval. Later completion-only stage directives settle bookkeeping without
 another body, reviewer, or human learnings/approval question.
 
 After Request Changes, an `invoke-swarm` directive with `resume_existing: true`
-uses the same batch and exact Unit set, after fresh Plan Approval for that
-rejection revision:
+uses the same batch and exact Unit set. If rejection retired the prior approval,
+obtain fresh Plan Approval for that revision before preparation:
 
 ```bash
 aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted Units>"
@@ -1579,48 +1908,52 @@ aidlc engine swarm prepare --resume-existing --batch <N> --units "<exact emitted
 If a worktree survives, the tool preserves its source and archives old metadata.
 If native source landing removed it, the tool can create a fresh child from the
 already-landed parent source after validating that landing evidence. Both paths
-retain the rejection revision and require fresh Plan Approval. A missing child
+retain the rejection revision and its actual approval evidence. Once approval
+exists for the same intent, target, and attempt, retrying setup does not require
+another answer: `testing-posture verify` with `execution_allowed: true` (exit 0)
+also permits postapproval continuation under a lowered fence when `ok: false`.
+That allowance never revives an older attempt's approval. A missing child
 without that evidence is refused. Do not assume every merged child survives, or
 replace a refused resume with ordinary prepare. Source that differs from the
 approved starting point must be reconciled and approved before work resumes.
 
 ### Grouped Code Generation Plan Approval
 
-For the exact live swarm Unit set, a single **Approve Plans** answer can record
-separate Plan Approval receipts for every named Unit. Prepare every plan and
-questions file, then create the batch manifest in the active record. `--batch-file`
-takes its record-relative path, with no absolute paths, `..` components, or
-symlinked components. The manifest must be a regular file of at most 64 KiB:
+When several Units of a swarm batch have plans ready at once, `next` asks about
+them in one question: each Unit's summary and plan path, then **Approve all**,
+**Request Changes**, and **I'll edit the files**. The person answers in their own
+words and the human-turn hook records the answer: "approve all" approves every
+Unit, and a change that names a Unit ("change billing: use Stripe") sends just
+that Unit back with those words and approves the rest. Every Unit still gets its
+own approval record bound to its own plan. The older recorded-batch commands
+(`aidlc engine log decision|answer --stage code-generation --checkpoint
+plan-approval --batch-file <manifest>`) remain only so a grouped approval
+started before an update can finish; while the engine's question is open they
+refuse with "Plan Approval is asked by the engine now. Run next, show the person
+the question it returns, and end the turn."
 
-```json
-{"batch":"<review name>","units":[{"unit":"<Unit>","questionsFile":"<project-relative questions path>"}]}
-```
-
-```bash
-aidlc engine log decision --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --decision "Approve these named plans?" --options "Approve Plans,Request Changes"
-aidlc engine log answer --stage code-generation --checkpoint plan-approval --batch-file "<manifest.json>" --session "<SessionStart ID>" --details "Approve Plans"
-```
-
-The decision precedes the prompt. Only after the actual **Approve Plans** answer,
-write `[Answer]: Approve Plan` into each named questions file and call `answer`.
-For **Request Changes**, record that choice in the files and use
-`--details "Request Changes"`, then revise and re-present. The batch binds the
-exact live Units, plan/questions fingerprints, and unchanged planned source.
 When some approved Units have landed, the remaining prepared workers retain
 their original approval as `next` narrows the pending set. Continue their
-existing worktrees after verifying the current approvals; a partial batch does
-not require another approval answer or a fresh `prepare`. This also applies
+existing worktrees when `testing-posture verify` reports `execution_allowed:
+true` (exit 0), including when `ok: false` truthfully reports that edited content
+was not approved. For that continuation, `reason` says to continue without a
+new approval; `approval_reason` holds the detailed stale binding reason, which
+does not block execution. Existing workers use the live plan-approval fence
+of their verified parent intent, including later lowering or raising.
+A partial batch does not require another approval answer or a fresh `prepare`. This also applies
 after a checkpoint revision has been prepared. An interrupted revision setup
 can retry with its existing current approval; successful preparation removes
-the revision-preparation signal from subsequent `next` directives. Substantive
-plan or attempt changes still require the reported approval repair.
+the revision-preparation signal from subsequent `next` directives. After initial
+approval, plan, test instruction, and Testing Contract edits for the same target
+and attempt continue without reapproval under Guard Policy `relaxed` or `off`.
+Under `strict` the edited plan is asked about again; a new attempt still needs its own approval. Keep the original
+approval evidence without describing the edited content as approved.
 When a human Retry explicitly discards a worker, its native discard can retain
 the committed approved baseline for recreation. The replacement can keep the
 same approval while other batch members continue or have already landed.
 Missing directories and unrelated old discard records do not authorize this
 recovery.
-Legacy protected-choice mediation, overrides, and unsupported harnesses use the
-single-Unit flow; per-Unit approval remains mandatory in either presentation.
+Per-Unit approval remains mandatory however the question is presented.
 See [Construction Execution](../reference/03-orchestrator.md#construction-execution).
 
 ### `aidlc engine worktree restore` — recover files from a set-aside attempt
@@ -1633,7 +1966,7 @@ aidlc engine worktree restore --slug <slug> [--parked <stamp>] [--raw] [--repo <
 
 This recovers files saved by `worktree discard` or an authorized
 `bolt abort --discard`. Without `--parked`, it selects the latest saved `/head`
-for the slug; with it, it selects that exact stamp. Stamps are UTC
+for the selected intent's Bolt; with it, it selects that exact stamp. Stamps are UTC
 `YYYYMMDDTHHMMSSZ` with an optional numeric `-N` collision suffix, ordered
 numerically for latest selection (`-10` follows `-2`). An exact stamp present in
 only one repository selects that repository before generic slug ambiguity.
@@ -1658,12 +1991,13 @@ not accepted by purge.
 When the human asks to recover an attempt, the conductor uses the successful
 discard abort's saved `restore_operation`, not a command string. This typed
 `EngineInvocation` has route `worktree` and args
-`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? "."]` when the
+`["restore", "--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]` when the
 stamp is known. Invoke `aidlc engine worktree <args...>` (the installed
 `{{INVOKE}} engine worktree` route), passing each listed arg exactly as a
 separate argv argument; never join args into a shell command or rebuild a
 slug-only selection. The repository selector is always present: the sibling
-name or `.` for the root.
+name or `.` for the root. The final selectors pin the owning intent, even after
+the active intent changes; keep every returned argument.
 
 `restore_hint` is optional human display text rendered from that operation by
 `renderEngineInvocation`, with native/source selection, harness-directory
@@ -1701,9 +2035,9 @@ offer. If no namespace was saved, including without `--discard`, `parked_ref`
 is `null`; `parked_stamp`, `parked_mode`, `parked_repo`, `restore_operation`,
 `restore_hint`, `restore_hint_error`, `parked_excludes`, and `recovery_hint` are absent.
 
-Restore creates `.aidlc/restored/bolt-<slug>-<stamp>` on branch
-`restore/bolt-<slug>-<stamp>`. It never touches a live
-`.aidlc/worktrees/bolt-<slug>` checkout or `bolt-<slug>` branch, resumes the
+Restore creates `.aidlc/restored/bolt-<id8>_<slug>-<stamp>` on branch
+`restore/bolt-<id8>_<slug>-<stamp>`. It never touches a live
+`.aidlc/worktrees/bolt-<id8>_<slug>` checkout or `bolt-<id8>_<slug>` branch, resumes the
 aborted lifecycle, or reinstates review authority. If the restore path or branch
 already exists, it refuses rather than overwriting it. Selecting evidence-only
 recovery refs, with no `/head`, refuses even with `--raw`:
@@ -1711,6 +2045,10 @@ recovery refs, with no `/head`, refuses even with `--raw`:
 ```text
 no restorable files were parked for <slug> <stamp>; only review evidence was kept
 ```
+
+Legacy restores retain their recorded name and require the selected intent's
+exact `WORKTREE_DISCARDED` `Parked ref` provenance. See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity).
 
 | Selection | Behavior |
 |-----------|----------|
@@ -1745,12 +2083,12 @@ for the snapshot contract.
 ### `aidlc engine worktree purge` — remove recovery refs
 
 ```bash
-aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>]
+aidlc engine worktree purge --slug <slug> [--parked <stamp> | --older-than <days>] [--repo <name|.>] [--intent <intent>] [--space <space>]
 ```
 
 Purge compare-deletes local recovery refs, including snapshot/branch-tip markers
 and reviewed source refs. With no selector it removes all saved stamps for the
-slug; `--parked <stamp>` selects one exact stamp. `--older-than <days>` accepts
+selected intent's Bolt; `--parked <stamp>` selects one exact stamp. `--older-than <days>` accepts
 nonnegative finite days, including fractions, and selects only stamps strictly
 older than that threshold. Age is computed from the UTC `YYYYMMDDTHHMMSSZ`
 portion of the stamp, ignoring any `-N` collision suffix; commit dates do not
@@ -1775,7 +2113,7 @@ mode (`snapshot`, `branch-tip`, `legacy`, or `evidence-only`), canonical restore
 checkout existence, and typed recovery operations. In JSON, every entry has
 `purge_operation`; only restorable entries have `restore_operation`. Each is an
 `EngineInvocation` with route `worktree` and args beginning with `purge` or
-`restore`, followed by `["--slug", slug, "--parked", stamp, "--repo", repo ?? "."]`.
+`restore`, followed by `["--slug", slug, "--parked", stamp, "--repo", repo ?? ".", "--intent", recordDirName, "--space", space]`.
 Conductors invoke that route with each arg exactly as argv, never by joining
 strings for a shell. Optional `restore_command` and `purge_command` are safe
 renderings for human display only. If rendering throws, the corresponding
@@ -1784,6 +2122,9 @@ explains why while the operation remains. Evidence-only entries have only the
 purge operation and its command-or-error fields. Doctor uses the same
 slug-scoped recovery repository candidate set described above. A moved checkout may not show as
 restored in doctor, but purge still checks its Git registration.
+Namespaced attempts resolve their owner through the intent registry UUID;
+legacy attempts require an exact discarded `Parked ref` in the owner's audit.
+Unknown or ambiguous owners and unattributed legacy parks are omitted.
 Doctor uses the same strict stamp parser: impossible dates and times have
 `age_days: null` in JSON and show `unknown` in human-readable output.
 These entries do not produce warnings or failures. Use the copy-install prefix
@@ -1815,7 +2156,12 @@ bun .claude/tools/aidlc-utility.ts codekb-snapshot \
 Immediately before a reverse-engineering scan, this command captures the
 complete shared CodeKB generation plus a source fingerprint over the paths the
 scan will inspect. The source token uses the Git working-tree fingerprint when
-available and a byte-exact tree fallback outside Git. A space+repo lock keeps
+available and a byte-exact tree fallback outside Git. Below each requested
+path, both leave out .NET `bin/`, `obj/`, and `out/` beside a `.csproj`,
+`.fsproj`, or `.vbproj` file, and the fallback also skips dependency and cache
+directories such as `node_modules/` and tool byproduct files such as
+`.DS_Store`, so a `dotnet build` during the scan does not invalidate it. A path
+named in `--paths` is always read. A space+repo lock keeps
 the two values from straddling a concurrent publication. The returned
 `store_generation`, `source_fingerprint`, and `paths` are inputs to
 `codekb-publish`.
@@ -1841,6 +2187,16 @@ candidate into the shared store with rollback and crash recovery. A concurrent
 CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
 `CODEKB_SOURCE_CHANGED`. Both publish nothing and require a fresh re-merge or
 scan rather than a last-writer-wins overwrite.
+
+After a successful publication the utility renames the staged directory aside
+in one step, then checks each of the nine files against the bytes it just
+published and removes it at once, and finally removes the emptied directory
+without recursion; the JSON result reports `"staged_removed": true`. If
+anything changed after it was read, or a removal fails, the utility rebuilds
+the files it had removed from those published bytes and puts the directory
+back whole (or, when the staged path was recreated meanwhile, keeps the renamed
+copy beside it), reports `"staged_removed": false`, and names the kept
+directory on stderr.
 
 ### `aidlc-utility codekb-scope-diff` - check the code knowledge base before a rerun
 
@@ -1885,7 +2241,7 @@ fingerprint.
 
 ### `aidlc-utility detect` - read-only workspace scan
 
-`bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path. Pure read; the composer runs it to learn where scope data lives on the current harness.
+`bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path, and `proposalPath`: the project-relative file (`aidlc/spaces/<space>/intents/.aidlc-engine/composer-proposal.json`, ignored by git) where the composer writes its grid before `validate-grid` checks it. Pure read; the composer runs it to learn where scope data lives on the current harness.
 
 ### `aidlc-workspace-sync` - clone and reconcile the declared repo set
 
@@ -1909,7 +2265,11 @@ are replaced successfully remain under the ignored
 repos declared in `repos.json` but missing on disk, rewrites the managed block
 in the workspace `.gitignore` to one `/{name}/` line per repo, and writes an
 `aidlc.code-workspace` VSCode multi-root file listing the root plus each child
-repo. A declared `branch` is checked out for a new clone. Repos already on disk
+repo. In a Copilot project that file also carries VS Code's agent request cap,
+`"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no
+settings yet; the keys and values already in its settings are kept (the file
+is rewritten, so comments in it are not). A declared
+`branch` is checked out for a new clone. Repos already on disk
 are never re-cloned or switched; a mismatch there remains an advisory.
 
 An orphan checkout (on disk but not in `repos.json`) blocks the run and is
@@ -1976,7 +2336,36 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>] [--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied. The settings flags carry settings approved together with the flips: they are applied in the same state write, with their `CEREMONY_SET` or `REVIEW_CLASS_CHANGED` rows after `RECOMPOSED`, so one approval never leaves the plan half-changed. A setting on its own goes through `config set`.
+
+```bash
+# Equivalent ways to skip both stages after approval:
+{{INVOKE}} engine recompose --skip market-research --skip team-formation
+{{INVOKE}} engine recompose --skip=market-research,team-formation
+
+# Add both pending stages back:
+{{INVOKE}} engine recompose --add market-research --add team-formation
+```
+
+Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+
+### `aidlc engine scope save` - keep a plan as a scope
+
+`{{INVOKE}} engine scope save --name <name> [--keywords <word,...>] [--intent <slug>] [--space <name>]` keeps the selected piece of work's current plan as a reusable scope. It writes the stages the plan runs, its depth, Guard Policy, the three ceremony settings, and its review level to the durable record `aidlc/scopes/<name>.md`, then compiles, so `/aidlc --scope <name>` works at once in this harness; another harness picks it up at its next `graph compile`. The running work is left as it is. The conductor runs it when you say "save this plan as quick-fix", or pick **Approve and save as scope** at a compose gate.
+
+```bash
+{{INVOKE}} engine scope save --name quick-fix
+# Saved as scope quick-fix (4 stages, sensors on, learnings off, summary confirmation off, reviews advisory).
+# Next time: /aidlc --scope quick-fix "<what to build>"
+```
+
+A name is lowercase letters, digits, and single hyphens, starting with a letter, at most 40 characters, and must not already name a scope. `--keywords` makes the scope inferable from a request's words; each keyword is one word of letters, digits, and hyphens, checked against the keywords other scopes claim, as `validate-grid --keywords` does. Without it the scope ships `keywords: []` and resolves only by name. A greenfield run's reverse-engineering skip is not saved, so the scope still reverse-engineers an existing codebase. Emits `SCOPE_SAVED`. Subagents cannot run it.
+
+### Creating a workflow with its own stage changes (`--skip` / `--add`)
+
+`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: custom, based on <scope>`, and no scope file is written. On a running workflow `next` refuses them and points to `/aidlc compose`, which shows the change for approval first.
+
+`--depth` and `--test-strategy` take exactly `minimal`, `standard`, or `comprehensive`; `next` refuses any other value before it names a command.
 
 ### `aidlc-graph ars` - deterministic ARS scoring
 
@@ -1990,7 +2379,7 @@ bun .claude/tools/aidlc-graph.ts ars --iae 0.30 --csu 0.80 --ve 0.40 --r 0.20 --
 
 ### `aidlc-graph validate-grid` - arbitrary-grid dependency check
 
-`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>] [--change-control <strict|relaxed>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before writing gate-granted keywords). `--change-control` (or a `changeControl` member beside `stages`) checks the composer's proposed Change Control value: anything but `strict` or `relaxed` is an error, a `relaxed` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as `change_control`. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
+`bun .claude/tools/aidlc-graph.ts validate-grid [--proposal <path>] [--strict] [--project-type <t>] [--keywords <csv>] [--guard-policy <strict|relaxed|off>] [--matched <stock-scope> | --custom]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Without `--proposal` it reads the composer's proposal file, the `proposalPath` that `detect --json` prints. The proposal must name every compiled stage exactly once; missing stages, unknown stages, and invalid actions are errors. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). `--keywords` checks each granted keyword against the keywords existing scopes already claim: a collision is a hard error naming the incumbent scope (the composer runs this before the gate when keywords are granted, and `scope save --keywords` runs the same check). `--guard-policy` (or a `guardPolicy` member beside `stages`; the retired `--change-control` flag and `changeControl` member still resolve) checks the composer's proposed Guard Policy value: anything but `strict`, `relaxed`, or `off` is an error, a `relaxed` or `off` proposal under a memory layer's `Mode: strict` is refused naming that file, and the accepted value is echoed as both `guard_policy` and `change_control`. A `scopeSettings` member beside `stages` checks the composer's five scope settings: it must name exactly `sensors`, `learnings`, `summary_confirmation`, and `plan_approval` (each `on` or `off`) and `review_cap` (`adversarial`, `advisory`, or `none`); an unknown key, a missing key, or any other word is an error. The accepted values are echoed as `scope_settings`, and `summary.off` lists what they switch off. `--matched <stock-scope>` or `--custom` names the composer's route for a front/report proposal: either one requires `scopeSettings` and a Guard Policy. Neither route writes a scope file. `--matched` rejects a grid that differs from that stock scope and a Guard Policy below its default (a stricter value is one creation applies); any setting may differ, and a passing run echoes `routing`, `matched_scope`, and `creation_settings`, the typed changes applied to this piece of work at creation (for example `{"learnings": "off", "review": "adversarial"}`). `--custom` picks the stock scope the plan runs on, the nearest one whose Guard Policy default is the proposal's or lower (any one for `strict`) and that adds nothing the gate does not show (no walking skeleton, and no test strategy other than the plan's depth), and a passing run echoes `routing`, `base_scope`, `plan_changes` (the `skip` and `add` stage lists that turn that scope's grid into the plan), `creation_settings` against that scope, and `creation_depth` when the proposal's `depth` member differs from that scope's; it requires that `depth` member (`minimal`, `standard`, or `comprehensive`) and rejects a Guard Policy that no stock scope defaults to or below, and a plan that skips an initialization stage. Every run without `--matched` also echoes `custom_start`, the `guard_policy` and `scope_settings` a custom plan starts from: the `classic` scope's, whichever stock scope the plan runs on (omitted when `classic` is not an enabled scope). Any `on` ceremony that a kill switch (`AIDLC_DISABLE_*`, set or recorded) forces off on this machine gets an advisory too, since the scope stores `on` but the ceremony will not run. The result also carries `nearest_stock`: every graph/plugin-authored stock scope ranked by grid distance from the proposal (`{scope, diff, differs}` ascending, composer-authored scopes excluded), so the composer's matched-vs-custom verdict is the validator's number rather than an LLM recount.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 
@@ -2081,7 +2470,7 @@ Both verbs accept `--repo <name>` (multi-repo intents), `--space <name>`, and `-
 
 ### Session skills — report on a workflow
 
-Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in readable output. Type them like commands:
+Three read-only skills surface what `aidlc engine runtime summary` reports, wrapped in readable output. Type them like commands:
 
 | Skill | What it does |
 |-------|--------------|
@@ -2089,7 +2478,7 @@ Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in 
 | `/aidlc-replay` | Readable session narrative for async review. Terminal only |
 | `/aidlc-outcomes-pack` | Handover document for the team. Writes `OUTCOMES.md` |
 
-All three are read-only — no stage advance, no audit emit — and source every number from `aidlc-runtime summary --json`. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
+All three are read-only — no stage advance, no audit emit — and source every number from `aidlc engine runtime summary --json`. If your harness doesn't surface skills as slash commands (so `/aidlc-session-cost` is reported invalid), run that command directly — it produces the same cost view. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
 
 ---
 

@@ -147,7 +147,7 @@ export function compiledExecutable(
 // changes nor a native executable's process.execPath can turn a script into a
 // dispatcher command.
 export function aidlcEngineCommand(
-  route: "orchestrate" | "log" | "state" | "bolt",
+  route: "orchestrate" | "log" | "state" | "bolt" | "runtime" | "sensor",
   args: readonly string[],
   sourceToolPath?: string,
   executable: string | null = compiledExecutable(),
@@ -157,10 +157,35 @@ export function aidlcEngineCommand(
     : [process.execPath, sourceToolPath ?? resolveHarnessPath(["tools", `aidlc-${route}.ts`]), ...args];
 }
 
+// Control characters (line breaks, terminal escapes) in something we print.
+export function hasControlCharacters(value: string): boolean {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: detecting them is the point
+  return /[\u0000-\u001f\u007f]/.test(value);
+}
+
+// One argument of a command we print for someone to run: bare when it cannot
+// expand, else single-quoted so no shell substitutes into it. It stays one
+// line of plain text: a control character is shown as "?", never emitted.
+export function quoteCommandArgument(
+  value: string,
+  shell: "posix" | "powershell" = process.platform === "win32" ? "powershell" : "posix",
+): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  value = value.replace(/[\u0000-\u001f\u007f]/g, "?");
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return shell === "powershell"
+    ? `'${value.replaceAll("'", "''")}'`
+    : `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
 export function aidlcInvocation(): string {
   if (isCompiledExecutable()) return "aidlc";
   if (!PROJECTED_INVOKE.startsWith("{{")) return PROJECTED_INVOKE;
   return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
+}
+
+export function entrySkillInvocation(): string {
+  return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
 }
 
 export function aidlcDispatcherInvocation(route: string): string {
@@ -230,6 +255,62 @@ function readHarnessName(root: string): string | null {
   }
 }
 
+/**
+ * The two Kiro tree layouts. `agent-v1` is the Kiro CLI agent-JSON layout (JSON
+ * agents carrying their hooks); `kas` is the one Kiro IDE 1.x and Kiro CLI v3 run
+ * (Markdown agents, standalone `.kiro/hooks/*.json`). A row name says which
+ * distribution shipped a tree, not its layout, so code that depends on the
+ * layout asks for it here.
+ */
+export type KiroLayout = "agent-v1" | "kas";
+
+/** The layout a harness.json record declares, or the one its row name implied before the field existed. */
+export function kiroLayoutOf(record: unknown): KiroLayout | null {
+  if (!record || typeof record !== "object") return null;
+  const { kiroLayout, name, distribution } = record as Record<string, unknown>;
+  if (kiroLayout === "agent-v1" || kiroLayout === "kas") return kiroLayout;
+  const row = typeof name === "string" ? name : distribution;
+  if (row === "kiro-ide") return "kas";
+  if (row === "kiro") return "agent-v1";
+  return null;
+}
+
+/**
+ * The layout of the `.kiro` tree at `harnessRoot`: its harness.json first, then
+ * the conductor file it ships. With both conductors present the Markdown one
+ * wins, since the agent-v1 JSON is what a move to the KAS layout leaves behind.
+ * Null when the tree is neither.
+ */
+export function kiroTreeLayout(harnessRoot: string): KiroLayout | null {
+  try {
+    const layout = kiroLayoutOf(
+      JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "harness.json"), "utf-8")),
+    );
+    if (layout) return layout;
+  } catch {
+    // A tree without readable metadata still has its conductor file.
+  }
+  if (existsSync(join(harnessRoot, "agents", "aidlc.md"))) return "kas";
+  if (existsSync(join(harnessRoot, "agents", "aidlc.json"))) return "agent-v1";
+  return null;
+}
+
+/**
+ * The harness dir for this process, or null when the working directory cannot
+ * be read (a command started from a directory the user cannot list or enter).
+ * Null means "not discoverable here", never a default harness: a command that
+ * needs one still resolves it later and reports the error then. Other
+ * discovery errors are rethrown.
+ */
+export function discoverableRuntimeHarnessDir(projectDir = runtimeProjectDir()): string | null {
+  try {
+    return runtimeHarnessDir(projectDir);
+  } catch (error) {
+    if (["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  }
+}
+
 export function runtimeHarnessName(
   projectDir = runtimeProjectDir(),
   harnessDir = runtimeHarnessDir(projectDir),
@@ -293,6 +374,108 @@ export function packagedDistributionRoot(
   distribution = distributionFor(harnessDir),
 ): string {
   return join(dirname(process.execPath), "runtime", distribution);
+}
+
+/**
+ * The running release's own copy of a project harness's tools/data/harness.json,
+ * or null. A native engine reads the project's file, which an older release may
+ * have written and `aidlc config` will not refresh while a workflow runs; the
+ * runtime it ships beside itself holds the same harness as this release writes
+ * it. The harness is the one the project's file names. A Bun engine reads its
+ * own tree already and ships no such copy. Any failure reads as no copy.
+ */
+export function releasedHarnessData(projectHarnessData: string): Record<string, unknown> | null {
+  if (!isCompiledExecutable()) return null;
+  try {
+    const declared = JSON.parse(readFileSync(projectHarnessData, "utf-8")) as Record<string, unknown>;
+    const { name, harnessDir } = declared;
+    if (
+      typeof name !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(name) ||
+      typeof harnessDir !== "string" || !/^\.[a-z0-9][a-z0-9._-]*$/i.test(harnessDir)
+    ) {
+      return null;
+    }
+    const released = join(packagedDistributionRoot(harnessDir, name), harnessDir, "tools", "data", "harness.json");
+    if (resolve(released) === resolve(projectHarnessData)) return null;
+    const copy = JSON.parse(readFileSync(released, "utf-8")) as unknown;
+    if (copy === null || typeof copy !== "object" || Array.isArray(copy)) return null;
+    const data = copy as Record<string, unknown>;
+    return data.name === name && data.harnessDir === harnessDir ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The largest directive a host shows whole as one shell result, and that host. */
+export interface DirectiveLimit {
+  bytes: number;
+  host: string;
+}
+
+// The host's name as the person knows it, by harness id. A harness.json is
+// project-editable, so its own productName never reaches the model: the id
+// only selects one of these fixed names.
+const HOST_LABELS: Readonly<Record<string, string>> = {
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+};
+
+// A limit is a positive whole number; anything else declares none.
+function declaredLimit(data: Record<string, unknown>): DirectiveLimit | null {
+  const bytes = data.directiveMaxBytes;
+  if (!Number.isSafeInteger(bytes) || (bytes as number) <= 0) return null;
+  const host = typeof data.name === "string" && Object.hasOwn(HOST_LABELS, data.name)
+    ? HOST_LABELS[data.name]
+    : "this assistant";
+  return { bytes: bytes as number, host };
+}
+
+function harnessDataLimit(harnessData: string): DirectiveLimit | null {
+  let own: DirectiveLimit | null = null;
+  try {
+    own = declaredLimit(JSON.parse(readFileSync(harnessData, "utf-8")) as Record<string, unknown>);
+  } catch {
+    // An unreadable file declares nothing of its own.
+  }
+  // The running release's copy is the host's ceiling as this release knows it.
+  // A project value can only tighten it, so a release that lowers a host's
+  // budget reaches projects configured earlier, and no project value raises it.
+  const released = releasedHarnessData(harnessData);
+  const shipped = released ? declaredLimit(released) : null;
+  if (own === null) return shipped;
+  return shipped !== null && shipped.bytes < own.bytes ? shipped : own;
+}
+
+/**
+ * The smallest directive limit declared by the engine's own harness data or by
+ * any harness installed in the project, or null when none declares one. With
+ * several harnesses in one project, the engine cannot tell which host prints its
+ * result (Claude's `.claude` is found before Copilot's `.aidlc`), so the
+ * smallest wins. Each harness's value is the smaller of its project file's and
+ * its release copy's, or whichever of the two declares one.
+ */
+export function directiveLimitFor(harnessData: string[], projectDir?: string): DirectiveLimit | null {
+  const files = [...harnessData];
+  if (projectDir !== undefined) {
+    try {
+      for (const harness of discoverProjectHarnesses(projectDir)) {
+        files.push(join(harness.root, "tools", "data", "harness.json"));
+      }
+    } catch {
+      // An unreadable project keeps the engine's own value.
+    }
+  }
+  let smallest: DirectiveLimit | null = null;
+  for (const file of new Set(files.map((path) => resolve(path)))) {
+    const limit = harnessDataLimit(file);
+    if (limit && (smallest === null || limit.bytes < smallest.bytes)) smallest = limit;
+  }
+  return smallest;
 }
 
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {

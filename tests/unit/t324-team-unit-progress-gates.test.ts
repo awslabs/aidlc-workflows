@@ -1,16 +1,24 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-state:set-unit-ownership, subcommand:aidlc-state:set-unit-gate-rhythm, subcommand:aidlc-state:refresh-unit-progress, audit:UNIT_OWNERSHIP_SET, audit:UNIT_GATE_RHYTHM_SET, function:UNIT_OWNERSHIP_FIELD, function:UNIT_GATE_RHYTHM_FIELD, function:isTeamUnitOwnership, function:readUnitGateRhythm, function:unitGateStatus, function:unitLifecycleSnapshot, function:unitMajorConstructionStageSlugs, function:deriveTeamUnitProgressModel
 
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename,
+  auditBlockField,
   findStageBySlug,
   freshReviewReceipts,
   isTeamUnitOwnership,
+  parseCheckboxes,
   readAllAuditShards,
+  readAuditShardEvents,
   readUnitGateRhythm,
   UNIT_GATE_RHYTHM_FIELD,
   UNIT_OWNERSHIP_FIELD,
@@ -33,8 +41,14 @@ import {
   deriveTeamUnitProgressModel,
 } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import {
+  reconstructTimeline,
+  runDiagnosis,
+} from "../../dist/claude/.claude/tools/aidlc-doctor-bundle.ts";
+import {
   readReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 resetAidlcEnv();
 
@@ -42,6 +56,7 @@ const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 
 const ENV: NodeJS.ProcessEnv = {
   ...process.env,
@@ -194,6 +209,7 @@ function runState(
   env: Record<string, string | undefined> = ENV,
 ): { rc: number; out: string } {
   const result = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env,
   });
@@ -207,7 +223,7 @@ function runReport(proj: string, args: string[]): Directive {
   const result = spawnSync(
     BUN,
     [ORCH, "report", ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: ENV },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV },
   );
   try {
     return JSON.parse((result.stdout ?? "").trim()) as Directive;
@@ -333,7 +349,7 @@ function logReviewReady(
     "--project-dir",
     proj,
   ];
-  const request = spawnSync(BUN, base, { encoding: "utf-8", env: ENV });
+  const request = spawnSync(BUN, base, { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: ENV });
   if ((request.status ?? -1) !== 0) {
     throw new Error(`review failed: ${request.stdout}${request.stderr}`);
   }
@@ -351,6 +367,7 @@ function logReviewReady(
         `### Findings\n\nNo blocking findings (pass ${++reviewPass}).\n`,
   );
   const completed = spawnSync(BUN, [...base, "--verdict", "READY"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
     env: ENV,
   });
@@ -386,6 +403,7 @@ function approveGate(proj: string, directive: Directive): void {
   ];
   expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind)
     .toBe("print");
+  // A Unit approval never ends the workflow, so its done says the walk goes on.
   expect(
     runReport(proj, [
       ...args,
@@ -393,8 +411,8 @@ function approveGate(proj: string, directive: Directive): void {
       "approved",
       "--user-input",
       "Approve",
-    ]).kind,
-  ).toBe("done");
+    ]),
+  ).toMatchObject({ kind: "done", workflow_continues: true });
 }
 
 function state(proj: string): string {
@@ -474,7 +492,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
         kind: "run-stage",
         ...dormant.expected,
       });
-    }, 30000);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   test("per-stage rhythm gates every settled pair before the next stage", () => {
@@ -535,7 +553,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(unitGates.every((gate) => gate.unit_gate === "per-stage"))
       .toBe(true);
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-end rhythm emits one chain gate after code-generation", () => {
     const proj = seedProject(
@@ -568,7 +586,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     });
     expect(state(proj)).toContain("- [-] build-and-test — EXECUTE");
     expect(state(proj)).toContain("- **Current Stage**: build-and-test");
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team ownership leaves ordinary Delivery Planning gates unitless", () => {
     const proj = seedProject({ ownership: "team" });
@@ -722,7 +740,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(readAllAuditShards(finalSkip)).toContain(
       "**Gate Stages**: functional-design,nfr-requirements,nfr-design,infrastructure-design",
     );
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team block completion finalizes a plan with no later stage", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -752,7 +770,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(runNext(proj).kind).toBe("done");
     expect(state(proj)).toContain("- **Status**: Completed");
     expect(readAllAuditShards(proj)).toContain("**Event**: WORKFLOW_COMPLETED");
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("cross-shard boundary ties fail a unit gate closed", () => {
     const proj = seedProject({ ownership: "team" }, ["alpha"]);
@@ -919,7 +937,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(blocked.out).toContain(
       "Stage status cannot be changed with aidlc-state.ts refresh-unit-progress",
     );
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-keyed rejection floors only the rejected unit's lifecycle and review receipts", () => {
     const proj = seedProject({ ownership: "team" });
@@ -962,7 +980,69 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const stage = findStageBySlug("functional-design")!;
     const reviews = freshReviewReceipts(proj, state(proj), stage);
     expect([...reviews.unitVerdicts.keys()]).toEqual(["beta"]);
-  }, 60000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a team Unit gate's Request Changes records the person's typed words", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    const session = "01995000-7a11-7000-8000-0000000324aa";
+    const typed = 'Split "alpha" & "beta" entities; keep the rules as they are.';
+    const env: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const hook = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt: typed }),
+      env: { ...env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(hook.status, hook.stderr).toBe(0);
+    const rejected = spawnSync(BUN, [
+      ORCH, "report", ...args, "--result", "rejected", "--user-input", "Request Changes",
+      "--reason", "Split the entities", "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    const directive = JSON.parse((rejected.stdout ?? "").trim()) as Directive;
+    expect(directive.kind, rejected.stdout + rejected.stderr).toBe("print");
+    expect(directive.message).toStartWith('Recorded rejected for unit "alpha" of "functional-design".');
+    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(typed)}`);
+    const row = (event: string) => readAuditShardEvents(proj).filter((entry) => entry.event === event).at(-1)!.block;
+    expect(auditBlockField(row("GATE_REJECTED"), "Unit")).toBe("alpha");
+    expect(auditBlockField(row("GATE_REJECTED"), "Feedback")).toBe(typed);
+    expect(auditBlockField(row("GATE_REJECTED"), "Conductor Summary")).toBe("Split the entities");
+    expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A conductor that reports a team Unit gate complete before asking it gets
+  // that Unit's question opened, never a stage-wide gate or an approval.
+  test("a team Unit gate reported complete before its question opens only that Unit's question", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const env: NodeJS.ProcessEnv = { ...ENV };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const report = (args: string[]): Directive => {
+      const result = spawnSync(BUN, [
+        ORCH, "report", "--stage", "functional-design", ...args, "--project-dir", proj,
+      ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      return JSON.parse((result.stdout ?? "").trim()) as Directive;
+    };
+
+    const unitless = report(["--result", "completed"]);
+    expect(unitless.kind).toBe("error");
+    expect(unitless.message).toContain("requires --unit");
+
+    const opened = report(["--unit", "alpha", "--result", "completed"]);
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect(opened.message).toContain('Unit "alpha" of "functional-design" has not asked for approval yet');
+    expect(opened.message).toContain("nothing is approved until they answer");
+    const events = readAuditShardEvents(proj);
+    const awaiting = events.filter((entry) => entry.event === "STAGE_AWAITING_APPROVAL");
+    expect(awaiting.map((entry) => auditBlockField(entry.block, "Unit"))).toEqual(["alpha"]);
+    expect(events.some((entry) => entry.event === "GATE_APPROVED")).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team gates record review finding dispositions for only the gated Unit", () => {
     const approved = seedProject({ ownership: "team" }, ["alpha"]);
@@ -1095,7 +1175,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     ]).toMatchObject([
       { status: "Rejected: This concern must be addressed" },
     ]);
-  }, 120000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("legacy unitless rejection remains stage-global under team ownership", () => {
     const proj = seedProject({ ownership: "team" });
@@ -1208,7 +1288,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const audit = readAllAuditShards(proj);
     expect(audit).toContain("**Event**: UNIT_OWNERSHIP_SET");
     expect(audit).toContain("**Event**: UNIT_GATE_RHYTHM_SET");
-  }, 30000);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("team ownership rejects recorded workspace repos before changing state", () => {
     const proj = seedProject();
@@ -1278,4 +1358,123 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
   });
+});
+
+describe("t324 doctor stage drift against the engine (#1190)", () => {
+  const driftFindings = (proj: string) => {
+    const stateContent = readFileSync(seededStateFile(proj), "utf-8");
+    const audit = readAllAuditShards(proj);
+    return runDiagnosis({
+      projectDir: proj,
+      timeline: reconstructTimeline(audit, stateContent),
+      stateContent,
+      audit,
+      graphStages: [],
+      recordAbsDir: null,
+      hooksHealth: { dirExists: true, heartbeats: [], degradedDrops: [] },
+      runtimeGraphExists: true,
+      runtimeGraphMtimeMs: null,
+      authoredInputsNewestMtimeMs: null,
+      markers: {
+        planExists: false,
+        planParseable: null,
+        recoveryExists: false,
+        stopHookDirExists: true,
+      },
+    }).filter(
+      (f) => f.id === "stage-state-audit-drift" || f.id === "current-stage-not-started",
+    );
+  };
+  const checkbox = (proj: string, slug: string) =>
+    parseCheckboxes(state(proj)).find((c) => c.slug === slug)?.state;
+
+  test("a team Unit projection that next resets to [ ] is not reported as drift", () => {
+    const proj = seedProject({ ownership: "team" });
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    appendAuditEntry(
+      "STAGE_STARTED",
+      { Stage: "functional-design", Agent: "aidlc-architect-agent" },
+      proj,
+    );
+    runNext(proj);
+    // The precondition: the refresh really did rewrite the started stage's box.
+    expect(checkbox(proj, "functional-design")).toBe("pending");
+    expect(driftFindings(proj)).toEqual([]);
+  }, 60000);
+
+  test("report names a lost state write when the audit shows the stage started", () => {
+    const lostWrite = (withStart: boolean): Directive => {
+      const proj = seedProject({}, ["alpha"]);
+      let content = state(proj).replace(
+        "- **Current Stage**: functional-design",
+        "- **Current Stage**: build-and-test",
+      );
+      for (const slug of BLOCK) {
+        content = content.replace(new RegExp(`^- \\[[ -]\\] ${slug} `, "m"), `- [x] ${slug} `);
+      }
+      writeFileSync(seededStateFile(proj), content);
+      expect(checkbox(proj, "build-and-test")).toBe("pending");
+      appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+      if (withStart) {
+        appendAuditEntry(
+          "STAGE_STARTED",
+          { Stage: "build-and-test", Agent: "aidlc-quality-agent" },
+          proj,
+        );
+      }
+      return runReport(proj, ["--stage", "build-and-test", "--result", "completed"]);
+    };
+
+    const lost = lostWrite(true);
+    expect(lost.kind).toBe("error");
+    expect(lost.message).toContain(
+      'Stage "build-and-test" shows as not started in aidlc-state.md, but the audit log shows it started',
+    );
+    expect(lost.message).toContain(" doctor` for the exact fix");
+
+    const unrun = lostWrite(false);
+    expect(unrun.kind).toBe("error");
+    expect(unrun.message).toBe(
+      'Stage "build-and-test" is still pending. Run the stage before reporting it complete.',
+    );
+  }, 60000);
+
+  test("scope-change refuses to skip the current team Unit stage and leaves next routable", () => {
+    // bugfix skips functional-design. Under team ownership its Unit gates live
+    // in Unit Progress while the box reads [-], and team routing refuses a
+    // current per-unit stage outside the unskipped block, so the change would
+    // strand the workflow.
+    const scopeChange = (proj: string) =>
+      spawnSync(BUN, [UTIL, "scope-change", "--scope", "bugfix", "--project-dir", proj], {
+        encoding: "utf-8",
+        env: ENV,
+      });
+
+    const team = seedProject({ ownership: "team" });
+    const before = state(team);
+    const refused = scopeChange(team);
+    expect(refused.status).toBe(1);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "Cannot change scope to bugfix while functional-design is the current team Unit stage",
+    );
+    expect(state(team)).toBe(before);
+    expect(readAllAuditShards(team)).not.toContain("SCOPE_CHANGED");
+    expect(runNext(team)).toMatchObject({ kind: "run-stage", stage: "functional-design" });
+
+    // Without team ownership the same change routes: next asks for the skip.
+    const solo = seedProject({});
+    // The rebuild keys on the legend line an engine-created state carries.
+    writeFileSync(
+      seededStateFile(solo),
+      state(solo).replace(
+        "## Stage Progress\n",
+        "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n",
+      ),
+    );
+    const changed = scopeChange(solo);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    const recovery = runNext(solo);
+    expect(recovery.kind).toBe("print");
+    expect(recovery.message).toContain("--result skipped");
+  }, 60000);
 });

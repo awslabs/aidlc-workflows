@@ -23,9 +23,9 @@
 <!-- We use BDD. Specifications drive scenarios; scenarios drive code. -->
 <!-- Each Unit ships with feature files in /features/. -->
 
-## Change Control
+## Guard Policy
 
-<!-- Affirmed by the team. Mode: strict or relaxed. Strict here holds for every intent and cannot be changed from chat. -->
+<!-- Affirmed by the team. Mode: strict, relaxed, or off. Strict here holds for every intent and cannot be changed from chat. A section under the retired Change Control heading, written by an earlier release, is still read. -->
 
 ## Deployment
 

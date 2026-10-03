@@ -52,36 +52,152 @@ caution nor default economy is acceptable.
   revalidate the stock grid, then rebuild the summary and decision table from
   that final grid; note the dropped flips at the gate). The earlier mechanical
   screen's distance is advisory and never overrides evidence-driven folds. A
-  custom scope is maintenance surface the user owns forever. A human edit to an
-  adopted stock grid converts it to custom so the edit has a persistence path.
-  When no stock scope fits the final proposal, synthesize - do not force a bad
-  match.
+  human edit to an adopted stock grid converts it to custom so the edit is
+  carried to creation. When no stock scope fits the final proposal, synthesize
+  - do not force a bad match.
+- Neither route writes a scope file. A custom plan runs on the stock scope the
+  validator names (`base_scope`) with its stage changes (`plan_changes`) and,
+  when that scope runs another depth, the plan's own (`creation_depth`, from
+  the `depth` the proposal names), for this piece of work only, so nothing
+  piles up in the scope library. The
+  person can keep a plan they like: "Approve and save as scope" at the gate, or
+  "save this plan as <name>" later, and the engine writes the scope then.
 - In-flight recomposition never adopts a stock scope. Preserve the running
   workflow's scope, depth, and frozen actions, then return only the strict-
   validated pending delta as exact `changes.skip` / `changes.add` arrays for
   the conductor's `recompose` command.
 
-## Change Control
+## Guard Policy
 
-Every proposal names ONE Change Control value with a one-line rationale. The
-value decides what happens when an input changes after the human approved or
-confirmed something: `strict` reopens that approval; `relaxed` records the
-change once, tells the human in one line, and continues. It never removes a
-gate, so it is a question of how much the team wants to be asked again, not of
-how much is checked.
+Every proposal names ONE Guard Policy value with a 1-2 sentence rationale
+naming the fences it lowers and why an input change after approval should
+reopen it, or be recorded and continue. The value decides two things: what
+happens when an input changes after the human approved or confirmed something,
+and how far the automatic checks stand aside for the agents. `strict` lowers
+no fences and reopens that approval; `relaxed`
+records the change once, tells the human in one line, continues, and stands the
+plan-approval and review-freeze checks aside; `off` does that and stands the
+state-transition and reviewer-scope checks aside as well. No value removes a
+gate and none of them touches human presence. The conductor still asks every
+approval question; the value also decides which fences stop undirected work,
+and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
-- A matched stock scope carries its own default (`change_control:` in the
-  scope file; the shipped defaults are strict on enterprise, security-patch,
-  and infra, relaxed everywhere else). Adopt it and say so.
-- For a custom grid, read the entropy profile the same way the grid was read:
-  high risk or verification entropy, regulated work, or several people sharing
-  the approvals point to strict; a spike, a fix, or a solo run where every
-  changed file would otherwise mean another approval points to relaxed.
+- A matched stock scope carries its own default (`guard_policy:` in the
+  scope file; the core defaults are strict on enterprise and off on the
+  rest; a plugin scope uses its own value, read in the order the scope loader reads it:
+  `guard_policy:`, then the retired `change_control:`, then strict when
+  neither line is present). Adopt it and say so, and keep a stricter value
+  the human asked for on every re-dispatch.
+- For a custom grid, copy the validator's `custom_start.guard_policy`, the
+  classic scope's default (`off` in core), and keep it: a custom plan runs
+  with the guards a person gets without composing, and the human raises it on
+  the gate row if they want more (keep their value on every re-dispatch).
+  Under a memory layer that declares strict, propose strict. Without a
+  `custom_start` echo, start from `nearest_stock[0]`'s default.
+  `validate-grid --custom` picks a `base_scope` whose default is that value
+  or lower (any stock scope serves strict), so creation carries it.
 - In-flight, the running intent's value stays as it is; the human flips it
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
-  approving. A memory layer that declares strict wins over any proposal; the
-  validator and the intent-create command both refuse a relaxed value under it.
+  approving a front composition. In-flight, the row is read-only: a
+  recompose lands only stage skips and adds, so the proposal names the routes
+  (raise or lower by typing `/aidlc --guard-policy <value>`, with `$aidlc` on
+  Codex). Changing scope alone never lowers the running policy.
+  A memory layer that declares strict wins over any proposal; the
+  validator and the intent-create command both refuse a relaxed or off value
+  under it.
+- Intent creation reads Guard Policy from the scope the plan runs on; the
+  conductor passes `--guard-policy` for `strict` or `relaxed`, raising a lower
+  base default, and never for `off`. A flip below a matched proposal's stock
+  default is an edit: convert it to custom and revalidate, and the base the
+  validator picks carries the value at creation; no setter runs afterwards. A
+  flip above it keeps the proposal matched, and creation applies it.
+
+## Scope settings
+
+The grid decides which stages run; five scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all five in its
+`scopeSettings` member, in the scope file's own words, with a 1-2 sentence
+`scopeSettingsRationale`:
+
+| Setting | Values | What turning it down removes |
+|---------|--------|------------------------------|
+| `sensors` | `on`, `off` | Automatic sensor runs (claim sources, required sections, upstream coverage, traceability, lint, type check) and their gate checks |
+| `learnings` | `on`, `off` | The stage learnings read/write ritual |
+| `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
+| `plan_approval` | `on`, `off` | The person's approval of each code plan before it is built; off builds the plan as written with one line naming it |
+| `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
+
+- A matched proposal starts from its stock scope's values (from its `.md`; a
+  missing ceremony line means `on`, a missing `review_cap` means
+  `adversarial`). A value you or the human change applies to this piece of
+  work only, since no scope file is written: the final validate-grid run
+  echoes the values that differ from the stock scope the plan runs on as
+  `creation_settings`, typed values the conductor turns into creation flags.
+  Any value can change, reviews included: a review level set for the piece of
+  work replaces its scope's ceiling.
+- Validate the final grid with the chosen values and its route (`--matched
+  <scope>` or `--custom`); either flag makes the five settings and the Guard
+  Policy required, and the validator checks each against the words the scope
+  loader accepts.
+- For a custom grid, start from the validator's `custom_start.scope_settings`:
+  the classic scope's values (in core, summary confirmation off, reviews
+  advisory, the rest on), whichever stock scope the plan runs on. The plan
+  picks its own stages; only the ceremony starts from classic. Without a
+  `custom_start` echo, start from the validator's nearest stock scope. A
+  matched proposal that the human's edit turns custom keeps the Guard Policy
+  and settings the gate showed, with their change applied. Either
+  way, move a setting only when the entropy profile gives a reason, the same
+  way a SKIP needs one:
+  - `sensors`: keep on when verification entropy is MED or higher, the work
+    is regulated, or later stages trace back to these artifacts. Off fits a
+    throwaway spike or the lightest run, where nobody will check the artifacts
+    against their sources.
+  - `learnings`: keep on for work in a codebase the team will keep changing.
+    Off fits a one-off change where the ritual costs more than it returns.
+  - `summary_confirmation`: reading the consolidated answers back is how a
+    misunderstanding gets caught before generation. A matched plan keeps it on
+    when intent ambiguity or unresolved assumptions are MED or higher; a
+    custom plan turns it on only when either is HIGH. Off fits work whose
+    answers are already unambiguous.
+  - `plan_approval`: keep the value you start from (the matched stock
+    scope's, or a custom plan's `custom_start`). Never propose turning it off:
+    the validator rejects off where the scope the plan runs on asks, because
+    only the person turns plan approval off.
+  - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
+    the work is regulated; `advisory` when both are MED or lower and the human
+    will read the findings at the gate; `none` only when both are LOW and the
+    change is small enough for the human to review directly.
+- No value removes a gate, a required question, human-turn authority, or the
+  audit trail; `plan_approval: off` removes only the plan stop, and a
+  memory-held strict Guard Policy keeps it on. A global kill switch
+  (`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
+  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) still forces its ceremony off
+  whatever the scope says. The validator names one that forces an `on` value
+  off on this machine; mark that value in the gate row, since the scope stores
+  `on` but the ceremony will not run until the switch is cleared.
+- The human sees the five values as one gate row, and whatever they ask for
+  there is done. A change keeps the route and applies to this piece of work;
+  only lowering a matched proposal's Guard Policy makes it custom. Plan
+  approval keeps the value the plan starts from: only the person turns it
+  off. When they ask at the gate, in their own words, to skip plan
+  approval, the harness records it and creation turns it off, so the proposal
+  stays as it is. A plan the person saves as a scope stores the
+  values in its frontmatter as `sensors:`, `learnings:`,
+  `summary_confirmation:`, `plan_approval:`, and `review_cap:`.
+- In-flight, the settings are not part of the recompose. Leave a settings
+  request out of the stage delta and return `settingsChanges`, typed values
+  the conductor shows on the gate and applies only on the human's approval;
+  return only what the request asks for. The keys are `sensors`, `learnings`, and
+  `summary_confirmation` (`on`/`off`), `plan_approval` (`on` only: the person
+  turns it off in their own words), and `review` (`adversarial`/`advisory`/
+  `none`). Full reviews on a capped scope is `"review": "adversarial"`; no
+  stage changes. When `engine config get <key>` reports `from env
+  AIDLC_DISABLE_<NAME>`, a kill switch on this machine overrides every
+  setting: return no change and say in one line that it has to be removed
+  outside the agent. Never look for where it is set; shell startup files,
+  environment listings, and harness settings files can hold credentials.
+  Never put command text in `settingsChanges` or `creationSettings`.
 
 ## Rationale quality
 

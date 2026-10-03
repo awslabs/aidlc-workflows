@@ -174,12 +174,23 @@ The entry MUST contain:
 - `Looks correct` and `Request changes` options
 - A blank `[Answer]:` tag
 
+Before presenting it, record the prompt with the checkpoint flags; a plain
+`decision` or `answer` is an ordinary question and never counts:
+
+```bash
+{{INVOKE}} engine log decision --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --decision "Does this all look correct before I generate the requirements artifact?" --options "Looks correct,Request changes"
+```
+
 Present that prompt as a structured question using the
 `Looks correct` / `Request changes` options from `stage-protocol.md`, then end
-the turn and wait for the user's response. Use the checkpoint-specific
-`aidlc-log.ts decision` / `answer` commands from that protocol, including this
-questions-file path; fill the confirmation `[Answer]:` before recording the
-answer receipt. If the user requests changes, ask **"What should change?"** and
+the turn and wait for the user's response. After they respond, fill the
+confirmation `[Answer]:` with their exact choice, then record the receipt:
+
+```bash
+{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details "<Looks correct or Request changes>"
+```
+
+If the user requests changes, ask **"What should change?"** and
 end the turn again. Do not update any answer until the user supplies that
 feedback. Then record the feedback, update the affected answers, reset the
 confirmation `[Answer]:` to blank, and repeat this step. Do NOT create
@@ -199,6 +210,12 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
+
+Keep review lifecycle content in the separate review file returned by the
+review request. A newly generated `requirements.md` must not contain a
+`## Review` section, a pending-review placeholder, or a reviewer verdict.
+Finish the primary requirements content before requesting its review; do not
+change it after a terminal review receipt to remove a placeholder.
 
 ### Step 11: Completion Handoff
 

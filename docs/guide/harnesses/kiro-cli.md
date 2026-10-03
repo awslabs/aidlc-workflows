@@ -13,6 +13,11 @@ methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
 — is byte-shared across every harness; only the shell (skills, agent
 configs, hook wiring, activation) differs.
 
+Harness-specific onboarding lives in `.kiro/steering/aidlc-onboarding.md`,
+loaded through the conductor agent's `resources`. The root `AGENTS.md` block
+is harness-neutral and shared with other installed harnesses; engine directories
+must still differ (Kiro CLI and Kiro IDE cannot share one `.kiro/` install).
+
 ## Prerequisites
 
 - **Kiro CLI ≥ 2.6** (`kiro-cli --version`), logged in (`kiro-cli login`)
@@ -39,7 +44,9 @@ aidlc doctor
 The installer verifies the release metadata, executable, and all-harness runtime archive against the published SHA-256 checksums. The installed runtime does not require Bun, Node.js, or Git. Harness selection happens in `aidlc config`.
 
 On Windows, download `install.ps1` and run
-`& $installer`. For an air-gapped package, use
+`& $installer`. See [Windows installation](../18-install-and-lifecycle.md#windows-powershell)
+for account scope, automatic User PATH registration, and `-NoModifyPath`.
+For an air-gapped package, use
 `install.sh --from <release-directory> --offline` on Unix or
 `& $installer -From <release-directory> -Offline` on Windows.
 
@@ -166,6 +173,24 @@ exactly like a permission failure. `--trust-all-tools` bypasses both the allow
 and deny lists, including the recursive-`rm` and `git push` denials. Use it only
 inside a disposable sandbox where blanket shell access is acceptable.
 
+**The hooks run on Kiro CLI's v2 engine, including over ACP.** This
+distribution registers its hooks in `.kiro/agents/aidlc.json`. Kiro CLI runs
+that block on its v2 engine while the `aidlc` agent is active. `kiro-cli acp`
+picks the agent from `chat.defaultAgent`, the same way `kiro-cli chat` does.
+Kiro CLI's v3 engine does not run the file as AI-DLC ships it, so if a session
+starts on v3 (for example when a client starts `kiro-cli acp --agent-engine v3`)
+or switches to another agent, none of these hooks run. With no hooks, no
+`HUMAN_TURN` receipts are recorded, so every approval and confirmation is
+refused. No write events are recorded either, so reviews are refused.
+After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
+never executed". Before that, doctor reports the heartbeats as not yet fired
+and passes, so it cannot tell you whether the hooks run. Restarting on the v3
+engine does not fix it. Start `kiro-cli chat --agent-engine v2 --agent aidlc`
+instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
+CLI on its v3 engine, use the
+[Kiro IDE](kiro-ide.md) distribution instead. See
+[Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
+
 ## What's different on Kiro
 
 | Area | Claude Code | Kiro CLI |
@@ -199,7 +224,7 @@ ignored and local. `bun scripts/package.ts --check` builds twice in independent
 temporary roots and byte-compares the results as the CI determinism guard. The
 authored Kiro surfaces live in `harness/kiro/`: the orchestrator skill
 (`skills/aidlc/`), the agent JSONs (`agents/`), the hook adapter
-(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `AGENTS.md` — edit
+(`hooks/aidlc-kiro-adapter.ts`), `settings/cli.json`, `settings/mcp.json`, and `onboarding.fills.ts` — edit
 those (or `core/`), never hand-edit the generated `dist/kiro`. See
 [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 

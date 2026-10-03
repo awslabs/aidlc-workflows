@@ -11,6 +11,7 @@ if [[ -z "${GITHUB_WORKSPACE:-}" || ! -d "$GITHUB_WORKSPACE" ]]; then
 fi
 
 codex_bin="$(command -v codex)"
+claude_bin="$(command -v claude)"
 
 sudo adduser \
   --system \
@@ -22,7 +23,8 @@ sudo install \
   -m 700 \
   -o "$review_user" \
   -g "$review_user" \
-  "$review_home/.codex"
+  "$review_home/.codex" \
+  "$review_home/.claude-review"
 
 if ! sudo -u "$review_user" test -x /home/runner; then
   sudo setfacl -m "u:${review_user}:--x" /home/runner
@@ -34,6 +36,10 @@ sudo chmod -R g+rX "$GITHUB_WORKSPACE"
 
 if ! sudo -u "$review_user" test -r "$GITHUB_WORKSPACE/.ai-review-context/pr.diff"; then
   echo "$review_user cannot read the immutable review context" >&2
+  exit 1
+fi
+if sudo -u "$review_user" test -w "$GITHUB_WORKSPACE/.ai-review-context/pr.diff"; then
+  echo "$review_user can modify the immutable review context" >&2
   exit 1
 fi
 
@@ -69,3 +75,11 @@ sudo -u "$review_user" -- env -i \
   /usr/bin/test \
   -r \
   "$GITHUB_WORKSPACE/.ai-review-context/pr.diff"
+
+sudo -u "$review_user" -- env -i \
+  CLAUDE_CONFIG_DIR="$review_home/.claude-review" \
+  HOME="$review_home" \
+  PATH="$PATH" \
+  "$claude_bin" \
+  --version \
+  >/dev/null

@@ -1,7 +1,12 @@
 // covers: function:isAutonomousConstructionGate, subcommand:aidlc-bolt:set-autonomy, subcommand:aidlc-state:approve, subcommand:aidlc-orchestrate:report
 //
 // An early human grant must not double as the first stage's approval.
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+  NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "../harness/test-budget.ts";
+import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,6 +22,8 @@ import {
   isAutonomousConstructionGate,
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 let project = "";
 afterEach(() => {
@@ -40,7 +47,7 @@ function run(tool: "bolt" | "state" | "orchestrate", args: string[]) {
   const result = spawnSync(
     process.execPath,
     [join(AIDLC_SRC, "tools", tools[tool]), ...args, "--project-dir", project],
-    { encoding: "utf-8", env },
+    { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
   );
   return {
     status: result.status,
@@ -102,6 +109,21 @@ describe("t339 on-demand autonomy preserves protected stage approvals", () => {
     const approved = run("state", ["approve", "build-and-test"]);
     expect(approved.status, approved.output).toBe(0);
     expect(readAllAuditShards(project)).toContain("**Event**: GATE_APPROVED");
+  });
+
+  // No person answered this gate, so stop words in the report are the
+  // conductor's, not a person's: an unattended run never parks (#365, #1411).
+  test("a gate the grant answered never parks on a stop request", () => {
+    setup("build-and-test", "off");
+    const reported = run("orchestrate", [
+      "report", "--stage", "build-and-test", "--result", "approved",
+      "--user-input", "Approve, but let's stop there for today",
+    ]);
+    expect(reported.status, reported.output).toBe(0);
+    expect(JSON.parse(reported.stdout).kind, reported.output).not.toBe("parked");
+    expect(readAllAuditShards(project)).toContain("**Event**: GATE_APPROVED");
+    expect(readAllAuditShards(project)).not.toContain("**Event**: WORKFLOW_PARKED");
+    expect(readFileSync(seededStateFile(project), "utf-8")).not.toContain("- **Parked**:");
   });
 
   test("a conditional skip protects the next approval without moving it after completion", () => {

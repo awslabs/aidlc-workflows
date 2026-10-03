@@ -24,6 +24,12 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  remainingCleanupTimeoutMs,
+  NATIVE_STARTUP_TIMEOUT_MS,
+  NATIVE_PROCESS_CLEANUP_TIMEOUT_MS,
+  remainingOperationTimeoutMs,
+} from "./test-budget.ts";
+import {
   copyFileSync,
   cpSync,
   existsSync,
@@ -39,6 +45,7 @@ import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as AidlcLib from "../../core/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
 import type { ShippedHarnessName } from "./harness-matrix.ts";
 
@@ -55,15 +62,9 @@ export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 // resolve the seeded paths via seededRecordDir()/seededStateFile() below (or
 // import recordDirFor from sdk-drive.ts) instead of hardcoding aidlc-docs/.
 export const DEFAULT_SPACE = "default";
-// The seeded default intent's uuid (canonical UUIDv7 shape). The record dir name
-// is `<slug>-<id8>` where id8 = idSuffix(uuid) = the trailing 16 hex chars (dashes
-// stripped) — the SAME derivation the runtime uses to join an intents.json row to
-// its dir (aidlc-lib.ts idSuffix/listIntents). Deriving DEFAULT_RECORD_DIR from
-// the uuid keeps the row and the dir consistent BY CONSTRUCTION, so the seeded
-// fixture models a layout the runtime can actually produce (a hand-kept suffix had
-// drifted: uuid …8000-000000000001 → idSuffix `8000000000000001`, not the literal
-// `0000000000000001` the dir used, so listIntents()/updateIntentStatus() never
-// matched the row to its dir).
+// Retain the seeded record's historical 16-hex directory suffix; the registry's
+// explicit dirName joins it to the UUID. Bolt names use the independent 8-hex
+// idSuffix(uuid), resolved by fixtureIntentId8 rather than this record dirname.
 export const DEFAULT_INTENT_UUID = "00000000-0000-7000-8000-000000000001";
 const DEFAULT_RECORD_ID8 = DEFAULT_INTENT_UUID.replace(/-/g, "").slice(-16);
 export const DEFAULT_RECORD_DIR = `fixture-${DEFAULT_RECORD_ID8}`;
@@ -216,6 +217,7 @@ export function runOrchestrateNext(
       encoding: "utf-8",
       cwd: options.cwd,
       env: options.env,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture orchestration" }),
     });
     const stdout = res.stdout ?? "";
     stderr += res.stderr ?? "";
@@ -239,7 +241,7 @@ export function runOrchestrateNext(
     }
 
     steering.push(directive);
-    const token = directive.continue_token;
+    const token = directive.receipt;
     if (typeof token !== "string" || token.length === 0) {
       return {
         status: res.status ?? -1,
@@ -281,6 +283,17 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
  */
 export function seededRecordDir(proj: string, space = DEFAULT_SPACE): string {
   return join(intentsDirOf(proj, space), DEFAULT_RECORD_DIR);
+}
+
+/** Resolve the active fixture intent through the same registry identity as Bolt tools. */
+export function fixtureIntentId8(projectDir: string, intent?: string, space?: string): string {
+  const lib = requireHere(
+    "../../core/tools/aidlc-lib.ts",
+  ) as typeof AidlcLib;
+  const selection = lib.resolveWorkflowSelection(projectDir, { intent, space });
+  const uuid = lib.intentUuidForSelection(projectDir, selection);
+  if (!uuid) throw new Error(`Fixture intent has no registry identity: ${projectDir}`);
+  return lib.idSuffix(uuid);
 }
 
 /** The seeded space-level codekb directory for a repository. */
@@ -411,7 +424,7 @@ export function removeWorkspaceRecord(proj: string, space = DEFAULT_SPACE): void
 export function toPortablePath(p: string): string {
   if (process.platform !== "win32") return p;
   try {
-    return execFileSync("cygpath", ["-m", p], { encoding: "utf8" }).trim() || p;
+    return execFileSync("cygpath", ["-m", p], { encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS }).trim() || p;
   } catch {
     return p;
   }
@@ -470,6 +483,7 @@ export function recordArtifactWriteViaHook(
     [join(AIDLC_SRC, "hooks", "aidlc-write-audit-log.ts")],
     {
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...extraEnv },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture audit hook" }),
       input: JSON.stringify({
         hook_event_name: "PostToolUse",
         tool_name: tool,
@@ -551,7 +565,7 @@ export function setupWorktreeFixture(): string {
   }
   proj = toPortablePath(proj);
   const git = (args: string[]): void => {
-    const r = spawnSync("git", args, { cwd: proj, encoding: "utf8" });
+    const r = spawnSync("git", args, { cwd: proj, encoding: "utf8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture git" }) });
     if (r.status !== 0) {
       rmSync(proj, { recursive: true, force: true });
       throw new Error(
@@ -571,6 +585,8 @@ export function setupWorktreeFixture(): string {
   // anchor under aidlc/spaces/default/intents/<record>/ instead of a flat
   // aidlc-docs/ tree.
   seedWorkspaceShell(proj);
+  // Bolt creation requires a selected registry intent; cursors ignore stateless records.
+  writeFileSync(seededStateFile(proj), "# AI-DLC State\n", "utf-8");
   return proj;
 }
 
@@ -588,6 +604,7 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
   // metadata. `git worktree list --porcelain` lists the main checkout first.
   const list = spawnSync("git", ["-C", proj, "worktree", "list", "--porcelain"], {
     encoding: "utf8",
+    timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
   });
   if (list.status === 0) {
     let mainSeen = false;
@@ -600,6 +617,7 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
       }
       spawnSync("git", ["-C", proj, "worktree", "remove", "--force", wt], {
         encoding: "utf8",
+        timeout: remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS),
       });
     }
   }
@@ -607,16 +625,19 @@ export function cleanupWorktreeFixture(proj: string | undefined): void {
 }
 
 function removeTreeWithRetry(path: string): void {
-  const attempts = process.platform === "win32" ? 10 : 1;
+  const deadline = Date.now() + remainingCleanupTimeoutMs(NATIVE_PROCESS_CLEANUP_TIMEOUT_MS);
   let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
+  for (let i = 0; ; i++) {
     try {
       rmSync(path, { recursive: true, force: true });
+      if (existsSync(path)) {
+        throw Object.assign(new Error(`fixture directory still exists after removal: ${path}`), { code: "ENOTEMPTY" });
+      }
       return;
     } catch (err) {
       lastErr = err;
-      if (!isRetryableRmError(err) || i === attempts - 1) break;
-      sleepSync(50 * (i + 1));
+      if (!isRetryableRmError(err) || Date.now() >= deadline) break;
+      sleepSync(Math.min(50 * (i + 1), 500, Math.max(0, deadline - Date.now())));
     }
   }
   throw lastErr;
@@ -804,7 +825,7 @@ function gitInit(dir: string, seedFile: string): void {
     ["add", "-A"],
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
   ]) {
-    const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "fixture git" }) });
     if (r.status !== 0) {
       throw new Error(`git ${args.join(" ")} in ${dir} failed: ${r.stderr?.trim() || r.stdout?.trim()}`);
     }

@@ -79,6 +79,20 @@ tool-owned.
 
 ## Intra-stage control flow (Keep / Modify / Redo)
 
+After Code Generation's initial Plan Approval, respect the effective Guard
+Policy for the same target and stage attempt. Under `relaxed` or `off`,
+continue after plan, test instruction, or Testing Contract edits without adding
+a reapproval stop or resetting the human's answer. Keep the original approval
+evidence; it does not approve the edited content. Under `strict`, those edits
+reopen Plan Approval. Follow the stage's Step 3 for the engine path. Changes to
+Testing Posture, scope, test strategy, or project type use the same rule within
+the same intent, target, and attempt: refresh the current contract and
+instructions as needed and continue while the policy allows it. When plan
+approval is off for the piece of work, the engine routes straight to the build
+and there is no approval stop to add. Initial approval (while plan approval is
+on), explicit Request Changes, new attempts, and other gates retain their
+existing procedures.
+
 The clean split is *between* directives (the engine says which stage is next)
 vs *within* a stage (you loop on your own). Inside one stage you still own:
 
