@@ -33,6 +33,12 @@
 //   - stopping for now: the park and the unpark the engine names get through
 //     the guard, and coming back builds an approved plan or asks about the
 //     same plan again.
+//   - the zero-Unit lockout reported in #1172 (refactor and bugfix, Brownfield,
+//     rules in parts): one approval reaches the build, each refusal while a
+//     part is the step names that part's `continue`, the stage-level handoff
+//     and source edits go through, parking and coming back reach the build
+//     with no new question, and a rules part left behind by a state that moved
+//     back holds nothing.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1526,5 +1532,186 @@ describe("stopping for now at Code Generation", () => {
     expect(workspaceSourceFingerprint(proj)).toBe(source);
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+  });
+});
+
+// The lockout reported in #1172: a Brownfield refactor (or bugfix) workflow
+// skips units-generation, so Code Generation is one zero-Unit, stage-level
+// target. The person approved the plan; the rules then arrived in parts, and
+// the build never started: the next part was refused, a fresh `next` started
+// the parts over, and every worker handoff and source edit was refused while
+// the step was a rules part. Parking to stop for the day was a trap of its
+// own: the refusal named `next`, `next` named the unpark, and the unpark was
+// refused. These cases drive that sequence end to end with the real engine,
+// the real human-turn hook, and the real plan-approval guard.
+function zeroUnitProject(scope: "refactor" | "bugfix"): string {
+  const proj = createOrchestrationTestProject();
+  created.push(proj);
+  let state = readFileSync(join(FIXTURES_DIR, "state-mid-inception.md"), "utf-8")
+    .replace("- **Change Control**: strict (from scope bugfix)",
+      `- **Guard Policy**: off (from scope ${scope})\n- **Plan Approval**: on (from scope ${scope})`)
+    .replace("- [-] requirements-analysis \u2014 EXECUTE", "- [x] requirements-analysis \u2014 EXECUTE")
+    .replace("- [ ] code-generation \u2014 EXECUTE", "- [-] code-generation \u2014 EXECUTE")
+    .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
+    .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
+    .replace("- **Next Stage**: code-generation", "- **Next Stage**: build-and-test");
+  if (scope === "refactor") {
+    state = state
+      .replace("- **Scope**: bugfix", "- **Scope**: refactor")
+      .replace("- [S] functional-design \u2014 SKIP (bugfix scope)", "- [x] functional-design \u2014 EXECUTE")
+      .replaceAll("SKIP (bugfix scope)", "SKIP (refactor scope)");
+  }
+  writeFileSync(seededStateFile(proj), state, "utf-8");
+  mkdirSync(join(proj, "src"), { recursive: true });
+  writeFileSync(join(proj, "src", "base.ts"), "export const base = true;\n", "utf-8");
+  cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
+  return withRulesInParts(proj);
+}
+
+function activeMarker(proj: string): { kind?: string; stage?: string; unit?: string } {
+  return JSON.parse(readFileSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), "utf-8"));
+}
+
+/** Each rules part's own `continue`, run once, to the directive after the last part. */
+function continueEachPart(proj: string, first: Emitted & { part?: number; receipt?: string }): Emitted {
+  let directive = first;
+  let parts = 0;
+  while (directive.kind === "load-steering") {
+    expect(directive.stage).toBe("code-generation");
+    expect(directive.part).toBe(++parts);
+    directive = engineCall(proj, ["continue", String(directive.receipt)]);
+  }
+  expect(parts).toBeGreaterThan(1);
+  return directive;
+}
+
+/** The person approves, the rules arrive in parts, and the build step arrives. */
+function approveThroughParts(proj: string, scope: string): Emitted {
+  writePlan(proj);
+  const ask = next(proj);
+  expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+  expect(ask.ask_type).toBe("plan-approval");
+  expect(ask.plan_approval.targets?.map((target) => target.unit)).toEqual([null]);
+  // The person picks Approve Plan, the first choice.
+  reply(proj, "1");
+  expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+  // The conductor re-enters with the request it started from, as reported.
+  const first = engineCall(proj, ["next", "--scope", scope, "Tidy the slug helpers"]);
+  expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+  // While a part is the step, the refusal names that part's own `continue`.
+  const early = guardWrite(proj, join(proj, "src", "slugify.ts"));
+  expect(early.code).toBe(2);
+  expect(early.stderr).toContain(`continue ${first.receipt}\``);
+  expect(early.stderr).not.toContain("cannot select one approval target");
+  const build = continueEachPart(proj, first);
+  expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+  expect(build.stage).toBe("code-generation");
+  expect(build.plan_approval).toEqual({ status: "approved" });
+  expect(activeMarker(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation" });
+  expect(activeMarker(proj).unit).toBeUndefined();
+  return build;
+}
+
+/** The developer handoff with the markers the reporter used, and nothing else. */
+function stageLevelHandoff(proj: string): { code: number; stderr: string } {
+  const approval = evaluateCodeGenerationApproval(proj, { unit: null });
+  expect(approval.ok, approval.reason).toBe(true);
+  return guardDispatch(proj, `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: ${approval.contractHash}\n`);
+}
+
+describe("the zero-Unit Code Generation lockout reported in #1172", () => {
+  for (const scope of ["refactor", "bugfix"] as const) {
+    test(`one approval builds the stage-level plan: the parts, the handoff, and the source edits go through (${scope})`, () => {
+      const proj = zeroUnitProject(scope);
+      approveThroughParts(proj, scope);
+      const handoff = stageLevelHandoff(proj);
+      expect(handoff.code, handoff.stderr).toBe(0);
+      expect(generationStarted(proj)).toBe(true);
+      const edit = guardWrite(proj, join(proj, "src", "slugify.ts"));
+      expect(edit.code, edit.stderr).toBe(0);
+      // The approval was asked for once and still stands.
+      expect(questions(proj)).toMatch(/^\[Answer\]: A\. Approve Plan$/m);
+      expect(nextThroughParts(proj).directive.plan_approval).toEqual({ status: "approved" });
+      expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+    });
+  }
+
+  // Before approval the planning rules can come in parts too: each part's
+  // refusal names its own `continue`, the planning step lets the plan be
+  // written, and the engine opens the question.
+  test("before approval, the planning rules arrive in parts, the plan is written, and the question opens", () => {
+    const proj = zeroUnitProject("refactor");
+    const first = engineCall(proj, ["next"]);
+    expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+    const early = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
+    expect(early.code).toBe(2);
+    expect(early.stderr).toContain(`continue ${first.receipt}\``);
+    const planning = continueEachPart(proj, first);
+    expect(planning.kind, JSON.stringify(planning)).toBe("run-stage");
+    expect(planning.plan_approval).toEqual({ status: "plan" });
+    for (const file of ["code-generation-plan.md", "unit-test-instructions.md"]) {
+      const write = guardWrite(proj, join(stageDir(proj), file));
+      expect(write.code, write.stderr).toBe(0);
+    }
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  for (const when of ["while the rules arrive", "during the build"] as const) {
+    test(`stopping for the day ${when}: the way back the refusal names gets through, and the plan is built with no new question`, () => {
+      const proj = zeroUnitProject("refactor");
+      if (when === "during the build") {
+        approveThroughParts(proj, "refactor");
+        expect(stageLevelHandoff(proj).code).toBe(0);
+      } else {
+        writePlan(proj);
+        expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+        reply(proj, "1");
+        expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", part: 1 });
+      }
+      const park = "bun .claude/tools/aidlc.ts engine orchestrate park";
+      const parkAdmitted = guardBash(proj, park);
+      expect(parkAdmitted.code, parkAdmitted.stderr).toBe(0);
+      expect(JSON.parse(runInstalled(proj, park)).kind).toBe("parked");
+      // Parked, a workspace command is refused; the refusal names `next`, and
+      // `next --resume` names the unpark, which the guard lets through.
+      const parked = guardBash(proj, "git add -A");
+      expect(parked.code).toBe(2);
+      expect(parked.stderr).toContain(" next`");
+      const unpark = resumeNamesUnpark(proj);
+      const unparkAdmitted = guardBash(proj, unpark);
+      expect(unparkAdmitted.code, unparkAdmitted.stderr).toBe(0);
+      runInstalled(proj, unpark);
+      const first = engineCall(proj, ["next", "--resume"]);
+      expect(first, JSON.stringify(first)).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+      const build = continueEachPart(proj, first);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval).toEqual({ status: "approved" });
+      const handoff = stageLevelHandoff(proj);
+      expect(handoff.code, handoff.stderr).toBe(0);
+      expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(0);
+      expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
+    });
+  }
+
+  // A merge that rewrote the state file left a Code Generation rules part as
+  // the last thing published while the state went back to Functional Design.
+  test("a rules part left over from before the state moved back holds nothing: the current stage runs", () => {
+    const proj = zeroUnitProject("refactor");
+    writePlan(proj);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "1");
+    expect(engineCall(proj, ["next"])).toMatchObject({ kind: "load-steering", stage: "code-generation", part: 1 });
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8")
+      .replace("- [x] functional-design \u2014 EXECUTE", "- [-] functional-design \u2014 EXECUTE")
+      .replace("- [-] code-generation \u2014 EXECUTE", "- [ ] code-generation \u2014 EXECUTE")
+      .replace("- **Current Stage**: code-generation", "- **Current Stage**: functional-design"), "utf-8");
+    expect(activeMarker(proj)).toMatchObject({ kind: "load-steering", stage: "code-generation" });
+    const edit = guardWrite(proj, join(proj, "src", "slugify.ts"));
+    expect(edit.code, edit.stderr).toBe(0);
+    const current = nextThroughParts(proj).directive;
+    expect(current.kind, JSON.stringify(current)).toBe("run-stage");
+    expect(current.stage).toBe("functional-design");
   });
 });
