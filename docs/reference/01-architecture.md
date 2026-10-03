@@ -930,7 +930,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
-14. **Four-option session resume** -- Resume from checkpoint, redo current stage, jump to a specific stage, or start fresh (with archive confirmation). Gives users fine-grained control over workflow navigation without manual state file editing.
+14. **Session resume** -- Bare `/aidlc` in a new session carries on from the checkpoint; the person can ask to redo the current stage, jump to a specific stage, or start fresh (a new intent alongside). Gives users fine-grained control over workflow navigation without manual state file editing.
 
 15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); under solo unit-major Construction a jump to the step the walk is on just continues it, once a Unit has finished work a jump to a later per-unit step moves only the Unit in flight on, and any other forward jump names what it skips or starts over; backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
 

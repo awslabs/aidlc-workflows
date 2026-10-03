@@ -1128,7 +1128,7 @@ When the directive carries `artifact_reuse` (the person chose Redo on the resume
 When a stage detects existing output artifacts in its artifact directory:
 
 1. List the existing artifacts found
-2. When the person's request already chose (they picked "Redo the current stage" on the resume menu, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
+2. When the person's request already chose (they asked to redo the current stage on re-entry, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
    - **Keep** — Accept existing artifacts as-is, skip this stage's generation steps, proceed to approval gate
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.

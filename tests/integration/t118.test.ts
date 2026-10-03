@@ -363,6 +363,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const jump = report("Jump to a stage");
     expect(jump.kind).toBe("print");
     expect(jump.message).toContain("next --stage");
+    // A stage the person already named is never asked for again.
+    expect(jump.message).toContain("for the stage the person named");
+    expect(jump.message).not.toContain("Ask the human which stage to jump to");
 
     const fresh = report("Start fresh");
     expect(fresh.kind).toBe("print");

@@ -192,7 +192,7 @@ Rules (both tracks):
   resume, then re-runs `next`; otherwise it waits for their direction. `"claim"`
   follows the Unit claim flow. `"execute-remedy"` offers only executable guard
   remedies and follows the human-selected command or action, never an invented
-  report. Empty remedies remain terminal. The prompt-rendered resume menu is
-  the sole non-stage report round-trip and uses
-  `report --result resumed --user-input "<exact label>"`; this is not a generic
+  report. Empty remedies remain terminal. A redo, jump, or start-fresh request
+  on re-entry is the sole non-stage report round-trip and uses
+  `report --result resumed --user-input "<their words>"`; this is not a generic
   engine-ask answer route. Explicit guard-remedy stage reports are unchanged.

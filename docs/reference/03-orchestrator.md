@@ -162,7 +162,7 @@ Explicit `/aidlc --resume` is different: the dispatcher calls `next --resume`, w
 
 ### Session Resume Flow
 
-Bare session re-entry and explicit resume intentionally diverge. The conductor owns the four-option menu on bare `/aidlc`; explicit `--resume` expresses the choice up front and enters the engine's normal continuation routing.
+Bare session re-entry on an active intent and explicit resume take the same route: the first call is `next --resume`, so a parked workflow is unparked and the work carries on, with no resume menu. The conductor says where the work picked up and that the person can ask to redo, jump to a stage, or start fresh instead; such a request goes to `report --result resumed --user-input "<their words>"`, which returns the exact follow-up move.
 
 ```mermaid
 flowchart TD
@@ -172,15 +172,11 @@ flowchart TD
     RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
-    RESUME_MENU["AskUserQuestion:\nResume Options"]
-    OPT_RESUME["Resume from\nlast checkpoint"]
-    OPT_REDO["Redo\ncurrent stage"]
-    OPT_JUMP["Jump to\nspecific stage"]
-    OPT_FRESH["Start fresh\n(archive existing)"]
     RESUME_STATE{"State exists?"}
     PARKED{"Workflow parked?"}
     UNPARK["Print unpark command"]
     CONTINUE["Normal next routing:\nload-steering / run-stage"]
+    OTHER["Person asks to redo,\njump, or start fresh:\nreport --result resumed"]
     JUMP["Explicit stage jump"]
     NO_STATE["Error: no workflow state"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
@@ -197,29 +193,23 @@ flowchart TD
     STATE_EXISTS -->|Yes| RECOVERY_CHECK
     STATE_EXISTS -->|No| SCOPE_DETECT
 
-    RECOVERY_CHECK -->|Yes| CORRUPTION
-    RECOVERY_CHECK -->|No| RESUME_MENU
-    CORRUPTION -->|Mismatch| WARN --> RESUME_MENU
-    CORRUPTION -->|Match| RESUME_MENU
-
-    RESUME_MENU --> OPT_RESUME
-    RESUME_MENU --> OPT_REDO
-    RESUME_MENU --> OPT_JUMP
-    RESUME_MENU --> OPT_FRESH
+    RECOVERY_CHECK -->|"Yes"| CORRUPTION
+    RECOVERY_CHECK -->|"No: next --resume"| RESUME_STATE
+    CORRUPTION -->|Mismatch| WARN --> RESUME_STATE
+    CORRUPTION -->|Match| RESUME_STATE
 
     RESUME_STATE -->|No| NO_STATE
     RESUME_STATE -->|Yes| PARKED
     PARKED -->|Yes| UNPARK --> CONTINUE
     PARKED -->|No| CONTINUE
-
-    OPT_FRESH -->|"archive + confirm"| CREATE
+    CONTINUE -.->|"any time"| OTHER
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
     CONFIRM_SCOPE --> CREATE
 
     style START fill:#e1bee7,stroke:#7b1fa2,color:#000
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
     style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
     style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
     style WARN fill:#ffcdd2,stroke:#c62828,color:#000

@@ -226,11 +226,17 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     const parsed = JSON.parse(r.stdout.trim());
     expect(typeof parsed.additionalContext).toBe("string");
     expect(parsed.additionalContext.length).toBeGreaterThan(0);
-    expect(parsed.additionalContext).toContain("On BARE /aidlc re-entry");
+    // A bare re-entry carries on like --resume: no resume menu, one hint line.
     expect(parsed.additionalContext).toContain(
-      "Explicit /aidlc --resume already selects Resume",
+      "A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume",
     );
-    expect(parsed.additionalContext).toContain("do NOT offer the menu");
+    expect(parsed.additionalContext).toContain("send the first `next` as `next --resume`");
+    expect(parsed.additionalContext).toContain(
+      "Say redo, jump to a stage, or start fresh if you'd rather.",
+    );
+    expect(parsed.additionalContext).toContain("`/aidlc` alone -> `next --resume`");
+    expect(parsed.additionalContext).not.toContain("Resume / Redo / Jump / Start Fresh");
+    expect(parsed.additionalContext).not.toContain("offer the user the standard resume options");
   });
 
   test("Claude Code reads the context: each line also carries it under hookSpecificOutput", () => {

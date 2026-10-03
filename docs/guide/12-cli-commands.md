@@ -223,9 +223,9 @@ Run with no arguments when a state file exists to resume.
 /aidlc
 ```
 
-**Behavior:** Reads `aidlc-state.md`, checks `.aidlc-engine/recovery.md` for corruption, then presents four resume options: resume from checkpoint, redo current stage, jump to stage, or start fresh. See [Session Management](11-session-management.md) for details.
+**Behavior:** Reads `aidlc-state.md`, checks `.aidlc-engine/recovery.md` for corruption, then carries on from the saved checkpoint, the same as `/aidlc --resume`. Say redo, jump to a stage, or start fresh to do something else. See [Session Management](11-session-management.md) for details.
 
-Use `/aidlc --resume` to skip the menu and continue directly from the saved checkpoint. Add `--stage <slug>` when the explicit target should win and route through the normal jump behavior.
+`/aidlc --resume` continues directly from the saved checkpoint too. Add `--stage <slug>` when the explicit target should win and route through the normal jump behavior.
 
 If no state file exists, the framework treats this as a new workflow and asks for scope/description.
 
@@ -2633,7 +2633,7 @@ for the precedence, defaults, and recordable `aidlc config flags --bypass` forms
 ## Next Steps
 
 - [Skills and Runner Commands](17-skills.md) — The typeable `/aidlc-<scope>` and `/aidlc-<stage>` runners, and what `--single` does
-- [Session Management](11-session-management.md) — Resume options and stage jumps in detail
+- [Session Management](11-session-management.md): re-entry, redo, and stage jumps in detail
 - [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — Scope definitions, stage mappings, and test strategy levels
 - [Troubleshooting](15-troubleshooting.md) — When commands don't behave as expected
 - [Glossary](glossary.md) — Definitions for command, utility command, scope

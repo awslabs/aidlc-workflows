@@ -184,7 +184,7 @@ The user-facing walk-through (with a worked example) is in [Rules and the Learni
 | Prerequisites | Self-contained `aidlc`; atomic filesystem locking |
 | AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
 | Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; application code goes to workspace root |
-| Session Resumption | Check for `aidlc-state.md` on startup, offer resume options |
+| Session Resumption | Check for `aidlc-state.md` on startup and carry on from the checkpoint |
 | Git Integration | Commit policy (see below) |
 
 ### Git Integration

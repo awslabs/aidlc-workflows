@@ -13,7 +13,7 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 ## Resume Flow
 
-When you run bare `/aidlc` in a new session and the active intent's `aidlc-state.md` exists, AI-DLC presents a status summary and offers four resume options. Run `/aidlc --resume` when you already know you want to continue from the saved checkpoint; it skips the menu and routes directly to the current stage.
+When you run bare `/aidlc` in a new session and the active intent's `aidlc-state.md` exists, AI-DLC carries on where the work stopped, the same as `/aidlc --resume`, and says where it picked up. To do something else, say so: redo the current stage, jump to a stage, or start fresh.
 
 ```mermaid
 flowchart TD
@@ -23,15 +23,11 @@ flowchart TD
     RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn about possible\nstate corruption"]
-    RESUME_MENU["Resume Options"]
-    OPT_RESUME["Resume from\nlast checkpoint"]
-    OPT_REDO["Redo\ncurrent stage"]
-    OPT_JUMP["Jump to\nspecific stage"]
-    OPT_FRESH["Start fresh\n(new intent alongside)"]
     RESUME_STATE{"aidlc-state.md\nexists?"}
     PARKED{"Workflow parked?"}
     UNPARK["Clear park marker"]
     CONTINUE["Continue current stage"]
+    OTHER["You ask to redo, jump,\nor start fresh"]
     JUMP["Jump to named stage"]
     NO_STATE["Error: no workflow state"]
     SCOPE_DETECT["Detect scope,\nstart new workflow"]
@@ -44,32 +40,30 @@ flowchart TD
     STATE_EXISTS -->|No| SCOPE_DETECT
 
     RECOVERY_CHECK -->|Yes| CORRUPTION
-    RECOVERY_CHECK -->|No| RESUME_MENU
-    CORRUPTION -->|Mismatch| WARN --> RESUME_MENU
-    CORRUPTION -->|Match| RESUME_MENU
-
-    RESUME_MENU --> OPT_RESUME
-    RESUME_MENU --> OPT_REDO
-    RESUME_MENU --> OPT_JUMP
-    RESUME_MENU --> OPT_FRESH
+    RECOVERY_CHECK -->|No| RESUME_STATE
+    CORRUPTION -->|Mismatch| WARN --> RESUME_STATE
+    CORRUPTION -->|Match| RESUME_STATE
 
     RESUME_STATE -->|No| NO_STATE
     RESUME_STATE -->|Yes| PARKED
     PARKED -->|Yes| UNPARK --> CONTINUE
     PARKED -->|No| CONTINUE
+    CONTINUE -.->|"any time"| OTHER
 
     style START fill:#e1bee7,stroke:#7b1fa2,color:#000
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
     style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
     style WARN fill:#ffcdd2,stroke:#c62828,color:#000
     style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
-<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and shows four resume options; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
+<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and carries on like /aidlc --resume; you can ask to redo, jump, or start fresh at any time; without state it starts scope detection. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
 
 Park from the command surface with `/aidlc park`; the engine names the park command and the conductor reports where it stopped. `/aidlc --resume` brings it back.
 
-### Four resume options
+### Redo, jump, or start fresh
+
+Bare `/aidlc` resumes from the last checkpoint. Ask for one of the others in your own words at any time.
 
 | Option | What happens | What is preserved | What is lost |
 |--------|-------------|-------------------|-------------|

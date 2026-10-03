@@ -12079,7 +12079,7 @@ function handleResumeReport(
   }
   if (choice.includes("jump")) {
     emit(printDirective(
-      `Jump accepted. Ask the human which stage to jump to, then re-run \`next --stage <slug>\`; the direction and the target are worked out and checked for you.`,
+      `Jump accepted. Run \`next --stage <slug>\` for the stage the person named; ask which stage only when they named none. The direction and the target are worked out and checked for you.`,
     ));
     return;
   }
@@ -12214,7 +12214,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       message:
         `Unknown --result "${flags.result}". ` +
         `accepted outcomes: ${[...REPORT_RESULTS].join(", ")}. ` +
-        "Answers to AI-DLC questions are not reported, except the resume menu: run the command the question supplied, or re-run next to see the question again.",
+        "Answers to AI-DLC questions are not reported, except a redo, jump, or start-fresh request on re-entry (report --result resumed): run the command the question supplied, or re-run next to see the question again.",
     });
     return;
   }
@@ -12226,7 +12226,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       kind: "error",
       message:
         "No active intent workflow state found (aidlc-state.md is absent) - nothing to report a transition for. " +
-        "Answers to AI-DLC questions are not reported, except the resume menu: run the command the question supplied, or re-run next to see the question again.",
+        "Answers to AI-DLC questions are not reported, except a redo, jump, or start-fresh request on re-entry (report --result resumed): run the command the question supplied, or re-run next to see the question again.",
     });
     return;
   }

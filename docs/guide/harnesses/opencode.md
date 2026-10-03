@@ -118,8 +118,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
 Because opencode has no channel for the session-start hook's injected context,
 the `/aidlc` skill performs one read-only status probe on a bare invocation. An
-existing workflow gets the standard Resume / Redo / Jump / Start Fresh menu;
-`/aidlc --resume` skips both the probe and menu and continues directly.
+existing workflow carries on where it stopped, as with `/aidlc --resume` (ask
+to redo, jump to a stage, or start fresh to do something else);
+`/aidlc --resume` skips the probe and continues directly.
 
 The versioned runtime uses the native `aidlc` command. Framework developers who
 need the Bun-shaped projection can clone the repository, run

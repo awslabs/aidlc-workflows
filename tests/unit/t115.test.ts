@@ -291,7 +291,7 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
     expect(r.out).toContain("rejected");
     expect(r.out).toContain("revised");
     expect(r.out).toContain("skipped");
-    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except the resume menu");
+    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except a redo, jump, or start-fresh request on re-entry");
     expect(r.out).toContain("run the command the question supplied");
     expect(r.out).not.toContain("response_route");
   });
@@ -307,7 +307,7 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
       "Workshop",
     ], p);
     expect(r.out).toContain("Unknown --result");
-    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except the resume menu");
+    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except a redo, jump, or start-fresh request on re-entry");
     expect(r.out).toContain("run the command the question supplied");
     expect(r.out).not.toContain("response_route");
   });
@@ -320,7 +320,7 @@ describe("t115 aidlc-orchestrate report — preconditions (migrated from t115-or
     tempDirs.push(p);
     const r = orchestrate(["report", "--result", "approved"], p);
     expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except the resume menu");
+    expect(r.out).toContain("Answers to AI-DLC questions are not reported, except a redo, jump, or start-fresh request on re-entry");
     expect(r.out).toContain("run the command the question supplied");
     expect(r.out).not.toContain("response_route");
   });

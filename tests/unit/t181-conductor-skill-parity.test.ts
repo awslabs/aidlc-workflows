@@ -1044,8 +1044,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("no conductor routes an engine ask answer through a generic report", () => {
     // The ask row once ended "For every other ask, feed the human's answer back
     // on the next `report`", so conductors reported scope-confirm and compose
-    // answers and invented results the engine rejects. Only the prompt-rendered
-    // resume menu reports; every engine ask names its route and commands.
+    // answers and invented results the engine rejects. Only a redo, jump, or
+    // start-fresh request on re-entry reports; every engine ask names its route
+    // and commands.
     const failures: string[] = [];
     const askRowOf = (rel: string): string =>
       readFileSync(join(REPO_ROOT, rel), "utf-8")
@@ -1326,6 +1327,36 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "answers in their own words, those words are their answer",
     ]) {
       if (!protocol.includes(rule)) stale.push(`stage-protocol.md  missing: ${rule}`);
+    }
+    expect(stale).toEqual([]);
+  });
+
+  test("a bare re-entry carries on: no surface offers the old resume menu", () => {
+    // A new session's bare /aidlc used to stop on a Resume / Redo / Jump / Start
+    // Fresh menu although the person wanted to carry on. Every copy of that rule
+    // is gone; a person who wants redo, jump, or start fresh says so.
+    const surfaces = [
+      ...skills,
+      ...harnessQuestionAnnexes().filter((rel) => existsSync(join(REPO_ROOT, rel))),
+      "core/hooks/aidlc-session-start.ts",
+      "core/tools/aidlc-runner-gen.ts",
+      "core/tools/aidlc-orchestrate.ts",
+      "core/aidlc-common/protocols/stage-protocol.md",
+    ];
+    const stale: string[] = [];
+    for (const rel of surfaces) {
+      const text = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const old of [
+        /prompt-rendered resume menu/i,
+        /Resume \/ Redo \/\s*Jump \/ Start Fresh/i,
+        /standard resume options/i,
+        /four resume options/i,
+        /on the resume menu/i,
+        /answer to the resume menu/i,
+        /resume menu is prompt-rendered/i,
+      ]) {
+        if (old.test(text)) stale.push(`${rel}  ${old.source}`);
+      }
     }
     expect(stale).toEqual([]);
   });
