@@ -9,7 +9,7 @@ import { join } from "node:path";
  */
 export interface RetryEvidence {
   status: "PASS" | "FAIL" | "SKIP";
-  cases: { failed: number };
+  cases: { passed: number; failed: number; skipped: number };
   evidenceComplete?: boolean;
   cleanupError?: string;
   timedOut: boolean;
@@ -32,6 +32,18 @@ export function retryEligible(first: RetryEvidence, maxWallMs: number, remaining
   return first.status === "FAIL" && first.cases.failed > 0 && first.evidenceComplete === true &&
     !first.cleanupError && !first.timedOut && first.wallTimeMs <= maxWallMs &&
     remainingMs > RETRY_DEADLINE_RESERVE_MS;
+}
+
+/**
+ * A retry replaces the first attempt's failure only when it passed every case
+ * the first attempt ran: no failed case, no case newly skipped, complete
+ * evidence, and no timeout or cleanup failure. A case that failed and is then
+ * skipped never counts as passing, even beside passing siblings.
+ */
+export function retryPassed(first: RetryEvidence, second: RetryEvidence): boolean {
+  return second.status === "PASS" && second.cases.failed === 0 && second.evidenceComplete === true &&
+    !second.cleanupError && !second.timedOut && second.cases.skipped <= first.cases.skipped &&
+    second.cases.passed >= first.cases.passed + first.cases.failed;
 }
 
 /**

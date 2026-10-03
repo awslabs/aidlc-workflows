@@ -782,6 +782,11 @@ test.skip("executes nothing", () => expect(1).toBe(1));`,
 const retried = existsSync(join(observer, name + ".failed-once"));
 if (!retried) writeFileSync(join(observer, name + ".failed-once"), "1");
 test.skipIf(retried)("fails, then skips on its retry", () => expect("first attempt").toBe("second attempt"));`,
+  failsThenSkipsBesidePass: `${RETRY_PRELUDE}
+const retried = existsSync(join(observer, name + ".failed-once"));
+if (!retried) writeFileSync(join(observer, name + ".failed-once"), "1");
+test("passes on both attempts", () => expect(1).toBe(1));
+test.skipIf(retried)("fails, then skips on its retry", () => expect("first attempt").toBe("second attempt"));`,
 };
 
 function retryFixture(files: Record<string, string>) {
@@ -833,21 +838,25 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     expect(result.status).toBe(1);
     expect(runs()).toEqual(["t-always-fails", "t-always-fails"]);
     expect(result.summary).toMatch(/^ {2}t-always-fails +FAIL /m);
-    expect(result.summary).toContain("Failed on both attempts:\n  t-always-fails: first attempt failed 1 case(s)");
+    expect(result.summary).toContain("Still failed after a retry:\n  t-always-fails: first attempt failed 1 case(s)");
     expect(result.failures).toContain("FAIL: t-always-fails");
     const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
     expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: "FAIL", failedCases: 1 } });
   });
 
-  test("a failure whose retry executes no cases stays a failure", () => {
-    const { fixture, observer, runs } = retryFixture({ "integration/t-fails-then-skips.test.ts": RETRY_CASES.failsThenSkips });
+  test.each([
+    ["executes no cases", "t-fails-then-skips", RETRY_CASES.failsThenSkips, "SKIP"],
+    ["skips the failed case beside a passing one", "t-fails-then-skips-beside-pass", RETRY_CASES.failsThenSkipsBesidePass, "PASS"],
+  ])("a failure whose retry %s stays a failure", (_label, name, source, secondStatus) => {
+    const { fixture, observer, runs } = retryFixture({ [`integration/${name}.test.ts`]: source });
     const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
     expect(result.status, result.out + result.failures).toBe(1);
-    expect(runs()).toEqual(["t-fails-then-skips", "t-fails-then-skips"]);
-    expect(result.summary).toMatch(/^ {2}t-fails-then-skips +FAIL .*\n {4}failed on its first attempt \(1 case\(s\)\), then executed no cases on retry$/m);
-    expect(result.failures).toContain("FAIL: t-fails-then-skips");
+    expect(runs()).toEqual([name, name]);
+    expect(result.summary).toMatch(new RegExp(`^ {2}${name} +FAIL .*\\n {4}failed on its first attempt \\(1 case\\(s\\)\\); its retry did not pass every case the first attempt ran$`, "m"));
+    expect(result.summary).toContain(`Still failed after a retry:\n  ${name}: first attempt failed 1 case(s)`);
+    expect(result.failures).toContain(`FAIL: ${name}`);
     const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
-    expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: "SKIP" } });
+    expect(retry).toMatchObject({ passedOnRetry: false, secondAttempt: { status: secondStatus } });
   });
 
   test("a timeout, a crash and a file that executed no cases are never retried", () => {

@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { type RetryRecord, retryReport } from "../../scripts/ci-retry-report.ts";
 import {
   ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, RETRY_DEADLINE_RESERVE_MS, type RetryEvidence, retryEligible,
+  retryPassed,
 } from "../lib/file-retry.ts";
 
 const roots: string[] = [];
@@ -19,7 +20,7 @@ afterEach(() => {
 
 describe("the retry rule", () => {
   const failed: RetryEvidence = {
-    status: "FAIL", cases: { failed: 1 }, evidenceComplete: true, timedOut: false, wallTimeMs: 30_000,
+    status: "FAIL", cases: { passed: 3, failed: 1, skipped: 1 }, evidenceComplete: true, timedOut: false, wallTimeMs: 30_000,
   };
 
   test("an assertion failure with complete evidence earns one more run", () => {
@@ -27,9 +28,9 @@ describe("the retry rule", () => {
   });
 
   test.each([
-    ["a pass", { status: "PASS" as const, cases: { failed: 0 } }],
-    ["a skip", { status: "SKIP" as const, cases: { failed: 0 } }],
-    ["a nonzero exit without failed cases (crash, empty file)", { cases: { failed: 0 } }],
+    ["a pass", { status: "PASS" as const, cases: { passed: 4, failed: 0, skipped: 1 } }],
+    ["a skip", { status: "SKIP" as const, cases: { passed: 0, failed: 0, skipped: 5 } }],
+    ["a nonzero exit without failed cases (crash, empty file)", { cases: { passed: 0, failed: 0, skipped: 0 } }],
     ["incomplete evidence", { evidenceComplete: false }],
     ["missing evidence", { evidenceComplete: undefined }],
     ["a timeout", { timedOut: true }],
@@ -49,6 +50,24 @@ describe("the retry rule", () => {
   test("never starts a second attempt the run deadline would cut short", () => {
     expect(retryEligible(failed, ORDINARY_RETRY_MAX_MS, RETRY_DEADLINE_RESERVE_MS + 1)).toBe(true);
     expect(retryEligible(failed, ORDINARY_RETRY_MAX_MS, RETRY_DEADLINE_RESERVE_MS)).toBe(false);
+  });
+
+  const passed: RetryEvidence = { ...failed, status: "PASS", cases: { passed: 4, failed: 0, skipped: 1 } };
+
+  test("a retry replaces the failure when it passes every case the first attempt ran", () => {
+    expect(retryPassed(failed, passed)).toBe(true);
+  });
+
+  test.each([
+    ["skips the failed case while its siblings pass", { cases: { passed: 3, failed: 0, skipped: 2 } }],
+    ["runs fewer cases", { cases: { passed: 3, failed: 0, skipped: 1 } }],
+    ["fails a case", { status: "FAIL" as const, cases: { passed: 3, failed: 1, skipped: 1 } }],
+    ["executes no cases", { status: "SKIP" as const, cases: { passed: 0, failed: 0, skipped: 5 } }],
+    ["has incomplete evidence", { evidenceComplete: false }],
+    ["times out", { timedOut: true }],
+    ["fails its cleanup", { cleanupError: "EBUSY" }],
+  ])("a retry that %s leaves the file failed", (_label, change) => {
+    expect(retryPassed(failed, { ...passed, ...change })).toBe(false);
   });
 });
 
@@ -116,12 +135,12 @@ describe("the retry report", () => {
     const summary = join(root, "step-summary.md");
     expect(retryReport(stamp, { RUNNER_OS: "Windows", GITHUB_STEP_SUMMARY: summary }, root)).toEqual([
       "::warning title=Flaky test::tests/unit/t161-lock.test.ts passed on its second attempt (merge queue)",
-      "Retries: 1 file(s) failed on both attempts.",
+      "Retries: 1 file(s) still failed after a retry.",
     ]);
     const table = readFileSync(summary, "utf8");
     expect(table).toContain("### Passed on retry (Windows)");
     expect(table).toContain("| tests/unit/t161-lock.test.ts | 2 | t161-lock.attempt-1.log |");
-    expect(table).toContain("### Failed on both attempts (Windows)");
+    expect(table).toContain("### Still failed after a retry (Windows)");
     expect(table).toContain("| tests/integration/t121-stop.test.ts | 2 | t121-stop.attempt-1.log |");
   });
 

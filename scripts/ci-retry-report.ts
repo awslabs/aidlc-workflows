@@ -35,7 +35,7 @@ export function retryReport(stampFile: string, env = process.env, repoRoot = REP
     const failed = retries.filter((retry) => !retry.passedOnRetry);
     const lines = flaky.map((retry) =>
       `::warning title=Flaky test::${escapeData(`${retry.file} passed on its second attempt (merge queue)`)}`);
-    if (failed.length > 0) lines.push(`Retries: ${failed.length} file(s) failed on both attempts.`);
+    if (failed.length > 0) lines.push(`Retries: ${failed.length} file(s) still failed after a retry.`);
     if (env.GITHUB_STEP_SUMMARY) {
       const row = (retry: RetryRecord): string =>
         `| ${retry.file} | ${retry.firstAttempt.failedCases} | ${retry.firstAttempt.log ?? "not kept"} |`;
@@ -46,7 +46,7 @@ export function retryReport(stampFile: string, env = process.env, repoRoot = REP
       ];
       appendFileSync(env.GITHUB_STEP_SUMMARY, [
         ...section("Passed on retry", "These files failed, then passed when run again: flaky tests to fix. The merge queue let them through; PR CI does not retry.", flaky),
-        ...section("Failed on both attempts", "These files failed twice, so the job failed.", failed),
+        ...section("Still failed after a retry", "These files failed, and their retry did not pass every case, so the job failed.", failed),
       ].join("\n"));
     }
     return lines;

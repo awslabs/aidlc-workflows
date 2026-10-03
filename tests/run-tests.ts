@@ -45,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible } from "./lib/file-retry.ts";
+import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -1277,18 +1277,18 @@ async function runFileWithRetry(file: string, parallelMode: boolean): Promise<Fi
   await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}) ===\n`);
   let second = await runBunTestFile(file, parallelMode);
   if (!second) return first;
-  const passedOnRetry = second.status === "PASS";
+  const passedOnRetry = retryPassed(first, second);
   const secondAttempt = { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs };
   const metaPath = join(resultsDir, `${name}.meta`);
   if (!passedOnRetry && second.status !== "FAIL") {
-    // Only a complete pass replaces the first failure: a retry that executed
-    // no cases (all skipped, empty) leaves the file failed.
+    // Only a pass of every case the first attempt ran replaces its failure: a
+    // retry that skipped one of them, or executed none, leaves the file failed.
     const meta: ResultRow = existsSync(metaPath)
       ? parseMeta(metaPath)
       : { name, status: "FAIL", tests: 0, skipped: 0, failed: 0, duration: "0" };
     writeMeta(name, {
       ...meta, status: "FAIL", failed: Math.max(1, meta.failed, first.cases.failed),
-      reason: `failed on its first attempt (${first.cases.failed} case(s)), then executed no cases on retry`,
+      reason: `failed on its first attempt (${first.cases.failed} case(s)); its retry did not pass every case the first attempt ran`,
     });
     second = { ...second, status: "FAIL" };
     fileExecutions.set(name, second);
@@ -1771,7 +1771,7 @@ function writeVerboseSummary(): void {
   }
   // Rows keep the PASS/FAIL column the timing and report parsers read; a retry
   // is named here and in retries.json instead.
-  for (const [heading, passed] of [["Passed on retry (flaky: fix these)", true], ["Failed on both attempts", false]] as const) {
+  for (const [heading, passed] of [["Passed on retry (flaky: fix these)", true], ["Still failed after a retry", false]] as const) {
     const retries = ordinaryRetries.filter((retry) => retry.passedOnRetry === passed);
     if (retries.length === 0) continue;
     lines.push("", `${heading}:`);
