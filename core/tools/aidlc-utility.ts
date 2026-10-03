@@ -8466,20 +8466,38 @@ const DOCUMENT_INPUT_MATCH_LIMIT = 10;
 // Outside a git repository the lookup walk stops after this many entries.
 const DOCUMENT_INPUT_WALK_CAP = 50_000;
 
+// A name given without an extension matches only document files, so a stem
+// can never pick up a configuration or key file.
+const DOCUMENT_INPUT_STEM_EXTENSIONS = new Set([
+  "md", "markdown", "txt", "text", "rst", "adoc", "asciidoc", "org", "html", "htm",
+  "pdf", "docx", "doc", "rtf", "odt",
+]);
+
+// Names a looked-up file is never offered under: keys, environment files, and
+// anything that says it holds a secret. An exact path the person typed is read
+// as they gave it; only a lookup is held to this.
+function documentInputLooksSecret(name: string): boolean {
+  return name.startsWith(".env") || name.endsWith(".env") || name.endsWith(".pem") ||
+    name.endsWith(".key") || name.endsWith(".p12") || name.endsWith(".pfx") ||
+    name.startsWith("id_") || /secret|credential|password|passwd|token|\.netrc|\.npmrc|\.pypirc|kubeconfig/.test(name);
+}
+
 // Project files that may be the document a person named when nothing exists
-// at that exact path: the same file name, or the same stem when the name has
-// no extension, ignoring case. Git lists the candidates, so nothing under .git
-// or a git-ignored path is offered; outside a repository a walk skips .git and
-// node_modules. Symlinks, non-regular files, and obvious secret files are never
-// offered. The agent can already see these names, so listing them leaks
-// nothing new.
+// at that exact path: the same file name, or the same stem on a document file
+// when the name has no extension, ignoring case. Git lists the candidates, so
+// nothing under .git or a git-ignored path is offered; only a folder that is
+// not a git repository is walked, skipping .git and node_modules. Symlinks,
+// non-regular files, and secret-looking files are never offered. When the
+// files cannot all be listed (git fails inside a repository, or the walk hits
+// its cap), `incomplete` says why and nothing is chosen. The agent can already
+// see these names, so listing them leaks nothing new.
 function documentInputMatches(
   projectRoot: string,
   requested: string,
   isContainedRegularFile: (relPath: string) => boolean,
-): string[] {
+): { matches: string[]; incomplete?: string } {
   const wanted = basename(requested.replace(/[\\/]+$/, "")).toLowerCase();
-  if (wanted === "") return [];
+  if (wanted === "") return { matches: [] };
   const hasExtension = /.\.[^.]+$/.test(wanted);
   const listed = spawnSync(
     "git",
@@ -8491,24 +8509,33 @@ function documentInputMatches(
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
     },
   );
-  const candidates = listed.status === 0 && listed.error === undefined
-    ? listed.stdout.split("\0")
-    : walkDocumentInputCandidates(projectRoot);
+  let candidates: string[];
+  if (listed.status === 0 && listed.error === undefined) {
+    candidates = listed.stdout.split("\0");
+  } else if (insideGitRepository(projectRoot)) {
+    // Walking a repository would offer the files git ignores.
+    return { matches: [], incomplete: "git could not list the project's files" };
+  } else {
+    const walked = walkDocumentInputCandidates(projectRoot);
+    if (walked.truncated) return { matches: [], incomplete: "the project has too many files to search" };
+    candidates = walked.files;
+  }
   const matches = new Set<string>();
   for (const relPath of candidates) {
     const segments = relPath.split("/");
     const name = (segments.at(-1) ?? "").toLowerCase();
+    const extension = /.\.([^.]+)$/.exec(name)?.[1] ?? "";
     const named = name === wanted ||
-      (!hasExtension && name.replace(/(.)\.[^.]+$/, "$1") === wanted);
-    const secret = name.startsWith(".env") || name.endsWith(".pem") ||
-      name.endsWith(".key") || name.startsWith("id_");
-    if (!named || secret || segments.includes(".git")) continue;
+      (!hasExtension && DOCUMENT_INPUT_STEM_EXTENSIONS.has(extension) &&
+        name.slice(0, name.length - extension.length - 1) === wanted);
+    if (!named || documentInputLooksSecret(name) || segments.includes(".git")) continue;
     if (isContainedRegularFile(relPath)) matches.add(relPath);
   }
-  return [...matches].sort();
+  return { matches: [...matches].sort() };
 }
 
-function walkDocumentInputCandidates(projectRoot: string): string[] {
+
+function walkDocumentInputCandidates(projectRoot: string): { files: string[]; truncated: boolean } {
   const files: string[] = [];
   const pending = [""];
   let visited = 0;
@@ -8533,7 +8560,7 @@ function walkDocumentInputCandidates(projectRoot: string): string[] {
       }
     }
   }
-  return files;
+  return { files, truncated: visited > DOCUMENT_INPUT_WALK_CAP || pending.length > 0 };
 }
 
 async function handleDocumentInput(projectDir: string): Promise<void> {
@@ -8617,13 +8644,20 @@ async function handleDocumentInput(projectDir: string): Promise<void> {
   if (!present) {
     // Nothing at that exact path: look the name up among the project's files.
     const name = basename(portablePath);
-    const matches = documentInputMatches(projectRoot, portablePath, (relPath) => {
+    const lookup = documentInputMatches(projectRoot, portablePath, (relPath) => {
       try {
         return statSync(resolveContainedFile(projectRoot, relPath).absPath).isFile();
       } catch {
         return false;
       }
     });
+    const matches = lookup.matches;
+    if (lookup.incomplete) {
+      refuse(
+        `there is no ${JSON.stringify(portablePath)} in the project, and ${lookup.incomplete}, ` +
+          "so no other file was chosen. Ask the person for the file's path.",
+      );
+    }
     if (matches.length === 0) {
       refuse(
         `there is no ${JSON.stringify(portablePath)} in the project, and no other project file ` +

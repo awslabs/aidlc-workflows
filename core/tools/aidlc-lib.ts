@@ -25553,20 +25553,31 @@ export function authoritativeProjectDescription(raw: string): {
     };
   }
 
-  const opened = first >= 0 && (last < 0 || last > first);
-  const closed = last > first;
+  // More openings than closings means a closing marker is missing, so the last
+  // closing one may be pasted text: the document then runs to the end.
+  const unbalanced = first >= 0 && raw.split(open).length > raw.split(close).length;
+  const opened = first >= 0 && (unbalanced || last < 0 || last > first);
+  const closed = !unbalanced && last > first;
   const start = opened ? first : 0;
   const end = closed ? last + close.length : raw.length;
   const documentSplit = opened && closed
     ? `I read everything from the first ${open} to the last ${close} as your pasted document, and only the text outside it as your instructions.`
     : opened
-      ? `Your ${open} has no closing ${close}, so I read everything from ${open} to the end as your pasted document, and only the text before it as your instructions.`
+      ? `Your ${unbalanced && last >= 0 ? `message has more ${open} than ${close} markers` : `${open} has no closing ${close}`}, so I read everything from ${open} to the end as your pasted document, and only the text before it as your instructions.`
       : closed
         ? `Your ${close} has no opening ${open}, so I read everything up to ${close} as your pasted document, and only the text after it as your instructions.`
         : `Your ${close} comes before your ${open}, so I read the whole message as your pasted document.`;
-  const directions = [raw.slice(0, start).trim(), raw.slice(end).trim()]
+  // Only the document span goes: the person's words keep their own lines, and
+  // the line break around the span stays as it was (a space within a line).
+  const head = raw.slice(0, start);
+  const tail = raw.slice(end);
+  const breaks = Math.max(
+    (head.slice(head.trimEnd().length).match(/\n/g) ?? []).length,
+    (tail.slice(0, tail.length - tail.trimStart().length).match(/\n/g) ?? []).length,
+  );
+  const directions = [head.trim(), tail.trim()]
     .filter((part) => part.length > 0)
-    .join(" ");
+    .join(breaks > 0 ? "\n".repeat(breaks) : " ");
   return {
     description: directions || ONLY_DOCUMENT_REQUEST,
     pastedDocumentPresent: true,

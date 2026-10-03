@@ -303,9 +303,11 @@ records the contained file identity, and requires the opened descriptor to
 match it before reading; parent-directory replacement, redirects, and
 unsupported input are refused. When nothing exists at that path, it lists the
 project's regular files with that name through `git ls-files --cached --others
---exclude-standard` (a walk that skips `.git` and `node_modules` outside a
-repository), never offering symlinks or secret files, and reads a sole match or
-returns the matches for a numbered pick. `project-description` splits a pasted
+--exclude-standard` (a walk that skips `.git` and `node_modules`, only outside a
+repository), matching an extensionless name only to document files, never
+offering symlinks or secret-looking files, and reads a sole match or returns the
+matches for a numbered pick. When git fails inside a repository or the walk
+hits its cap, it chooses nothing and asks for the path. `project-description` splits a pasted
 document from the person's directions, so no stage splits it by itself. Successful reads emit the same inline untrusted-path and
 untrusted-content notices as DocumentKB.
 

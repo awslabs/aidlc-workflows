@@ -331,7 +331,7 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(JSON.parse(result.stdout)).toEqual({
       description,
       source: PROJECT_DESCRIPTION_FILE,
-      directions: "Summarize the report. Keep it to one page.",
+      directions: "Summarize the report.\nKeep it to one page.",
       document: [
         "<document>",
         "Quarterly numbers.",
@@ -412,6 +412,43 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(exact.status, exact.stderr).toBe(0);
     expect(JSON.parse(exact.stdout).path).toBe("private/brief.md");
     expect(JSON.parse(exact.stdout).selection_note).toBeUndefined();
+  });
+
+  test("a name without an extension finds only document files, never a credential file", () => {
+    const dir = project();
+    mkdirSync(join(dir, "config"));
+    writeFileSync(join(dir, "config", "credentials.json"), "{\"key\": \"secret\"}\n");
+    writeFileSync(join(dir, "config", "production.env"), "TOKEN=secret\n");
+    writeFileSync(join(dir, "config", "vision.json"), "{}\n");
+    for (const name of ["credentials", "production", "vision"]) {
+      writeRequest(dir, name);
+      const looked = run(dir);
+      expect(looked.status, `${name}: ${looked.stdout}`).not.toBe(0);
+      expect(looked.stdout).toBe("");
+      expect(looked.stderr).toContain("Ask the person for the file's path.");
+    }
+    writeFileSync(join(dir, "config", "vision.md"), "# Vision\n");
+    writeRequest(dir, "vision");
+    const found = run(dir);
+    expect(found.status, found.stderr).toBe(0);
+    expect(JSON.parse(found.stdout).path).toBe("config/vision.md");
+    // A named secret file is not looked up either.
+    writeFileSync(join(dir, "config", "api-credentials.md"), "secret\n");
+    writeRequest(dir, "api-credentials.md");
+    expect(run(dir).status).not.toBe(0);
+  });
+
+  test("inside a repository git cannot list, nothing is chosen from a raw walk", () => {
+    const dir = project();
+    // A .git that is no repository makes git ls-files fail inside it.
+    writeFileSync(join(dir, ".git"), "gitdir: missing\n");
+    mkdirSync(join(dir, "private"));
+    writeFileSync(join(dir, "private", "notes.md"), "# Ignored notes\n");
+    writeRequest(dir, "notes.md");
+    const r = run(dir);
+    expect(r.status, r.stdout).not.toBe(0);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("git could not list the project's files, so no other file was chosen.");
   });
 
   test("says so when no project file has that name", () => {
