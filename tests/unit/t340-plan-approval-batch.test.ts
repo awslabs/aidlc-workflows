@@ -245,7 +245,7 @@ describe("t340 exact reviewed Code Generation batch approval", () => {
     answers(f);
     const answer = log(f, "answer");
     expect(answer.code).not.toBe(0);
-    expect(answer.stderr).toContain("actual offered choice");
+    expect(answer.stderr).toContain("requires the person's reply to this prompt, in this session");
     expect(receiptFiles(f.project)).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

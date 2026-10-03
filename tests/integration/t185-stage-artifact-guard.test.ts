@@ -1370,7 +1370,7 @@ X. Other (please specify)
         'report --stage \\"feasibility\\" --result rejected',
       );
       expect(result.out).toContain(
-        '--user-input \\"Request Changes\\" --reason \\"<requested changes>\\"',
+        "--user-input \\\"Request Changes\\\" --reason '<requested changes>'",
       );
       expect(result.out).toContain("Re-save each generated artifact");
       expect(result.out).toContain("rerun the section-12a reviewer");

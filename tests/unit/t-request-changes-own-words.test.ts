@@ -18,8 +18,10 @@
 //   - the kept words are cleared once a gate is presented or answered;
 //   - replies to other engine questions in between (a Construction
 //     checkpoint, a unit merge gate, a logged answer, a guard-recovery ask)
-//     are not this gate's feedback, and questions alone never are: a bare
-//     reject with only a question on record still asks "What should change?".
+//     are not this gate's feedback; a message that is only an option pick
+//     ("2", "Request Changes") is left out, and nothing else is dropped for
+//     what it means: a bare pick with nothing said still asks "What should
+//     change?".
 
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -305,14 +307,21 @@ describe("Request Changes records the person's own words", () => {
     expect(existsSync(wordsDir(proj))).toBe(false);
   });
 
-  test("a question alone is not feedback: a bare reject still asks what should change", () => {
+  // Nothing the person said is dropped for what it means: a question is kept
+  // with their words, and the agent, which read it, decides what to record.
+  test("a question is kept with their words; only a bare pick with nothing said asks what should change", () => {
     says(proj, "can you show me the diff first?");
+    const directive = rejectWith(proj, slug, []);
+    expect(directive.kind, JSON.stringify(directive)).toBe("print");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("can you show me the diff first?");
+  });
+
+  test("a bare pick with nothing said, and no --reason, asks what should change", () => {
+    says(proj, "Request Changes");
     const refused = rejectWith(proj, slug, []);
     expect(refused.kind, JSON.stringify(refused)).toBe("error");
-    expect(refused.message).toContain("Request Changes requires nonblank revision feedback");
     expect(refused.message).toContain("What should change?");
     expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
-    // With a --reason the conductor's text stands, exactly as before.
     const withReason = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(withReason).toEqual({ kind: "print", message: `Recorded rejected for "${slug}".` });
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
@@ -335,14 +344,14 @@ describe("Request Changes records the person's own words", () => {
     "Make the TSV support an explicit flag instead of automatic.",
   ] as const;
 
-  test("after a bare Request Changes, the feedback is what followed it (the live sequence)", () => {
+  test("the live sequence: every word they said is the feedback, the bare pick left out", () => {
     for (const message of LIVE) says(proj, message);
-    const directive = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", LIVE[2]]);
+    const directive = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes"]);
     expect(directive.kind, JSON.stringify(directive)).toBe("print");
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(LIVE[2]);
+    const said = `${LIVE[0]}\\n${LIVE[2]}`;
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(said);
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();
-    expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(LIVE[2]);
-    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(LIVE[2])}`);
+    expect(field(proj, "STAGE_REVISING", "Feedback")).toBe(said);
   });
 
   test("feedback typed before the bare Request Changes still counts", () => {
@@ -352,16 +361,18 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.");
   });
 
-  test("every message after the latest bare pick counts, in order", () => {
+  test("every message they said counts, in order, with the bare pick left out", () => {
     says(proj, "Rename the done command.");
     says(proj, "Request Changes.");
     says(proj, "Make the list command todo ls.");
     says(proj, "also keep done as it is.");
     rejectWith(proj, slug, []);
-    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe("Make the list command todo ls.\\nalso keep done as it is.");
+    expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(
+      "Rename the done command.\\nMake the list command todo ls.\\nalso keep done as it is.",
+    );
   });
 
-  test("only a question after the bare pick leaves the earlier words standing", () => {
+  test("a question after the bare pick keeps the change they said before it", () => {
     says(proj, "Make the list command todo ls.");
     says(proj, "2");
     says(proj, "can you show me the diff first?");
@@ -496,15 +507,15 @@ describe("the words are ordered against the gate row, not by time", () => {
     recordGateWords(proj, SESSION, `  ${TYPED}  `);
     recordGateWords(proj, SESSION, "cancel");
     expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual(["Request Changes", TYPED, "cancel"]);
-    expect(personsGateFeedback(proj, SESSION, { stage: slug, acceptAsIs: false })).toBe(TYPED);
-    expect(personsGateFeedback(proj, OTHER_SESSION, { stage: slug, acceptAsIs: false })).toBeNull();
-    expect(personsGateFeedback(proj, null, { stage: slug, acceptAsIs: false })).toBeNull();
-    expect(personsGateFeedback(proj, SESSION, { stage: "some-other-stage", acceptAsIs: false })).toBeNull();
-    expect(personsGateFeedback(proj, SESSION, { stage: slug, unit: "alpha", acceptAsIs: false })).toBeNull();
+    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBe(TYPED);
+    expect(personsGateFeedback(proj, OTHER_SESSION, { stage: slug })).toBeNull();
+    expect(personsGateFeedback(proj, null, { stage: slug })).toBeNull();
+    expect(personsGateFeedback(proj, SESSION, { stage: "some-other-stage" })).toBeNull();
+    expect(personsGateFeedback(proj, SESSION, { stage: slug, unit: "alpha" })).toBeNull();
     // A corrupt file reads as no words.
     const file = join(wordsDir(proj), readdirSync(wordsDir(proj))[0]);
     writeFileSync(file, "{not json", "utf-8");
-    expect(personsGateFeedback(proj, SESSION, { stage: slug, acceptAsIs: false })).toBeNull();
+    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBeNull();
     expect([...GATE_WORDS_SPENT_BY].sort()).toEqual([
       "GATE_APPROVED", "GATE_REJECTED", "STAGE_AWAITING_APPROVAL", "WORKFLOW_COMPLETED",
     ]);
@@ -513,7 +524,7 @@ describe("the words are ordered against the gate row, not by time", () => {
     clearGateWords(proj);
   });
 
-  test("forgetting one kept message leaves the others; questions alone are no feedback", () => {
+  test("forgetting one kept message leaves the others", () => {
     presentWithoutClearing();
     const keep = (text: string) => {
       appendAuditEntry("HUMAN_TURN", {}, proj);
@@ -528,7 +539,7 @@ describe("the words are ordered against the gate row, not by time", () => {
     forgetGateWords(proj, SESSION, second as number);
     expect(gateWordsSincePresentation(proj, SESSION, { stage: slug })).toEqual(["what does step 3 do?", TYPED]);
     forgetGateWords(proj, SESSION, third as number);
-    expect(personsGateFeedback(proj, SESSION, { stage: slug, acceptAsIs: false })).toBeNull();
+    expect(personsGateFeedback(proj, SESSION, { stage: slug })).toBe("what does step 3 do?");
     // A later answer to another question moves the start past everything before it.
     keep(TYPED);
     appendAuditEntry("QUESTION_ANSWERED", { Stage: "some-other-stage", Details: "yes" }, proj);

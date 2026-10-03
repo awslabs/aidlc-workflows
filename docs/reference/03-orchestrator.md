@@ -732,15 +732,15 @@ The orchestration engine owns every transition above. The conductor reports outc
 3. **Present the approval gate** (AskUserQuestion).
 
 4. **Record the user's response**:
-   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
-   - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
+   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
+   - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
    - After re-running work for a `[R]` stage, call `aidlc engine orchestrate report --stage <slug> --result revised` to re-enter the gate (re-runs gate sensors, emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). The approve-time unrecorded-revision backstop uses the same sensor enforcement before recovered re-entry; a blocking result leaves the durable state at `[R]`.
 
 5. **Advance to the next stage**: the approval report in step 4 also advances. The engine derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). It marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
 
    The tool is idempotent — replaying `advance <slug>` a second time returns `{replay: true}` without re-emitting events.
 
-6. **If this was the last in-scope stage**: the same `report --stage <slug> --result approved --user-input '<their reply>'` call marks `[x]`, sets Status=Completed, and emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
+6. **If this was the last in-scope stage**: the same `report --stage <slug> --result approved --user-input "Approve"` call marks `[x]`, sets Status=Completed, and emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
 
 7. **Transition tasks**: mark the old task `completed`, set the new task `in_progress` with `activeForm: "Running <Next Stage> [slug]"`. The `[slug]` suffix triggers the PostToolUse hook that syncs statusline fields.
 
@@ -954,22 +954,26 @@ Bun nor `jq` at runtime.
 
 ### Human turns and protected question responses
 
-The human-turn hook routes a reply to one recorder. While the engine's Plan
-Approval question is the active directive, `recordPlanApprovalAskReply` owns the
-reply: it reads it in the person's own words from any chat on this piece of
-work, takes the fingerprint of the plan files as they are, and writes the
-questions-file answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. A typed
-"review the plan" while an approved plan may keep building records a review
-request instead, and no other recorder reads that reply. A reply that picks a
-waiting guard-recovery question's choice, by its number, label, or a lead
-"Request Changes:", is that question's answer, not a review request. Otherwise
-the reply goes to the legacy Kiro IDE path's
-`recordPlanApprovalHumanResponse`, or to `recordProtectedHumanResponse` for the
-session's verification-command, Construction-policy, or checkpoint-approval
-question. Minting either challenge removes the other challenge and response;
-if conflicting files nevertheless exist, the hook deletes both and records no
-response. A protected response binds the session, fresh challenge ID, and offered
-choice. Its consumer also requires the current canonical target digest.
+The human-turn hook keeps that a person replied to the open question, and their
+exact words; it never reads meaning into them. The conductor reads the reply and
+records the choice the person made through the question's own command; the
+engine requires a reply since the question was shown and carries the person's
+words on the receipt (`Person Reply`). While the engine's Plan Approval
+question is the active directive, `notePlanApprovalAskReply` keeps each message
+on the open question from any chat on this piece of work, and the conductor's
+`answer --checkpoint plan-approval` (`recordPlanApprovalAnswer`) takes the
+fingerprint of the plan files as they are, writes the questions-file answer, the
+receipt, and the `PLAN_APPROVAL_RECORDED` row. A request to look at the plan
+again is the conductor's `answer --details "Review the plan"`
+(`requestPlanApprovalReviewNow`). Otherwise the reply goes to the
+legacy Kiro IDE path's `recordPlanApprovalHumanResponse`, or to
+`recordProtectedHumanResponse` for the session's verification-command,
+Construction-policy, or checkpoint-approval question. Minting either challenge
+removes the other challenge and response; if conflicting files nevertheless
+exist, the hook deletes both and records no
+response. A protected response binds the session, the fresh challenge ID, and the
+person's words, and a reply that is exactly one offered choice also records it
+as their pick. Its consumer also requires the current canonical target digest.
 
 When a picker supplies the rendered question, the hook requires its exact text
 digest to match the minting command's `--decision` text. Without rendered text,

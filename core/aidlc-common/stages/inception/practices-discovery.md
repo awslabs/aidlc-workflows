@@ -207,10 +207,10 @@ Run the section 13 learnings ritual only when `directive.protocol_modules` lists
    option's description, read from the run-stage directive's `next_stage` field
    (`Complete workflow` when it is null); never show the field name to the user.
 4. STOP and wait for the human response.
-5. Carry their reply unchanged only into the matching `report` or promotion
-   path below; never call `aidlc-log.ts answer` for this gate.
-6. On Request Changes, report `--result rejected --user-input '<their reply>'`
-   (add `--reason '<feedback>'` only when they gave it separately),
+5. Read their reply and take the matching `report` or promotion path below;
+   never call `aidlc-log.ts answer` for this gate.
+6. On Request Changes, report `--result rejected --user-input "Request Changes"`
+   (their words are kept with the record; add `--reason` only to say more),
    revise through the lead (and re-run a support only when its evidence must be
    refreshed), then report `--result revised` before re-presenting the gate.
    A rejection invalidates any earlier promotion receipt: the engine refuses

@@ -94,6 +94,9 @@ const manifest: HarnessManifest = {
           // The variant whose folder-trust bullet said both Copilot surfaces
           // read trustedFolders (VS Code never does).
           "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
+          // The pre-person-drives shipped variant (its Guards section named a
+          // command for the person to type; now the agent runs the setter).
+          "sha256:1095316799b8630bcb498539cb82b9b0907fa7aa69cdfb3ee6a9b489c8ed42e3",
         ],
       },
     },

@@ -826,7 +826,8 @@ describe("t341 verification command consent", () => {
     expect(mismatch.out).toContain("Command SHA-256");
     const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(absent.code).not.toBe(0);
-    expect(absent.out).toContain("hook-recorded response");
+    // The question is open and the reply came before it: none is on record yet.
+    expect(absent.out).toContain("none is on record yet");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
     submitCommandChoice(dir, "t341-command", "Approve", env);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
@@ -851,21 +852,24 @@ describe("t341 verification command consent", () => {
     submitCommandChoice(dir, "t341-command", "Request Changes", env);
     const refused = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
     expect(refused.code).not.toBe(0);
-    expect(refused.out).toContain("actual offered choice");
+    expect(refused.out).toContain('The person picked \\"Request Changes\\" for this question');
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unrelated prompts and the presence bypass cannot substitute for the offered response", () => {
+  test("the presence bypass cannot substitute for a reply, and a question is kept as the person's words", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
-    submitCommandChoice(dir, "t341-command", "What does this command do?", env);
     const answer = ["answer", ...identity, "--details", "Approve"];
     expect(cli(dir, "log", answer, env).code).not.toBe(0);
     expect(cli(dir, "log", answer, { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }).code).not.toBe(0);
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    // Their question is kept verbatim, with no choice read into it: the agent answers it.
+    submitCommandChoice(dir, "t341-command", "What does this command do?", env);
+    expect(readProtectedResponse(dir, "t341-command")?.words).toBe("What does this command do?");
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one session's answer cannot satisfy another session's pending challenge", () => {
@@ -1078,18 +1082,21 @@ describe("t341 verification command consent", () => {
 });
 
 describe("t341 human authority, attempt boundaries, and scoped approval", () => {
-  test("skeleton always needs an approving reply and a fresh human, including under autonomy", () => {
+  test("skeleton always needs the person's reply and a fresh human, including under autonomy", () => {
     const dir = project(true);
     expect(pass(dir, "skeleton").human_required).toBe(true);
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("needs a reply that approves");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("requires the person's reply to this question");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow();
     expect(approvals(dir)).toEqual([]);
-    human(dir, "skeleton");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "hmm", "t341-checkpoint")).toThrow("needs a reply that approves");
-    // The person's own words name the choice the hook recorded.
-    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "approve", "t341-checkpoint");
+    // An exact pick is the person's: the conductor cannot record the other choice.
+    human(dir, "skeleton", "Request Changes");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow('picked "Request Changes"');
+    // The conductor read their approval; the receipt carries their own words.
+    human(dir, "skeleton", "looks right, ship it");
+    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
     expect(approved.approved).toBe(true);
     const gate = approvals(dir).at(-1)!;
+    expect(auditBlockField(gate.block, "Person Reply")).toBe("looks right, ship it");
     for (const [key, value] of Object.entries({
       Unit: "alpha", Stage: "code-generation", Stages: STAGES.join(", "),
       "Gate Scope": "unit-end", Checkpoint: "walking-skeleton",
@@ -1098,6 +1105,29 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     pass(dir, "skeleton");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow("--action ask");
     expect(approvals(dir)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's reply to this question is their presence: a decision the
+  // agent recorded after it never makes them answer the question again.
+  test("a reply on record for the question records the agent's reading without a second reply", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    human(dir, "skeleton", "looks right, ship it");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: "code-generation", Details: "an unrelated answer" }, dir);
+    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
+    expect(approved.approved).toBe(true);
+    expect(auditBlockField(approvals(dir).at(-1)!.block, "Person Reply")).toBe("looks right, ship it");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a question with no reply yet waits for one, and none open names the ask", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
+      .toThrow("no such question is open");
+    const asked = cli(dir, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "skeleton", "--session", "t341-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
+      .toThrow("none is on record yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("ordinary checkpoints autoapprove only under a recorded autonomous grant", () => {
@@ -1109,7 +1139,7 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     pass(gated);
     writeFileSync(seededStateFile(gated), setField(readFileSync(seededStateFile(gated), "utf-8"),
       "Construction Autonomy Mode", "autonomous"));
-    expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("needs a reply that approves");
+    expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("requires the person's reply to this question");
     human(gated);
     expect(approveConstructionCheckpoint(gated, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1163,8 +1193,9 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     approveConstructionCheckpoint(dir, "beta", "unit");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow();
     expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_REJECTED")).toEqual([]);
+    human(dir, "unit", "Approve");
+    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow('picked "Approve"');
     human(dir, "unit", "Request Changes");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "approve", "Fix alpha", "t341-checkpoint")).toThrow("needs a reply that asks for changes");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", " ", "t341-checkpoint")).toThrow("reason");
     const priorFloor = latestMainWorkflowStageRunFloorForProject(dir, STAGES[0], true, "beta");
     const rejected = rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint");
@@ -1303,7 +1334,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test.each(["unit", "skeleton"])("%s refuses unrelated prompts, cross-session choices, and consumed responses", (kind) => {
+  test.each(["unit", "skeleton"])("%s refuses a prompt from before the question, cross-session choices, and consumed responses", (kind) => {
     const pd = project();
     pass(pd, kind as "unit" | "skeleton");
     submitCommandChoice(pd, session, "hello", env);
@@ -1312,7 +1343,6 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(approvals(pd)).toEqual([]);
     const asked = cli(pd, "bolt", [...route(kind), "--action", "ask"], env);
     expect(asked.code, asked.out).toBe(0);
-    submitCommandChoice(pd, session, "hello", env);
     expect(decide().code).not.toBe(0);
     submitCommandChoice(pd, "other-session", "Approve", env);
     expect(decide().code).not.toBe(0);

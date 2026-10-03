@@ -1042,12 +1042,12 @@ describe("Kiro numbered-prose answer classification", () => {
 });
 
 describe("Kiro checkpoint reply protocol", () => {
-  test("shared protocol reads the reply in the person's own words and names one follow-up", () => {
+  test("shared protocol has the agent read the reply and record the person's choice", () => {
     expect(KIRO_PROTOCOL).toContain("### Reading the person's reply at a checkpoint");
-    expect(KIRO_PROTOCOL).toMatch(/engine reads the person's reply in their own words/);
+    expect(KIRO_PROTOCOL).toMatch(/you read the person's reply and record the\s+choice they made/);
     expect(KIRO_PROTOCOL).toMatch(/A harness-supplied\s+\*\*Other\*\* escape is an offered UI choice/);
     expect(KIRO_PROTOCOL).toMatch(/Discuss what they\s+want instead/);
-    expect(KIRO_PROTOCOL).toMatch(/never ask\s+them to retype an exact label/);
+    expect(KIRO_PROTOCOL).toMatch(/retype an option/);
     expect(KIRO_PROTOCOL).toMatch(
       /do not call\s+`aidlc-orchestrate\.ts report`/,
     );

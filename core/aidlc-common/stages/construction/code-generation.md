@@ -217,18 +217,24 @@ When both files from Step 2 are written, run `next`:
   single-choice picker whose question is exactly `question` and whose options are
   exactly the three choices when your harness has one; otherwise number them
   `1.`, `2.`, `3.`. End the turn.
-- **The answer.** The person answers in their own words ("1", "approve", "looks
-  good", "rename the handler", "I'll edit it"). The human-turn hook reads the
-  reply, records it, and adds one `AIDLC Plan Approval:` line saying what it
-  recorded. You record nothing. After their reply, run `next`. When `next`
-  returns the same question, nothing was recorded (a question, an unclear reply,
-  or a bare yes that did not follow the question): answer what they asked, act on
-  `plan_approval.note`, and show the question again.
+- **The answer.** Read the person's reply and record the choice they made:
+  `{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval
+  --details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`).
+  For a question about several Units, add `--units "<unit>,<unit>"` to record a
+  choice for some of them, then record the rest. The person's words are kept
+  with the record, and a change request uses them as what to change; add
+  `--reason` only to say more. When they approved and asked for a change ("approve,
+  but add a test for the empty cart"), make that change in the plan first (once
+  they have replied, its plan and test instructions are open to you; code
+  waits), then record "Approve Plan": the approval covers the plan as it stands
+  then. When they also asked to stop for now, add `--park`. A question gets an
+  answer, and their next reply decides; ask only when their intent is genuinely
+  unclear. Then run `next`.
 - **Edit mode.** For "I'll edit the files", `next` returns the question with
   `plan_approval.editing: true`. Tell the person they can change `plan_path` and
-  `instructions_path`, and can write their answer after `[Answer]:` in
-  `questions_path`; then end the turn and wait for them to say done. While they
-  edit, the guard refuses your writes to those files. After "done", run `next`.
+  `instructions_path`; then end the turn and wait for them to say done. While
+  they edit, the guard refuses your writes to those files. After "done", read
+  what they changed and record their choice the same way.
 - **Plan or build.** Otherwise `next` returns this run-stage with
   `plan_approval.status`:
   - `approved`: continue with Step 4. Say any `change_notices` line once.
@@ -247,7 +253,7 @@ When both files from Step 2 are written, run `next`:
     names when present, then run `next`.
 
 Never write `code-generation-questions.md`, an `[Answer]:` line, a fingerprint,
-or a receipt: the engine writes them. Before `plan_approval.status: "approved"`,
+or a receipt: the engine writes them when you record the person's choice. Before `plan_approval.status: "approved"`,
 do not begin Step 4 or dispatch the developer agent.
 
 After approval:
@@ -260,20 +266,21 @@ After approval:
   asks again, on any Guard Policy: the build continues and a `change_notices`
   line names the files. Say it once.
 - When the person asks to review the plan ("review the plan", "let me see the
-  plan first"), the hook records the request and the next `next` shows the
-  question before anything else is built. With plan approval off this is how
+  plan first"), record it with `{{INVOKE}} engine log answer --stage
+  code-generation --checkpoint plan-approval --details "Review the plan"`, and
+  the next `next` shows the question before anything else is built. With plan approval off this is how
   they look at one plan; it does not change the setting for later Units. If the
   plan is already being built, finish that build and run `next` as usual: the
   plan comes back beside what was built, on its gate or as its own question,
   before anything else starts.
 
-**Plan approval off.** A scope (express and poc ship with it off), the person
-(in their own words, or `/aidlc --plan-approval off`), or the machine switch
-`AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan stop off for this piece
-of work; the engine then routes straight to the build with the notice above.
-Only the person turns it off: never run a command that turns it off, and never
-suggest turning it off. Turning it back on (`config set plan-approval on`) is
-fine whenever they ask.
+**Plan approval off.** A scope (express and poc ship with it off), the person,
+or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
+stop off for this piece of work; the engine then routes straight to the build
+with the notice above. When the person asks for it, in their own words or with
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set plan-approval off`
+and say in one line that it is off. Never suggest turning it off yourself.
+Turning it back on (`config set plan-approval on`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own
   approval: `next` asks again, or, while plan approval is off, builds the plan
   for that attempt with the same one-line notice. After a rejected gate, while the plan is still
@@ -317,8 +324,8 @@ Then run `next`.
 #### Legacy Kiro IDE windows (picker only)
 
 When the directive carries `legacy_plan_approval_choices`, this Kiro IDE build
-does not pass the person's typed text to AI-DLC, so the engine cannot read a
-reply in their own words. Tell the person once: "This Kiro IDE build approves
+does not pass the person's typed text to AI-DLC, so a typed reply cannot be
+recorded. Tell the person once: "This Kiro IDE build approves
 plans with the picker only; updating Kiro IDE lets you answer in your own words
 or edit the files." Then approve through the protected picker choices. Print the
 fingerprint tags (use `--stage-level` instead of `--unit` for zero-Unit work):

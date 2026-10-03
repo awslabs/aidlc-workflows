@@ -1491,12 +1491,11 @@ describe("t328 human-only break-glass override", () => {
       "Approve Plan,Request Changes",
     ];
     expect(runLog(project, decision).exitCode).toBe(0);
-    // The human's reply chose nothing, so the conductor's receipt refuses.
-    expect(humanPrompt(project, session, "hmm, not sure").exitCode).toBe(0);
+    // No reply from the person has arrived, so the conductor's receipt refuses.
     markAnswered(questions);
     const refused = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
     expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
+    expect(refused.stderr?.toString() ?? "").toContain("requires the person's reply to this prompt, in this session");
     // Nothing is recorded under this session, so the refusal also says the
     // session value itself may be the cause and how to recover on any harness.
     expect(refusalMessage(refused)).toContain(
@@ -1509,7 +1508,7 @@ describe("t328 human-only break-glass override", () => {
     expect(minted.exitCode, minted.stderr).toBe(0);
     const output = JSON.parse(minted.stdout) as { override: boolean; failed_checks: string[] };
     expect(output.override).toBe(true);
-    expect(output.failed_checks.join("\n")).toContain("actual offered choice from this prompt and session");
+    expect(output.failed_checks.join("\n")).toContain("requires the person's reply to this prompt, in this session");
     expect(evaluateCodeGenerationApproval(project, { unit: null })).toMatchObject({
       ok: true,
       reason: "approved",
@@ -1920,14 +1919,14 @@ describe("t328 plan-approval session resolution", () => {
 
     const unanswered = answer();
     expect(unanswered.exitCode).not.toBe(0);
-    expect(refusalMessage(unanswered)).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(refusalMessage(unanswered)).toContain("The person has not replied to this question yet");
     expect(refusalMessage(unanswered)).toContain(`"${session}" may not be this conversation's session.`);
     expect(refusalMessage(unanswered)).toContain("start a new chat session and run /aidlc");
 
     expect(humanPrompt(project, session, "Request Changes").exitCode).toBe(0);
     const otherChoice = answer();
     expect(otherChoice.exitCode).not.toBe(0);
-    expect(refusalMessage(otherChoice)).toContain('recorded as "Request Changes"; record that choice instead.');
+    expect(refusalMessage(otherChoice)).toContain('The person picked "Request Changes" for this question; record that choice instead');
     // A recorded answer shows the session is right, so no session recovery.
     expect(refusalMessage(otherChoice)).not.toContain("start a new chat session");
 
@@ -1940,7 +1939,7 @@ describe("t328 plan-approval session resolution", () => {
       `${JSON.stringify({ ...response, challengeId: `${response.challengeId}-earlier`, choice: "Approve Plan" }, null, 2)}\n`,
     );
     const stale = refusalMessage(answer());
-    expect(stale).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(stale).toContain("The person has not replied to this question yet");
     expect(stale).toContain(`"${session}" may not be this conversation's session.`);
     expect(receiptSessions(project)).toEqual([]);
   }, 30000);

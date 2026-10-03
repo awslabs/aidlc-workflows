@@ -155,7 +155,7 @@ rules.
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; reviewer-bearing stages require a fresh terminal receipt before gate opening | `tools/aidlc-state.ts` (internal emitter) |
-| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<their reply>'` | `tools/aidlc-state.ts` (internal emitter) |
+| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "Approve"` | `tools/aidlc-state.ts` (internal emitter) |
 | `AwaitingApproval → Revising` | `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input <text>` | `tools/aidlc-state.ts` (internal emitter) |
 | `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
 | `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised`; reviewer-bearing stages require a fresh post-rejection terminal receipt before gate re-entry | `tools/aidlc-state.ts` (internal emitter) |
@@ -425,7 +425,7 @@ the gate can reopen. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Archive (issue #980).** `aidlc-utility intent archive <name> [--reason <text>]` retires an in-flight intent the team will not finish, or hides a completed one from the default listing. Under the workspace lock it emits `WORKFLOW_ARCHIVED` into that intent's own audit shard first, then flips the state file's `Status` to `Archived` (keeping the Status it replaced in `Archived From`) and the `intents.json` row to `archived`; the record dir, its artifacts, its audit shards, and any Bolt worktrees are never moved or deleted. A subsequent `next` on that record (a stale per-user cursor or session binding) emits a terminal `done` naming `intent unarchive`, so retired stages never resume by accident; `park` refuses an archived workflow the same way it refuses a completed one. Archiving is refused only for a team-owned intent with claimed Units. An intent with Bolt worktrees archives and the output names them; their `Bolt Refs` stay in the state file, Bolt start, complete, and merge refuse until unarchive, and doctor still counts them as active forks. `intent unarchive <name>` reverses the field writes, restoring `Completed` / `complete` when `Archived From` says `Completed` and `Running` / `in-flight` otherwise, and emits `WORKFLOW_UNARCHIVED`; a `--reason` given to it is not recorded, and the output says so. The default `intent` listing hides archived rows (`--all` shows them; `--json` always carries every row), the creation gate ignores them, and the lone-record fallback never resolves one implicitly.
 
-**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for in a reply AIDLC reads: an approval at Plan Approval, or at a gate a person answered, that also says to stop for today. The human-turn hook or `report` parks in-process as attended (`parkWorkflow` in `aidlc-state.ts`; the CLI never passes it) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it.
+**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it. The one exception is a stop the person asks for. With a reply from them on record since the last decision, `park` (and an approval reported with `--park`) parks as attended (`parkWorkflow` in `aidlc-state.ts`) and records `Parked By: person`, which the Stop hook honors under autonomy too; `unpark` clears it. On a host whose hooks can miss a reply (its `hookActivation` names one), an attended session's park is recorded as the person's even with no reply on record, and its result carries a note saying so. `AIDLC_UNATTENDED=1` always refuses.
 
 ### Revision loop
 
@@ -656,7 +656,7 @@ back on while that line stands, unless a machine-wide kill switch takes
 precedence. The persisted `Guards Off` entry remains and takes effect again
 only after the memory line no longer holds strict. Scope-owned Guard Policy
 follows a stricter new scope default, while a lower default preserves the
-stored value until the person types the lowering switch. Ceremony values still
+stored value until the person asks for the lower value. Ceremony values still
 follow the new scope under memory policy, which controls the effective Guard
 Policy. Changed stored values or sources are audited with scope provenance;
 explicit overrides and absent legacy rows are preserved. Explicit Guard
@@ -684,23 +684,27 @@ No switch is saved for later, and the CLI performs no switch-authority session
 lookup; hooks run on Windows too, so every harness that forwards the prompt
 supports this path.
 
-After the memory-strict check, `config-change` and `scope-change` refuse any
-explicit lowering from `you` unless it is a no-op or `fenceKeyBypassed` allows
-the fixture or harness-launch presence bypass.
+After the memory-strict check, `config-change` and `scope-change` carry out an
+explicit lowering when a person's turn is on record since the last gate
+resolution (`personSpokeSinceGate`): the conductor runs them when the person
+asks in their own words or picks a `lower-fence` remedy. Without that turn they
+refuse, unless the change is a no-op or `fenceKeyBypassed` allows the fixture or
+harness-launch presence bypass.
 A fence already off for this work and a policy word already equal to the
 current line with source `you` need no key.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
 value is below the scope default: create
-the piece of work, then have the person type the switch; scope defaults apply
-without asking.
+the piece of work, and the agent runs the setter when the person asks for the
+lower value; scope defaults apply without asking.
 `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering
 before the presence bypass can apply.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan
 Approval runtime directory for an attended harness launched with
 `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`; an inline environment assignment does not
 establish the bypass.
-A `lower-fence` remedy is `human-input`, with no `operation` or `command`:
-selecting it only tells the person the exact command to type and executes nothing.
+A `lower-fence` remedy is a `command` remedy whose `command` is the setter:
+when the person picks it, the conductor runs it and says in one line what
+changed.
 Model tools cannot invoke hooks or write `aidlc/.aidlc-sessions/` or any
 `.aidlc-plan-approval/` or `<record>/.aidlc-engine/gate-words/` directory, as enforced by the
 [state-transition guard](06-hooks-and-tools.md#pretooluse-aidlc-state-transition-guardts).
@@ -1199,8 +1203,9 @@ receipts, and the active-directive marker.
 **A query never writes, and a guard never deletes evidence.** `next`, the Stop
 hook's `next` probe, the `unit start` route check, `/aidlc --status`, `--doctor`
 and `team-board` are queries. `next` publishes the directive it returns, and for
-Plan Approval the question the person is asked, but never an answer: only the
-human-turn hook records the person's answer. The one receipt the engine writes
+Plan Approval the question the person is asked, but never an answer: an answer
+is recorded only from the person's reply, by the human-turn hook for an exact
+pick or by the conductor's `log answer` for the choice it read. The one receipt the engine writes
 is the skipped record when plan approval is off for the piece of work: a receipt
 marked skipped, `[Answer]: Plan approval off`, and a `PLAN_APPROVAL_SKIPPED`
 row, written when the build is handed over (by `next`, or by the `continue`
@@ -1256,19 +1261,20 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
-holding. It is a `human-input` choice carrying no `operation` or `command`.
-Selecting it executes nothing and only tells the person to type
-`/aidlc config set guard.<fence> off` (`$aidlc config set guard.<fence> off` on
-Codex), so the way past a fence is printed beside the thing that stopped the
-human instead of living on a reference page.
+holding. It is a `command` choice: its `operation` is
+`{kind: "lower-fence", fence}` and its `command` is the setter, so the way past
+a fence is offered beside the thing that stopped the person, and picking it is
+enough for the conductor to carry it out.
 
 The human-turn hook applies the person's typed switch at prompt time to the
 piece of work selected by the message or the hook payload session.
-A picked `lower-fence` choice does not lower a fence or the policy word.
-Memory-held strict refuses first, and unattended runs cannot lower through this
-path.
-CLI setters refuse lowering except for an already-set no-op or the
-fixture/harness-launch presence bypass; no saved switch is consumed by a setter.
+A picked `lower-fence` choice is carried out by the conductor running the
+setter, which the person's reply on record authorizes.
+Memory-held strict refuses first (and withholds the remedy), and unattended
+runs cannot lower through this path.
+Without a person's turn on record, CLI setters refuse lowering except for an
+already-set no-op or the fixture/harness-launch presence bypass; no saved switch
+is consumed by a setter.
 
 The runtime-integrity check refuses recognized direct and indirect tool-call
 routes to hooks and their records, including paths, environment assignments,
@@ -1287,8 +1293,8 @@ the selected interaction:
 
 | `interaction` | Contract after selection |
 |---|---|
-| `command` | Execute the exact returned `command`, rendered from its structured `operation`. These reset operations require human selection; selection is sufficient to attempt the command. |
-| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. `lower-fence` only tells the person to type the exact setter command; selection authorizes and executes nothing. |
+| `command` | Execute the exact returned `command`, rendered from its structured `operation`. These operations (the resets, and `lower-fence`'s setter) require human selection; selection is sufficient to attempt the command. |
+| `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
 `aidlc-guard-operation.ts` defines four operations:
@@ -1301,9 +1307,9 @@ work is open: the Unit's artifacts are on disk and only the receipt is missing.
 `unit complete` then records the receipt without an earlier `unit start`, but
 only once the person picked that remedy on the active ask for the same stage and
 Unit, and it still refuses when a required artifact is missing.
-The `lower-fence` operation remains for `PreToolUse` admission of the setter's
-command shape; admission does not permit the CLI to lower a fence on its own,
-and the `lower-fence` remedy carries neither that operation nor a command.
+The `lower-fence` operation renders the setter, the command its remedy
+carries; `PreToolUse` admits the same exact shape, and the setter still requires
+a person's turn on record.
 
 A stage restart first resolves its destination and returns the exact
 `jump execute` continuation. During unapproved Code Generation, that
@@ -1352,8 +1358,8 @@ For `PreToolUse` admission, the `lower-fence` operation models the fence setter
 as `aidlc engine config set guard.<fence> off` in a native install and
 `bun <harness-dir>/tools/aidlc-utility.ts config-change --guard.<fence> off` in a
 source install, because the native `config` route is a dispatcher translation
-onto `aidlc-utility.ts`. These are setter shapes, not commands emitted by the
-`lower-fence` remedy.
+onto `aidlc-utility.ts`. The `lower-fence` remedy carries the same shape as
+its `command`.
 
 The conductor must obtain human consent before aborting a Bolt. This
 conductor-prose-obtained consent remains the abort trust boundary. The Plan
@@ -1430,21 +1436,27 @@ tool failure.
 ask is stored as an active-directive marker (`kind: "ask"`,
 `ask_type: "guard-recovery"`); a hook/tool-printed ask alone does not publish one.
 The marker carries `remedies`, the offered `op`, `action`, `operation` (when present),
-and `interaction` entries in display order. The human-turn hook records the
-selection with `delivery: consumed`, `selection_sha256`, and `selected_op`;
-`selected_op` is null when the selection is unmatched or ambiguous. Command and
-external-work selections become `guard_recovery_response.status: ready`
-immediately, without a feedback hash. Human-input selections remain
-`awaiting-feedback` until a separate human answer supplies `feedback_sha256`
-and changes the status to `ready`. An unmatched selection authorizes no remedy.
-For `lower-fence`, neither the selection nor later recorded feedback lowers
-anything; the human-turn hook applies only the person's exact typed command,
-including any validated companion intent settings.
-A recorded command or external-work selection authorizes only until the next
-human response; a later prompt before the returned command runs replaces it,
-while an identical re-recorded response is idempotent. An unmatched answer
-records no feedback and leaves no admissible restart; the next response is
-resolved as a fresh selection.
+and `interaction` entries in display order. The human-turn hook records that the
+person replied (`delivery: consumed`, `selection_sha256` over their words,
+`selected_op: null`); the conductor reads the reply and records the remedy they
+picked with `answer --checkpoint guard-recovery --details "<the remedy's op>"`
+(`recordGuardRecoveryChoice`), which sets `selected_op`. It passes the stable
+`op`, never the action text, which can hold backtick-wrapped commands a shell
+would run. Command and
+external-work picks become `guard_recovery_response.status: ready` immediately,
+without a feedback hash. A Request Changes pick whose reply already said what to
+change (`--details 'request-changes: <what>'`) is ready with that reply as the
+feedback; other human-input picks remain `awaiting-feedback` until the person's
+next reply supplies `feedback_sha256` and changes the status to `ready`. A next
+reply that is exactly a different remedy is a new pick instead: it replaces the
+selection and is not taken as feedback; the same remedy again changes nothing. A
+reply with no recorded pick authorizes no remedy.
+For `lower-fence`, the selection is ready at once (a `command` interaction):
+the conductor runs the setter. The human-turn hook still applies the person's
+exact typed command itself, including any validated companion intent settings.
+A recorded pick authorizes only until the next human response; a later prompt
+before the picked remedy runs withdraws the pick so the conductor reads the new
+reply, while an identical re-recorded response is idempotent.
 
 A repeated `next` preserves that response only when the state, gate, and ordered
 remedy `op`, `action`, structured `operation`, and `interaction` still match.
@@ -1471,11 +1483,11 @@ quotes, and trailing punctuation, and one `(Recommended)` label decorator is
 accepted inside or outside those quotes and punctuation. The Approve, Request
 Changes, and Accept as-is labels each accept one trailing `(Recommended)`
 decorator, case-insensitively; Approve and Accept as-is are otherwise matched
-exactly apart from surrounding whitespace. The engine's Plan Approval question
-reads the human's reply in their own words instead (see the Plan Approval
-guard in `06-hooks-and-tools.md`): a named option or a change request always
-counts, and a plain yes counts when it is the first reply after the question is
-shown or is picked in the picker asking that question. The legacy Kiro IDE
+exactly apart from surrounding whitespace. For the engine's Plan Approval
+question the conductor reads the person's reply and records their choice with
+`answer --checkpoint plan-approval --details "Approve Plan"` (or `Request
+Changes`, `I'll edit the files`, `Review the plan`), which needs a reply kept on
+the open question since it was shown. The legacy Kiro IDE
 path's `answer --checkpoint plan-approval --details` still requires
 `Approve Plan` or `Request Changes`.
 

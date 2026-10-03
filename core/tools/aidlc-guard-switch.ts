@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  personSpokeSinceGate,
   assertChangeControlLedgerWritable,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
@@ -311,8 +312,8 @@ export function applyIntentSettings(
     if (loweredFence !== undefined) {
       const section = cc.memoryStrict.heading.replace(/^## /, "");
       die(
-        `Guard Policy is set to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
-          `so ${loweredFence.fence} cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+        `Your team set Guard Policy to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
+          `so ${loweredFence.fence} stays on for everyone on this repo. Changing that line there changes it.`,
       );
     }
   }
@@ -368,7 +369,13 @@ export function applyIntentSettings(
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
-  if (lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId)) {
+  // Lowering a fence is the person's call. Their typed switch carries it out,
+  // and so does this setter when a person has spoken since the last decision:
+  // the conductor runs what they asked for, in their own words.
+  if (
+    lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
+    !personSpokeSinceGate(projectDir)
+  ) {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
 
@@ -681,8 +688,8 @@ export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string 
 }
 
 export function planApprovalMemoryLockRefusal(path: string): string {
-  return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
-    "cannot be turned off from chat. Edit that file to change it.";
+  return `Your team set Guard Policy to strict in ${path}, so plan approval stays on for everyone on this ` +
+    "repo. Changing that line there changes it.";
 }
 
 // --- Plan approval off, asked before the piece of work exists ----------------
