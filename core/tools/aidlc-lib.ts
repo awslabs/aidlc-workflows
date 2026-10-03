@@ -7743,7 +7743,7 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   const marker: ActiveDirectiveMarker = { ...(parsed as unknown as ActiveDirectiveMarker), stage, ...(unit ? { unit } : {}) };
   // A diagnostic never decides whether the marker reads: one that is not in
   // the shape the writers produce is dropped, and the step reads as before.
-  const outOfDate = parseActiveDirectiveOutOfDate(parsed.out_of_date, kinds);
+  const outOfDate = parseActiveDirectiveOutOfDate(parsed.out_of_date);
   if (outOfDate) marker.out_of_date = outOfDate;
   else delete marker.out_of_date;
   return marker;
@@ -7757,10 +7757,7 @@ const OUT_OF_DATE_TEXT = /^[A-Za-z0-9][A-Za-z0-9 ._/()-]{0,79}$/;
 const OUT_OF_DATE_MAX_CHANGED = 8;
 const OUT_OF_DATE_MAX_WRITERS = 4;
 
-function parseActiveDirectiveOutOfDate(
-  value: unknown,
-  kinds: readonly ActiveDirectiveKind[],
-): ActiveDirectiveOutOfDate | null {
+function parseActiveDirectiveOutOfDate(value: unknown): ActiveDirectiveOutOfDate | null {
   if (!isPlainObject(value)) return null;
   const { by, at, kind, stage, unit, changed, writers } = value;
   const lines = (list: unknown, max: number): boolean =>
@@ -7770,7 +7767,7 @@ function parseActiveDirectiveOutOfDate(
     Object.keys(value).some((key) => !["by", "at", "kind", "stage", "unit", "changed", "writers"].includes(key)) ||
     !OUT_OF_DATE_BY.includes(by as ActiveDirectiveOutOfDateBy) ||
     typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(at) ||
-    !kinds.includes(kind as ActiveDirectiveKind) || kind === "error" ||
+    !OUT_OF_DATE_KINDS.has(kind as ActiveDirectiveKind) ||
     typeof stage !== "string" || !/^[a-z][a-z0-9-]*$/.test(stage) ||
     (unit !== undefined && (typeof unit !== "string" || validateUnitName(unit) !== null)) ||
     (changed !== undefined && !lines(changed, OUT_OF_DATE_MAX_CHANGED)) ||
@@ -8427,6 +8424,8 @@ export function writeActiveDirectiveMarker(
     if (legacySession && current?.version !== 2) {
       freshAuthorityAfterDestroyedMarker.value = { session: legacySession, marker: next };
     }
+    // The state writes before this step are not its own: none is named for it.
+    resetStateWrites(target.statePath);
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
   const freshAuthority = freshAuthorityAfterDestroyedMarker.value;
@@ -26242,8 +26241,15 @@ interface StateWrite {
   at: string; by: string; before: string; after: string; changed: string[];
 }
 
-function stateWritesPath(statePath: string): string {
-  return join(engineDirFor(dirname(statePath)), STATE_WRITES_FILE);
+// The record's path, or null when the engine dir beside the state is not a
+// real directory: a link there could redirect every read and write elsewhere.
+function stateWritesPath(statePath: string): string | null {
+  const engine = engineDirFor(dirname(statePath));
+  try {
+    return lstatSync(engine).isDirectory() ? join(engine, STATE_WRITES_FILE) : null;
+  } catch {
+    return null;
+  }
 }
 
 // The command's own words (the tool file and its lowercase verbs), never its
@@ -26285,8 +26291,10 @@ function changedStateLines(before: string, after: string): string[] {
 function readStateWrites(statePath: string): StateWrite[] {
   try {
     const path = stateWritesPath(statePath);
-    if (statSync(path).size > STATE_WRITES_MAX_BYTES) return [];
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (path === null || !existsSync(path)) return [];
+    // Bounded, regular files only: a link, FIFO or device here reads as no record.
+    const bytes = readRegularFileNoFollowOrThrow(path, "state-write record", STATE_WRITES_MAX_BYTES);
+    const parsed: unknown = JSON.parse(bytes.toString("utf-8"));
     return Array.isArray(parsed)
       ? parsed.filter((entry): entry is StateWrite =>
         isPlainObject(entry) && typeof entry.at === "string" && typeof entry.by === "string" &&
@@ -26308,14 +26316,26 @@ function recordStateWrite(statePath: string, previous: string | null, content: s
     if (before === after || by === null) return;
     // Only beside an issued step: with no marker there is no step to go out of
     // date, and the record never creates the first file in the engine dir.
-    if (!existsSync(join(engineDirFor(dirname(statePath)), ACTIVE_DIRECTIVE_MARKER))) return;
+    const path = stateWritesPath(statePath);
+    if (path === null || !existsSync(join(dirname(path), ACTIVE_DIRECTIVE_MARKER))) return;
     const writes = [
       ...readStateWrites(statePath),
       { at: isoTimestamp(), by, before, after, changed: changedStateLines(previous ?? "", content) },
     ].slice(-STATE_WRITES_KEPT);
-    writeFileAtomic(stateWritesPath(statePath), `${JSON.stringify(writes, null, 2)}\n`);
+    writeFileAtomic(path, `${JSON.stringify(writes, null, 2)}\n`);
   } catch {
     // A diagnostic record never fails the state write it describes.
+  }
+}
+
+// A step was just handed out: the writes before it are not this step's, so
+// none of them may be named for it later.
+function resetStateWrites(statePath: string): void {
+  try {
+    const path = stateWritesPath(statePath);
+    if (path !== null) rmSync(path, { force: true });
+  } catch {
+    // An old record left behind only breaks the chain; nothing is guessed.
   }
 }
 

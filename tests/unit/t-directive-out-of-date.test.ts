@@ -11,12 +11,14 @@
 // with the one command that ends it, and that `next` hands the approved build
 // straight back and retires the record. A state write after the step was
 // issued names the state lines that moved and the AI-DLC command that wrote
-// them, and nothing when a write went unrecorded. A record that is not in the
-// writers' shape is dropped and never shown.
+// them, and nothing when a write went unrecorded or came before the step. A
+// record that is not in the writers' shape is dropped and never shown, and a
+// link or FIFO planted in place of the state-write record never holds up a
+// state write.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeDirectiveOutOfDateReason,
@@ -81,8 +83,21 @@ function adapter(proj: string, target: string, payload: Record<string, unknown>)
   return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
 }
 
+// The terminal a rewritten command runs in: Git's bash on Windows, as VS Code
+// users there run it, and /bin/sh elsewhere.
 function shell(proj: string, command: string) {
-  const run = spawnSync("/bin/sh", ["-c", command], {
+  const sh = process.platform === "win32"
+    ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+    : "/bin/sh";
+  const run = spawnSync(sh, [process.platform === "win32" ? "-lc" : "-c", command], {
+    cwd: proj, encoding: "utf-8", env: env(), timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
+}
+
+// One of the project's own tools, run directly with no shell.
+function tool(proj: string, file: string, args: string[]) {
+  const run = spawnSync(process.execPath, [join(proj, ".aidlc", "tools", file), ...args], {
     cwd: proj, encoding: "utf-8", env: env(), timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
@@ -161,7 +176,7 @@ function dispatch(proj: string, session: string, contract: string) {
 }
 
 function doctorLines(proj: string): string[] {
-  const run = shell(proj, "bun .aidlc/tools/aidlc.ts doctor");
+  const run = tool(proj, "aidlc.ts", ["doctor"]);
   return run.stdout.split(/\r?\n/);
 }
 
@@ -209,7 +224,7 @@ describe("a step that went out of date says which write did it", () => {
     const proj = project();
     const session = "out-of-date-setting";
     approvedBuild(proj, session);
-    const changed = shell(proj, "bun .aidlc/tools/aidlc-utility.ts config-change --depth minimal");
+    const changed = tool(proj, "aidlc-utility.ts", ["config-change", "--depth", "minimal"]);
     expect(changed.code, changed.stderr).toBe(0);
     const stop = adapter(proj, "continue-workflow", {
       hook_event_name: "Stop", session_id: session, stop_reason: "end_turn", stop_hook_active: false,
@@ -235,9 +250,14 @@ describe("the record names only what it knows", () => {
       `import { writeStateFile } from ${JSON.stringify(join(proj, ".aidlc", "tools", "aidlc-lib.ts"))};\n` +
         `writeStateFile(${JSON.stringify(proj)}, ${JSON.stringify(content)});\n`,
     );
-    const run = spawnSync(process.execPath, [script], { cwd: proj, encoding: "utf-8", env: env() });
+    const run = spawnSync(process.execPath, [script], {
+      cwd: proj, encoding: "utf-8", env: env(), timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(run.error, "the state write returns").toBeUndefined();
     expect(run.status, run.stderr).toBe(0);
   }
+
+  const engineDir = (proj: string) => join(seededRecordDir(proj), ".aidlc-engine");
 
   function issued(proj: string): string {
     const state = readFileSync(seededStateFile(proj), "utf-8");
@@ -277,6 +297,51 @@ describe("the record names only what it knows", () => {
     expect(activeDirectiveOutOfDateReason(read)).toMatch(/after the workflow state had changed$/);
   });
 
+  test("a write from before the step was issued is never named for it", () => {
+    const proj = project();
+    const state = issued(proj);
+    const moved = state.replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal");
+    // The state goes there and back through recorded writes, then a step is
+    // issued, then a hand edit lands on a digest an old write once produced.
+    writeState(proj, moved);
+    writeState(proj, state);
+    issued(proj);
+    writeFileSync(seededStateFile(proj), moved);
+    expect(recordCopilotHumanSequence(proj, moved, "chat-d")).toBe(true);
+    const read = readActiveDirectiveMarker(proj, moved);
+    expect(read?.out_of_date).toMatchObject({ by: "copilot-human-turn", kind: "run-stage" });
+    expect(read?.out_of_date?.writers).toBeUndefined();
+    expect(read?.out_of_date?.changed).toBeUndefined();
+  });
+
+  test.skipIf(process.platform === "win32")("a link, FIFO or device in place of the record never holds up a state write", () => {
+    for (const plant of ["symlink", "fifo"] as const) {
+      const proj = project();
+      const state = issued(proj);
+      const record = join(engineDir(proj), "state-writes.json");
+      if (plant === "symlink") symlinkSync("/dev/zero", record);
+      else expect(spawnSync("mkfifo", [record]).status).toBe(0);
+      const moved = state.replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal");
+      writeState(proj, moved);
+      // The planted entry reads as no record and is replaced by a real one.
+      expect(lstatSync(record).isFile(), plant).toBe(true);
+      expect(recordCopilotHumanSequence(proj, moved, `chat-${plant}`)).toBe(true);
+      expect(readActiveDirectiveMarker(proj, moved)?.out_of_date?.writers).toEqual(["write-state.ts"]);
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("a linked engine dir is never written through", () => {
+    const proj = project();
+    const outside = createTestProject();
+    projects.push(outside);
+    writeFileSync(join(outside, "active-directive.json"), "{}\n");
+    rmSync(engineDir(proj), { recursive: true, force: true });
+    symlinkSync(outside, engineDir(proj));
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    writeState(proj, state.replace(/^- \*\*Depth\*\*:.*$/m, "- **Depth**: Minimal"));
+    expect(existsSync(join(outside, "state-writes.json"))).toBe(false);
+  });
+
   test("a record not in the writers' shape is dropped, and the step still reads", () => {
     const proj = project();
     const state = readFileSync(seededStateFile(proj), "utf-8");
@@ -290,6 +355,9 @@ describe("the record names only what it knows", () => {
       { ...good, writers: ["x".repeat(200)] },
       { ...good, kind: "error" },
       { ...good, extra: "field" },
+      // Kinds no writer stamps: nothing was being worked from.
+      { ...good, kind: "print" },
+      { ...good, kind: "done" },
       "compaction",
     ]) {
       writeFileSync(path, `${JSON.stringify({ ...base, kind: "error", out_of_date: bad }, null, 2)}\n`);
