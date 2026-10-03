@@ -267,6 +267,9 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
                        #   writes both channels; `--check` builds twice and compares
+scripts/package-sources.ts # content fingerprint of the build's inputs, recorded
+                       #   per harness in dist/.package-sources.json; tools that
+                       #   read dist/ (the coverage generator) refuse a stale tree
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
@@ -873,6 +876,12 @@ record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `audit/` shards, and artifacts are **committed**. Audit is committed as per-clone
 shards (`audit/<host>-<clone>.md`) precisely so git never has to merge concurrent
 appends — there is intentionally no `merge=union` attribute.
+Both name parts come from `.aidlc-clone-id` (the token, and the host recorded
+when it was minted), so a clone keeps one shard when the machine's name changes
+or the folder is copied to another machine. Shard files that start with the same
+first row are copies of one file (a sync tool's conflict copy, a hand copy);
+readers read the rows they share once (`copiedAuditBlocks` in
+`core/tools/aidlc-lib.ts`).
 
 ## Key Design Decisions
 
@@ -898,7 +907,7 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 111-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 112-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

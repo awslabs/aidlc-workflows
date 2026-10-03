@@ -71,6 +71,7 @@ import {
   remainingCleanupTimeoutMs,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { waitForBarrierLine } from "../harness/barrier-file.ts";
 import { adaptWindowsLaunch } from "../harness/tui-drive.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1629,7 +1630,7 @@ describe("t244 Windows and completion release surfaces", () => {
     // This makes the CWD lifetime deterministic without changing production waits.
     writeFileSync(cleanupPath, windowsUninstallCleanupScript(journal) + [
       `$receipt = @{ nativeCwd = [Environment]::CurrentDirectory; location = (Get-Location).Path; pid = $PID } | ConvertTo-Json -Compress`,
-      `[IO.File]::WriteAllText(${ps(ready)}, $receipt)`,
+      `[IO.File]::WriteAllText(${ps(ready)}, $receipt + [char]10)`,
       `$deadline = [DateTime]::UtcNow.AddMilliseconds(${remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS)})`,
       `while (-not (Test-Path -LiteralPath ${ps(release)})) {`,
       "  if ([DateTime]::UtcNow -ge $deadline) { exit 9 }",
@@ -1645,10 +1646,8 @@ describe("t244 Windows and completion release surfaces", () => {
     ]);
     let diagnostic = "";
     try {
-      const deadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
-      while (!existsSync(ready) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(50);
-      expect(existsSync(ready), `cleanup did not reach its completion marker; exit=${child.exitCode}`).toBe(true);
-      const receipt = JSON.parse(readFileSync(ready, "utf-8"));
+      // Cleanup must reach its completion marker while the worker stays alive.
+      const receipt = JSON.parse(await waitForBarrierLine(ready, { writer: child }));
       diagnostic = JSON.stringify({ receipt, pid: child.pid, project });
       console.error(`t244 uninstall worker CWD: ${diagnostic}`);
       expect(child.exitCode, diagnostic).toBeNull();

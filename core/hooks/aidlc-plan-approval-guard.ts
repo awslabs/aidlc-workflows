@@ -48,12 +48,10 @@
 import {
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -86,6 +84,7 @@ import {
   normalizeDriveLetter,
   recordGuardStoodAside,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   loadScopeMapping,
@@ -93,6 +92,7 @@ import {
   parseCheckboxes,
   parseStateStageSuffixes,
   readActiveDirectiveMarker,
+  activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
@@ -659,6 +659,14 @@ function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null):
       : targets[0] === null ? "the zero-Unit stage-level implementation" : `unit ${targets[0]}`,
     stands,
   };
+}
+
+// Why the step went out of date, when the write that did it was recorded (the
+// chat compacted, the state moved): said as the refusal's reason, ahead of the
+// way out. Empty when nothing was recorded.
+function outOfDateClause(marker: ActiveDirectiveMarker): string {
+  const why = activeDirectiveOutOfDateReason(marker);
+  return why === null ? "" : `: ${why}`;
 }
 
 // --- Evidence gathering ---------------------------------------------------------
@@ -1801,8 +1809,7 @@ async function evaluate(
 
   try {
     const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
@@ -1941,7 +1948,8 @@ async function evaluate(
         // a write gets, with the fresh `next` that issues the build again.
         if (verdict.block && issuance === null) {
           authorityFailure =
-            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"`;
+            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"` +
+            outOfDateClause(activeDirective);
           standing = planStanding(projectDir, activeDirective);
         } else if (
           verdict.handoff &&
@@ -2017,7 +2025,8 @@ async function evaluate(
         return 0;
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
+          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+          outOfDateClause(activeDirective);
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
@@ -2171,25 +2180,10 @@ async function evaluate(
             ? blockedMutation.target
             : normalizeDriveLetter(blockedMutation.target.replace(/\\/g, "/"))
           : toolName;
-      const guardAuthority = gate.authority;
-      let recorded: boolean | undefined;
-      const recordContinuation = (): boolean => {
-        recorded ??= recordGuardStoodAside(projectDir, {
-          fence: "plan-approval",
-          authority: guardAuthority,
-          stage: GUARDED_STAGE,
-          tool: toolName,
-          details: detail,
-        });
-        return recorded;
-      };
       // A lowered fence keeps its permission decision, but an existing genuine
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
-      if (!recordContinuation()) {
-        return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
-      }
       try {
         for (const notice of beginCodeGenerationBatch(
           projectDir, selected.map(({ target }) => target), { recordContinuation: false },
@@ -2199,8 +2193,22 @@ async function evaluate(
       } catch (e) {
         return refuseProvenanceFailure(errorMessage(e));
       }
-      recordContinuation();
-      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));
+      // The row is written once the build has started (the start just held and
+      // released the same lock), so it never claims a pass that did not happen.
+      // It is this fence's account of what it let through, not approval
+      // evidence: a ledger that cannot take it never refuses the person's
+      // lowered fence. The line says it was not recorded, and the doctor lists it.
+      const recorded = recordGuardStoodAside(projectDir, {
+        fence: "plan-approval",
+        authority: gate.authority,
+        stage: GUARDED_STAGE,
+        tool: toolName,
+        details: detail,
+      });
+      if (!recorded) {
+        recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
+      }
+      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
       return 0;
     }
   }

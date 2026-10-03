@@ -402,7 +402,11 @@ creates a missing root with private permissions; it refuses an unsafe existing
 root rather than changing its permissions. On POSIX, every explicit-root ancestor
 must be owned by the current user or root, with no group/other write bits unless
 sticky; the implicit root's temporary parent must be current-user-owned or mode
-**1777**. Windows validates root/session owner and DACL, but does not yet validate
+**1777**. On a controlled test host whose filesystem reports those ancestors as
+owned by a sandbox uid (for example an overlay filesystem where `/` belongs to
+`nobody`), set `AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS=1` to skip only the ownership
+requirement; the write-bit rule and every other check here stay enforced.
+Windows validates root/session owner and DACL, but does not yet validate
 ancestor ACL trust; the generation handshake below remains enforced. Remove an
 unsafe pre-created root or point `AIDLC_TUI_BUN_ROOT` at a private directory under
 trusted ancestors, and keep that setting consistent across commands.
@@ -563,6 +567,15 @@ bun tests/gen-coverage-registry.ts          # rewrite the registry from disk
 bun tests/gen-coverage-registry.ts --check  # fail if the committed registry is stale
 ```
 
+The generator reads the units from the packaged `dist/claude` tree. If that
+tree was packaged from other sources (`core/`, `harness/`, `plugins/` or the
+packager's own scripts) than the checkout, both commands refuse with one line:
+run `bun scripts/package.ts` first. `package.ts` records a content fingerprint of its inputs per harness in
+`dist/.package-sources.json` (`scripts/package-sources.ts`), so undoing an edit
+needs no rebuild. A build during which an input changed is not recorded and
+fails, saying to run it again. Temp trees from the generator's `AIDLC_COVERAGE_*` seams have
+no `core/` and are not checked.
+
 `tests/.coverage-registry.json` is the authoritative, machine-checked index —
 consult it (or grep the `covers:` headers directly) to find which test exercises
 a given function, audit event, scope, stage, hook, subcommand, or render
@@ -579,7 +592,7 @@ from disk reds the gate.
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts and bounded hosted live shards | GitHub Actions |
@@ -607,6 +620,30 @@ It posts nothing for test failures, conflicts, manual removals, PRs that change
 `.github/`, PRs already back in the queue, or a run it already explained, and
 it never enqueues, dequeues or merges. `t-ci-merge-queue-notice` pins this on
 trimmed records of real drops in `tests/fixtures/merge-queue-notice/`.
+
+PR CI stays strict: a failing file is red on the PR, with no retry, so a flake
+is seen where it was introduced. The merge queue is different, because one
+flaky file drops the PR and rebuilds every group queued behind it. There,
+`ci.yml` passes `retry-once` to the smoke, unit and integration legs, which run
+the tier with `--file-retries 1`: a file whose first attempt failed assertions
+(failed cases, complete JUnit evidence, no timeout, no cleanup failure, at most
+ten minutes, and at least five minutes left in the run) runs once more in a
+fresh process and temporary directory. The rule lives in
+`tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
+nonzero exit without failed cases, a file that executed no cases, a timeout,
+and a second failure are never retried. Only a retry that passes every case the
+first attempt ran replaces the first failure: a second failure, or a retry that
+skips one of those cases or executes none, stays a failure.
+The retry starts only after the first attempt's evidence is moved aside whole;
+if any of it cannot be, the file is not retried.
+A pass on the second attempt is never silent: the job shows a `Flaky test`
+warning ("<file> passed on its second attempt (merge queue)"), the step summary
+lists it under "Passed on retry", the file's `summary.txt` row keeps `PASS`
+with a "passed on retry" line under it, and `retries.json` in the run's log
+directory records every retry for flake triage. The first attempt's log and
+JUnit stay beside the second as `<file>.attempt-1.*`. Isolated e2e and Full
+Suite never take the flag. `t-runner-production-guards` and
+`t-ci-retry-report` cover the rule, the runner and the report.
 
 `main` is not production: PR CI and the merge queue remain the fast gates listed
 above, while required hosted live tiers run in
@@ -804,6 +841,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_TEST_TIMEOUT` | `1800` | Per-`claude -p` call timeout in seconds. `0` disables that operation timer; file/run deadlines still apply. |
 | `AIDLC_TUI_BACKEND` | `auto` | Terminal driver: native `bun` on Linux/Windows/macOS. Explicit values: `bun`, `tmux`; see [Terminal Driver](#terminal-driver). |
 | `AIDLC_TUI_BUN_ROOT` | `<os.tmpdir()>/aidlc-bun-tui` | Native records/snapshots; use the same root across commands. Must be user-owned and private (0700 on POSIX; current-user owner, no Everyone/Users/Authenticated Users allow ACEs on Windows), never a symlink/reparse point. A missing root is created privately; an unsafe existing root or identity-replaced session directory is refused. |
+| `AIDLC_TUI_ALLOW_UNTRUSTED_ANCESTORS` | unset | Set to `1` only on a controlled test host whose temporary-directory ancestors are owned by a sandbox uid (neither root nor the current user), such as an overlay filesystem where `/` belongs to `nobody`. Without it, every live native-root tier fails at setup, and the error names this variable. It skips only the POSIX explicit-root ancestor ownership check: ancestors writable by other users without the sticky bit and symlink/reparse points are still refused, and the private root's owner, mode and generation handshake stay enforced. |
 | `AIDLC_BUN_BIN` | current Bun executable, otherwise `bun` on `PATH` | Executable override for the Bun and tmux TUI backends. Native PTY use on Linux/Windows/macOS requires Bun >=1.3.14. |
 | `AIDLC_NODE_BIN` | unset | Node executable made available to isolated live tool environments and test fixtures; it does not select a TUI backend. |
 | `AIDLC_TEST_GUARD_PROFILE` | `fixture` (runner-set) | Runner-provided diagnostic for tests: `fixture` or `production`, selected by the runner CLI. An inherited value does not select the profile; the runner replaces it in every test child. |
@@ -1500,6 +1538,8 @@ stops dispatch and marks remaining files incomplete.
 
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
+(Without `--isolated-files`, the same flag retries smoke, unit and integration
+files in a fresh process; the merge queue uses that, as described above.)
 Timeouts, incomplete evidence and cleanup failures are not retried. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
 capability preflights. Manual `--family FAMILY --test <repository-path>` selects
@@ -1751,6 +1791,28 @@ fails. `tests/logs/windows-collection-<uuid>.json` records completion per source
 and, on failure, the operation, safe relative path and exception codes. It omits
 exception messages, absolute paths and sensitive path components. An uploaded
 collection report or fallback log does not establish that a test passed.
+
+Windows live legs also keep evidence for a hook that stops making progress.
+`scripts/ci-live-sandbox.ts` sets `AIDLC_TEST_HOOK_TRACE=1` for every Windows
+live family, and the runner binds `AIDLC_HOOK_TRACE_DIR` to each file attempt's
+`e2e-artifacts/<file>/attempt-<n>/hook-trace/`, so every hook process in that
+attempt writes its phases there (see
+[Hook phase trace](06-hooks-and-tools.md#hook-phase-trace)). While a live run's
+scheduled task runs, the runner-side wait loop in
+`.github/scripts/prepare-live-runtime.ps1` checks the process table once a
+minute. When a process owned by the isolated account with `engine hook ` or
+`engine adapter ` in its command line has run 10 minutes, it writes one
+`hook-stall-<time>.json` to
+`tests/logs/windows-launch-<uuid>/hook-stalls-run-<id>/` with the stalled
+process's tree (its isolated-account parents and all its children) and their
+thread states, once per process. It reads process metadata only and checks
+ownership only for the stalled process and its parents. Every query is capped
+at what is left of a 60-second snapshot budget (15 seconds at most); a query
+that is skipped, fails or times out marks the snapshot `truncated`. A stalled
+process whose owner could not be checked is listed under `ownerUnknown` with
+only its id, name and start time (no command line, no children), since it
+may belong to another account. It never fails the run. The hook trace's `.ndjson` files follow the trace-retention rule below.
+Linux and macOS legs turn neither on.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
 is blocked if sanitization fails. Full-suite and shared deterministic jobs retain

@@ -34,6 +34,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     hooks-health/                  # Hook heartbeats and drop counters
     plan.json                      # Derived scope plan
     recovery.md                    # Compaction recovery breadcrumb
+    state-writes.json              # Recent state writes, for doctor
     stop-hook/                     # No-progress guard counters
     human-turn                     # Last human prompt marker
     engine-touch                   # Last engine advance marker

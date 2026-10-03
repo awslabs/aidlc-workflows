@@ -196,8 +196,9 @@ const BASE_KEYS = [
 // carries it too. A per-harness key set must therefore be BASE_KEYS plus
 // any subset of these -- asserting exact equality against BASE_KEYS alone fails
 // the moment a harness opts into one, which is how this test first broke.
-// `hookActivation` is the Kiro trees' (hosts that run no hooks until the folder
-// is trusted and the window reloads, or on the wrong Kiro CLI engine).
+// `hookActivation` is the Kiro and Copilot trees' (hosts that run no hooks
+// until the folder is trusted and the window reloads, on the wrong Kiro CLI
+// engine, or with VS Code's Chat: Use Hooks off).
 // `directiveMaxBytes` is Copilot's (VS Code keeps 20,000 characters of a
 // terminal result). `kiroLayout` names the layout of the two Kiro trees, which
 // every other harness omits.

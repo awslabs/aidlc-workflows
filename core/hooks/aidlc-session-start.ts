@@ -30,8 +30,7 @@
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
@@ -51,6 +50,7 @@ import {
   harnessDir,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -76,6 +76,7 @@ import {
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
+  writeSessionSelectionNotice,
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
@@ -255,6 +256,14 @@ if (!existsSync(stateFile)) {
       rejoin =
         `\nINTENT REBIND OFFER: This conversation was working ${slug}, but it has not joined that workflow on this machine. ` +
         `Rejoin ${slug}? [Y/n] - on Yes, run ${command}; on No, continue without a workflow.`;
+      if (rebindCheckOnly) {
+        writeSessionSelectionNotice(
+          projectDir,
+          sessionId,
+          `This chat was working on ${slug}, which it has not joined on this machine, so it carries on without a workflow. ` +
+            `To pick ${slug} up again, run ${command}.`,
+        );
+      }
     }
     process.stdout.write(`${JSON.stringify({
       additionalContext:
@@ -272,8 +281,7 @@ const healthDir = hooksHealthDir(
   selection.intent ?? undefined,
   selection.space,
 );
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "session-start.last", isoTimestamp());
 
 // Emit session event. appendAuditEntry creates audit.md if missing, so no
 // audit-existence guard — the state-file guard above is the sole "workflow
@@ -377,6 +385,18 @@ if (sessionId) {
             `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
+          if (rebindCheckOnly) {
+            // The prompt that ran this probe goes through on this chat's own
+            // work: its binding (or, for a chat stamped by an earlier version,
+            // the binding written from that stamp above) selected it.
+            const wasLabel = intentDisplayLabel(was);
+            writeSessionSelectionNotice(
+              projectDir,
+              sessionId,
+              `Another chat selected ${liveSlug}; this chat stays on ${wasLabel}. ` +
+                `To make ${wasLabel} the selected work again, ${switchInstruction}.`,
+            );
+          }
         }
       }
     } else {
@@ -401,10 +421,10 @@ if (sessionId) {
   }
 }
 
-// Cursor can only surface this probe through beforeSubmitPrompt's blocking
-// user_message channel. Consume a real drift after returning it so the next
-// submission can either run the named switch command (Yes) or continue on the
-// live intent (No) instead of receiving the same warning forever.
+// Cursor's prompt hook cannot add context, so the probe's offer reaches the
+// person as the line written above, on the conversation's next directive; the
+// prompt itself always goes through. Consume a real drift here so the same
+// line is not written again for the same move.
 if (rebindCheckOnly) {
   if (rebindOffer) {
     if (binding && selectedUuid) {

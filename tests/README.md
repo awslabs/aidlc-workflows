@@ -194,7 +194,10 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. The merge queue, and manual CI with
 `platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same twelve shards and provisioning.
+all unit regressions through the same twelve shards and provisioning. Only the
+merge queue reruns a smoke, unit or integration file whose assertions failed,
+once, in a fresh process; a pass on that attempt shows a `Flaky test` warning
+and is listed in the run's `retries.json`. PR CI never retries.
 
 For a single deterministic reproduction, manually dispatch
 `deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,

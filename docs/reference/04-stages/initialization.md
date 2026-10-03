@@ -105,6 +105,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - Excludes `.claude/`, `<record>/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
 - `package.json` with only `devDependencies` is treated as tooling/scaffolding and does not alone cause brownfield classification
 - A parseable `.gitmodules` with at least one submodule path entry is a brownfield signal (repo metadata declares code even when the submodule dirs are uninitialized). When submodule paths are uninitialized, the scan warns and names `git submodule update --init --recursive` - surfaced in the `WORKSPACE_SCANNED` event (`Submodules` field + `Details` remedy) and on creation stdout so the conductor can relay it; languages stay as scanned
+- The person's word wins over the scan: `intent-create --project-type <greenfield|brownfield>` sets `Project Type` and writes `Project Type Source: you` (otherwise `workspace scan`). Later, `workspace reclassify --project-type <t>` rescans and records the type as theirs, and `next` asks once when work the scan set up as greenfield gains code before Construction (see `/aidlc --project-type` in the [CLI guide](../../guide/12-cli-commands.md))
 
 ---
 

@@ -38,6 +38,9 @@ aidlc/spaces/*/intents/active-intent
 # The clone-id token names this clone's audit shard; it MUST stay machine-local
 # (gitignored) or every clone from a commit would share a shard and git-conflict.
 aidlc/.aidlc-clone-id
+# Personal AI-DLC settings (`aidlc config ... --local`); aidlc.settings.json is
+# the team's and stays committed.
+aidlc.settings.local.json
 aidlc/.aidlc-unit-scope.json
 aidlc/.aidlc-unit-parked
 aidlc/.aidlc-claim-generations.json

@@ -46,12 +46,12 @@ function git(root: string, args: string[]): string {
 function fixture(files: Record<string, string>): string {
   const root = scratch();
   for (const path of [
-    "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts",
+    "tests/run-tests.ts", "tests/run-tests.sh", "tests/gen-coverage-registry.ts", "scripts/package-sources.ts",
     "tests/harness/claude-gate.ts", "tests/harness/tui-runtime.ts", "tests/harness/tui-record-file.ts",
     "tests/harness/tui-windows-private-file.ts",
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
-    "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
+    "tests/lib/bun-junit-to-meta.ts", "tests/lib/file-retry.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
     "tests/lib/e2e-deferred-cleanup.ts",
   ]) {
@@ -231,6 +231,23 @@ test("relative alias is private", () => {
     const root = fixture({ "t-proof.test.ts": pass });
     rmSync(join(root, "tests/harness/tui-windows-private-file.ts"));
     expect(() => assertRunnerFixtureImports(root)).toThrow("imports missing");
+  });
+
+  test("copied runners reject a missing import outside tests/ before the run starts", () => {
+    const root = fixture({ "t-proof.test.ts": pass });
+    const write = (path: string, body: string): void => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    };
+    // A harness module that reads a script, which reads a core module: the
+    // shape of sdk-drive.ts reading the credential broker.
+    write("tests/harness/needs-script.ts", 'import { value } from "../../scripts/fixture-script.ts";\nexport const read = value;\n');
+    const entries = ["tests/harness/needs-script.ts"];
+    expect(() => assertRunnerFixtureImports(root, entries)).toThrow("fixture-script.ts");
+    write("scripts/fixture-script.ts", 'import { base } from "../core/fixture-core.ts";\nexport const value = base;\n');
+    expect(() => assertRunnerFixtureImports(root, entries)).toThrow("fixture-core.ts");
+    write("core/fixture-core.ts", "export const base = 1;\n");
+    expect(() => assertRunnerFixtureImports(root, entries)).not.toThrow();
   });
 
   test("unfiltered deterministic deep tiers skip the closed Claude preflight without failing", () => {
