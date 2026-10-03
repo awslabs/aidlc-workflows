@@ -77,7 +77,12 @@ import {
   withAuditLock,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
-import { applyTypedGuardSwitchPrompt, isTypedGuardSwitchPrompt, normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
+import {
+  applyTypedGuardSwitchPrompt,
+  isTypedGuardSwitchPrompt,
+  isTypedGuardSwitchQuestion,
+  normalizeRetiredGuardPolicyField,
+} from "../tools/aidlc-guard-switch.ts";
 import {
   PLAN_APPROVAL_OVERRIDE_PHRASE_RE,
   type PlanApprovalPickerQuestion,
@@ -340,10 +345,12 @@ try {
   if (existsSync(stateFilePath(projectDir))) {
     if (mintAllowed) {
       // A typed guard switch or break-glass request is an instruction to the
-      // framework, not an answer to the pending Plan Approval question.
+      // framework, not an answer to the pending Plan Approval question; a
+      // question about a switch ("skip plan approval?") is for the agent.
       const notAReply = typedPrompt.length > 0 && (
         typedPrompt.trim().startsWith("/") ||
         isTypedGuardSwitchPrompt(typedPrompt) ||
+        isTypedGuardSwitchQuestion(typedPrompt) ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
       let replyNotice: string | null = null;
