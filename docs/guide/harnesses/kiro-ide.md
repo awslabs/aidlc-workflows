@@ -33,10 +33,10 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
 > For a source-generated `dist/` install, bun must be on the PATH the IDE
 > hands its hooks and tools. Opened from a terminal, the IDE hands them that
 > terminal's PATH, so `bun --version` working there is enough. Opened from the
-> dock or a desktop icon, it may not: if hooks can't find bun, open the IDE from
-> such a terminal instead. To make dock launches work too, run
-> `bun .kiro/tools/aidlc.ts doctor` in that terminal; its `Runtime hook PATH`
-> row names the directory to add and where. Restart the IDE afterwards.
+> dock or a desktop icon, it may not: if hooks can't find bun, run
+> `bun .kiro/tools/aidlc.ts doctor` in such a terminal. Its `Runtime hook PATH`
+> row names the directory to add and where; restart the IDE afterwards. Until
+> then, open the IDE from that terminal.
 
 ## Install
 

@@ -174,11 +174,12 @@ bun --version
 For a source-generated `dist/` install, `bun` must be on the PATH the harness
 hands its hooks. A harness started from a terminal hands them that terminal's
 PATH, so `bun --version` working there is enough. A harness started from the
-dock, a desktop icon, or a service does not get that PATH: if its hooks do not
-run, start it from such a terminal instead. To make those launches work too,
-run `bun <harness-dir>/tools/aidlc.ts doctor` (for example
-`bun .kiro/tools/aidlc.ts doctor`) in that terminal; its `Runtime hook PATH`
-row names the directory to add and where. Restart the harness afterwards. On native
+dock, a desktop icon, or a service does not get that PATH. If its hooks do not
+run, open a terminal where `bun --version` works and run
+`bun <harness-dir>/tools/aidlc.ts doctor` there (for example
+`bun .kiro/tools/aidlc.ts doctor`): its `Runtime hook PATH` row names the
+directory to add and where. Restart the harness afterwards. Until then, start
+it from that terminal. On native
 Windows PowerShell, the system PATH entry set by `npm install -g bun` is
 sufficient.
 
