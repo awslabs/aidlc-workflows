@@ -1470,6 +1470,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeDirectiveOutOfDateReason",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:activeDirectiveStorageDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -2982,6 +2994,10 @@
       "unitId": "function:copilotStopEvidence",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
@@ -4947,6 +4963,10 @@
       "unitId": "function:invalidateActiveDirectiveContext",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
@@ -7849,6 +7869,10 @@
       "unitId": "function:recordCopilotHumanSequence",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
           "mechanism": "cli"
@@ -11665,8 +11689,13 @@
       "unitClass": "function",
       "unitId": "function:writeStateFile",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -13920,6 +13949,10 @@
         },
         {
           "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-directive-out-of-date.test.ts",
           "mechanism": "cli"
         },
         {
