@@ -35,7 +35,7 @@ diagnostic and lifecycle routes.
 | `/aidlc park` | Park the active workflow at the current stage boundary for a later session or another person |
 | `/aidlc team-board [--snapshot] [--space <name>] [--intent <name>]` | Read-only Team Construction board (Unit progress, claims, merge readiness) |
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
-| `/aidlc intent archive <name>` | Retire an in-flight intent without deleting its record; `unarchive <name>` brings it back |
+| `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc knowledge <verb>` | Index and read your own documents (`onboard`, `sync`, `list`, `show`, `associate`, `dissociate`, `rebind`, `summarize`) |
@@ -59,6 +59,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
+| `/aidlc --project-type <type>` | Say whether this work is a new project or existing code (greenfield, brownfield); mid-workflow it scans again and runs Reverse Engineering for existing code |
 | `/aidlc --review <class>` | Set stage reviews for this run, replacing the scope cap (adversarial, advisory, none) |
 | `/aidlc --guard-policy <value>` | Set how far the guards stand aside for this piece of work (strict, relaxed, off); `--change-control` is its retired name |
 | `/aidlc --sensors <on\|off>` | Set automatic Sensor execution and blocking-sensor checks for this intent |
@@ -324,8 +325,8 @@ slug or full record-dir name. It never creates an intent or advances a workflow.
 
 ### `/aidlc intent archive <name>` — Retire an intent you will not finish
 
-`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight intent to
-the terminal `archived` status. Nothing is deleted: the record dir, its
+`/aidlc intent archive <name> [--reason "<text>"]` moves an in-flight or
+completed intent to the `archived` status. Nothing is deleted: the record dir, its
 artifacts, and its audit shards stay exactly where they are, and the archive
 itself is recorded in that intent's audit trail as `WORKFLOW_ARCHIVED` (with
 your `--reason` when you give one). The registry row flips to `archived`, the
@@ -334,14 +335,18 @@ listing hides the row. If the archived intent was the active one, the per-user
 cursor is cleared, so the next `/aidlc` asks which intent to work on (or creates
 new work when none is left) instead of resuming retired stages.
 
-Archiving is refused for a completed intent (already terminal), for an intent
-with Bolt worktrees still in flight, and for a team-owned intent with claimed
-Units, because those still have work running in other checkouts.
+A completed intent archives too, which is how you hide finished work from the
+default listing. An intent with Bolt worktrees archives as well: the output
+names the worktrees, and they stay on disk untouched until you bring the intent
+back. Archiving is refused only for a team-owned intent with claimed Units,
+because those Units are still being worked in other checkouts.
 
-`/aidlc intent unarchive <name>` reverses it: the row returns to `in-flight`,
-`Status` returns to `Running` at the stage it stopped on, and `WORKFLOW_UNARCHIVED`
-is recorded. It does not move the cursor; switch to the revived intent with
-`/aidlc intent <name>` when you want to continue it.
+`/aidlc intent unarchive <name>` reverses it: the row and `Status` return to
+what they were (`in-flight` and `Running` at the stage it stopped on, or
+`complete` and `Completed` for finished work), and `WORKFLOW_UNARCHIVED` is
+recorded. Only `archive` records a reason; a `--reason` given to `unarchive` is
+not recorded, and the output says so. It does not move the cursor; switch to
+the revived intent with `/aidlc intent <name>` when you want to continue it.
 
 ### `/aidlc space [name]` — List or switch spaces
 
@@ -699,8 +704,9 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Hook heartbeats | `.aidlc-engine/hooks-health/` contains timestamps from hook executions. No heartbeat is advisory only before workflow progress; once work advances it fails, and a newest heartbeat more than five minutes behind the newest stage/gate event fails as stopped, with `/hooks` approval/policy guidance |
 | Claude managed hook policy | On the Claude harness only, uses the existing managed-settings resolver (`AIDLC_MANAGED_SETTINGS_PATH`, current and legacy Windows paths, macOS, Linux/WSL) plus alphabetical `managed-settings.d/` fragments and fails when effective `allowManagedHooksOnly` is `true` |
 | Human-turn receipts | When stage/gate events exist but the audit has no `HUMAN_TURN`, reports a passing advisory that presence-gated checkpoints will refuse |
-| Hook drops | Surfaces any `.aidlc-engine/hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count and last timestamp per hook, and the remediation (inspect, then delete the file). Advisory - never fails |
+| Hook drops | Surfaces any `.aidlc-engine/hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count, last timestamp, and most frequent reasons per hook, and the remediation (inspect, then delete the file). A hook whose latest failure is under 24 hours old is a warning shown without `--verbose` (`Hook failures, the latest within the last day`), counting every failure; it clears a day later or when the file is deleted. Each reason is shown only up to its first colon, the hook's own summary, with secrets redacted; the detail after it stays in the file. Older failures, and `[advisory]` lines from the plugin compose hook, are a passing advisory row. A hook's normal decisions (the Stop hook letting a turn end because you have to answer first) go to `<hook>.trace` instead and are never counted. Only a `[degraded]` drop (a half-applied plugin compose) fails |
 | Workspace source boundary binds | Only when workflow state exists: runs the same workspace source walk Plan Approval binds a plan to. Passes with the first 12 hex characters of the fingerprint; fails naming the reason code and path (for example `budget-entries at .`, `dangling-symlink at linked/src`, `excluded-path at node_modules/pkg`) with the repair text: shrink or exclude the offending path, declare real source under excluded directories in `.aidlc-source-paths.json`, remove the broken symlink, then run `next`; last resort, the human types `Override Plan Approval: <reason>` and the conductor follows the break-glass steps in the Code Generation stage |
+| Current step out of date | Only while it lasts: the step the assistant was working from went out of date (the chat was compacted, or the workflow state changed after the step was issued). Says when and why, and, when known, which state lines changed and which AI-DLC command wrote them; the fix is `next` as its own command, which hands the current step out again and keeps an approval that still matches (warning - never fails) |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Pending approval | When the current stage has waited at an organic approval gate for more than 24 hours, identifies it as waiting for a human rather than stuck and points to `/aidlc --status` (advisory - never fails) |
 | Background subagents | Reports fresh and stale session-scoped entries in `aidlc/.aidlc-subagent-inflight`. Fresh entries are advisory; stale or malformed entries fail with exact removal guidance. Silent when absent |
@@ -843,6 +849,8 @@ Jump directly to a specific stage by slug or number.
 /aidlc --stage code-generation --scope bugfix
 ```
 
+A stage your plan skips is not a dead end. When it comes after the current stage, the jump puts it back on the plan first (a `recompose --add`, recorded with the jump as its reason) and then jumps, and one line says so and how to go back. With no workflow yet, the stage runs as any other jump target does, with one line saying it is not part of the scope's plan. When it comes before the current stage, or is the current stage, going back would run every stage after it again, so the jump is refused with the way to run it now without touching the plan or your progress: `/aidlc --stage <slug> --single`.
+
 ---
 
 ### `/aidlc --stage <slug> --single` — Run one stage in isolation
@@ -852,6 +860,8 @@ workflow. The stage runs, writes its artifact, and stops; your workflow's
 `Current Stage` is never advanced — the isolation is enforced by the engine, not
 by convention. Use it to apply one piece of methodology (a requirements
 analysis, a reverse-engineering scan) without committing to a full lifecycle.
+A stage your scope skips runs too: one line says it is not part of the plan, and
+the plan stays as it is.
 The isolated run still uses the stage's configured agents and reviewer, but it
 does not run workflow learnings or ask for a workflow approval. Its synthetic
 completion is recorded in the audit log, then the command stops.
@@ -896,7 +906,7 @@ Change the active scope of a running workflow.
 /aidlc --scope enterprise
 ```
 
-**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update. Stage checkboxes carry over unchanged, including an open approval (`[?]`) and a revision (`[R]`). A change that would skip a stage still waiting for approval is refused; approve it or request changes first, then change scope. A change is also refused when it would skip the current stage in a way the workflow cannot route past: a current stage that has not started, or, under team Unit Ownership, the current per-unit Construction stage (finish it for every Unit first).
+**Behavior:** Updates the scope configuration in `aidlc-state.md`, recalculates which stages should execute and which should be skipped, and logs a `SCOPE_CHANGED` audit event. Can be combined with `--depth`, `--test-strategy`, `--review`, `--guard-policy`, `--sensors`, `--learnings`, `--summary-confirmation`, and the `--guard.<fence>` switches. Scope-sourced Guard Policy follows a stricter new default automatically, but a lower default does not reduce the running workflow's policy; type the Guard Policy lowering switch first. Ceremony values follow the new scope's defaults, while explicit human overrides and absent legacy rows are preserved. Memory strict still controls the effective policy. Explicit flags retain human provenance and follow the same lowering rule as `config-change`. Selecting the current scope still applies supplied settings through the same configuration applier, without a spurious scope-change event. Invalid or unknown flags, or an unauthorized `--guard-policy relaxed` or `--guard-policy off`, refuse the whole CLI update. Stage checkboxes carry over unchanged, including an open approval (`[?]`) and a revision (`[R]`), except where the new scope skips a stage that is waiting for approval, or skips the current stage before it has started: those stages are skipped with the change (`[S]`, one `STAGE_SKIPPED` row and one output line each, naming `/aidlc --stage <slug> --single` to run one on its own), and the next `/aidlc` moves on to the next stage the new scope runs. The one refusal is a change that would skip the current per-unit Construction stage under team Unit Ownership (finish it for every Unit first).
 
 The `Approval gates: ...; no ...` summary lists ceremonies effectively disabled after the change, including retained human overrides and environment kill switches, rather than only the new scope's defaults. The reviewers entry follows the scope's review cap.
 
@@ -962,6 +972,28 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 /aidlc --depth standard --test-strategy minimal        Full artifacts, minimal tests
 /aidlc --scope bugfix --test-strategy comprehensive    Bugfix with thorough testing
 ```
+
+---
+
+### `/aidlc --project-type <type>` - New project or existing code
+
+Say what this piece of work is, instead of leaving it to the workspace scan.
+
+**Syntax:**
+
+```
+/aidlc --project-type brownfield "add the hover tooltip"   Start on existing code
+/aidlc --project-type greenfield "scaffold the new service"   Start as a new project
+/aidlc --project-type brownfield                            Mid-workflow: this is existing code
+```
+
+You can also say it in plain words at any point ("this is existing code, the frontend is in ui-repo"); the agent runs the same command.
+
+**Behavior:** At the start, the type you give replaces the scan's verdict, while the scan still fills in languages, frameworks, and build system. Mid-workflow it runs `aidlc engine workspace reclassify --project-type <type>`, which scans the folder again, sets `Project Type`, records `Project Type Source: you`, and refreshes `## Workspace State`. For existing code it also records repos added to the folder since the work started (when none were recorded and Construction has not started), and puts back the Reverse Engineering a new-project scan left out. When the workflow is already past Reverse Engineering, it runs next and the workflow then returns to the stage you were on; finished stages stay finished, and the reply names the ones that were done before the code was known so you can redo one. For a new project, a Reverse Engineering that has not finished is skipped, including one waiting at its approval gate: that question closes as skipped and the documents it wrote stay. Once Construction has started the plan stays as it is, and the reply says how to run Reverse Engineering on its own (the agent runs it when you also asked to scan the code now). When the type changes, the reply ends with how to undo it. Logs `WORKSPACE_RECLASSIFIED`.
+
+When the scan set the work up as a new project and the folder gains code before Construction, `next` asks you once whether it is existing code. Either answer records the type as yours, so it is not asked again. The type you give holds for that piece of work only; the next piece of work scans the folder again.
+
+**Valid values:** `greenfield`, `brownfield` (case-insensitive).
 
 ---
 
@@ -1463,6 +1495,20 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
+Recording or clearing a switch changes only that settings file and refreshes no
+harness files, so it also works while a workflow is running: the next check
+reads it, with no restart. AI-DLC's managed `.gitignore` block already lists
+`aidlc.settings.local.json`; on an install from before that, the first `--local`
+record keeps the file out of git through the clone's own `.git/info/exclude`
+instead of editing `.gitignore`. Neither settings file counts as your code, so
+recording one mid Code Generation does not stop the stage from completing.
+The command asks nothing (`--yes` is optional), needs no `--harness` in a
+project with several harnesses, and prints what it recorded or cleared with the
+command that undoes it. With no `--local`, `--project`, or `--global`, a
+`--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
+clears the switch from every file that records it. A switch is on while any of
+the files records it. A command that also changes
+another flag, or adds `--download`, is a refresh and waits for the workflow.
 
 #### `/aidlc --plan-approval` - Plan approval
 
@@ -1634,6 +1680,13 @@ an unrelated prompt, or a response from another session cannot authorize the
 change. Reusing an answer is refused. If audit append fails, retry the same
 answer after repairing the failure; the one-shot response is retained until
 the append succeeds.
+
+Switching to `unit-major` or turning checkpoints on in the middle of a stage
+keeps the Units already finished: `/aidlc` carries on with the next Unit that
+still has work, and the change is recorded as `CONSTRUCTION_POLICY_SET`.
+Going the other way, to `stage-major` with checkpoints off (switching iteration
+back, or turning checkpoints off while stage-major), still hands the Units
+already finished at the stage in progress out again.
 
 Execution is separate from approval: swarm works with guided (`gated`) or
 automatic (`autonomous`) completion. Unit-major stays serial and refuses a
@@ -2247,6 +2300,10 @@ fingerprint.
 
 `bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path, and `proposalPath`: the project-relative file (`aidlc/spaces/<space>/intents/.aidlc-engine/composer-proposal.json`, ignored by git) where the composer writes its grid before `validate-grid` checks it. Pure read; the composer runs it to learn where scope data lives on the current harness.
 
+### `aidlc engine workspace reclassify` - new project or existing code
+
+`aidlc engine workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>]` is the command behind a mid-workflow `/aidlc --project-type` and the answers to the "this folder now has code" question. It scans the folder again and records the type as the person's in one locked write, audited first as `WORKSPACE_RECLASSIFIED`. It never moves the workflow itself: when it puts Reverse Engineering back behind the current stage, the next `next` names the redo jump that runs it. On finished or archived work it records the type and leaves the plan as it is. When the type changes, its reply ends with how to undo it.
+
 ### `aidlc-workspace-sync` - clone and reconcile the declared repo set
 
 This is a **direct tool invocation**, not an `/aidlc workspace-sync` command. It
@@ -2340,7 +2397,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>] [--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied. The settings flags carry settings approved together with the flips: they are applied in the same state write, with their `CEREMONY_SET` or `REVIEW_CLASS_CHANGED` rows after `RECOMPOSED`, so one approval never leaves the plan half-changed. A setting on its own goes through `config set`.
+`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>] [--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>] [--reason <text>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied. The settings flags carry settings approved together with the flips: they are applied in the same state write, with their `CEREMONY_SET` or `REVIEW_CLASS_CHANGED` rows after `RECOMPOSED`, so one approval never leaves the plan half-changed. A setting on its own goes through `config set`. `--reason <text>` records why the plan changed on the `RECOMPOSED` row; the engine passes it when a jump puts a skipped stage back on the plan.
 
 ```bash
 # Equivalent ways to skip both stages after approval:
@@ -2351,7 +2408,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 {{INVOKE}} engine recompose --add market-research --add team-formation
 ```
 
-Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, any flip that would move the first EXECUTE stage of Construction - the protected stage-routing anchor - in either direction, any recompose against a workflow whose Status is not Running, and any recompose under autonomous Construction - re-shaping the plan needs a human at the gate, so switch to gated first or let the swarm finish), rebuilds the derived state fields, and emits `RECOMPOSED`. Each refusal of a stage names what you can do instead: jump to or past the stage, run it on its own with `/aidlc --stage <slug> --single`, add or skip the stages a missing input involves, or change to a scope that runs or skips it. Reached through `/aidlc --skip <slug>`, `/aidlc --add <slug>`, a jump to a skipped stage, and `/aidlc compose` mid-workflow, not typed directly.
 
 ### `aidlc engine scope save` - keep a plan as a scope
 
@@ -2367,7 +2424,7 @@ A name is lowercase letters, digits, and single hyphens, starting with a letter,
 
 ### Creating a workflow with its own stage changes (`--skip` / `--add`)
 
-`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: custom, based on <scope>`, and no scope file is written. On a running workflow `next` refuses them and points to `/aidlc compose`, which shows the change for approval first.
+`next --scope <scope> --skip <slug,...> --add <slug,...> -- "<description>"` creates a workflow on `<scope>` with stages dropped or added for this piece of work only; the conductor passes them for a custom composed plan, and you can type them too. Each slug must name a stage; an initialization stage, a stage on both lists, or a change the scope already makes (`--skip` of a stage it skips) is refused before anything is created. The work's state records `Plan: custom, based on <scope>`, and no scope file is written. On a running workflow, `/aidlc --skip <slug,...>` and `/aidlc --add <slug,...>` change its remaining stages at once through `recompose`, with no approval question (you named the stages), and say in one line what changed and the opposite flag that undoes it. A scope or setting typed in the same command is applied first. A flip the plan cannot take is refused with what you can do instead.
 
 `--depth` and `--test-strategy` take exactly `minimal`, `standard`, or `comprehensive`; `next` refuses any other value before it names a command.
 

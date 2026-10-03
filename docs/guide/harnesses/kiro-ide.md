@@ -30,13 +30,13 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
   self-contained.
 
 > [!TIP]
-> For a source-generated `dist/` install, bun must be on the PATH that
-> *non-interactive* shells see
-> — that's what the IDE uses to run a hook or tool. Those shells read
-> `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc`, but the bun
-> installer writes to `~/.zshrc`. If `which bun` works in your terminal yet
-> hooks can't find bun, copy the `BUN_INSTALL`/`PATH` export into
-> `~/.zshenv` (or `~/.bashrc`).
+> For a source-generated `dist/` install, bun must be on the PATH the IDE
+> hands its hooks and tools. Opened from a terminal, the IDE hands them that
+> terminal's PATH, so `bun --version` working there is enough. Opened from the
+> dock or a desktop icon, it may not: if hooks can't find bun, run
+> `bun .kiro/tools/aidlc.ts doctor` in such a terminal. Its `Runtime hook PATH`
+> row names the directory to add and where; restart the IDE afterwards. Until
+> then, open the IDE from that terminal.
 
 ## Install
 
@@ -383,9 +383,9 @@ ways to enable it, either works:
   (in PowerShell, `New-Item -ItemType File aidlc/.aidlc-hook-debug`)
   in your project. It takes effect on the very next hook fire — no IDE restart —
   and `rm aidlc/.aidlc-hook-debug` turns it back off.
-- **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Because the IDE runs
-  hooks in non-interactive shells, set it where those shells read it — add the
-  export to `~/.zshenv` (zsh) or `~/.bashrc` (bash), then restart the IDE.
+- **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Hooks see the
+  environment the IDE started with, so quit the IDE, then open it from a
+  terminal where the variable is exported.
   On Windows, set it as a user variable in PowerShell instead,
   `[Environment]::SetEnvironmentVariable("AIDLC_HOOK_DEBUG", "1", "User")`,
   then quit and reopen the IDE (run it again with `$null` in place of `"1"` to
@@ -403,7 +403,7 @@ ways to enable it, either works:
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` when a new session takes its first prompt, and on Kiro IDE `SESSION_RESUMED` when a prompt returns to an earlier chat (no genuine session-end trigger, so no `SESSION_ENDED`; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
 | Quotes in recorded text on Windows | Recorded as typed | Kiro IDE runs the agent's commands in Windows PowerShell 5.1, which drops empty arguments and removes a double quote inside a value unless it is written as `\"`. The agent writes quotes that way, so answers and feedback are recorded with their quotes. A value that also holds `&`, `<`, `>`, `^`, or a pipe sign is written with single inner quotes instead, because the `aidlc` command runs through cmd.exe, which would act on those characters; the hook refuses a command where one would reach cmd.exe outside its quotes. If a question or answer still arrives split in two, AI-DLC refuses to record it and says how to pass it, so the audit trail never keeps only part of it |
-| Turning a guard or summary confirmation off mid-workflow | Type the switch in chat, for example `/aidlc config set summary-confirmation off` | The same, except on Kiro IDE builds that give hooks an empty message (such as 1.0.242): update Kiro IDE and type the switch. For summary confirmation, once every piece of work in the project is complete, you can also run the terminal command the refusal names to turn it off for all work (on a native install, `aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes`; `--clear-bypass` turns it back on) |
+| Turning a guard, summary confirmation, or plan approval off mid-workflow | Type the switch in chat, for example `/aidlc config set summary-confirmation off` | The same, except on Kiro IDE builds that give hooks an empty message (such as 1.0.242). There, for summary confirmation or plan approval, run the terminal command the refusal names to turn it off now for all work, including the work running now (on a native install, `aidlc config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD`; `--clear-bypass` turns it back on); for another guard, update Kiro IDE and type the switch |
 
 Everything else — state machine, audit trail, artifacts under the per-intent
 record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings

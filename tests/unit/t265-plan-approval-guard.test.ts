@@ -738,14 +738,14 @@ function runHook(
   proj: string,
   payload: Record<string, unknown> | string,
   env: Record<string, string> = {},
-): { code: number; stderr: string } {
+): { code: number; stderr: string; stdout: string } {
   const r = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     input: typeof payload === "string" ? payload : JSON.stringify(payload),
     env: { ...process.env, CLAUDE_PROJECT_DIR: proj, ...env },
     encoding: "utf-8",
   });
-  return { code: r.status ?? -1, stderr: r.stderr ?? "" };
+  return { code: r.status ?? -1, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }
 
 // Two intents, each bound to its own session: intent-a (S-A) is at Code
@@ -1191,8 +1191,11 @@ describe("t265b hook lifecycle", () => {
         }
         const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
         expect(write.code).toBe(2);
-        // Either fence decision names the way back: a fresh `next` re-issues it.
-        expect(write.stderr).toContain("Run a fresh `aidlc-orchestrate.ts next`");
+        // Either fence decision names the way back, spelled the way this tree
+        // runs it: a fresh `next` re-issues the step.
+        expect(write.stderr).toContain(
+          "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+        );
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }
@@ -2008,13 +2011,16 @@ describe("t265b hook lifecycle", () => {
       expect(delegated.stderr).not.toContain("config set guard.plan-approval off");
       expect(delegated.stderr).not.toContain("cannot be turned off from chat");
       // The plan was approved and then edited: an older lowered fence passes
-      // the eligibility check. Recording the continuation needs an intent's
-      // audit trail, which t-guard-plan-continuation-swarm covers end to end.
+      // the eligibility check. This fixture has no audit trail, so the
+      // stand-aside row cannot be written: the build still goes on, and the
+      // one line says it was not recorded (t-guard-plan-continuation-swarm
+      // covers the recorded row end to end).
       lowerFence(edited);
       seedActiveDirective(edited, "code-generation");
       const lowered = runHook(edited, payload);
       expect(lowered.stderr).not.toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
-      expect(lowered.stderr).toContain("lowered-fence continuation");
+      expect(lowered.code, lowered.stderr).toBe(0);
+      expect(lowered.stdout).toContain("Not recorded in the audit trail, which was busy or could not be written");
     } finally {
       rmSync(edited, { recursive: true, force: true });
     }
@@ -2245,6 +2251,9 @@ describe("t265b hook lifecycle", () => {
         `& '${active}' ${next}`,
         ...(windows ? [`${launcher} ${next}`, `${active} ${next}`] : []),
         `cd '${proj}'; aidlc ${next}`,
+        // The form an agent types in VS Code on Windows (#1411).
+        `cd ${proj}; aidlc ${next}`,
+        `cd ${proj}; aidlc --version`,
         `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
       ]) {
         const result = pwsh(command);
@@ -2942,6 +2951,71 @@ describe("t265b hook lifecycle", () => {
       expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(false);
     } finally {
       releaseAuditLock(proj);
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("a setting recorded while the plan waits keeps the plan current", () => {
+    const proj = scratchProject();
+    try {
+      mkdirSync(join(proj, "src"), { recursive: true });
+      writeFileSync(join(proj, "src", "app.ts"), "export const app = 1;\n", "utf-8");
+      seedState(proj);
+      seedUnit(proj, null, { plan: true, answer: null });
+      const questionsPath = join(
+        codeGenerationRecordDir(proj, null),
+        "code-generation-questions.md",
+      );
+      const logTool = join(proj, ".claude", "tools", "aidlc-log.ts");
+      const identity = [
+        "--stage",
+        "code-generation",
+        "--checkpoint",
+        "plan-approval",
+        "--questions-file",
+        questionsPath,
+        "--session",
+        "settings-session",
+        "--stage-level",
+      ];
+      appendAuditEntry("SESSION_STARTED", { Source: "startup", Session: "settings-session" }, proj);
+      const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      const decision = spawnSync(
+        BUN,
+        [logTool, "decision", ...identity, "--decision", "Approve this plan?", "--options", "Approve Plan,Request Changes"],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" },
+      );
+      expect(decision.status, decision.stderr).toBe(0);
+      // The person records a kill switch while the plan waits: AI-DLC's own
+      // settings, not the code the plan describes.
+      writeFileSync(join(proj, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+      writeFileSync(join(proj, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+      // Then they approve the plan in their own words.
+      const turn = spawnSync(
+        BUN,
+        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "settings-session", prompt: "Approve Plan" }),
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          encoding: "utf-8",
+        },
+      );
+      expect(turn.status, turn.stderr).toBe(0);
+      writeFileSync(
+        questionsPath,
+        readFileSync(questionsPath, "utf-8").replace(/\[Answer\]:\s*$/, "[Answer]: Approve Plan"),
+      );
+      const answer = spawnSync(
+        BUN,
+        [logTool, "answer", ...identity, "--details", "Approve Plan"],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env, encoding: "utf-8" },
+      );
+      expect(answer.status, answer.stderr).toBe(0);
+      expect(answer.stderr).not.toContain("re-present the plan");
+      expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
+    } finally {
       rmSync(proj, { recursive: true, force: true });
     }
   });

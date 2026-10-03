@@ -234,7 +234,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(110);
+    expect(eventTypes.length).toBe(112);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -1040,6 +1040,7 @@ describe("documentation parity derives current behavior from authored implementa
       "Hook heartbeat data",
       "Human-turn receipts: 0 HUMAN_TURN rows",
       "Plan Approval authority is ambiguous or stale",
+      "cannot select one approval target",
       "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
     ]) {

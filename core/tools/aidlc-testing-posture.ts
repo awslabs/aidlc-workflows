@@ -62,6 +62,7 @@ import {
   relativeRecordDir,
   recordAcceptedChanges,
   recordGuardStoodAside,
+  recordHookDrop,
   renderChangedPaths,
   governedChangeControl,
   intentRepos,
@@ -195,6 +196,11 @@ export interface CodeGenerationApproval {
   executionFailure?: string;
   /** The current receipt is a human break-glass override (content and attempt only). */
   override?: true;
+  /**
+   * The receipt recorded for this plan question was written by plan approval
+   * off (built without asking), not by a person's answer.
+   */
+  skipped?: true;
 }
 
 export interface CodeGenerationTarget {
@@ -1952,6 +1958,34 @@ function activeCodeGenerationDirective(marker: ActiveDirectiveMarker): CodeGener
     : { kind: "invoke-swarm", units: marker.units ?? [] };
 }
 
+/**
+ * The Code Generation directive this marker is, or stands in for; null when it
+ * names no target an approval binds to. With `setAside`, a marker that no
+ * longer names one (a step set aside since it was issued keeps its stage and
+ * the Unit or Units it named) is read the same way a Plan Approval question
+ * is: its Unit, else its group, else the zero-Unit stage-level work.
+ */
+export function codeGenerationIssuance(
+  marker: ActiveDirectiveMarker,
+  setAside = false,
+): CodeGenerationIssuance | null {
+  try {
+    return activeCodeGenerationDirective(marker);
+  } catch {
+    if (!setAside || marker.stage !== CODE_GENERATION_STAGE) return null;
+    if (marker.unit !== undefined) return { kind: "run-stage", unit: marker.unit };
+    return marker.units?.length ? { kind: "invoke-swarm", units: marker.units } : { kind: "run-stage" };
+  }
+}
+
+/**
+ * How every command a Code Generation refusal names is to be run: as printed
+ * and alone. A `cd`, a pipe, or a second command around an admitted command
+ * makes the whole line a shell the plan-approval guard cannot read.
+ */
+export const AS_ITS_OWN_COMMAND =
+  "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
+
 // A rules part's receipt as the engine mints it: 8 base64url characters
 // (`steeringReceipt` in aidlc-orchestrate.ts).
 const PART_RECEIPT_RE = /^[A-Za-z0-9_-]{8}$/;
@@ -1971,7 +2005,8 @@ export function codeGenerationRulesArrivingReason(marker: ActiveDirectiveMarker 
     return null;
   }
   const engine = aidlcToolInvocation("orchestrate");
-  const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded).`;
+  const loaded = `The Code Generation rules are still arriving (part ${marker.part} of ${marker.parts} has been loaded). ` +
+    `Run each command named here ${AS_ITS_OWN_COMMAND}.`;
   const after = "follow each part until the Code Generation step itself arrives; nothing is built or handed to a worker before then.";
   // Only a receipt in the engine's own shape is put in a command; anything
   // else on the marker gets the fresh `next`, which is always safe to run.
@@ -2345,10 +2380,13 @@ function recordCodeGenerationContinuation(
     tool: `testing-posture ${operation}`,
     details: detail,
   });
+  // The row is the lowered fence's account of what it let through, not
+  // approval evidence: a ledger that cannot take it never stops the person's
+  // build. The line says it was not recorded, and the doctor lists the miss.
   if (!recorded) {
-    throw new Error("Code Generation continuation could not be recorded in the audit ledger. Repair the ledger and retry; the earlier approval and plan-approval setting are unchanged.");
+    recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail);
+  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
 }
 
 export interface LegacyPlanApprovalGuardState {
@@ -4215,6 +4253,7 @@ export function evaluateCodeGenerationApproval(
     const candidate = recordedFingerprint
       ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint })
       : null;
+    if (candidate?.skipped !== undefined) empty.skipped = true;
     // A worker executes the parent's approved contract, including for a sibling
     // repository that does not carry the workspace's methodology files.
     const contractProject = candidate?.delegation
@@ -4364,6 +4403,7 @@ export function evaluateCodeGenerationApproval(
       ok: true,
       reason: "approved",
       ...(receipt?.override !== undefined ? { override: true as const } : {}),
+      ...(receipt?.skipped !== undefined ? { skipped: true as const } : {}),
     };
   } catch (error) {
     return {

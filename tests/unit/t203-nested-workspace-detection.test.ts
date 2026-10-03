@@ -29,8 +29,9 @@
 //      empty workspace genuinely has nothing to reverse-engineer, and forcing
 //      Brownfield would break the greenfield RE-skip pins). Instead intent-create
 //      writes a one-line stderr advisory when such a scope scans Greenfield,
-//      pointing the user at fixing Project Type or the layout. Routing is
-//      unchanged: reverse-engineering still greenfield-SKIPs.
+//      pointing the user at saying it is existing code (--project-type
+//      brownfield). Routing is unchanged: reverse-engineering still
+//      greenfield-SKIPs.
 //
 //   3. AI-DLC's OWN WHOLE FILES. Cursor ships its copy installer as a root
 //      install.ts, and `aidlc config --harness cursor` (or copying the whole
@@ -366,7 +367,8 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
     // The advisory fired on stderr (not stdout).
     expect(stderr).toContain('scope "bugfix"');
     expect(stderr.toLowerCase()).toContain("greenfield");
-    expect(stderr).toContain("Project Type");
+    // It names the way to say so: the project-type flag (or plain words).
+    expect(stderr).toContain("--project-type brownfield");
   });
 
   test.each(["refactor", "security-patch"])(

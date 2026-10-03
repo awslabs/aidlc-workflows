@@ -430,18 +430,39 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(existsSync("/tmp/t351-pwn")).toBe(false);
   });
 
-  test("a running workflow's stages change only through the reshape gate", () => {
-    const proj = createTestProject();
-    tempDirs.push(proj);
-    seedAidlcMemory(proj);
-    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+  test("a running workflow's named stage changes apply at once, with the undo named", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]).status).toBe(0);
+    // The person named the stage: no compose gate re-asks it.
     const d = nextDirective(proj, ["--skip", "team-formation"]);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("--skip and --add shape a new workflow's stages when it is created");
-    expect(d.message).toContain('compose "<the change>"');
+    expect(d.kind).toBe("print");
+    expect(d.message).not.toContain("next compose");
+    const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
+    expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
+    expect(d.message).toContain('"Skipped team-formation. To undo it, type `/aidlc --add team-formation`."');
+    const words = command.split(" ");
+    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    expect(applied.status, applied.out).toBe(0);
+    expect(applied.out).toContain("1 skipped (team-formation)");
+    expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
+    // Asking again changes nothing, so nothing is sent and no undo is named.
+    const again = nextDirective(proj, ["--skip", "team-formation"]);
+    expect(again.kind).toBe("print");
+    expect(again.message).not.toContain("engine recompose");
+    expect(again.message).toContain('"Team-formation is already skipped. The plan is unchanged."');
+
+    // A setting typed with it runs first, so neither request is dropped.
+    const both = nextDirective(proj, ["--add", "team-formation", "--depth", "minimal"]);
+    expect(both.kind).toBe("print");
+    const setting = both.message.indexOf("config set depth minimal");
+    expect(setting, both.message).toBeGreaterThan(-1);
+    expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
+    expect(both.message).toContain("To undo it, type `/aidlc --skip team-formation`.");
+
     const combined = nextDirective(proj, ["compose", "--skip", "team-formation", "trim it"]);
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
+    expect(combined.message).not.toContain("at creation");
   });
 });
 

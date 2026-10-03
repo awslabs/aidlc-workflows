@@ -155,6 +155,7 @@ import {
   hookChildEnv,
   isEngineToolCall,
   hooksHealthDir,
+  writeHookStatusFile,
   isoTimestamp,
   intentUuidForSelection,
   isTeamUnitOwnership,
@@ -164,6 +165,7 @@ import {
   readSessionIntentHandoff,
   readSessionIntentUuid,
   recordHookDrop,
+  recordHookTrace,
   resolveProjectDirFromHook,
   resolveWorkflowSelection,
   stageDir,
@@ -841,7 +843,7 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
       // Unlink failure is non-fatal - the staleness check above already refused
       // to honour the marker, so the loop stays enforced regardless.
     }
-    recordHookDrop(
+    recordHookTrace(
       projectDir,
       HOOK_NAME,
       "ignoring an orphaned compose marker (aidlc/.aidlc-compose-pending older than the freshness window); cleaned it up and falling through to the cap-bounded block",
@@ -887,7 +889,7 @@ function isPendingSubagentStop(
       return false;
     }
     if (match.staleRemoved > 0) {
-      recordHookDrop(
+      recordHookTrace(
         projectDir,
         HOOK_NAME,
         `pruned ${match.staleRemoved} orphaned background-subagent in-flight ${match.staleRemoved === 1 ? "entry" : "entries"} before evaluating the pending-subagent carve-out`,
@@ -926,12 +928,16 @@ function isPendingSubagentStop(
 //      loop must keep running unattended; there is no human chatting to release.
 // Fail-closed throughout: any error returns false and the cap-bounded block stands.
 
+// The default reminder's opening and closing words, which the matcher keys on.
+const CONTINUATION_OPENING = "The AI-DLC workflow is not finished";
+const SAY_NOTHING = "tell the person nothing about this note";
+
 // True when a user-role transcript entry's text is actually the hook's OWN
 // injected continuation (a re-prompt after a block), not the human talking.
 // Two shapes: Claude Code wraps the block reason as "Stop hook feedback: ..."
 // (isMeta:true), but other harnesses (Codex) may re-inject the RAW reason text
-// with no wrapper. continuationReason() (below) opens with "The AIDLC workflow
-// has a pending step" and names "the workflow loop"; errorDirectiveReason()
+// with no wrapper. continuationReason()'s default reminder (below) opens with
+// CONTINUATION_OPENING and carries SAY_NOTHING; errorDirectiveReason()
 // opens with ERROR_DIRECTIVE_REASON_PREFIX and identifies the verbatim engine
 // diagnostic. Excluding these is what keeps an engine-engaged turn whose last
 // user entry is the hook's nudge from being misread as a fresh human prompt.
@@ -943,6 +949,8 @@ function isInjectedHookFeedback(text: string): boolean {
   const t = text.trimStart();
   return (
     t.startsWith("Stop hook feedback:") ||
+    (t.startsWith(CONTINUATION_OPENING) && t.includes(SAY_NOTHING)) ||
+    // The earlier wording, still found in older transcripts.
     (t.startsWith("The AIDLC workflow has a pending step") &&
       /workflow loop/.test(t)) ||
     (t.startsWith(ERROR_DIRECTIVE_REASON_PREFIX) &&
@@ -1450,8 +1458,11 @@ function continuationReason(
   committedTo?: string,
   unit?: string,
   finishedUnit?: string,
+  teamUnits = false,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  // A team-owned Unit's records and reports carry its Unit; solo ones do not.
+  const scopedUnit = teamUnits && unit && validateUnitName(unit) === null ? unit : undefined;
   if (kind === "rehydrate" && committedTo !== undefined) {
     // The report's `done` was loop bookkeeping, not the end of the workflow:
     // name the fresh `next` that starts the step it moved to, and `park` for a
@@ -1471,7 +1482,8 @@ function continuationReason(
   if (retained && kind === "run-stage") {
     // The marker is a writable file: only a valid Unit name reaches the agent.
     const forUnit = unit && validateUnitName(unit) === null ? ` (unit "${unit}")` : "";
-    return `The exact delivered AIDLC run-stage${where}${forUnit} is still active. Complete that exact stage, then use \`report\` for the real outcome; use \`park\` for a clean pause. Never rubber-stamp approval or revision gates.`;
+    const name = stage.length > 0 ? `The "${stage}" stage` : "The current stage";
+    return `${name}${forUnit} is not finished. ${askedQuestionStep(stage, scopedUnit)} Otherwise carry on with that stage's steps, then record its real outcome with \`${aidlcDispatcherInvocation("orchestrate report")} ${scopeFlags(stage, scopedUnit)} --result <outcome>\` (add \`--single\` in an isolated run). If the person asked to stop here, run \`${aidlcDispatcherInvocation("orchestrate park")}\`. Never report an approval the person did not give, and ${SAY_NOTHING}.`;
   }
   if (kind === "load-steering" && continueToken) {
     // Pointer plus receipt, never the payload. Hook messages are capped near
@@ -1488,15 +1500,31 @@ function continuationReason(
     );
   }
   return (
-    `The AIDLC workflow has a pending step (a ${kind} directive${where}). ` +
-    "You have not finished the workflow loop yet. Run " +
+    `${CONTINUATION_OPENING}${stage.length > 0 ? ` (current stage "${stage}")` : ""}. ` +
+    `${askedQuestionStep(stage, scopedUnit)} Otherwise run ` +
     `\`${aidlcToolInvocation("orchestrate")} next\`, do what the step it prints ` +
-    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\` to record ` +
-    "the outcome. Repeat until it answers `done`. " +
-    "If you meant to pause this workflow instead and pick it up in a later " +
-    `session, run \`${aidlcToolInvocation("orchestrate")} park\` to stop ` +
-    "cleanly between stages - never mark a stage complete just to end the turn."
+    `asks, then run \`${aidlcToolInvocation("orchestrate")} report --stage <stage> --result <outcome>\`; ` +
+    "repeat until it answers `done`. " +
+    `If the person asked to stop here, run \`${aidlcToolInvocation("orchestrate")} park\`. ` +
+    `Never mark a stage done or approved just to end the turn, and ${SAY_NOTHING}.`
   );
+}
+
+// The one wait this hook cannot see is a question the agent showed before
+// recording it. The person already has that question, so the step is to record
+// it and end the turn, never to ask it again.
+function askedQuestionStep(stage: string, unit?: string): string {
+  return (
+    "If you just asked the person a question and are waiting for the answer, " +
+    `run \`${aidlcDispatcherInvocation("log decision")} ${scopeFlags(stage, unit)} --decision "<the question>" --options "<the choices>"\`, ` +
+    "adding any `--single`, `--checkpoint` or `--questions-file` flags that question's own instructions use, " +
+    "and end your turn without asking it again."
+  );
+}
+
+function scopeFlags(stage: string, unit?: string): string {
+  const slug = /^[a-z0-9][a-z0-9-]*$/.test(stage) ? stage : "<stage>";
+  return unit ? `--stage ${slug} --unit ${unit}` : `--stage ${slug}`;
 }
 
 // --- Main ---------------------------------------------------------------------
@@ -1535,8 +1563,7 @@ try {
 // Write a health heartbeat (mirrors the other hooks' .aidlc-engine/hooks-health beat).
 try {
   const healthDir = hooksHealthDir(projectDir);
-  mkdirSync(healthDir, { recursive: true });
-  writeFileSync(join(healthDir, "continue-workflow.last"), isoTimestamp(), "utf-8");
+  writeHookStatusFile(healthDir, "continue-workflow.last", isoTimestamp());
 } catch {
   // Heartbeat failure is non-fatal — never let it affect the stop decision.
 }
@@ -1669,7 +1696,7 @@ if (sessionId) {
     if (exactBoundary) {
       clearSessionIntentHandoff(projectDir, sessionId);
       resetGuard(projectDir);
-      recordHookDrop(
+      recordHookTrace(
         projectDir,
         HOOK_NAME,
         "allowing stop at the exact intent handoff boundary (create or switch)",
@@ -1704,7 +1731,7 @@ if (!copilotSession) {
     return allowStop();
   }
   if (resumeWaiting) {
-    recordHookDrop(
+    recordHookTrace(
       projectDir,
       HOOK_NAME,
       "active resume choice is waiting on the human; allowing the stop before the shared next probe",
@@ -1712,7 +1739,7 @@ if (!copilotSession) {
     return allowStop();
   }
   if (recoveryWaiting) {
-    recordHookDrop(
+    recordHookTrace(
       projectDir,
       HOOK_NAME,
       "active guard-recovery question is waiting on the human; allowing the stop before the shared next probe",
@@ -1781,7 +1808,7 @@ if (kind === "parked") {
     getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous" &&
     getField(stateContent, "Parked By")?.trim() !== "person"
   ) {
-    recordHookDrop(
+    recordHookTrace(
       projectDir,
       HOOK_NAME,
       "parked directive seen under autonomous Construction; declining the parked allow (an unattended run must not self-park), falling through to the cap-bounded block",
@@ -1848,7 +1875,7 @@ if (kind === "error") {
     return allowStop();
   }
   if (delivery === "duplicate") {
-    recordHookDrop(
+    recordHookTrace(
       projectDir,
       HOOK_NAME,
       `error directive ${fingerprint} was already delivered; allowing stop`,
@@ -1889,7 +1916,7 @@ if (!KNOWN_DIRECTIVE_KINDS.has(kind)) {
 // current-stage-scoped successor to the broad `[?]` substring match that landed
 // in 679153d; scoping to the current slug and adding [R] is strictly safer.)
 if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
-  recordHookDrop(
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     `current stage ${currentStageSlug(stateContent)} is awaiting approval or being revised; allowing the stop (human-wait carve-out)`,
@@ -1903,7 +1930,7 @@ if (isHumanWaitStop(projectDir, stateContent, activeStage, activeUnit)) {
 // unit-major walk. Strictly gated and fail-open (see isPendingQuestionStop).
 if (isPendingQuestionStop(projectDir, stateContent, activeStage, activeUnit)) {
   const pendingStage = activeStage ?? currentStageSlug(stateContent);
-  recordHookDrop(
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     `active stage ${pendingStage} has an unanswered question; allowing the stop (pending-question carve-out)`,
@@ -1924,7 +1951,7 @@ if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
   const pendingStage = teamPending
     ? (activeStage ?? currentStageSlug(stateContent))
     : currentStageSlug(stateContent);
-  recordHookDrop(
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     teamPending
@@ -1941,7 +1968,7 @@ if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
 // nudging it back into stage execution mid-compose. Positive-confirmation only
 // (the marker), autonomy-guarded, fail-open (see isPendingComposeStop).
 if (isPendingComposeStop(projectDir, stateContent)) {
-  recordHookDrop(
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
@@ -1955,7 +1982,7 @@ if (isPendingComposeStop(projectDir, stateContent)) {
 // autonomy-guarded, freshness-bounded, and fail-open (see
 // isPendingSubagentStop).
 if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
-  recordHookDrop(
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     "a background subagent is still in flight for this session; allowing the stop (pending-subagent carve-out)",
@@ -1975,7 +2002,7 @@ if (isPendingSubagentStop(projectDir, stateContent, rawSessionId)) {
 // so a conductor that engaged the workflow and then quit mid-loop (and every
 // autonomous run) is still nudged.
 if (isConversationalStop(projectDir, stateContent, transcriptPath, transcriptFormat, copilotSession)) {
-  recordHookDrop(
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     "the ending turn was conversational (human's last prompt answered with no workflow-engine call); allowing the stop (conversational carve-out)",
@@ -2035,6 +2062,7 @@ return blockStop(
       : undefined,
     activeUnit,
     directive.finishedUnit,
+    isTeamUnitOwnership(stateContent),
   ),
 );
 }

@@ -43,7 +43,7 @@
 // the run's record shows when the bound bit; audit failures never change the
 // decision.
 
-import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
@@ -56,6 +56,7 @@ import {
   errorMessage,
   guardStoodAsideLine,
   hooksHealthDir,
+  writeHookStatusFile,
   recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
@@ -945,8 +946,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
   if (!outside) {
     try {
       const healthDir = hooksHealthDir(projectDir);
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+      writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
     } catch {
       // Heartbeat failure is non-fatal - never let it affect the decision.
     }
@@ -1051,10 +1051,11 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
           toPosix(c.text).includes("construction/"),
         );
         if (touchesConstruction && perUnitReviewOwed(projectDir, stateContent)) {
-          const marker = join(hooksHealthDir(projectDir), `${HOOK_NAME}.missing-record.last`);
+          const markerName = `${HOOK_NAME}.missing-record.last`;
+          const marker = join(hooksHealthDir(projectDir), markerName);
           const fresh = existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 10 * 60 * 1000;
           if (!fresh) {
-            writeFileSync(marker, isoTimestamp(), "utf-8");
+            writeHookStatusFile(hooksHealthDir(projectDir), markerName, isoTimestamp());
             recordHookDrop(
               projectDir,
               HOOK_NAME,

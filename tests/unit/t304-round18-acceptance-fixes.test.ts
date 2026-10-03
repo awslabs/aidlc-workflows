@@ -791,6 +791,74 @@ describe("t304 copied projection configuration", () => {
     }
   }, 180_000);
 
+  // A workflow left running, as a stage question leaves one.
+  function startWorkflow(project: string): string {
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    const dirName = "260919-add-running";
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(join(intents, "intents.json"), JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000004",
+      slug: "add-running",
+      dirName,
+      scope: "feature",
+      status: "in-flight",
+    }]));
+    writeFileSync(join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    return `default/${dirName}`;
+  }
+
+  function stampAs(project: string, harnessDir: string, version: string): void {
+    const path = join(project, harnessDir, "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(path, "utf-8"));
+    writeFileSync(path, `${JSON.stringify({ ...stamp, frameworkVersion: version }, null, 2)}\n`);
+  }
+
+  test("a copied harness added from another release while a workflow runs is fetched at the running release", async () => {
+    const project = fullCopyProject();
+    stampAs(project, ".claude", OTHER_VERSION);
+    const workflow = startWorkflow(project);
+    const release = releaseServer(OTHER_VERSION);
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    try {
+      const refused = await runCopiedAsync(
+        project,
+        ["config", "--harness", "codex", "--yes", "--from", join(DIST, "codex")],
+        { env },
+      );
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      expect(refused.stdout).toContain(
+        `error: the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (${workflow}) uses ${OTHER_VERSION}\n`,
+      );
+      const fix = fixLine(refused.stdout);
+      expect(fix).toBe("bun .claude/tools/aidlc.ts config --harness codex --yes --download");
+      expect(existsSync(join(project, ".codex"))).toBe(false);
+      const followed = await followFix(fix, project, env);
+      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+      expect(followed.stdout).toContain(`Downloaded aidlc-copy-runtime-${OTHER_VERSION}.tar.gz`);
+      expect(JSON.parse(
+        readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+      ).frameworkVersion).toBe(OTHER_VERSION);
+    } finally {
+      release.stop();
+    }
+  }, 180_000);
+
+  test("natively, a harness added while a workflow runs comes from the engine's release", () => {
+    const { project, machine } = configuredNativeProject();
+    // Every native harness runs the hooks of the engine serving the project,
+    // so an installed harness on another release is no reason to refuse.
+    stampAs(project, ".claude", OTHER_VERSION);
+    startWorkflow(project);
+    const added = runCopied(project, ["config", "--harness", "codex", "--yes"], {
+      env: { ...machine, AIDLC_RUNTIME_ROOT: DIST_RELEASE },
+    });
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(JSON.parse(
+      readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+    ).frameworkVersion).toBe(AIDLC_VERSION);
+  }, 120_000);
+
   test("natively, a missing pinned release is installed and registered, then the command finishes", async () => {
     const { project, machine } = configuredNativeProject();
     writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);

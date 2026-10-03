@@ -1161,6 +1161,126 @@ describe("t271 review iteration ceiling", () => {
     expect(stale.stageStale).toBe(true);
   });
 
+  // A live Copilot run: the reviewer wrote a whole READY review with one
+  // `## What I verified` heading, the logger refused it, and the conductor ran
+  // the reviewer again (16 more minutes). Such a review now records as
+  // written, with only that heading line made `###`.
+  const r1Review = (verdictLine = "**Verdict:** READY", heading = "## What I verified") => [
+    "**Reviewer:** aidlc-product-lead-agent",
+    "",
+    verdictLine,
+    "",
+    "**Iteration:** 1",
+    "",
+    "Advisory review of the stage.",
+    "",
+    heading,
+    "",
+    "- **Reported defect is fixed.** The end comparison now keeps the last day.",
+    "",
+    "### Findings",
+    "",
+    "**Prior findings**",
+    "",
+    "| ID | Now | Severity | Note |",
+    "|---|---|---|---|",
+    "",
+    "**New findings**",
+    "",
+    "| Severity | Location | Finding | Required action |",
+    "|---|---|---|---|",
+    "",
+  ].join("\n");
+  const requestHeadingReview = () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+    const record = (review: string) => {
+      writeFileSync(join(proj, reviewFile), review, "utf-8");
+      return runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    };
+    return { proj, record };
+  };
+
+  test("a whole review with a ## heading records the first time, with only that heading made ###", () => {
+    const { proj, record } = requestHeadingReview();
+    const recorded = record(r1Review());
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED");
+    expect(completed).toHaveLength(1);
+    expect(auditBlockField(completed[0], "Verdict")).toBe("READY");
+    // One request and no retry: the reviewer ran once.
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(r1Review("**Verdict:** READY", "### What I verified"));
+    // The audit row says the reviewer's heading was changed, and which.
+    expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe("line 9: ## What I verified");
+  });
+
+  test("only the heading markers change: a byte order mark, line endings and an opening ## Review are kept", () => {
+    const { proj, record } = requestHeadingReview();
+    const original = "\uFEFF## Review\r\n\r\n" + r1Review().replaceAll("\n", "\r\n").replace("Advisory", "# Advisory notes\r\n\r\nAdvisory");
+    const recorded = record(original);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(
+      original.replace("\r\n# Advisory notes", "\r\n### Advisory notes").replace("## What I verified", "### What I verified"),
+    );
+    expect(body.startsWith("\uFEFF## Review\r\n")).toBe(true);
+    const completed = auditBlocks(proj, "REVIEW_COMPLETED");
+    expect(auditBlockField(completed[0], "Review Headings Made Level 3")).toBe(
+      "line 9: # Advisory notes; line 13: ## What I verified",
+    );
+  });
+
+  test("a ## heading right after a table is made ### too", () => {
+    const { proj, record } = requestHeadingReview();
+    // Straight after the last table row, with no blank line between.
+    const review = `${r1Review()}## Notes after the table\n\nMore notes.\n`;
+    const recorded = record(review);
+    expect(recorded.status, recorded.stderr).toBe(0);
+    const { reviewRecord } = JSON.parse(recorded.stdout) as { reviewRecord: string };
+    const body = (JSON.parse(readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8")) as ReviewRecord).body;
+    expect(body).toBe(
+      review.replace("## What I verified", "### What I verified").replace("\n## Notes after", "\n### Notes after"),
+    );
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_COMPLETED")[0], "Review Headings Made Level 3")).toBe(
+      "line 9: ## What I verified; line 24: ## Notes after the table",
+    );
+  });
+
+  test("a heading never hides another defect, and heading forms that cannot be made ### still refuse", () => {
+    const { proj, record } = requestHeadingReview();
+    // A wrong verdict is named as such, not as a heading problem.
+    const wrongVerdict = record(r1Review("**Verdict:** NOT-READY"));
+    expect(wrongVerdict.status).not.toBe(0);
+    expect(wrongVerdict.stderr).toContain("exactly one canonical verdict line matching --verdict");
+    for (const heading of [
+      "What I verified\n---------------",
+      "> ## What I verified",
+      "<h2>What I verified</h2>",
+    ]) {
+      const refused = record(r1Review("**Verdict:** READY", heading));
+      expect(refused.status, heading).not.toBe(0);
+      expect(refused.stderr, heading).toMatch(/no (later )?rendered (HTML )?H1 or H2 heading/);
+    }
+    // A heading-shaped line in code is not a heading and is kept as written.
+    const fenced = record(r1Review("**Verdict:** READY", "```\n## What I verified\n```"));
+    expect(fenced.status, fenced.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
+  });
+
   test("a changed or missing named review record cannot authorize approval", () => {
     for (const damage of ["changed", "missing"] as const) {
       const proj = seedProject("feature");
@@ -1956,7 +2076,17 @@ describe("t271 review iteration ceiling", () => {
     // Every case is run twice: as the review file (the record path, where the
     // whole file is the section and prose before the heading makes the heading
     // a later H2) and as the deprecated appended section (where the section
-    // must open with the heading).
+    // must open with the heading). In a review file a plain `#` or `##` line
+    // is recorded as `###` and the check decides on those bytes, so a review
+    // that is whole apart from those lines records with none left.
+    const demotedInAReviewFile = new Set<string>([
+      "semantic bytes before heading",
+      "later H1 section",
+      "indented later H1 section",
+      "inline code cannot open a fake HTML comment",
+      "list continuation code cannot open a fake HTML comment",
+      "blockquote continuation code cannot open a fake HTML comment",
+    ]);
     for (const scenario of cases) {
       for (const path of ["record", "embedded"] as const) {
         const proj = seedProject("feature");
@@ -1981,6 +2111,10 @@ describe("t271 review iteration ceiling", () => {
           if (scenario.name === "semantic bytes before heading") {
             expectedError = "no later rendered H1 or H2 heading";
           }
+          if (scenario.name === "duplicate review section") {
+            // Made `###`, the second section's ownership lines are duplicates.
+            expectedError = "exactly one canonical verdict line";
+          }
         } else {
           appendFileSync(artifact, scenario.suffix, "utf-8");
           if (
@@ -1997,6 +2131,21 @@ describe("t271 review iteration ceiling", () => {
         const completed = runReview(proj, [...request, "--verdict", "READY"], {
           AIDLC_TEST_NO_REVIEW_FILE: "1",
         });
+        if (path === "record" && demotedInAReviewFile.has(scenario.name)) {
+          expect(completed.status, `${scenario.name} (${path}): ${completed.stderr}`).toBe(0);
+          expect(auditBlocks(proj, "REVIEW_COMPLETED"), `${scenario.name} (${path})`).toHaveLength(1);
+          const { reviewRecord } = JSON.parse(completed.stdout) as { reviewRecord: string };
+          const body = (JSON.parse(
+            readFileSync(join(seededRecordDir(proj), reviewRecord), "utf-8"),
+          ) as ReviewRecord).body;
+          expect(
+            body.split("\n").filter((line) =>
+              /^ {0,3}#{1,2}(?=[ \t]|$)/.test(line) && !/^## Review[ \t]*$/.test(line)
+            ),
+            `${scenario.name} (${path})`,
+          ).toEqual([]);
+          continue;
+        }
         expect(completed.status, `${scenario.name} (${path})`).not.toBe(0);
         expect(completed.stderr, `${scenario.name} (${path})`).toContain(expectedError);
         expect(

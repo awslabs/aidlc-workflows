@@ -298,11 +298,25 @@ field. They invoke
 `bun <harness-dir>/tools/aidlc-utility.ts document-input` after writing the
 selected path with the native file-write tool to the active record's fixed
 `.aidlc-engine/document-input-path` transport. Customer-chosen path bytes never enter
-the shell command. The handler resolves one exact project-root path, records
-the contained file identity, and requires the opened descriptor to match it
-before reading; parent-directory replacement, redirects, and unsupported input
-are refused. Successful reads emit the same inline untrusted-path and
-untrusted-content notices as DocumentKB.
+the shell command. The handler resolves the path from the project root,
+records the contained file identity, and requires the opened descriptor to
+match it before reading; parent-directory replacement, redirects, and
+unsupported input are refused. When nothing exists at that path, it lists the
+project's regular files with that name through `git ls-files --cached --others
+--exclude-standard` (a walk that skips `.git`, `node_modules`, hidden folders,
+and nested repositories, only outside a repository), matching only document
+files outside hidden folders, never offering symlinks or a path with a secret-looking file or folder name, and reads a sole match or returns the
+matches for a numbered pick. When git fails inside a repository or the walk
+hits its cap, it chooses nothing and asks for the path. `project-description` splits a pasted
+document from the person's directions, so no stage splits it by itself. Successful reads emit the same inline untrusted-path and
+untrusted-content notices as DocumentKB. `document-input --onboard` is the one
+form that writes: for a PDF or Word file it copies the bytes it read into the
+active space's `knowledge/documents/` (a staged file published with `link()`, so
+no existing file is replaced) and calls the knowledge tool's `onboard` and
+`showDocument` in-process. A git-ignored source, or one git cannot check, returns
+one `ask` and copies nothing unless `--include-ignored` is passed, which the stages add only after
+the person agrees. The Copilot adapter keeps the Allow prompt for this form,
+because it runs the extractor.
 
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):

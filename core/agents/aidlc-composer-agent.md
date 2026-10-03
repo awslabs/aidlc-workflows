@@ -81,7 +81,9 @@ Run `{{INVOKE}} engine workspace detect --json`. Returns workspace scan
 + `scopeGridPath`, and `proposalPath`. You read the first two, and
 you never write a scope file. The only file you write is `proposalPath`, the
 project-relative proposal file you hand to `validate-grid` (Step 6; git
-ignores it).
+ignores it). When your task says the person named the project type (new
+project or existing code), that type is the project type for every later
+step, in place of the scan's projectType.
 
 ### Step 2: Estimate the Autonomy Risk Score (ARS)
 

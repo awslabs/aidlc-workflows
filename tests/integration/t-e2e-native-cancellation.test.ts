@@ -231,10 +231,10 @@ function git(cwd: string, args: string[]): void {
 function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witness: string): string {
   const fixture = join(scratch(), "runner");
   const copied = [
-    "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "tests/harness/claude-gate.ts",
+    "tests/run-tests.ts", "tests/gen-coverage-registry.ts", "scripts/package-sources.ts", "tests/harness/claude-gate.ts",
     "tests/harness/runner-profile.ts",
     "tests/harness/test-budget.ts",
-    "tests/lib/bun-junit-to-meta.ts", "tests/lib/test-sharding.ts",
+    "tests/lib/bun-junit-to-meta.ts", "tests/lib/file-retry.ts", "tests/lib/test-sharding.ts",
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
     "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",

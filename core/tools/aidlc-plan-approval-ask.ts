@@ -147,6 +147,18 @@ export function readPlanApprovalAsk(projectDir: string, intentId: string): PlanA
     ? value : null;
 }
 
+/**
+ * Where the person stands on the recorded Plan Approval question: not answered
+ * yet, editing the files themselves, or answered (a choice is recorded and the
+ * next `next` carries it out). Null when no question is recorded.
+ */
+export function planApprovalAskState(projectDir: string): "unanswered" | "editing" | "answered" | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (record === null) return null;
+  if (record.mode === "editing") return "editing";
+  return (record.results?.length ?? 0) > 0 ? "answered" : "unanswered";
+}
+
 function writePlanApprovalAsk(projectDir: string, record: PlanApprovalAskRecord): void {
   writePlanApprovalRuntimeRecord(
     projectDir,

@@ -636,7 +636,8 @@ At each non-gate question interaction:
 This pair is also a deterministic human-wait signal for the forwarding-loop Stop
 hook, including learning prompts that do not add a blank tag to the stage
 questions file. Once `decision` succeeds, render that question and END THE TURN.
-Never interpret hook feedback, a continuation reminder, or silence as its
+If you showed the question before recording it, the person already has it: end
+the turn without showing it again. Never interpret hook feedback, a continuation reminder, or silence as its
 answer; only the human's next interaction may be followed by `answer`.
 
 ### Stage progress notation

@@ -1,7 +1,7 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { accessSync, appendFileSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,8 +77,10 @@ export {
 } from "./aidlc-reply-reader.ts";
 import {
   _resetSettingsCacheForTests,
+  LOCAL_SETTINGS_FILE,
   RECORDABLE_PROJECT_BYPASSES,
   resolveAidlcSettings,
+  SETTINGS_FILE,
   type ProjectFlagsRecord,
   type RecordableProjectBypass,
 } from "./aidlc-settings.ts";
@@ -371,6 +373,7 @@ export interface HookActivation {
   recovery: string;
   missedReply: string;
   notRunYet?: string;
+  notRunInWorkflow?: string;
 }
 
 interface ShippedHarnessData {
@@ -545,6 +548,9 @@ function readShippedHarnessData(): ShippedHarnessData {
           recovery: activation.recovery,
           missedReply: activation.missedReply,
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
+          ...(typeof activation.notRunInWorkflow === "string"
+            ? { notRunInWorkflow: activation.notRunInWorkflow }
+            : {}),
         }
         : null;
     _shippedHarnessData = {
@@ -1035,8 +1041,8 @@ export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
 ]);
 
 // The two intent lifecycle verbs that retire and revive a record without
-// touching its files: `archive` moves an in-flight intent to the terminal
-// `archived` status, `unarchive` brings it back to `in-flight`.
+// touching its files: `archive` moves an in-flight or completed intent to the
+// `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
 export type WorkspaceCommand =
@@ -2842,7 +2848,9 @@ function mainCheckoutRepoName(projectDir: string): string | null {
 //   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
 //                       (mainCheckoutRepoName), falling back to basename(projectDir)
 //                       when git cannot answer. Identical to basename(projectDir)
-//                       for every root that is not a linked worktree.
+//                       for every root that is not a linked worktree. A folder
+//                       that was moved keeps its earlier store
+//                       (movedFolderStoreName).
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
@@ -2862,7 +2870,42 @@ export function codekbRepoName(
   // NOTHING-RECORDED case consults git, where the project root is the repo and a
   // worktree basename is otherwise mistaken for the repository name.
   if (repos.length > 1) return basename(projectDir);
-  return mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  const name = mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
+}
+
+// A project folder that was moved, renamed or copied keeps its code knowledge
+// base. The store is named after the folder it was first written in, so when
+// no store carries the current name and exactly one store in the space belongs
+// to no intent's recorded repos, that store is this folder's. Nothing is
+// renamed on disk (the store is committed and shared). Two or more such stores
+// are ambiguous and keep the current name, and so does a registry without the
+// active intent's row or with a malformed entry, since it cannot say which
+// stores other intents' repos own.
+function movedFolderStoreName(
+  projectDir: string,
+  space: string,
+  intent: string | null,
+  name: string,
+): string | null {
+  const root = join(workspaceRoot(projectDir), "spaces", space, "codekb");
+  if (intent === null || existsSync(join(root, name))) return null;
+  const rows = readIntentRegistry(projectDir, space);
+  const wellFormed = rows.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    (entry.repos === undefined || Array.isArray(entry.repos)));
+  if (!wellFormed || !rows.some((entry) => recordDirMatches(entry, intent))) return null;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const claimed = new Set(rows.flatMap((entry) => entry.repos ?? []));
+  const stores = entries
+    .filter((entry) => entry.isDirectory() && isValidRepoName(entry.name) && !claimed.has(entry.name))
+    .map((entry) => entry.name);
+  return stores.length === 1 ? stores[0] : null;
 }
 
 // --- Codekb scope of analysis -------------------------------------------------
@@ -3531,10 +3574,10 @@ export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): b
 
 // The intent status lifecycle is a registry-row field. Creation writes
 // `in-flight`; workflow completion flips it to `complete`; `intent archive`
-// flips an in-flight row to `archived` and `intent unarchive` restores
-// `in-flight`. `archived` is the only status a human moves a row INTO and back
-// OUT of, so it gets a named constant and predicate; the other two stay the
-// literals the creation and completion paths already write.
+// flips an in-flight or complete row to `archived` and `intent unarchive`
+// restores the one it had. `archived` is the only status a human moves a row
+// INTO and back OUT of, so it gets a named constant and predicate; the other
+// two stay the literals the creation and completion paths already write.
 export const ARCHIVED_INTENT_STATUS = "archived";
 
 export function isArchivedIntent(entry: { status: string }): boolean {
@@ -5290,6 +5333,54 @@ export function clearSessionRebindOffer(
   }
 }
 
+// A host whose prompt hook cannot add context (Cursor) lets the person's
+// prompt through and leaves the rebind line here; the conversation's next
+// directive says it once.
+function sessionSelectionNoticePath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.selection-notice` : "";
+}
+
+export function writeSessionSelectionNotice(projectDir: string, sessionId: string, line: string): void {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path || !line) return;
+  // The line is true only while this chat stays on the work it is on now.
+  const binding = readSessionBinding(projectDir, sessionId);
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ line, space: binding?.space ?? null, intent: binding?.intent ?? null })}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+// A typed workspace switch or create ("/aidlc intent login") moves this
+// conversation's selection itself, so no rebind line is kept for it. The
+// command head is the one the typed guard switch parser reads.
+export function promptMovesSelection(prompt: string): boolean {
+  const text = prompt.trim();
+  const head = text.match(/^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i);
+  if (head === null) return false;
+  const kind = parseWorkspaceCommand(splitKiroCommandArgs(text.slice(head[0].length).trim())).kind;
+  return kind === "switch" || kind === "create" || kind === "create-intent";
+}
+
+export function takeSessionSelectionNotice(projectDir: string, sessionId: string): string | null {
+  const path = sessionSelectionNoticePath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const text = readFileSync(path, "utf-8");
+    unlinkSync(path);
+    const saved = JSON.parse(text) as { line?: unknown; space?: unknown; intent?: unknown };
+    // A chat that moved since (a switch, new work, an archive) is not where the line says.
+    const binding = readSessionBinding(projectDir, sessionId);
+    if ((binding?.space ?? null) !== saved.space || (binding?.intent ?? null) !== saved.intent) return null;
+    return typeof saved.line === "string" && saved.line ? saved.line : null;
+  } catch {
+    return null;
+  }
+}
+
 interface SessionPidEntry {
   // A null session stops ancestry fallback while SessionStart refreshes a PID.
   sessionId: string | null;
@@ -6385,14 +6476,18 @@ export function registerIntentRecord(
     minted.space,
   );
   if (selectIntentForSession(projectDir, minted.dirName, minted.space, sessionId)) return;
-  // A one-shot receipt, machine-local like the rest of the engine dir, for a
-  // host that learns which session created the record only from the command's
-  // output afterwards (see consumeCreationReceipt). A creation that already
-  // bound its session leaves none to pick up.
+  leaveCreationReceipt(minted.recordDir, minted.uuid);
+}
+
+// A one-shot receipt, machine-local like the rest of the engine dir, for a
+// host that learns which session created the record only from the command's
+// output afterwards (see consumeCreationReceipt). A creation that already
+// bound its session leaves none to pick up.
+export function leaveCreationReceipt(recordDir: string, uuid: string): void {
   try {
-    const receiptDir = engineDirFor(minted.recordDir);
+    const receiptDir = engineDirFor(recordDir);
     mkdirSync(receiptDir, { recursive: true });
-    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${minted.uuid}\n`, { encoding: "utf-8", flag: "wx" });
+    writeFileSync(join(receiptDir, CREATION_RECEIPT_FILE), `${uuid}\n`, { encoding: "utf-8", flag: "wx" });
   } catch {
     // Best-effort: without a receipt the observed creation stays unproven.
   }
@@ -6745,6 +6840,24 @@ interface ActiveDirectiveResume {
   issuing_session: string; issuing_intent_uuid: string | null; action?: ResumeAction;
 }
 
+// What put a live step out of date: the write that turned the directive the
+// agent was working from into kind "error", so `next` must hand the step out
+// again. Diagnostic only. It is kept while the step stays out of date, shown by
+// doctor and in the Code Generation refusal, and decides nothing.
+export type ActiveDirectiveOutOfDateBy =
+  | "compaction" | "status-sync" | "copilot-next" | "copilot-result" | "copilot-turn-end" | "copilot-human-turn";
+
+export interface ActiveDirectiveOutOfDate {
+  by: ActiveDirectiveOutOfDateBy;
+  at: string;
+  kind: ActiveDirectiveKind; stage: string; unit?: string;
+  // The state lines that moved after the step was issued, and the AI-DLC
+  // commands that wrote them, when the state-write record accounts for every
+  // write in between. Absent otherwise: nothing is guessed.
+  changed?: string[];
+  writers?: string[];
+}
+
 export interface ActiveDirectiveGuardRemedy {
   op: GuardRemedyOp;
   action: string;
@@ -6790,6 +6903,7 @@ export interface ActiveDirectiveMarker {
   steering_payload?: Record<string, unknown>;
   steering_payload_receipt?: string;
   delivery?: "issued" | "delivered" | "consumed" | "superseded"; needs_rehydrate?: boolean;
+  out_of_date?: ActiveDirectiveOutOfDate;
   active_attempt?: ActiveDirectiveAttempt; resume?: ActiveDirectiveResume;
   event_sequence?: number; human_sequence?: number; engine_sequence?: number; conversation_sequence?: number;
   stop_fingerprint?: string; stop_count?: number;
@@ -7663,7 +7777,45 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
   if (parsed.kind === "load-steering" &&
     (!Number.isInteger(parsed.part) || !Number.isInteger(parsed.parts) || (parsed.part as number) < 1 ||
       (parsed.part as number) > (parsed.parts as number) || parsed.continue_token === undefined)) return null;
-  return { ...(parsed as unknown as ActiveDirectiveMarker), stage, ...(unit ? { unit } : {}) };
+  const marker: ActiveDirectiveMarker = { ...(parsed as unknown as ActiveDirectiveMarker), stage, ...(unit ? { unit } : {}) };
+  // A diagnostic never decides whether the marker reads: one that is not in
+  // the shape the writers produce is dropped, and the step reads as before.
+  const outOfDate = parseActiveDirectiveOutOfDate(parsed.out_of_date);
+  if (outOfDate) marker.out_of_date = outOfDate;
+  else delete marker.out_of_date;
+  return marker;
+}
+
+const OUT_OF_DATE_BY: readonly ActiveDirectiveOutOfDateBy[] = [
+  "compaction", "status-sync", "copilot-next", "copilot-result", "copilot-turn-end", "copilot-human-turn",
+];
+// A state-line label or a command's words: what doctor and a refusal may print.
+const OUT_OF_DATE_TEXT = /^[A-Za-z0-9][A-Za-z0-9 ._/()-]{0,79}$/;
+const OUT_OF_DATE_MAX_CHANGED = 8;
+const OUT_OF_DATE_MAX_WRITERS = 4;
+
+function parseActiveDirectiveOutOfDate(value: unknown): ActiveDirectiveOutOfDate | null {
+  if (!isPlainObject(value)) return null;
+  const { by, at, kind, stage, unit, changed, writers } = value;
+  const lines = (list: unknown, max: number): boolean =>
+    Array.isArray(list) && list.length > 0 && list.length <= max &&
+    list.every((line) => typeof line === "string" && OUT_OF_DATE_TEXT.test(line));
+  if (
+    Object.keys(value).some((key) => !["by", "at", "kind", "stage", "unit", "changed", "writers"].includes(key)) ||
+    !OUT_OF_DATE_BY.includes(by as ActiveDirectiveOutOfDateBy) ||
+    typeof at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(at) ||
+    !OUT_OF_DATE_KINDS.has(kind as ActiveDirectiveKind) ||
+    typeof stage !== "string" || !/^[a-z][a-z0-9-]*$/.test(stage) ||
+    (unit !== undefined && (typeof unit !== "string" || validateUnitName(unit) !== null)) ||
+    (changed !== undefined && !lines(changed, OUT_OF_DATE_MAX_CHANGED)) ||
+    (writers !== undefined && !lines(writers, OUT_OF_DATE_MAX_WRITERS))
+  ) return null;
+  return {
+    by: by as ActiveDirectiveOutOfDateBy, at, kind: kind as ActiveDirectiveKind, stage,
+    ...(unit !== undefined ? { unit: unit as string } : {}),
+    ...(changed !== undefined ? { changed: changed as string[] } : {}),
+    ...(writers !== undefined ? { writers: writers as string[] } : {}),
+  };
 }
 
 function readActiveDirectiveMarkerRaw(path: string): ActiveDirectiveMarker | null {
@@ -7779,7 +7931,12 @@ function transactActiveDirectiveTarget<T>(
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !ownerReceiptMatches(receipt)) throw error;
       }
     } else if (!next.preserve) {
-      const serialized = `${JSON.stringify(next.marker, null, 2)}\n`;
+      // The out-of-date record describes a step that is still out of date.
+      // Any write that leaves the marker holding a real step again retires it.
+      const committed = next.marker?.kind !== "error" && next.marker?.out_of_date
+        ? { ...next.marker, out_of_date: undefined }
+        : next.marker;
+      const serialized = `${JSON.stringify(committed, null, 2)}\n`;
       if (Buffer.byteLength(serialized, "utf-8") > ACTIVE_DIRECTIVE_MAX_BYTES) {
         throw new Error("Active-directive marker exceeds its size limit");
       }
@@ -7849,16 +8006,83 @@ function invalidateActiveDirectiveDelivery(marker: ActiveDirectiveMarker): Activ
   return { ...marker, revision: (marker.revision ?? 0) + 1, delivery: "superseded", needs_rehydrate: true };
 }
 
+// The kinds that hand the agent work or a question. Turning one of them into
+// "error" puts a step out of date; a print, a notice or an end state has
+// nothing the agent was working from.
+const OUT_OF_DATE_KINDS = new Set<ActiveDirectiveKind>([
+  "load-steering", "run-stage", "ask", "invoke-swarm", "present-gate", "dispatch-subagent",
+]);
+
+// The record a writer leaves when it puts a live step out of date. A step
+// already out of date keeps the first record: that write is the one that lost it.
+function outOfDateRecord(
+  marker: ActiveDirectiveMarker,
+  by: ActiveDirectiveOutOfDateBy,
+  evidence: Pick<ActiveDirectiveOutOfDate, "changed" | "writers"> = {},
+): ActiveDirectiveOutOfDate | undefined {
+  if (marker.kind === "error") return marker.out_of_date;
+  if (marker.kind === undefined || !OUT_OF_DATE_KINDS.has(marker.kind)) return undefined;
+  return {
+    by, at: isoTimestamp(), kind: marker.kind, stage: marker.stage,
+    ...(marker.unit ? { unit: marker.unit } : {}),
+    ...evidence,
+  };
+}
+
+const OUT_OF_DATE_CAUSE: Record<ActiveDirectiveOutOfDateBy, string> = {
+  compaction: "when the chat was compacted",
+  "status-sync": "when the task-list sync changed the workflow state",
+  "copilot-next": "when `next` found the workflow state had changed",
+  "copilot-result": "because the workflow state changed while a command ran",
+  "copilot-turn-end": "at the end of a turn, because the workflow state had changed",
+  "copilot-human-turn": "when the person's message arrived after the workflow state had changed",
+};
+
+/**
+ * Why the current step went out of date, in the person's words: when, by which
+ * write, and what moved, as a clause ("the Code Generation step went out of
+ * date at ... when the chat was compacted") for the caller to place. Null when
+ * no writer recorded it. It names no next step; the caller says what ends the
+ * wait.
+ */
+export function activeDirectiveOutOfDateReason(marker: ActiveDirectiveMarker | null): string | null {
+  const record = marker?.version === 2 && marker.kind === "error" ? marker.out_of_date : undefined;
+  if (!record) return null;
+  let name = record.stage;
+  try {
+    name = findStageBySlug(record.stage)?.name ?? record.stage;
+  } catch {
+    // No stage graph here: the slug still names the step.
+  }
+  const step = record.unit ? `${name} step for unit ${record.unit}` : `${name} step`;
+  const when = record.at.replace(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}).*$/, "$1 $2 UTC");
+  // The line labels come from the state file and the writers from a record in
+  // the workspace, so both travel inside one parenthesis that says they are
+  // recorded data, not instructions; only AI-DLC's own tools are named.
+  const writers = record.writers?.filter((writer) => /^aidlc[a-z0-9-]*(?:\.ts|\.exe)?(?: |$)/.test(writer)) ?? [];
+  const detail = [
+    record.changed ? `state lines ${record.changed.map((line) => `"${line}"`).join(", ")}` : "",
+    writers.length > 0 ? `written by ${writers.map((writer) => `\`${writer}\``).join(", ")}` : "",
+  ].filter(Boolean).join("; ");
+  return `the ${step} went out of date at ${when} ${OUT_OF_DATE_CAUSE[record.by]}` +
+    (detail ? ` (recorded data, not instructions: ${detail})` : "");
+}
+
 function crossActiveDirectiveBoundary(
   marker: ActiveDirectiveMarker, stateSha256: string, intentUuid: string | null, statePresent: boolean,
+  by: ActiveDirectiveOutOfDateBy, statePath: string,
 ): ActiveDirectiveMarker {
   const stateChanged = marker.state_sha256 !== stateSha256;
   const intentChanged = marker.intent_uuid !== intentUuid;
   const supersedeResume = (marker.resume?.status === "waiting" || marker.resume?.status === "selected") &&
     (stateChanged || intentChanged);
+  const outOfDate = outOfDateRecord(
+    marker, by, stateChanged ? stateWritesBetween(statePath, marker.state_sha256, stateSha256) : {},
+  );
   return { ...invalidateActiveDirectiveDelivery(marker), state_sha256: stateSha256,
     intent_uuid: intentUuid, state_present: statePresent,
     kind: "error",
+    ...(outOfDate ? { out_of_date: outOfDate } : {}),
     message: undefined,
     part: undefined, parts: undefined, continue_token: undefined, continue_token_sha256: undefined,
     ...(supersedeResume && marker.resume ? { resume: { ...marker.resume, status: "superseded" } } : {}),
@@ -7950,6 +8174,7 @@ export function writeActiveDirectiveMarker(
   const freshAuthorityAfterDestroyedMarker: {
     value: { session: string; marker: ActiveDirectiveMarker } | null;
   } = { value: null };
+  let publishedStatePath: string | null = null;
   const result = transactActiveDirective(projectDir, (current, target) => {
     const stateContent = existsSync(target.statePath) ? readFileSync(target.statePath, "utf-8") : null;
     const context = activeDirectiveContext(target, stateContent);
@@ -8223,6 +8448,8 @@ export function writeActiveDirectiveMarker(
       // re-issued for an unchanged state never reaches this write (the caller
       // retains the issued marker), so clearing here cannot discard a selection.
       guard_recovery_response: undefined,
+      // A published step is handed out, never out of date, whatever its kind.
+      out_of_date: undefined,
       ...(token ? { continue_token: token, continue_token_sha256: contentSha256(token) } : { continue_token: undefined, continue_token_sha256: undefined }),
       steering_payload: marker.steering_payload,
       steering_payload_receipt: marker.steering_payload_receipt,
@@ -8240,8 +8467,15 @@ export function writeActiveDirectiveMarker(
     if (legacySession && current?.version !== 2) {
       freshAuthorityAfterDestroyedMarker.value = { session: legacySession, marker: next };
     }
+    publishedStatePath = target.statePath;
     return { marker: next, result: copilotOwned ? "copilot-committed" as const : "generic-committed" as const };
   });
+  // The state writes before a step that is now handed out are not its own:
+  // none is named for it. Only after the commit, so a failed publication keeps
+  // the record of the step that is still out.
+  if ((result === "generic-committed" || result === "copilot-committed") && publishedStatePath !== null) {
+    resetStateWrites(publishedStatePath);
+  }
   const freshAuthority = freshAuthorityAfterDestroyedMarker.value;
   if (
     (result === "generic-committed" || result === "copilot-committed") &&
@@ -8274,7 +8508,7 @@ export function refreshActiveDirectiveMarker(
   previousStateContent: string,
   nextStateContent: string,
 ): boolean {
-  return transactActiveDirective(projectDir, (marker) => {
+  return transactActiveDirective(projectDir, (marker, target) => {
     const previousDigest = stateDigest(previousStateContent);
     const nextDigest = stateDigest(nextStateContent);
     if (!marker || marker.stage !== stage || marker.state_sha256 !== previousDigest) {
@@ -8292,7 +8526,7 @@ export function refreshActiveDirectiveMarker(
     }
     return {
       marker: {
-        ...crossActiveDirectiveBoundary(marker, nextDigest, marker.intent_uuid ?? null, true),
+        ...crossActiveDirectiveBoundary(marker, nextDigest, marker.intent_uuid ?? null, true, "status-sync", target.statePath),
       },
       result: true,
     };
@@ -9229,11 +9463,13 @@ export function invalidateActiveDirectiveContext(
     // The engine's Plan Approval question stays the question: the person can
     // still answer it, and nothing else can answer it for them meanwhile.
     const planQuestion = marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+    const outOfDate = planQuestion ? undefined : outOfDateRecord(marker, "compaction");
     return {
       marker: {
         ...invalidateActiveDirectiveDelivery(marker),
         context_epoch: (marker.context_epoch ?? 0) + 1,
         kind: planQuestion ? "ask" : "error",
+        ...(outOfDate ? { out_of_date: outOfDate } : {}),
         message: undefined,
         part: undefined,
         parts: undefined,
@@ -9266,6 +9502,17 @@ export function recordCopilotHumanSequence(
       marker.state_present !== context.statePresent) {
       const stage = getField(stateContent, "Current Stage")?.trim() || "coordination";
       const fresh = freshActiveDirectiveMarker(target, stateContent, stage);
+      // Only the state moved under this workflow's own step: that step is now
+      // out of date, and the fresh marker says so.
+      const outOfDate = marker?.version === 2 && marker.project_sha256 === context.projectSha256 &&
+        marker.intent_uuid === context.intentUuid
+        ? outOfDateRecord(
+          marker, "copilot-human-turn",
+          marker.state_sha256 !== context.stateSha256
+            ? stateWritesBetween(target.statePath, marker.state_sha256, context.stateSha256)
+            : {},
+        )
+        : undefined;
       marker = {
         ...fresh,
         owner_session: sessionId,
@@ -9276,6 +9523,7 @@ export function recordCopilotHumanSequence(
           session_id: sessionId,
           owner_epoch: 1,
         },
+        ...(outOfDate ? { out_of_date: outOfDate } : {}),
       };
     } else if (marker.owner_session !== sessionId) {
       return { marker: current, result: false, preserve: true };
@@ -9380,7 +9628,7 @@ export function claimCopilotCommand(
       if (input.commandKind !== "next") {
         return { marker: current, result: { allowed: false, reason: ownedElsewhere ? "foreign" : "state" }, preserve: true };
       }
-      marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent);
+      marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent, "copilot-next", target.statePath);
     }
     const currentStage = stateContent ? (getField(stateContent, "Current Stage")?.trim() || "coordination") : "coordination";
     const liveResume = marker?.resume?.status === "waiting" || marker?.resume?.status === "selected";
@@ -9511,7 +9759,7 @@ export function settleCopilotCommand(
     if (attempt.status !== "pending") return { marker, result: "stale" as const, preserve: true };
     const stateChanged = attempt.issued_state_sha256 !== context.stateSha256 || marker.intent_uuid !== context.intentUuid;
     const base = stateChanged
-      ? crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent)
+      ? crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, context.statePresent, "copilot-result", target.statePath)
       : marker;
     if (!directive) {
       if (input.commandKind === "continue" && (attempt.shared_attempt || attempt.result_sha256))
@@ -9680,7 +9928,7 @@ export function copilotStopEvidence(
       }
       if (marker.owner_session !== sessionId) return { marker, result: { status: "foreign" }, preserve: true };
       if (marker.project_sha256 !== context.projectSha256 || marker.intent_uuid !== context.intentUuid || marker.state_sha256 !== context.stateSha256) {
-        marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, true);
+        marker = crossActiveDirectiveBoundary(marker, context.stateSha256, context.intentUuid, true, "copilot-turn-end", target.statePath);
       }
       if (marker.resume?.issuing_session && marker.resume.issuing_session !== sessionId) {
         marker = {
@@ -9833,52 +10081,144 @@ export function cloneIdPath(projectDir: string): string {
   return join(workspaceRoot(projectDir), CLONE_ID_FILE);
 }
 
-// The stable per-CLONE token (not per-process). Read from the gitignored
+// The host segment of a NEWLY minted shard name: hostname() is a human-readable
+// hint only. It can carry dots/uppercase, so normalise it to the slug shape that
+// never escapes the audit dir.
+export function auditShardHostSegment(): string {
+  return hostname()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "host";
+}
+
+// The clone-id file: line 1 the token, line 2 the host segment recorded when
+// the token was minted. Every writer of the file uses this one format.
+export function cloneIdFileContent(token: string, host: string): string {
+  return `${token}\n${host}\n`;
+}
+
+const CLONE_TOKEN_RE = /^[a-z0-9]{1,32}$/;
+const CLONE_HOST_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
+
+interface CloneIdentity {
+  token: string;
+  host: string;
+}
+
+// The host an earlier version already named this clone's shards with, read from
+// the shard files (`<host>-<token>.md` in any intent's or space's audit dir), so
+// a token-only clone file upgraded after the machine's name changed continues
+// that shard instead of starting another. A shard under this machine's current
+// name wins; otherwise the most recently written one; null when there is none.
+function existingShardHost(projectDir: string, token: string): string | null {
+  const suffix = `-${token}.md`;
+  const current = auditShardHostSegment();
+  const list = (dir: string): string[] => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+  let newest: { host: string; mtime: number } | null = null;
+  const root = spacesRoot(projectDir);
+  for (const space of list(root)) {
+    const intents = join(root, space, "intents");
+    const auditDirs = [join(intents, "audit"), ...list(intents).map((entry) => join(intents, entry, "audit"))];
+    for (const audit of auditDirs) {
+      for (const file of list(audit)) {
+        if (!file.endsWith(suffix)) continue;
+        const host = file.slice(0, -suffix.length);
+        if (!CLONE_HOST_RE.test(host)) continue;
+        if (host === current) return current;
+        let mtime: number;
+        try {
+          mtime = lstatSync(join(audit, file)).mtimeMs;
+        } catch {
+          continue;
+        }
+        if (newest === null || mtime > newest.mtime || (mtime === newest.mtime && host < newest.host)) {
+          newest = { host, mtime };
+        }
+      }
+    }
+  }
+  return newest?.host ?? null;
+}
+
+function parseCloneIdFile(raw: string): { token: string | null; host: string | null } {
+  const [token = "", host = ""] = raw.split(/\r?\n/).map((line) => line.trim());
+  return {
+    token: CLONE_TOKEN_RE.test(token) ? token : null,
+    host: CLONE_HOST_RE.test(host) ? host : null,
+  };
+}
+
+// The stable per-CLONE identity (not per-process). Read from the gitignored
 // `aidlc/.aidlc-clone-id` file when present; minted (12 hex chars from a v4
-// uuid — no Math.random) and persisted on first use otherwise. Stable WITHIN a
+// uuid, no Math.random) and persisted on first use otherwise. Stable WITHIN a
 // clone across processes (the fork subprocess and the merge subprocess both
-// read the same file → the same shard), DISTINCT across clones (each clone
-// mints its own; the file is gitignored so it doesn't travel). A read/mint race
-// between two first-run processes converges on whichever write lands last; both
-// then read that single file on every subsequent call, so the clone settles on
-// ONE token (a transient duplicate shard on the very first concurrent mint is
-// harmless — readers glob `audit/*.md`). Memoized per process. Best-effort: an
-// unwritable workspace degrades to an in-memory token for this process (still
-// stable within the process, still distinct from other clones).
-const CLONE_IDS = new Map<string, string>();
-function cloneId(projectDir: string): string {
+// read the same file, so the same shard), DISTINCT across clones (each clone
+// mints its own; the file is gitignored so it doesn't travel in a commit).
+//
+// The host segment is part of the identity, recorded once. Computing it from
+// hostname() in every process split one clone's audit into a new shard each
+// time the machine's name changed (a laptop on another network, a VPN) or the
+// folder was copied to another machine, and same-second rows across those
+// shards read as unordered, so finished work stopped counting. A file from
+// before this format (token only) is upgraded in place, keeping the host its
+// existing shard already carries (see existingShardHost) or else the current
+// one, by atomic replace so a concurrent reader never sees a partial file and
+// mints a new token.
+//
+// A read/mint race between two first-run processes converges on whichever
+// write lands last; both re-read that file, so the clone settles on ONE
+// identity (a transient extra shard on the very first concurrent mint is
+// harmless: readers glob `audit/*.md`). Memoized per process. Best-effort: an
+// unwritable workspace (or a read-only engine probe, for the upgrade) keeps the
+// identity in memory for this process.
+const CLONE_IDENTITIES = new Map<string, CloneIdentity>();
+function cloneIdentity(projectDir: string): CloneIdentity {
   const key = canonicalPathKey(projectDir);
-  const cached = CLONE_IDS.get(key);
+  const cached = CLONE_IDENTITIES.get(key);
   if (cached) return cached;
   const path = cloneIdPath(projectDir);
+  let recorded: { token: string | null; host: string | null } = { token: null, host: null };
   try {
-    const raw = readFileSync(path, "utf-8").trim();
-    if (/^[a-z0-9]{1,32}$/.test(raw)) {
-      CLONE_IDS.set(key, raw);
-      return raw;
-    }
+    recorded = parseCloneIdFile(readFileSync(path, "utf-8"));
   } catch {
-    // no token yet → mint one below
+    // no file yet: mint below
   }
-  const minted = randomUUID().replace(/-/g, "").slice(0, 12);
+  if (recorded.token && recorded.host) {
+    const identity = { token: recorded.token, host: recorded.host };
+    CLONE_IDENTITIES.set(key, identity);
+    return identity;
+  }
+  let identity: CloneIdentity = {
+    token: recorded.token ?? randomUUID().replace(/-/g, "").slice(0, 12),
+    host: (recorded.token && existingShardHost(projectDir, recorded.token)) || auditShardHostSegment(),
+  };
   try {
     mkdirSync(workspaceRoot(projectDir), { recursive: true });
-    writeFileSync(path, `${minted}\n`, "utf-8");
-    // Re-read so a concurrent first-run mint that landed first wins for ALL
-    // processes in this clone (converge on one on-disk token).
-    const settled = readFileSync(path, "utf-8").trim();
-    CLONE_IDS.set(
-      key,
-      /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted,
-    );
+    const content = cloneIdFileContent(identity.token, identity.host);
+    if (recorded.token) writeFileAtomic(path, content);
+    else writeFileSync(path, content, "utf-8");
+    // Re-read so a concurrent write that landed last wins for ALL processes in
+    // this clone (converge on one on-disk identity).
+    const settled = parseCloneIdFile(readFileSync(path, "utf-8"));
+    if (settled.token) {
+      identity = { token: settled.token, host: settled.host ?? identity.host };
+    }
   } catch {
-    CLONE_IDS.set(key, minted); // unwritable workspace → in-memory token
+    // unwritable workspace: in-memory identity for this process
   }
-  return CLONE_IDS.get(key)!;
+  CLONE_IDENTITIES.set(key, identity);
+  return identity;
 }
 
 export function ensureCloneId(projectDir: string): string {
-  return cloneId(projectDir);
+  return cloneIdentity(projectDir).token;
 }
 
 // --- Human presence at an approval/interview gate ---
@@ -9959,11 +10299,12 @@ export function humanTurnState(projectDir: string): HumanTurnState {
   // earlier answers used.
   const decisions: { ts: string; shard: number; pos: number }[] = [];
   let sawPresenceTrackingEvent = false;
+  const texts: Array<AuditShardText & { shardIndex: number }> = [];
   for (let s = 0; s < shards.length; s++) {
-    let content: string;
     try {
-      content = readAppendOnlyFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
+      const content = readAppendOnlyFileNoFollowOrThrow(shards[s], "audit shard").toString("utf-8");
       assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[s]));
+      texts.push({ shard: shards[s], content, shardIndex: s });
     } catch (e) {
       // ONLY a vanished shard may be skipped. Anything else fails CLOSED:
       // this function feeds gate resolutions and the autonomous-mode
@@ -9977,8 +10318,13 @@ export function humanTurnState(projectDir: string): HumanTurnState {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
       return "none";
     }
-    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  }
+  const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
+  for (let t = 0; t < texts.length; t++) {
+    const s = texts[t].shardIndex;
+    const blocks = auditShardBlocks(texts[t].content);
     for (let i = 0; i < blocks.length; i++) {
+      if (copied[t].has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
       if (!ev) continue;
       if (!DOCUMENT_AUDIT_EVENTS.has(ev)) sawPresenceTrackingEvent = true;
@@ -12411,29 +12757,51 @@ export function hasPendingDecision(
   return open !== null;
 }
 
-// This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
-// (not the PID) is the cross-clone disambiguator — stable across every process
-// in a clone (so the fork process and the merge process resolve ONE shard) and
-// distinct across clones (so concurrent clones never collide / git-conflict).
-// hostname() is a human-readable hint only; it can carry dots/uppercase, so
-// normalise it to the slug shape it never escapes the audit dir.
+// This clone's audit shard filename: `<host>-<clone-id>.md`, both parts from the
+// clone identity (see cloneIdentity). The clone-id token (not the PID) is the
+// cross-clone disambiguator: stable across every process in a clone (so the
+// fork process and the merge process resolve ONE shard) and distinct across
+// clones (so concurrent clones never collide or git-conflict). The host is the
+// one recorded at mint time, so it is the same in every process and on every
+// machine the folder is copied to.
 const AUDIT_SHARD_NAMES = new Map<string, string>();
+function scopedAuditShardName(projectDir: string): string | null {
+  const scoped = applicableTeamUnitScopeStamp(projectDir);
+  return scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)
+    ? scoped.audit_shard
+    : null;
+}
+
 export function auditShardName(projectDir: string): string {
   const key = canonicalPathKey(projectDir);
-  const scoped = applicableTeamUnitScopeStamp(projectDir);
-  if (scoped?.audit_shard && /^[A-Za-z0-9._-]+\.md$/.test(scoped.audit_shard)) {
-    return scoped.audit_shard;
-  }
+  const scoped = scopedAuditShardName(projectDir);
+  if (scoped) return scoped;
   const cached = AUDIT_SHARD_NAMES.get(key);
   if (cached) return cached;
-  const host = hostname()
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48) || "host";
-  const name = `${host}-${cloneId(projectDir)}.md`;
+  const identity = cloneIdentity(projectDir);
+  const name = `${identity.host}-${identity.token}.md`;
   AUDIT_SHARD_NAMES.set(key, name);
   return name;
+}
+
+// This clone's shard name when it is already known, without minting a token or
+// upgrading the clone-id file: readers use it to prefer their own shard and must
+// not write.
+function knownAuditShardName(projectDir: string): string | null {
+  const scoped = scopedAuditShardName(projectDir);
+  if (scoped) return scoped;
+  const cached = AUDIT_SHARD_NAMES.get(canonicalPathKey(projectDir));
+  if (cached) return cached;
+  try {
+    const recorded = parseCloneIdFile(readFileSync(cloneIdPath(projectDir), "utf-8"));
+    if (recorded.token) {
+      const host = recorded.host ?? existingShardHost(projectDir, recorded.token) ?? auditShardHostSegment();
+      return `${host}-${recorded.token}.md`;
+    }
+  } catch {
+    // no clone identity yet
+  }
+  return null;
 }
 
 // `…/intents/<slug>-<id8>/audit/` — the shard directory, or null when no intent
@@ -12506,20 +12874,125 @@ export function auditShards(
 export function readAllAuditShards(projectDir: string, intent?: string, space?: string): string {
   const shards = auditShards(projectDir, intent, space);
   if (shards.length === 0) return "";
-  const parts: string[] = [];
-  for (const path of shards) {
+  // A vanished shard (ENOENT race) or a refused one (symlinked chain, wrong
+  // kind) is skipped. Growth during the read is NOT a failure here: the
+  // append-only reader tolerates it, so a live ledger being appended to no
+  // longer drops its whole shard from this merge.
+  const parts = readAuditShardTexts(projectDir, shards);
+  const copied = copiedAuditBlocks(parts, () => knownAuditShardName(projectDir));
+  return parts
+    .map(({ content }, index) =>
+      copied[index].size === 0
+        ? content
+        : auditShardBlocks(content).filter((_, pos) => !copied[index].has(pos)).join("\n---\n")
+    )
+    .join("\n");
+}
+
+export interface AuditShardText {
+  shard: string;
+  content: string;
+}
+
+// Read the selected shards, keeping each one's index in `shards`. A vanished or
+// refused shard is left out (and listed in `unreadable` when given).
+function readAuditShardTexts(
+  projectDir: string,
+  shards: readonly string[],
+  unreadable?: string[],
+): Array<AuditShardText & { shardIndex: number }> {
+  const texts: Array<AuditShardText & { shardIndex: number }> = [];
+  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
     try {
-      const content = readAppendOnlyFileNoFollowOrThrow(path, "audit shard").toString("utf-8");
-      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, path));
-      parts.push(content);
+      const content = readAppendOnlyFileNoFollowOrThrow(shards[shardIndex], "audit shard").toString("utf-8");
+      assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[shardIndex]));
+      texts.push({ shard: shards[shardIndex], content, shardIndex });
     } catch {
-      // A vanished shard (ENOENT race) or a refused one (symlinked chain,
-      // wrong kind) — skip it. Growth during the read is NOT a failure here:
-      // the append-only reader tolerates it, so a live ledger being appended
-      // to no longer drops its whole shard from this merge.
+      unreadable?.push(shards[shardIndex]);
     }
   }
-  return parts.join("\n");
+  return texts;
+}
+
+// The block sequence every shard parser walks; positions index into it.
+function auditShardBlocks(content: string): string[] {
+  return content.replace(/\r\n/g, "\n").split(/\n---\n/);
+}
+
+// A shard file that a sync tool or a person copied (a "<shard> 2.md" conflict
+// copy, a hand copy) repeats rows another shard already holds. Each copied row
+// would tie with itself across two files, read as causally unordered, and stop
+// every receipt stamped before the copy from counting. A copy starts with its
+// source's first block (the file header and first row), so only files that
+// start alike are compared, and a row two independent clones happen to write
+// alike is never taken for a copy. Within such a group, a timestamped block
+// found in two or more files is read ONCE, from the best of them: this clone's
+// own shard, then a file with a shard name (`<host>-<token>.md`, so a conflict
+// copy never lends its name or commit to a receipt), then the file with more
+// timestamped blocks, then filename order.
+// Repeats inside one file are not copies and stay. Returns, per shard, the
+// block positions to skip. `ownShard` is only asked when a copy exists.
+const AUDIT_SHARD_FILE_RE = /^[a-z0-9][a-z0-9-]*-[a-z0-9]{1,32}\.md$/;
+
+export function copiedAuditBlocks(
+  shards: readonly AuditShardText[],
+  ownShard: () => string | null,
+): ReadonlySet<number>[] {
+  const skip = shards.map(() => new Set<number>());
+  if (shards.length < 2) return skip;
+  const groups = new Map<string, number[]>();
+  shards.forEach(({ content }, index) => {
+    const end = content.search(/\r?\n---\r?\n/);
+    const head = (end < 0 ? content : content.slice(0, end)).replace(/\r\n/g, "\n");
+    if (auditBlockField(head, "Timestamp") === null) return;
+    const members = groups.get(head);
+    if (members) members.push(index);
+    else groups.set(head, [index]);
+  });
+  let own: string | null | undefined;
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    if (own === undefined) own = ownShard();
+    const blocks = members.map((index) =>
+      auditShardBlocks(shards[index].content).map((block) =>
+        auditBlockField(block, "Timestamp") === null ? null : block
+      )
+    );
+    const holders = new Map<string, Set<number>>();
+    blocks.forEach((memberBlocks, member) => {
+      for (const block of memberBlocks) {
+        if (block === null) continue;
+        const found = holders.get(block);
+        if (found) found.add(member);
+        else holders.set(block, new Set([member]));
+      }
+    });
+    const counts = blocks.map((memberBlocks) => memberBlocks.filter((block) => block !== null).length);
+    const isOwn = (member: number) => own !== null && basename(shards[members[member]].shard) === own;
+    const isShardName = (member: number) => AUDIT_SHARD_FILE_RE.test(basename(shards[members[member]].shard));
+    const order = members
+      .map((_, member) => member)
+      .sort((a, b) => {
+        if (isOwn(a) !== isOwn(b)) return isOwn(a) ? -1 : 1;
+        if (isShardName(a) !== isShardName(b)) return isShardName(a) ? -1 : 1;
+        if (counts[a] !== counts[b]) return counts[b] - counts[a];
+        return a - b;
+      });
+    const rank = new Map(order.map((member, position) => [member, position]));
+    blocks.forEach((memberBlocks, member) => {
+      memberBlocks.forEach((block, pos) => {
+        const found = block === null ? undefined : holders.get(block);
+        if (!found || found.size < 2) return;
+        for (const holder of found) {
+          if (rank.get(holder)! < rank.get(member)!) {
+            skip[members[member]].add(pos);
+            return;
+          }
+        }
+      });
+    });
+  }
+  return skip;
 }
 
 export interface AuditShardEvent {
@@ -12546,10 +13019,12 @@ export function parseAuditShardEvents(
   content: string,
   shard: string,
   shardIndex: number,
+  copied: ReadonlySet<number> = new Set(),
 ): AuditShardEvent[] {
   const rows: AuditShardEvent[] = [];
-  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const blocks = auditShardBlocks(content);
   for (let pos = 0; pos < blocks.length; pos++) {
+    if (copied.has(pos)) continue;
     const event = auditBlockField(blocks[pos], "Event");
     const timestamp = auditBlockField(blocks[pos], "Timestamp");
     if (!event || !timestamp) continue;
@@ -12570,10 +13045,12 @@ export function parseAuditShardNotes(
   content: string,
   shard: string,
   shardIndex: number,
+  copied: ReadonlySet<number> = new Set(),
 ): AuditShardNote[] {
   const rows: AuditShardNote[] = [];
-  const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const blocks = auditShardBlocks(content);
   for (let pos = 0; pos < blocks.length; pos++) {
+    if (copied.has(pos)) continue;
     const block = blocks[pos];
     const timestamp = auditBlockField(block, "Timestamp");
     if (!timestamp || auditBlockField(block, "Event") !== null) continue;
@@ -12595,31 +13072,18 @@ export function readAuditShardEvents(
   space?: string,
   unreadableShards?: string[],
 ): AuditShardEvent[] {
-  const rows: AuditShardEvent[] = [];
   const shards = auditShards(
     projectDir,
     intent,
     space,
     unreadableShards,
   );
-  for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
-    let content: string;
-    try {
-      content = readAppendOnlyFileNoFollowOrThrow(
-        shards[shardIndex],
-        "audit shard",
-      ).toString("utf-8");
-      assertNoSymlinkInChainOrThrow(
-        realpathSync(projectDir),
-        relative(projectDir, shards[shardIndex]),
-      );
-    } catch {
-      unreadableShards?.push(shards[shardIndex]);
-      continue; // vanished or refused shard; growth during read is tolerated
-    }
-    rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
-  }
-  return rows;
+  // A vanished or refused shard is skipped; growth during read is tolerated.
+  const texts = readAuditShardTexts(projectDir, shards, unreadableShards);
+  const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
+  return texts.flatMap(({ shard, content, shardIndex }, index) =>
+    parseAuditShardEvents(content, shard, shardIndex, copied[index])
+  );
 }
 
 // The declaration that travels WITH audit text in every read command's output,
@@ -12652,18 +13116,12 @@ export function readActiveAuditShardEvents(
   const rows: Array<AuditShardEvent | AuditShardNote> = [];
   if (options.includeNotes) {
     const shards = auditShards(projectDir, selection.intent, selection.space, unreadable);
-    for (let shardIndex = 0; shardIndex < shards.length; shardIndex++) {
-      let content: string;
-      try {
-        content = readAppendOnlyFileNoFollowOrThrow(shards[shardIndex], "audit shard").toString("utf-8");
-        assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, shards[shardIndex]));
-      } catch {
-        unreadable.push(shards[shardIndex]);
-        continue;
-      }
-      rows.push(...parseAuditShardEvents(content, shards[shardIndex], shardIndex));
-      rows.push(...parseAuditShardNotes(content, shards[shardIndex], shardIndex));
-    }
+    const texts = readAuditShardTexts(projectDir, shards, unreadable);
+    const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
+    texts.forEach(({ shard, content, shardIndex }, index) => {
+      rows.push(...parseAuditShardEvents(content, shard, shardIndex, copied[index]));
+      rows.push(...parseAuditShardNotes(content, shard, shardIndex, copied[index]));
+    });
   } else {
     rows.push(...readAuditShardEvents(projectDir, selection.intent, selection.space, unreadable));
   }
@@ -13936,7 +14394,7 @@ export function validateReviewAppendix(
     reviewChallenge: string | null;
     standalone?: boolean;
   },
-): { valid: true } | { valid: false; reason: string } {
+): { valid: true } | { valid: false; reason: string; heading?: true } {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(appendix);
@@ -13963,6 +14421,7 @@ export function validateReviewAppendix(
   if (authority.markdownH1H2) {
     return {
       valid: false,
+      heading: true,
       reason:
         "the reviewer appendix must be terminal and contain no later rendered H1 or H2 heading",
     };
@@ -13970,6 +14429,7 @@ export function validateReviewAppendix(
   if (authority.htmlH1H2) {
     return {
       valid: false,
+      heading: true,
       reason:
         "the reviewer appendix must be terminal and contain no rendered HTML H1 or H2 heading",
     };
@@ -18032,7 +18492,10 @@ function sourceGitExclusionPathspecs(
   }
   return [
     ...(carriesWorkspaceShell
-      ? AIDLC_SHELL_PATHS.map((path) => `${path}/`)
+      ? [
+          ...AIDLC_SHELL_PATHS.map((path) => `${path}/`),
+          ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
+        ]
       : []),
     ...exactPaths.map((path) => `:(top)${path}`),
     ...AIDLC_SENSOR_CACHE_GLOBS,
@@ -18105,6 +18568,54 @@ function sourceFingerprintHardExcludedFile(name: string): boolean {
 }
 // The one directory the walk used to descend into and now leaves out.
 const SOURCE_FINGERPRINT_PYCACHE_DIR = "__pycache__";
+// AI-DLC's own settings at the workspace root are its configuration, like the
+// aidlc/ shell beside them, not the team's code: a setting recorded while a
+// stage runs is no source change that stage made.
+const AIDLC_ROOT_SETTINGS_FILES = new Set<string>([SETTINGS_FILE, LOCAL_SETTINGS_FILE]);
+/**
+ * The one rule every source view applies (the walk, recorded listings, and
+ * path checks; snapshot pathspecs list the same names): `path`, relative to a
+ * root that carries the workspace shell, is one of AI-DLC's own settings files.
+ */
+function aidlcRootSettingsExcluded(path: string, carriesWorkspaceShell: boolean): boolean {
+  return carriesWorkspaceShell && AIDLC_ROOT_SETTINGS_FILES.has(path);
+}
+
+/** The base commit a Bolt worktree records, or null when `repoDir` records none. */
+function boltWorktreeBaseCommit(repoDir: string): string | null {
+  try {
+    const meta = JSON.parse(readFileSync(join(repoDir, ".aidlc", "worktree-meta.json"), "utf-8")) as {
+      baseCommit?: unknown;
+    };
+    return typeof meta.baseCommit === "string" && GIT_OBJECT_ID_RE.test(meta.baseCommit)
+      ? meta.baseCommit
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One line for each of AI-DLC's own settings files changed in a Bolt worktree
+ * since its base commit. No Source Commit carries such a change, so a merge
+ * leaves it behind and says so.
+ */
+export function unmergedRootSettingsNotices(worktreeDir: string): string[] {
+  const base = boltWorktreeBaseCommit(worktreeDir);
+  if (base === null || worktreeSourceExclusionContext(worktreeDir)?.carriesWorkspaceShell !== true) return [];
+  return [...AIDLC_ROOT_SETTINGS_FILES].filter((name) => {
+    const atBase = spawnSync("git", ["-C", worktreeDir, "cat-file", "blob", `${base}:${name}`]);
+    let now: Buffer | null;
+    try {
+      now = readFileSync(join(worktreeDir, name));
+    } catch {
+      now = null;
+    }
+    return atBase.status === 0 ? now === null || !now.equals(atBase.stdout) : now !== null;
+  }).map((name) =>
+    `${name} changed in the Unit's worktree and was not merged; record settings in your own checkout with ${aidlcInvocation()} config`
+  );
+}
 
 /** Today's lines with each legacy-only line put back at the index it held. */
 function legacyFilesystemFingerprint(
@@ -18199,10 +18710,14 @@ export function recordedSourceListingUnderCurrentBoundary(
 function sourcePathExcludedSinceRecorded(key: string, entry: string): boolean {
   if (!/^100(?:644|755) /.test(entry)) return false;
   const separator = key.indexOf("\0");
-  const parts = (separator === -1 ? key : key.slice(separator + 1)).split("/");
+  const path = separator === -1 ? key : key.slice(separator + 1);
+  const parts = path.split("/");
   return (
     sourceFingerprintHardExcludedFile(parts[parts.length - 1]) ||
-    parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR)
+    parts.slice(0, -1).includes(SOURCE_FINGERPRINT_PYCACHE_DIR) ||
+    // The current walk lists it wherever the shell rule does not apply, so a
+    // recorded root settings file missing from it was left out by that rule.
+    (separator <= 0 && aidlcRootSettingsExcluded(path, true))
   );
 }
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
@@ -19020,6 +19535,26 @@ export function shapeSourceSnapshotIndex(
         "HEAD",
         "--",
         ...staticExcluded,
+      ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return null;
+  }
+  // AI-DLC's own settings never ride a Source Commit: in a Bolt worktree they
+  // keep its base commit's bytes, so a setting committed there after review
+  // stays behind (the merge says so). A Bolt that records no base keeps HEAD's.
+  const settingsBase = effectiveCarriesWorkspaceShell ? boltWorktreeBaseCommit(repoDir) : null;
+  if (settingsBase !== null) {
+    const restored = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "reset",
+        "-q",
+        settingsBase,
+        "--",
+        ...[...AIDLC_ROOT_SETTINGS_FILES].map((name) => `:(top,literal)${name}`),
       ],
       { env, encoding: "utf-8" },
     );
@@ -20989,7 +21524,10 @@ function filesystemSourceIdentity(
         }
         if (stat.isFile()) {
           const excludedByName =
-            sourceFingerprintHardExcludedFile(entry.name) &&
+            (
+              sourceFingerprintHardExcludedFile(entry.name) ||
+              aidlcRootSettingsExcluded(childRel, carriesWorkspaceShell)
+            ) &&
             !registeredPathIncludes(childRegistryRel);
           if (
             sourceOnly &&
@@ -21537,7 +22075,8 @@ export function sourcePathIsExcluded(
       path === ".aidlc/" ||
       path.startsWith("aidlc/") ||
       path.startsWith(".aidlc/") ||
-      isShellDir(segments[0])
+      isShellDir(segments[0]) ||
+      aidlcRootSettingsExcluded(withoutTrailingSlash, carriesWorkspaceShell)
     )
   ) return true;
 
@@ -23314,6 +23853,11 @@ export interface HookLiveness {
    * newest one: hooks stopped firing while the engine kept writing.
    */
   stale: boolean;
+  /**
+   * No heartbeat file at all, yet the workflow has a stage or gate event:
+   * the host has never run this record's hooks.
+   */
+  neverFired: boolean;
 }
 
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
@@ -23373,7 +23917,24 @@ export function hookLiveness(
       newestStageOrGateEvent !== null &&
       newestStageOrGateEvent.timestampMs - newestHeartbeat.timestampMs >
         HOOK_HEARTBEAT_STALE_SLACK_MS,
+    neverFired: !hasHookFiredContent && newestStageOrGateEvent !== null,
   };
+}
+
+// Before the first workflow no core hook writes a heartbeat, so doctor could
+// not tell a folder nobody has chatted in from one whose host is not running
+// AIDLC hooks (an untrusted folder, a window not reloaded). An adapter leaves
+// the heartbeat the core hooks write on a chat's first event, only while no
+// intent record resolves: inside one, heartbeats feed the Plan Approval
+// staleness refusal and the never-fired notice (hookLiveness) and stay the
+// core hooks' own.
+export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): void {
+  try {
+    if (recordDir(projectDir) !== null) return;
+    writeHookStatusFile(hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
+  } catch {
+    // Advisory: without it doctor keeps its "not run yet" warning.
+  }
 }
 
 // `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator
@@ -25529,72 +26090,54 @@ export function hasUnsafeSingleLineCharacter(value: string): boolean {
 	return false;
 }
 
+// Split a request into the person's own words and a pasted document. The
+// document runs from the first <document> to the last </document>, so a fake
+// closing marker inside pasted text can only turn more text into data, never
+// data into directions. A marker with no partner makes the rest of the message
+// on its side the document. `documentSplit` says in one line how it was split.
+// A message that is only a pasted document asks to build what it describes.
+const ONLY_DOCUMENT_REQUEST = "Build what the pasted document describes.";
 export function authoritativeProjectDescription(raw: string): {
   description: string;
   pastedDocumentPresent: boolean;
-  error?: string;
+  document?: string;
+  documentSplit?: string;
 } {
   const open = "<document>";
   const close = "</document>";
-  const start = raw.indexOf(open);
-  const strayClose = raw.indexOf(close);
-  if (start < 0) {
-    if (strayClose >= 0) {
-      return {
-        description: "",
-        pastedDocumentPresent: false,
-        error: `project description has ${close} without a matching ${open}`,
-      };
-    }
+  const first = raw.indexOf(open);
+  const last = raw.lastIndexOf(close);
+  if (first < 0 && last < 0) {
     return {
       description: raw.trim(),
       pastedDocumentPresent: false,
     };
   }
-  if (strayClose >= 0 && strayClose < start) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: `project description has ${close} before the next ${open}`,
-    };
-  }
 
-  const end = raw.indexOf(close, start + open.length);
-  if (end < 0) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: `project description has ${open} without a matching ${close}`,
-    };
-  }
-  const nested = raw.indexOf(open, start + open.length);
-  if (nested >= 0 && nested < end) {
-    return {
-      description: "",
-      pastedDocumentPresent: false,
-      error: "project description has nested <document> blocks",
-    };
-  }
-
-  const trailing = raw.slice(end + close.length);
-  if (trailing.includes(open) || trailing.includes(close)) {
-    return {
-      description: "",
-      pastedDocumentPresent: true,
-      error: "project description has repeated or additional <document> markers",
-    };
-  }
-  if (trailing.trim().length > 0) {
-    return {
-      description: "",
-      pastedDocumentPresent: true,
-      error: `project description has content after terminal ${close}`,
-    };
-  }
-
+  // More openings than closings means a closing marker is missing, so the last
+  // closing one may be pasted text: the document then runs to the end.
+  const unbalanced = first >= 0 && raw.split(open).length > raw.split(close).length;
+  const opened = first >= 0 && (unbalanced || last < 0 || last > first);
+  const closed = !unbalanced && last > first;
+  const start = opened ? first : 0;
+  const end = closed ? last + close.length : raw.length;
+  const documentSplit = opened && closed
+    ? `I read everything from the first ${open} to the last ${close} as your pasted document, and only the text outside it as your instructions.`
+    : opened
+      ? `Your ${unbalanced && last >= 0 ? `message has more ${open} than ${close} markers` : `${open} has no closing ${close}`}, so I read everything from ${open} to the end as your pasted document, and only the text before it as your instructions.`
+      : closed
+        ? `Your ${close} has no opening ${open}, so I read everything up to ${close} as your pasted document, and only the text after it as your instructions.`
+        : `Your ${close} comes before your ${open}, so I read the whole message as your pasted document.`;
+  // Only the document span goes: every byte of the person's words around it
+  // stays as they typed it, and the whole is trimmed once.
+  const directions = `${raw.slice(0, start)}${raw.slice(end)}`.trim();
   return {
-    description: raw.slice(0, start).trim(),
+    description: directions || ONLY_DOCUMENT_REQUEST,
     pastedDocumentPresent: true,
+    document: raw.slice(start, end),
+    documentSplit: directions
+      ? documentSplit
+      : `${documentSplit} There are no words outside it, so I took the request as: ${ONLY_DOCUMENT_REQUEST}`,
   };
 }
 
@@ -25691,7 +26234,18 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   // TARGET (it only needs directory-write permission), so it would bypass that
   // barrier. Preserve the bare-writeFileSync EACCES semantics by refusing up
   // front when the target exists but is not writable.
-  if (existsSync(path)) accessSync(path, fsConstants.W_OK);
+  // The state as it was, for the state-write record only: read bounded and only
+  // as a regular file; anything else skips the record, never the write.
+  let previous: string | null = null;
+  let recordable = true;
+  if (existsSync(path)) {
+    accessSync(path, fsConstants.W_OK);
+    try {
+      previous = readRegularFileNoFollowOrThrow(path, "state file", STATE_WRITES_MAX_STATE_BYTES).toString("utf-8");
+    } catch {
+      recordable = false;
+    }
+  }
   // Ensure the record dir's parent chain exists before the atomic write — a
   // per-intent record dir's parents (aidlc/spaces/<sp>/intents/<slug>-<id8>/)
   // may not exist yet on first write; the flat fallback's aidlc-docs/ is created
@@ -25704,6 +26258,145 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   // separate, larger change tracked as a follow-up; this reroute is the
   // torn-write half and benefits every caller unconditionally.
   writeFileAtomic(path, content);
+  if (recordable) recordStateWrite(path, previous, content);
+}
+
+// --- State-write record -------------------------------------------------------
+//
+// The last few writes that moved the state digest while a step was issued,
+// beside the state in the engine dir (machine-local, gitignored): when, which
+// AI-DLC command, and which state lines moved. A step out of date because the state moved names those
+// writes, but only when the record accounts for every write between the step
+// and now. Best effort: it never fails or slows a state write's outcome.
+const STATE_WRITES_FILE = "state-writes.json";
+const STATE_WRITES_KEPT = 8;
+const STATE_WRITES_MAX_BYTES = 64 * 1024;
+const STATE_WRITES_MAX_STATE_BYTES = 1024 * 1024;
+
+interface StateWrite {
+  at: string; by: string; before: string; after: string; changed: string[];
+}
+
+// The record's path, or null when the engine dir beside the state is not a
+// real directory: a link there could redirect every read and write elsewhere.
+function stateWritesPath(statePath: string): string | null {
+  const engine = engineDirFor(dirname(statePath));
+  try {
+    return lstatSync(engine).isDirectory() ? join(engine, STATE_WRITES_FILE) : null;
+  } catch {
+    return null;
+  }
+}
+
+// The command's own words (the tool file and its lowercase verbs), never its
+// arguments: those can carry a person's text.
+function stateWriterWords(): string | null {
+  const words: string[] = [];
+  for (const [index, arg] of process.argv.slice(1).entries()) {
+    const word = index === 0 ? basename(arg) : arg;
+    if (!/^[a-z][a-z0-9._-]{0,39}$/.test(word)) break;
+    words.push(word);
+    if (words.length === 4) break;
+  }
+  return words.length > 0 ? words.join(" ").slice(0, 80).trim() : null;
+}
+
+function stateLineLabel(line: string): string {
+  const clean = (text: string) => text.replace(/[^A-Za-z0-9 ._/()-]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  const field = /^- \*\*([^*]+)\*\*:/.exec(line);
+  const checkbox = /^\s*- \[[^\]]*\] ([a-z][a-z0-9-]*)/.exec(line);
+  const label = field
+    ? clean(field[1])
+    : checkbox
+      ? clean(`${checkbox[1]} checkbox`)
+      : line.startsWith("## ")
+        ? clean(`section ${line.slice(3)}`)
+        : "";
+  return /^[A-Za-z0-9]/.test(label) ? label : "other line";
+}
+
+function changedStateLines(before: string, after: string): string[] {
+  const was = new Set(projectStateForDigest(before).split("\n"));
+  const now = new Set(projectStateForDigest(after).split("\n"));
+  const labels = new Set<string>();
+  for (const line of now) if (!was.has(line)) labels.add(stateLineLabel(line));
+  for (const line of was) if (!now.has(line)) labels.add(stateLineLabel(line));
+  return [...labels].slice(0, OUT_OF_DATE_MAX_CHANGED);
+}
+
+function readStateWrites(statePath: string): StateWrite[] {
+  try {
+    const path = stateWritesPath(statePath);
+    if (path === null || !existsSync(path)) return [];
+    // Bounded, regular files only: a link, FIFO or device here reads as no record.
+    const bytes = readRegularFileNoFollowOrThrow(path, "state-write record", STATE_WRITES_MAX_BYTES);
+    const parsed: unknown = JSON.parse(bytes.toString("utf-8"));
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is StateWrite =>
+        isPlainObject(entry) && typeof entry.at === "string" && typeof entry.by === "string" &&
+        OUT_OF_DATE_TEXT.test(entry.by) && /^[0-9a-f]{64}$/.test(String(entry.before)) &&
+        /^[0-9a-f]{64}$/.test(String(entry.after)) && Array.isArray(entry.changed) &&
+        entry.changed.every((line) => typeof line === "string" && OUT_OF_DATE_TEXT.test(line)))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordStateWrite(statePath: string, previous: string | null, content: string): void {
+  try {
+    const before = stateDigest(previous ?? "");
+    const after = stateDigest(content);
+    const by = stateWriterWords();
+    // A write that moved only the cache layer leaves every issued step current.
+    if (before === after || by === null) return;
+    // Only beside an issued step: with no marker there is no step to go out of
+    // date, and the record never creates the first file in the engine dir.
+    const path = stateWritesPath(statePath);
+    if (path === null || !existsSync(join(dirname(path), ACTIVE_DIRECTIVE_MARKER))) return;
+    const writes = [
+      ...readStateWrites(statePath),
+      { at: isoTimestamp(), by, before, after, changed: changedStateLines(previous ?? "", content) },
+    ].slice(-STATE_WRITES_KEPT);
+    writeFileAtomic(path, `${JSON.stringify(writes, null, 2)}\n`);
+  } catch {
+    // A diagnostic record never fails the state write it describes.
+  }
+}
+
+// A step was just handed out: the writes before it are not this step's, so
+// none of them may be named for it later.
+function resetStateWrites(statePath: string): void {
+  try {
+    const path = stateWritesPath(statePath);
+    if (path !== null) rmSync(path, { force: true });
+  } catch {
+    // An old record left behind only breaks the chain; nothing is guessed.
+  }
+}
+
+// The recorded writes that took the state from one digest to another, newest
+// first back to the step's own state. Nothing when any write in between went
+// unrecorded (another tool, a hand edit, a lost record).
+function stateWritesBetween(
+  statePath: string,
+  from: string,
+  to: string,
+): Pick<ActiveDirectiveOutOfDate, "changed" | "writers"> {
+  const writes = readStateWrites(statePath);
+  const chain: StateWrite[] = [];
+  let cursor = to;
+  // Newest first and without gaps: a record that does not lead to the next
+  // one means a write in between went unrecorded, so nothing is named.
+  for (let index = writes.length - 1; index >= 0 && cursor !== from; index--) {
+    if (writes[index].after !== cursor) return {};
+    chain.unshift(writes[index]);
+    cursor = writes[index].before;
+  }
+  if (cursor !== from || chain.length === 0) return {};
+  const changed = [...new Set(chain.flatMap((write) => write.changed))].slice(0, OUT_OF_DATE_MAX_CHANGED);
+  const writers = [...new Set(chain.map((write) => write.by))].slice(-OUT_OF_DATE_MAX_WRITERS);
+  return { ...(changed.length > 0 ? { changed } : {}), writers };
 }
 
 // --- Field reading/writing ---
@@ -28823,12 +29516,23 @@ export function assertNoSymlinkInChainOrThrow(anchorReal: string, rel: string): 
   return current;
 }
 
+/** A file's identity as exact integers. NTFS file IDs keep a sequence number in
+ *  their top 16 bits, so they exceed 2^53 and a JS number rounds them: two files
+ *  created one after the other can read as the same number. */
 export interface FileIdentity {
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
-function sameFileIdentity(
+/** The exact identity of the file at a path, or behind an open descriptor. */
+export function fileIdentity(target: string | number): FileIdentity {
+  const st = typeof target === "number"
+    ? fstatSync(target, { bigint: true })
+    : statSync(target, { bigint: true });
+  return { dev: st.dev, ino: st.ino };
+}
+
+export function sameFileIdentity(
   left: FileIdentity,
   right: FileIdentity,
 ): boolean {
@@ -28907,9 +29611,10 @@ export function readRegularFileNoFollowOrThrow(
   }
   try {
     const st = fstatSync(fd);
+    const identity = fileIdentity(fd);
     if (
       expectedIdentity !== undefined &&
-      !sameFileIdentity(st, expectedIdentity)
+      !sameFileIdentity(identity, expectedIdentity)
     ) {
       throw changedDuringReadError(
         `${what} changed after project-containment validation: ${path}`,
@@ -28967,8 +29672,7 @@ export function readRegularFileNoFollowOrThrow(
           `No path component may be replaced by a symlink while the file is read.`,
       );
     }
-    const current = statSync(currentRealPath);
-    if (current.dev !== st.dev || current.ino !== st.ino) {
+    if (!sameFileIdentity(fileIdentity(currentRealPath), identity)) {
       throw changedDuringReadError(`${what} changed while opening: ${path}`);
     }
     let bytes: Buffer;
@@ -29010,9 +29714,8 @@ export function readRegularFileNoFollowOrThrow(
           `No path component may be replaced by a symlink while the file is read.`,
       );
     }
-    const after = statSync(afterRealPath);
     const afterFd = fstatSync(fd);
-    if (after.dev !== st.dev || after.ino !== st.ino ||
+    if (!sameFileIdentity(fileIdentity(afterRealPath), identity) ||
         afterFd.nlink !== 1 || afterFd.size !== st.size ||
         afterFd.mtimeMs !== st.mtimeMs || afterFd.ctimeMs !== st.ctimeMs ||
         bytes.length !== st.size) {
@@ -30155,7 +30858,10 @@ export function teamUnitGateStatus(
 // workflow creation, jump, or stage rejection and deliberately ignores
 // STAGE_STARTED. This matches the reviewer-receipt floor: the later stage start
 // must not invalidate work legitimately completed earlier in the same
-// unit-major block.
+// unit-major block. A Construction policy change is not a boundary either: a
+// stage start recorded while stage-major flooring was in force (per the
+// CONSTRUCTION_POLICY_SET rows) keeps counting after a switch to unit-major
+// flooring, so the Units finished before the switch stay finished.
 //
 // The no-boundary sentinel keeps fixture/recovery flows deterministic while
 // unstamped legacy rows still fail closed.
@@ -30165,53 +30871,19 @@ export function latestMainWorkflowStageRunFloor(
   unitMajor = false,
   unit?: string,
 ): string {
-  let floor = "unstarted#0";
-  const ordinals = new Map<string, number>();
-  const relevant = new Set([
-    "WORKFLOW_STARTED",
-    "STAGE_STARTED",
-    "STAGE_JUMPED",
-    "GATE_REJECTED",
-  ]);
-  const events = audit
+  const rows = audit
     .replace(/\r\n/g, "\n")
     .split(/\n---\n/)
     .map((block, pos) => ({
       block,
-      event: auditBlockField(block, "Event"),
+      event: auditBlockField(block, "Event") ?? "",
       pos,
+      shard: "",
+      shardIndex: 0,
       timestamp: auditBlockField(block, "Timestamp") ?? "",
     }))
-    .filter(
-      (row): row is { block: string; event: string; pos: number; timestamp: string } =>
-        row.event !== null && relevant.has(row.event) && row.timestamp !== "",
-    )
-    .sort((a, b) =>
-      a.timestamp !== b.timestamp
-        ? a.timestamp < b.timestamp
-          ? -1
-          : 1
-        : a.pos - b.pos,
-    );
-
-  for (const row of events) {
-    const stage = auditBlockField(row.block, "Stage");
-    let matches = false;
-    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
-      matches = true;
-    } else if (row.event === "GATE_REJECTED") {
-      matches = gateRejectionMatchesAttempt(row.block, slug, unit);
-    } else if (row.event === "STAGE_STARTED" && !unitMajor) {
-      matches =
-        stage === slug &&
-        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:");
-    }
-    if (!matches) continue;
-    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
-    ordinals.set(row.event, ordinal);
-    floor = `${row.event}:${row.timestamp}#${ordinal}`;
-  }
-  return floor;
+    .filter((row) => row.event !== "" && row.timestamp !== "");
+  return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, unit);
 }
 
 // Shard-aware attempt identity for live project readers. Same-shard timestamp
@@ -30251,21 +30923,27 @@ function latestMainWorkflowStageRunFloorFromRows(
     "STAGE_JUMPED",
     "GATE_REJECTED",
   ]);
+  const stageStart = (row: AuditShardEvent): boolean =>
+    row.event === "STAGE_STARTED" &&
+    auditBlockField(row.block, "Stage") === slug &&
+    !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:");
+  // Under unit-major flooring only the stage starts recorded under stage-major
+  // flooring count, each with the ordinal it had there (its place among all of
+  // this stage's starts), so its floor token is unchanged by the switch.
+  const stageFloored = unitMajor ? stageStartsUnderStageFlooring(rowsInput) : null;
+  const startOrdinals = new Map(
+    sortAttemptEvents(rowsInput.filter(stageStart)).map((row, index) => [row, index + 1]),
+  );
   const rows = rowsInput
     .filter((row) => {
       if (!relevant.has(row.event)) return false;
-      const stage = auditBlockField(row.block, "Stage");
       if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") {
         return true;
       }
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
-      return (
-        !unitMajor &&
-        stage === slug &&
-        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
-      );
+      return stageStart(row) && (stageFloored === null || stageFloored.has(row));
     });
   rows.sort((a, b) => {
     if (a.timestamp !== b.timestamp) {
@@ -30304,11 +30982,72 @@ function latestMainWorkflowStageRunFloorFromRows(
   const ordinals = new Map<string, number>();
   let floor = "unstarted#0";
   for (const row of rows) {
-    const ordinal = (ordinals.get(row.event) ?? 0) + 1;
+    const ordinal = row.event === "STAGE_STARTED"
+      ? startOrdinals.get(row) ?? 0
+      : (ordinals.get(row.event) ?? 0) + 1;
     ordinals.set(row.event, ordinal);
     floor = `${row.event}:${row.timestamp}#${ordinal}`;
   }
   return floor;
+}
+
+// The stage starts recorded while stage-major flooring was in force, read from
+// the CONSTRUCTION_POLICY_SET rows the typed setters write. Each row records the
+// policy it found in the state (its Previous Value, and the other field it left
+// alone), so a start reads the policy of the first change after it: a row whose
+// state write failed is corrected by the next one. A start after the last
+// change follows the caller's current unit-major flooring. Rows in one shard
+// keep their append order; rows in different shards in the same second cannot
+// be ordered, so a start is read against every change that could be the first
+// one after it, and counts unless all of them found unit-major flooring: the
+// result never depends on shard filenames.
+// With no change recorded the set is empty: under unit-major flooring no stage
+// start counts, as always.
+function stageStartsUnderStageFlooring(
+  rows: readonly AuditShardEvent[],
+): Set<AuditShardEvent> {
+  const counted = new Set<AuditShardEvent>();
+  const changes = rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET" && constructionPolicyRowComplete(row));
+  if (changes.length === 0) return counted;
+  // The shared causal order: append position within a shard, the timestamp
+  // across shards (attemptEventDefinitelyBefore). It is not transitive, so when
+  // no change is plainly first, every change that may follow the start counts.
+  const before = attemptEventDefinitelyBefore;
+  for (const start of rows) {
+    if (start.event !== "STAGE_STARTED") continue;
+    const after = changes.filter((change) => !before(change, start));
+    const firstAfter = after.filter((change) =>
+      !after.some((other) => before(start, other) && before(other, change)));
+    const candidates = firstAfter.length > 0 ? firstAfter : after;
+    if (candidates.some((change) => !constructionPolicyFoundUnitMajor(change))) counted.add(start);
+  }
+  return counted;
+}
+
+// A policy row the typed setters wrote in full: a known field with a value,
+// the value it found, and the iteration and checkpoint values it left. A row
+// cut short (an interrupted append) says nothing about the policy and is not
+// read.
+function constructionPolicyRowComplete(row: AuditShardEvent): boolean {
+  const field = auditBlockField(row.block, "Field");
+  return (field === "Construction Iteration" || field === "Construction Checkpoints" ||
+      field === "Construction Execution") &&
+    !!auditBlockField(row.block, "Value") &&
+    !!auditBlockField(row.block, "Previous Value") &&
+    !!auditBlockField(row.block, "Construction Iteration") &&
+    !!auditBlockField(row.block, "Construction Checkpoints");
+}
+
+// Whether a recorded policy change found unit-major flooring in force: Construction
+// Iteration unit-major or Construction Checkpoints enabled before the change, the
+// same rule the lifecycle readers apply to the state file.
+function constructionPolicyFoundUnitMajor(row: AuditShardEvent): boolean {
+  const before = (field: string): string | null =>
+    auditBlockField(row.block, "Field") === field
+      ? auditBlockField(row.block, "Previous Value")
+      : auditBlockField(row.block, field);
+  return before("Construction Iteration") === "unit-major" ||
+    before("Construction Checkpoints") === "enabled";
 }
 
 // The set of units the CURRENT attempt of `slug` has genuinely converged and
@@ -32992,6 +33731,71 @@ export function isoTimestamp(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
+// --- Hook status files ---
+//
+// Every hook status file (a `<hook>.last` heartbeat, the drop and trace lines,
+// the debug log, a hook's own marker) lives in a record's
+// `.aidlc-engine/hooks-health/` directory, and every write, read for rotation
+// and removal of one goes through these helpers. They go through no symbolic
+// link inside the record: when `.aidlc-engine`, `hooks-health` or the file
+// itself is a link, the operation is skipped and the link is left as it is.
+
+// The file's path once every component inside the record is known not to be a
+// link (directories created when `create`), or null.
+function hookStatusTarget(healthDir: string, fileName: string, create: boolean): string | null {
+  try {
+    const record = dirname(dirname(healthDir));
+    if (create) mkdirSync(record, { recursive: true });
+    const anchorReal = realpathSync(record);
+    const rel = relative(record, join(healthDir, fileName));
+    const target = assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    if (create) mkdirSync(dirname(target), { recursive: true });
+    // The directories exist now; none of them, nor the file, may be a link.
+    assertNoSymlinkInChainOrThrow(anchorReal, rel);
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+// "replace" rewrites the file, "append" adds to it. Never throws; returns
+// whether it wrote.
+export function writeHookStatusFile(
+  healthDir: string,
+  fileName: string,
+  data: string,
+  mode: "replace" | "append" = "replace",
+): boolean {
+  const target = hookStatusTarget(healthDir, fileName, true);
+  if (target === null) return false;
+  try {
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | noFollow |
+      (mode === "append" ? fsConstants.O_APPEND : fsConstants.O_TRUNC);
+    const fd = openSync(target, flags, 0o644);
+    try {
+      writeSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Removes the file when it is there. Never throws; returns whether it is gone.
+export function removeHookStatusFile(healthDir: string, fileName: string): boolean {
+  const target = hookStatusTarget(healthDir, fileName, false);
+  if (target === null) return false;
+  try {
+    rmSync(target, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // --- Hook drop counter ---
 //
 // Hooks swallow audit emission errors to avoid breaking the user's tool call,
@@ -33009,13 +33813,49 @@ export function recordHookDrop(
   space?: string,
 ): void {
   try {
-    const healthDir = hooksHealthDir(projectDir, intent, space);
-    mkdirSync(healthDir, { recursive: true });
-    const dropFile = join(healthDir, `${hookName}.drops`);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
-    appendFileSync(dropFile, line, "utf-8");
+    writeHookStatusFile(hooksHealthDir(projectDir, intent, space), `${hookName}.drops`, line, "append");
   } catch {
     // Drop-log failure is truly non-fatal — we're already in a failure path.
+  }
+}
+
+// A hook's normal decision worth keeping for a later look (the Stop hook
+// letting a turn end because the person has to answer first, or clearing a
+// stale marker) is not a failure, so it goes to `<hook>.trace` beside the drops,
+// in the same line format, and doctor does not count it. Kept to its newer half
+// once it passes HOOK_TRACE_MAX_BYTES, because nothing tells anyone to delete it.
+const HOOK_TRACE_MAX_BYTES = 64 * 1024;
+
+export function recordHookTrace(
+  projectDir: string,
+  hookName: string,
+  reason: string,
+  intent?: string,
+  space?: string,
+): void {
+  try {
+    const healthDir = hooksHealthDir(projectDir, intent, space);
+    const traceName = `${hookName}.trace`;
+    const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;
+    const traceFile = hookStatusTarget(healthDir, traceName, false);
+    if (traceFile !== null && existsSync(traceFile) && lstatSync(traceFile).size > HOOK_TRACE_MAX_BYTES) {
+      let kept = "";
+      try {
+        const lines = readRegularFileNoFollowOrThrow(traceFile, "hook trace", 4 * HOOK_TRACE_MAX_BYTES)
+          .toString("utf-8")
+          .split("\n")
+          .filter((entry) => entry.length > 0);
+        kept = `${lines.slice(Math.floor(lines.length / 2)).join("\n")}\n`;
+      } catch {
+        // Too large or unreadable to keep half of: start it over.
+      }
+      writeHookStatusFile(healthDir, traceName, `${kept}${line}`);
+      return;
+    }
+    writeHookStatusFile(healthDir, traceName, line, "append");
+  } catch {
+    // Trace is a convenience; a hook never fails over it.
   }
 }
 
@@ -33053,9 +33893,6 @@ export function hookDebug(
 ): void {
   if (!hookDebugEnabled(projectDir)) return;
   try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    const logFile = join(healthDir, "hook-debug.log");
     const parts = [isoTimestamp(), hookName, message];
     if (fields && Object.keys(fields).length > 0) {
       const flat = Object.entries(fields)
@@ -33063,7 +33900,7 @@ export function hookDebug(
         .join(" ");
       parts.push(flat);
     }
-    appendFileSync(logFile, `${parts.join("\t").replace(/\r?\n/g, " ")}\n`, "utf-8");
+    writeHookStatusFile(hooksHealthDir(projectDir), "hook-debug.log", `${parts.join("\t").replace(/\r?\n/g, " ")}\n`, "append");
   } catch {
     // Debug-log failure is non-fatal — observability is best-effort.
   }
@@ -34504,16 +35341,20 @@ export function decideFence(
  * The one line a human hears when a guard stands aside. It names what lowered
  * the fence, so someone using a scope default learns that the policy word did
  * it. The authority belongs in the GUARD_STOOD_ASIDE audit row, not the line.
+ * `recorded` false: the row could not be written, and the line says so instead
+ * of claiming it.
  */
 export function guardStoodAsideLine(
   fence: GuardFence,
   source: string,
   detail?: string,
+  recorded = true,
 ): string {
-  return (
-    `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
-    `Recorded in the audit trail${detail ? `: ${detail}` : "."}`
-  );
+  const where = recorded
+    ? "Recorded in the audit trail"
+    : `Not recorded in the audit trail, which was busy or could not be written; \`${aidlcInvocation()} doctor\` lists it`;
+  return `Continuing past the ${fence} check because it is off for this piece of work (${source}). ` +
+    `${where}${detail ? `: ${detail}` : "."}`;
 }
 
 /**

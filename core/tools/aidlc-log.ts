@@ -13,6 +13,7 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
   auditBlockField,
+  markdownBlocks,
   attemptEventDefinitelyBefore,
   maximalAttemptEvents,
   verificationCommandDetails,
@@ -716,6 +717,36 @@ function refusePlainSummaryConfirmation(flags: Record<string, string>, verb: "de
           "(exactly one blank `[Answer]:` line in the summary section), end the turn, and after the human's " +
           `reply run \`${commands.answer}\` with their new reply in place of <their reply>.`,
   );
+}
+
+// A review file's top-level `#` and `##` heading lines (outside code, quotes
+// and lists, other than an opening `## Review`) made `###`, with every other
+// byte kept, and a line naming each one changed; null when there is none.
+function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] } | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(body);
+  } catch {
+    return null;
+  }
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  // Lines at even indexes, their own line endings at odd ones.
+  const parts = text.slice(bom.length).split(/(\r\n|\r|\n)/);
+  const source = parts.filter((_, index) => index % 2 === 0);
+  const { lines } = markdownBlocks(source.join("\n"));
+  if (lines.length !== source.length) return null;
+  const opening = source.findIndex((line) => line.trim() !== "");
+  const changed: string[] = [];
+  for (let index = 0; index < source.length; index++) {
+    if (lines[index].kind !== "heading" || lines[index].containers.length > 0) continue;
+    if (index === opening && /^## Review[ \t]*$/.test(source[index])) continue;
+    const demoted = source[index].replace(/^( {0,3})#{1,2}(?=[ \t]|$)/, "$1###");
+    if (demoted === source[index]) continue;
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: an audit value is one plain line
+    changed.push(`line ${index + 1}: ${source[index].trim().replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 120)}`);
+    parts[index * 2] = demoted;
+  }
+  return changed.length === 0 ? null : { bytes: Buffer.from(bom + parts.join(""), "utf-8"), changed };
 }
 
 // --- Subcommand: decision ---
@@ -3171,15 +3202,34 @@ function handleReview(args: string[]): void {
             "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
-      const reviewBytes = body ?? snapshot.appendix;
+      let reviewBytes = body ?? snapshot.appendix;
       if (!incompleteFallback) {
-        const validity = validateReviewAppendix(reviewBytes, {
+        const expectedReview = {
           verdict: verdict as ReviewVerdict,
           reviewer: flags.reviewer,
           iteration,
           reviewChallenge: embeddedLegacy ? legacy?.challenge ?? null : null,
           standalone: body !== null,
-        });
+        };
+        let validity = validateReviewAppendix(reviewBytes, expectedReview);
+        // A whole review whose reviewer wrote `## What I verified` is not a
+        // reason to run the review again: a review file's `#` and `##` heading
+        // lines are recorded as `###`, and the same check runs on those bytes.
+        // It runs whether or not the check saw the heading (one right after a
+        // table reads to it as a table row). Any other defect, or a heading
+        // form this cannot change, refuses as before.
+        const demoted = body === null ? null : demoteReviewHeadings(body);
+        if (demoted !== null) {
+          const again = validateReviewAppendix(demoted.bytes, expectedReview);
+          if (again.valid) {
+            reviewBytes = demoted.bytes;
+            validity = again;
+            // The record shows the reviewer's headings were changed, and which.
+            fields["Review Headings Made Level 3"] = demoted.changed.join("; ");
+          } else if (!validity.valid && validity.heading && !again.heading) {
+            validity = again;
+          }
+        }
         if (!validity.valid) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,

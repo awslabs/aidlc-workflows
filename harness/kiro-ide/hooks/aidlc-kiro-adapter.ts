@@ -107,17 +107,15 @@ import {
   getField,
   hookChildEnv,
   hookDebug,
-  hooksHealthDir,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
-  isoTimestamp,
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
-  recordDir,
   recordHookDrop,
+  recordPreWorkflowHeartbeat,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -1275,23 +1273,6 @@ function rememberKiroIdeSessionId(sessionId: string): void {
   }
 }
 
-// Before the first workflow no core hook writes a heartbeat, so doctor could
-// not tell a folder nobody has chatted in from one whose hooks Kiro IDE is not
-// running (untrusted or not reloaded). A chat message leaves the heartbeat the
-// core hooks write, only while no intent record resolves: inside one,
-// heartbeats feed the Plan Approval staleness refusal (hookLiveness) and stay
-// the core hooks' own.
-function recordPromptHeartbeat(hook: string): void {
-  try {
-    if (recordDir(projectDir) !== null) return;
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${hook}.last`), isoTimestamp(), "utf-8");
-  } catch {
-    // Advisory: without it doctor keeps its "not run yet" warning.
-  }
-}
-
 function rememberedKiroIdeSessionId(): string {
   try {
     const sessionId = readFileSync(
@@ -1550,21 +1531,23 @@ function notePromptCapability(sessionId: string): void {
   }
   process.stdout.write(
     "Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. " +
-      `${summaryConfirmationWayOut()} ${PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
+      `${summaryConfirmationWayOut()} ${planApprovalWayOut()} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.\n`,
   );
 }
 
-// An updated build carries the typed switch again. The recorded kill switch is
-// the person's own terminal command, but config refuses it while any workflow
-// is still active, so it is named only as the route once the work is complete.
+// The step that works now comes first: the recorded kill switch is the
+// person's own terminal command, and recording it refreshes no project files,
+// so it also covers the work running now. An updated build carries the typed
+// switch again.
 function summaryConfirmationWayOut(): string {
-  return `To turn summary confirmation off, update Kiro IDE and type \`/aidlc config set summary-confirmation off\` yourself. Once every piece of work in this project is complete, you can instead run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal to turn it off for all work in this project (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
+  return `To turn summary confirmation off now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes\` in a terminal: it turns it off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set summary-confirmation off\` yourself.`;
 }
 
 // Plan approval off is read from what the person types or says, so this build
-// keeps asking about every plan; an update is what enables the switch.
-const PLAN_APPROVAL_WAY_OUT =
-  "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+// cannot carry the typed switch; the recorded one works now, as above.
+function planApprovalWayOut(): string {
+  return `To build code plans without being asked now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes\` in a terminal: it turns plan approval off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set plan-approval off\` yourself.`;
+}
 
 // "summary" when the only lowering is summary confirmation off, which skips
 // the person's `Looks correct` check; "plan" when it is plan approval off;
@@ -1708,7 +1691,7 @@ function terminalRefusal(result: TerminalResult): string {
 
 if (target === "verb-intercept") {
   // Before a doctor request below runs, so it sees this message.
-  recordPromptHeartbeat("terminal-command");
+  recordPreWorkflowHeartbeat(projectDir, "terminal-command");
   const sessionId = terminalSessionId();
   const turn = bumpTurn(sessionId);
   recordPromptEmpty(sessionId, turn);
@@ -1748,7 +1731,7 @@ if (target === "terminal-command-guard") {
     process.stderr.write(refused === "summary"
       ? `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${summaryConfirmationWayOut()}\n`
       : refused === "plan"
-      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${PLAN_APPROVAL_WAY_OUT}\n`
+      ? `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${planApprovalWayOut()}\n`
       : "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.\n");
     return 2;
   }
@@ -2035,7 +2018,7 @@ function buildForward(): Forward {
     }
 
     case "record-human-turn": {
-      recordPromptHeartbeat("record-human-turn");
+      recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
       const eventSessionId = ide.sessionId?.trim();
       const sessionId = terminalSessionId();
       // Kiro IDE 1.1.14 runs no SessionStart hook when a chat starts, so a

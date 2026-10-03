@@ -153,6 +153,13 @@ export type HarnessManifest = {
      * warns with this text instead of passing.
      */
     notRunYet?: string;
+    /**
+     * Sentence the engine adds to every directive's change_notices while this
+     * workflow has started a stage but no hook heartbeat exists. Set only when
+     * a hook on the agent's own shell command leaves a heartbeat in the record
+     * before the engine runs, so an install whose hooks run never sees it.
+     */
+    notRunInWorkflow?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
