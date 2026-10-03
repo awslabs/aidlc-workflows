@@ -11410,6 +11410,10 @@
         {
           "file": "tests/unit/t400-byproduct-files-excluded-from-source-fingerprint.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t401-vs-cache-excluded-from-source-fingerprint.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

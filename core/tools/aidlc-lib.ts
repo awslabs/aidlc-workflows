@@ -2848,7 +2848,9 @@ function mainCheckoutRepoName(projectDir: string): string | null {
 //   0 recorded repos (workspace root IS the repo) -> the MAIN CHECKOUT's basename
 //                       (mainCheckoutRepoName), falling back to basename(projectDir)
 //                       when git cannot answer. Identical to basename(projectDir)
-//                       for every root that is not a linked worktree.
+//                       for every root that is not a linked worktree. A folder
+//                       that was moved keeps its earlier store
+//                       (movedFolderStoreName).
 //   >1 recorded      -> caller loops per repo (this returns basename as a safe
 //                       default; callers that know the repo pass --repo explicitly).
 // basename done here (lib has basename imported) so callers never inline it.
@@ -2868,7 +2870,42 @@ export function codekbRepoName(
   // NOTHING-RECORDED case consults git, where the project root is the repo and a
   // worktree basename is otherwise mistaken for the repository name.
   if (repos.length > 1) return basename(projectDir);
-  return mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  const name = mainCheckoutRepoName(projectDir) ?? basename(projectDir);
+  return movedFolderStoreName(projectDir, selection.space, selection.intent, name) ?? name;
+}
+
+// A project folder that was moved, renamed or copied keeps its code knowledge
+// base. The store is named after the folder it was first written in, so when
+// no store carries the current name and exactly one store in the space belongs
+// to no intent's recorded repos, that store is this folder's. Nothing is
+// renamed on disk (the store is committed and shared). Two or more such stores
+// are ambiguous and keep the current name, and so does a registry without the
+// active intent's row or with a malformed entry, since it cannot say which
+// stores other intents' repos own.
+function movedFolderStoreName(
+  projectDir: string,
+  space: string,
+  intent: string | null,
+  name: string,
+): string | null {
+  const root = join(workspaceRoot(projectDir), "spaces", space, "codekb");
+  if (intent === null || existsSync(join(root, name))) return null;
+  const rows = readIntentRegistry(projectDir, space);
+  const wellFormed = rows.every((entry) =>
+    entry !== null && typeof entry === "object" &&
+    (entry.repos === undefined || Array.isArray(entry.repos)));
+  if (!wellFormed || !rows.some((entry) => recordDirMatches(entry, intent))) return null;
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const claimed = new Set(rows.flatMap((entry) => entry.repos ?? []));
+  const stores = entries
+    .filter((entry) => entry.isDirectory() && isValidRepoName(entry.name) && !claimed.has(entry.name))
+    .map((entry) => entry.name);
+  return stores.length === 1 ? stores[0] : null;
 }
 
 // --- Codekb scope of analysis -------------------------------------------------
@@ -18510,7 +18547,12 @@ export function workspaceSourceExclusionPathspecs(
 // Dependency and machine-local cache trees are never application source. These
 // names are excluded at every depth in both Git and filesystem modes so a
 // missing Git executable cannot turn a normal dependency install into a
-// multi-gigabyte freshness walk.
+// multi-gigabyte freshness walk. `.vs` is Visual Studio's machine-local cache:
+// its `FileContentIndex/*.vsidx` files are rewritten and held open by the IDE,
+// so one that cannot be hashed fails the whole source-boundary bind and refuses
+// Plan Approval while nothing a human authored has changed. Like the other
+// names here it is skipped unconditionally in both modes — these cache dirs
+// never hold application source.
 const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".cache",
   ".git",
@@ -18522,6 +18564,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   ".ruff_cache",
   ".tox",
   ".venv",
+  ".vs",
   "__pycache__",
   "node_modules",
   "venv",
