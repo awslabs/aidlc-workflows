@@ -920,6 +920,9 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // spawns the real audit append, Unit verbs, and `next`: which shard a
     // process writes, and the walk after a copied shard, are process boundaries
     "unit/t-audit-shard-identity.test.ts",
+    // spawns the real Copilot adapter, engine, and doctor: which write put the
+    // step out of date, and what doctor says about it, are process boundaries
+    "unit/t-directive-out-of-date.test.ts",
     // spawns the real engine, human-turn hook, Kiro adapter, and worker brief: one
     // approval through the rule parts to the build is a process boundary
     "unit/t-plan-approval-stock-parts.test.ts",

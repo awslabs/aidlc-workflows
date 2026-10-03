@@ -304,6 +304,9 @@ describe("a stale build step after approval: the refusal names the way back", ()
     approveBuildAndCompact(proj, null);
 
     const write = said(writeSource(proj));
+    // The reason comes first: what put the step out of date, and when.
+    const why = /directive kind "error": the Code Generation step went out of date at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC when the chat was compacted\. /;
+    expect(write).toMatch(why);
     expect(write).toContain(`The plan for the zero-Unit stage-level implementation ${ALREADY_APPROVED}`);
     expect(write).toContain(`Run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}, and follow the step it prints.`);
     if (policy === "strict") expect(write).toContain("Plan Approval authority is ambiguous or stale");
@@ -311,6 +314,7 @@ describe("a stale build step after approval: the refusal names the way back", ()
 
     // The developer handoff gets the same way back, not "not approved yet".
     const dispatched = said(handoff(proj));
+    expect(dispatched).toMatch(why);
     expect(dispatched).toContain(ALREADY_APPROVED);
     expect(namedCommand(dispatched)).toBe(SOURCE_NEXT);
     expect(dispatched).not.toContain("not approved yet");

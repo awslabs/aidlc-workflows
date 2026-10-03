@@ -93,6 +93,7 @@ import {
   parseCheckboxes,
   parseStateStageSuffixes,
   readActiveDirectiveMarker,
+  activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
@@ -659,6 +660,14 @@ function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null):
       : targets[0] === null ? "the zero-Unit stage-level implementation" : `unit ${targets[0]}`,
     stands,
   };
+}
+
+// Why the step went out of date, when the write that did it was recorded (the
+// chat compacted, the state moved): said as the refusal's reason, ahead of the
+// way out. Empty when nothing was recorded.
+function outOfDateClause(marker: ActiveDirectiveMarker): string {
+  const why = activeDirectiveOutOfDateReason(marker);
+  return why === null ? "" : `: ${why}`;
 }
 
 // --- Evidence gathering ---------------------------------------------------------
@@ -1941,7 +1950,8 @@ async function evaluate(
         // a write gets, with the fresh `next` that issues the build again.
         if (verdict.block && issuance === null) {
           authorityFailure =
-            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"`;
+            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"` +
+            outOfDateClause(activeDirective);
           standing = planStanding(projectDir, activeDirective);
         } else if (
           verdict.handoff &&
@@ -2017,7 +2027,8 @@ async function evaluate(
         return 0;
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
+          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+          outOfDateClause(activeDirective);
         standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
