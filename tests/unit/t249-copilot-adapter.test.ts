@@ -1664,7 +1664,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     );
     if (!asked) throw new Error(`no record step in: ${reason}`);
     expect(asked[1]).toEndWith(`engine log decision --stage ${stage}`);
-    const recorded = runShell(dir, `${asked[1]} --decision "Anything to add for next time?" --options "Nothing to add,Add a note"`);
+    // The compiled hook names the compiled `aidlc`, which is not on this
+    // shell's PATH: run it by path, as the dispatcher cases do.
+    const recordStep = COMPILED_BINARY && asked[1].startsWith("aidlc ")
+      ? `${JSON.stringify(COMPILED_BINARY)}${asked[1].slice("aidlc".length)}`
+      : asked[1];
+    const recorded = runShell(dir, `${recordStep} --decision "Anything to add for next time?" --options "Nothing to add,Add a note"`);
     expect(recorded.status, recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain("DECISION_RECORDED");
     const ended = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session, stop_hook_active: true });
