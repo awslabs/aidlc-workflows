@@ -1191,8 +1191,11 @@ describe("t265b hook lifecycle", () => {
         }
         const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
         expect(write.code).toBe(2);
-        // Either fence decision names the way back: a fresh `next` re-issues it.
-        expect(write.stderr).toContain("Run a fresh `aidlc-orchestrate.ts next`");
+        // Either fence decision names the way back, spelled the way this tree
+        // runs it: a fresh `next` re-issues the step.
+        expect(write.stderr).toContain(
+          "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+        );
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }

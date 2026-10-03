@@ -389,8 +389,10 @@ modes mid-stage.
   options per question)
 - Questions with 5+ options: split across multiple calls (4 options each).
   User must see every option. File retains full option set.
-- Built-in "Other" triggers discussion. Tell user before first batch:
-  "Select 'Other' on any question to discuss it before answering."
+- Built-in "Other" takes an answer in the user's own words as their answer,
+  or opens a discussion when they ask about the question. Tell user before
+  first batch: "Select 'Other' on any question to answer in your own words or
+  to discuss it."
 - After each batch, IMMEDIATELY write answers to the questions file
 - Log each batch with fresh ISO timestamp
 - Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print
@@ -476,11 +478,13 @@ ask targeted follow-up. Do NOT proceed until resolved.
 **Overconfidence prevention:**
 - Default to asking, not assuming. Never proceed with ambiguity.
 - Red flags requiring follow-up: single-word answers to open-ended questions;
-  "whatever you think" / "up to you"; contradictory signals; question-dodging;
-  relaxing, lowering, or disabling a previously defined quality target (for
-  example, a test coverage threshold) instead of meeting it
-- When user defers to AI: "I want to make sure the design reflects YOUR
-  priorities. Could you tell me [specific aspect]?"
+  contradictory signals; question-dodging; relaxing, lowering, or disabling a
+  previously defined quality target (for example, a test coverage threshold)
+  instead of meeting it
+- When the user leaves a choice to the agent ("up to you", "whatever you think
+  is best"), the agent decides: it picks the option that best fits what they
+  have said, records it as their answer with a note that they left it to the
+  agent, and says in one line what it chose, why, and that they can change it.
 
 ### Plan and Question File Location
 

@@ -100,6 +100,7 @@ Progress column and required team gates are complete.
 - **Status**: [Running/Completed/Archived]
 - **Construction Autonomy Mode**: [unset/autonomous/gated]
 - **Last Updated**: [ISO 8601 timestamp]
+- **Archived From**: [only while Archived: the Status it replaced, Running or Completed]
 
 ## Session Resume Point
 - **Last Completed Stage**: [stage slug]

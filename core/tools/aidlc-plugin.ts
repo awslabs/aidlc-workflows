@@ -16,7 +16,6 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { createInterface } from "node:readline/promises";
 import {
   errorMessage,
   parseArgs,
@@ -24,6 +23,7 @@ import {
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
+  aidlcInvocation,
   compiledExecutable,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
@@ -1314,27 +1314,23 @@ function compositionIsCurrent(
   });
 }
 
-export async function confirmPrune(
+// The person asked for --prune-missing, so at a terminal it says what goes and
+// how to get it back, then prunes. A script or an agent passes --yes.
+export function announcePrune(
   argv: string[],
   keys: string[],
-  input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
-  output: NodeJS.WritableStream = process.stdout,
-): Promise<void> {
+  input: { isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = argv.includes("--json") ? process.stderr : process.stdout,
+): void {
   if (keys.length === 0 || argv.includes("--yes")) return;
   if (!input.isTTY) {
     throw new Error("plugin sync --prune-missing requires --yes in non-interactive mode");
   }
-  const lines = createInterface({ input, output });
-  let response: string;
-  try {
-    response = await lines.question(
-      `Prune composed content for missing plugin(s) ${keys.join(", ")}? [y/N] `,
-    );
-  } finally {
-    lines.close();
-  }
-  response = response.trim().toLowerCase();
-  if (response !== "y" && response !== "yes") throw new Error("plugin prune cancelled");
+  output.write(
+    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project, ` +
+      "their additions to stage files, and their composition records. To get them back, reinstall " +
+      `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
+  );
 }
 
 export async function syncPlugins(
@@ -1382,7 +1378,7 @@ export async function syncPlugins(
     }
   }
   const pruned = prune ? missing : [];
-  await confirmPrune(argv, pruned);
+  announcePrune(argv, pruned);
   if (
     pruned.length === 0 &&
     plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))

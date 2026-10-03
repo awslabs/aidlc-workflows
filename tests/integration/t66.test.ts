@@ -54,7 +54,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   __resetGraphCache,
   artifactsRegistry,
@@ -86,6 +86,7 @@ const TOOLS_DIR = join(import.meta.dir, "..", "..", "dist", "claude", ".claude",
 const GRAPH_TS = join(TOOLS_DIR, "aidlc-graph.ts");
 const STATE_TS = join(TOOLS_DIR, "aidlc-state.ts");
 const SEED_GRAPH = join(TOOLS_DIR, "data", "stage-graph.json");
+const SEED_GRID = join(TOOLS_DIR, "data", "scope-grid.json");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const REAL_STAGES = join(AIDLC_SRC, "aidlc-common", "stages");
 const REAL_SENSORS = join(AIDLC_SRC, "sensors");
@@ -133,13 +134,28 @@ afterEach(() => {
 });
 
 /** Seed a fresh per-test stage-graph.json tempfile from the committed graph and
- *  return its path. Never touches the real graph (matches the .sh's mktemp+cp). */
+ *  return its path. Never touches the real graph (matches the .sh's mktemp+cp).
+ *  A scope-grid.json copy sits beside it for compileEnv. */
 function seedGraphCopy(): string {
   const dir = mkdtempSync(join(tmpdir(), "t66-graph-"));
   scratch.push(dir);
   const p = join(dir, "stage-graph.json");
   copyFileSync(SEED_GRAPH, p);
+  copyFileSync(SEED_GRID, join(dir, "scope-grid.json"));
   return p;
+}
+
+/** Env for a compile against a seeded graph. compile writes the scope grid as
+ *  well as the graph, so both go to the seeded copies: the shipped grid in dist
+ *  is read by every test running at the same time, and a compile over a
+ *  fixture stage tree would hand them a grid of only those stages. */
+function compileEnv(graph: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...extra,
+    AIDLC_STAGE_GRAPH: graph,
+    AIDLC_SCOPE_GRID: join(dirname(graph), "scope-grid.json"),
+  };
 }
 
 function sha256(s: string): string {
@@ -1004,7 +1020,7 @@ describe("t66 compile error hardening (in-process + source grep)", () => {
 describe("t66 compile --check drift (spawnSync CLI exit-code)", () => {
   test("clean -> 0, mutated -> 1, restore -> 0", () => {
     const graph = seedGraphCopy();
-    const env = { ...process.env, AIDLC_STAGE_GRAPH: graph };
+    const env = compileEnv(graph);
 
     // Clean -> exit 0
     const clean = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
@@ -1171,11 +1187,11 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     const graphA = seedGraphCopy();
     const graphB = seedGraphCopy();
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_RULES_DIR: popRules, AIDLC_STAGE_GRAPH: graphA },
+      env: compileEnv(graphA, { AIDLC_RULES_DIR: popRules }),
       encoding: "utf8",
     });
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_RULES_DIR: emptyRules, AIDLC_STAGE_GRAPH: graphB },
+      env: compileEnv(graphB, { AIDLC_RULES_DIR: emptyRules }),
       encoding: "utf8",
     });
     const hashPop = sha256(readFileSync(graphA, "utf8"));
@@ -1189,7 +1205,7 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     const rules = mkdtempSync(join(tmpdir(), "t66-rules-drift-"));
     scratch.push(rules);
     const graph = seedGraphCopy();
-    const env = { ...process.env, AIDLC_RULES_DIR: rules, AIDLC_STAGE_GRAPH: graph };
+    const env = compileEnv(graph, { AIDLC_RULES_DIR: rules });
     writeFileSync(join(rules, "org.md"), "# initial org rule\n");
     spawnSync(BUN, [GRAPH_TS, "compile"], { env, encoding: "utf8" });
     writeFileSync(join(rules, "team.md"), "# team rule added after compile\n");
@@ -1203,11 +1219,11 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     const graphD = seedGraphCopy();
     const graphE = seedGraphCopy();
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_STAGE_GRAPH: graphD },
+      env: compileEnv(graphD),
       encoding: "utf8",
     });
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_STAGE_GRAPH: graphE },
+      env: compileEnv(graphE),
       encoding: "utf8",
     });
     expect(sha256(readFileSync(graphD, "utf8"))).toBe(sha256(readFileSync(graphE, "utf8")));
@@ -1221,12 +1237,12 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     const parallel = seedGraphCopy();
     // Serial baseline.
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_STAGE_GRAPH: serial },
+      env: compileEnv(serial),
       encoding: "utf8",
     });
     const serialHash = sha256(readFileSync(serial, "utf8"));
     // Two parallel compiles against the same file.
-    const env = { ...process.env, AIDLC_STAGE_GRAPH: parallel };
+    const env = compileEnv(parallel);
     const p1 = Bun.spawn([BUN, GRAPH_TS, "compile"], { env, stdout: "ignore", stderr: "ignore" });
     const p2 = Bun.spawn([BUN, GRAPH_TS, "compile"], { env, stdout: "ignore", stderr: "ignore" });
     await Promise.all([p1.exited, p2.exited]);
@@ -1277,12 +1293,10 @@ description: Probe sensor for canonical-emitter test
     );
     const graphS1 = seedGraphCopy();
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: {
-        ...process.env,
+      env: compileEnv(graphS1, {
         AIDLC_STAGES_DIR: stagesInit,
         AIDLC_SENSORS_DIR: sensorsPop,
-        AIDLC_STAGE_GRAPH: graphS1,
-      },
+      }),
       encoding: "utf8",
     });
     // Non-empty graph file -> the AIDLC_SENSORS_DIR seam wired through.
@@ -1297,7 +1311,7 @@ description: Probe sensor for canonical-emitter test
     scratch.push(sensorsDrift);
     cpSync(REAL_SENSORS, sensorsDrift, { recursive: true });
     const graphS3 = seedGraphCopy();
-    const env = { ...process.env, AIDLC_SENSORS_DIR: sensorsDrift, AIDLC_STAGE_GRAPH: graphS3 };
+    const env = compileEnv(graphS3, { AIDLC_SENSORS_DIR: sensorsDrift });
     spawnSync(BUN, [GRAPH_TS, "compile"], { env, encoding: "utf8" });
     // Edit the linter manifest's matches glob; --check should now fail.
     const linterPath = join(sensorsDrift, "aidlc-linter.md");
@@ -1313,11 +1327,11 @@ description: Probe sensor for canonical-emitter test
     const graphS4 = seedGraphCopy();
     const graphS5 = seedGraphCopy();
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_STAGE_GRAPH: graphS4 },
+      env: compileEnv(graphS4),
       encoding: "utf8",
     });
     spawnSync(BUN, [GRAPH_TS, "compile"], {
-      env: { ...process.env, AIDLC_STAGE_GRAPH: graphS5 },
+      env: compileEnv(graphS5),
       encoding: "utf8",
     });
     expect(sha256(readFileSync(graphS4, "utf8"))).toBe(sha256(readFileSync(graphS5, "utf8")));

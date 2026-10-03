@@ -355,9 +355,9 @@ describe("t345 complete nightly coverage", () => {
       const suites = matrix.suite!.filter((suite) =>
         !excluded.some((row) => row.suite.name === suite.name && row.suite.tier === suite.tier));
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(8).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
-      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 33 : 10);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
+      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 45 : 14);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
     expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
@@ -906,6 +906,20 @@ describe("t345 complete nightly coverage", () => {
         expect(step["continue-on-error"], step.name).toBeUndefined();
       }
     }
+  });
+
+  test("the stale test-weight report is advisory: it runs after the tests and cannot fail a job", () => {
+    const all = steps(deterministic.jobs.test);
+    const index = all.findIndex((step) => step.name === "Report outdated test weights");
+    expect(index).toBeGreaterThan(all.findIndex((step) => step.name === "Run deterministic tier"));
+    expect(index).toBeLessThan(all.findIndex((step) => step.name === "Sanitize deterministic evidence"));
+    const report = all[index];
+    expect(report.if).toBe(`\${{ always() && (inputs.tier == 'unit' || inputs.tier == 'integration') }}`);
+    expect(report.env).toEqual({ TEST_TIER: `\${{ inputs.tier }}` });
+    // No continue-on-error (only the evidence upload may carry it); the script
+    // always exits 0 and `|| true` covers a crash of Bun itself.
+    expect(report["continue-on-error"]).toBeUndefined();
+    expect(report.run).toBe('bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true');
   });
 
   test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {
@@ -1511,7 +1525,7 @@ describe("t345 complete nightly coverage", () => {
     expect(suites.some((suite) => suite.tier === "deep")).toBe(false);
     expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);
     const shards = suites.filter((suite) => suite.tier === "unit");
-    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
+    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
     const files = readdirSync(join(REPO_ROOT, "tests/unit")).filter((file) => file.endsWith(".test.ts")).sort();
     const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests/unit-shard-weights.json"), "utf8")) as ShardConfig;
     const assignments = shards.map((suite) => selectShard(files, parseShardSpec(suite.shard!), config));

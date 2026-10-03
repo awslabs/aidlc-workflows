@@ -69,7 +69,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
   `COPILOT_PROVIDER_TYPE=anthropic`, a bearer token, and
   `COPILOT_MODEL=<catalog name>` + `COPILOT_PROVIDER_WIRE_MODEL=<Bedrock
   model id>` — `copilot help providers` documents the set). In VS Code, use
-  the model picker or a Custom Endpoint provider.
+  the model picker or a Custom Endpoint provider. Every AI-DLC agent uses the
+  model and effort of your Copilot session, so choose them there; see
+  [Choosing a Model and Effort](../18-install-and-lifecycle.md#choosing-a-model-and-effort).
 
 ## Install
 

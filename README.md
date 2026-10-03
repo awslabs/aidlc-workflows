@@ -101,7 +101,9 @@ provider-independent.
 ## Recommended Model
 
 AI-DLC works best with capable reasoning models. The current recommended model
-is Claude Opus 4.8.
+is Claude Opus 4.8. If Opus is not available to you, or you are not sure where
+to set the model and effort on your harness, see
+[Choosing a Model and Effort](docs/guide/18-install-and-lifecycle.md#choosing-a-model-and-effort).
 
 ## Why AI-DLC
 
@@ -114,7 +116,7 @@ audited lifecycle:
 - 11 workflow profiles for features, bug fixes, infrastructure, security,
   proofs of concept, enterprise delivery, and other common work
 - Human approval gates and source-bound review evidence
-- 110-event audit trail plus persistent state, team knowledge, and learned rules
+- 111-event audit trail plus persistent state, team knowledge, and learned rules
 - The same deterministic engine across every supported harness
 
 Start with [Workflow Profiles](docs/guide/workflow-profiles.md) to compare
