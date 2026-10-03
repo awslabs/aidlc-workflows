@@ -138,7 +138,10 @@ AI-DLC keeps everything it needs on disk, so a new chat is the cheaper switch:
    before the next stage starts (see
    [Interaction Modes](07-interaction-modes.md)). `/aidlc park` also parks it
    where it is.
-2. Open a new chat or session and choose the new model and effort there.
+2. Open a new chat or session and choose the new model and effort there. On
+   Kiro IDE, also choose the **aidlc** agent in the chat panel's agent picker,
+   because a new chat starts on Kiro's Default agent (see
+   [Start AI-DLC in a Kiro IDE chat](harnesses/kiro-ide.md#start-ai-dlc-in-a-kiro-ide-chat)).
 3. Run `/aidlc --resume`. The new chat reads the saved state, artifacts, and
    audit trail from disk instead of the old conversation, and continues where
    the workflow stopped.
