@@ -1087,6 +1087,23 @@ describe("t260 finished Units keep their receipts across a Construction policy c
     ]);
   });
 
+  // A clock stepped back: the change is appended after the start in the same
+  // shard but carries an earlier time. Append order wins, as everywhere else.
+  test("a change appended after a start keeps it even when the clock stepped back", () => {
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:2026-01-02T00:00:00Z#1\n`) +
+        block("CONSTRUCTION_POLICY_SET", "2026-01-01T23:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n"),
+    );
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true)).toBe("STAGE_STARTED:2026-01-02T00:00:00Z#1");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
   // Swarm convergence and the Plan Approval batch context floor every stage
   // start (they pass unitMajor false), whatever the policy. A recorded change
   // must not change what they read, even for a stage start recorded while Unit

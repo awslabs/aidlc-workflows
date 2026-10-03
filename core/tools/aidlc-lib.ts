@@ -30294,10 +30294,11 @@ function latestMainWorkflowStageRunFloorFromRows(
 // policy it found in the state (its Previous Value, and the other field it left
 // alone), so a start reads the policy of the first change after it: a row whose
 // state write failed is corrected by the next one. A start after the last
-// change follows the caller's current unit-major flooring. Rows in different
-// shards in the same second cannot be ordered, so a start is read against
-// every change that could be the first one after it, and counts unless all of
-// them found unit-major flooring: the result never depends on shard filenames.
+// change follows the caller's current unit-major flooring. Rows in one shard
+// keep their append order; rows in different shards in the same second cannot
+// be ordered, so a start is read against every change that could be the first
+// one after it, and counts unless all of them found unit-major flooring: the
+// result never depends on shard filenames.
 // With no change recorded the set is empty: under unit-major flooring no stage
 // start counts, as always.
 function stageStartsUnderStageFlooring(
@@ -30306,16 +30307,17 @@ function stageStartsUnderStageFlooring(
   const counted = new Set<AuditShardEvent>();
   const changes = rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
   if (changes.length === 0) return counted;
-  // Order that holds whatever the shard filenames: an earlier second, or an
-  // earlier row of the same shard in the same second.
-  const before = (a: AuditShardEvent, b: AuditShardEvent): boolean =>
-    a.timestamp < b.timestamp || (a.timestamp === b.timestamp && a.shard === b.shard && a.pos < b.pos);
+  // The shared causal order: append position within a shard, the timestamp
+  // across shards (attemptEventDefinitelyBefore). It is not transitive, so when
+  // no change is plainly first, every change that may follow the start counts.
+  const before = attemptEventDefinitelyBefore;
   for (const start of rows) {
     if (start.event !== "STAGE_STARTED") continue;
-    const firstAfter = changes.filter((change) =>
-      !before(change, start) &&
-      !changes.some((other) => before(start, other) && before(other, change)));
-    if (firstAfter.some((change) => !constructionPolicyFoundUnitMajor(change))) counted.add(start);
+    const after = changes.filter((change) => !before(change, start));
+    const firstAfter = after.filter((change) =>
+      !after.some((other) => before(start, other) && before(other, change)));
+    const candidates = firstAfter.length > 0 ? firstAfter : after;
+    if (candidates.some((change) => !constructionPolicyFoundUnitMajor(change))) counted.add(start);
   }
   return counted;
 }
