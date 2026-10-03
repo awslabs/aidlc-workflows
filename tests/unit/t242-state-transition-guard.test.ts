@@ -936,7 +936,7 @@ describe("t242 state-transition ownership guard", () => {
   test("runtime integrity follows a literal cd or pushd to the write it guards", () => {
     const project = createTestProject();
     projects.push(project);
-    for (const dir of [".kiro/hooks", "src", "docs", "x >y"]) mkdirSync(join(project, dir), { recursive: true });
+    for (const dir of [".kiro/hooks", "src", "docs"]) mkdirSync(join(project, dir), { recursive: true });
     const home = dirname(project);
     const name = basename(project);
     const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project, HOME: home };
@@ -952,7 +952,8 @@ describe("t242 state-transition ownership guard", () => {
       [`cd "$HOME/${name}/.kiro" && echo x > hooks/y.json`, 2],
       ["cd $" + `{HOME}/${name}/.kiro && echo x > hooks/y.json`, 2],
       [`echo x > $HOME/${name}/.kiro/hooks/y.json`, 2],
-      // A > inside a quoted operand is not a redirection.
+      // A > inside a quoted operand is not a redirection. (The directory need
+      // not exist, and Windows cannot create it.)
       [`cd "x >y/../.kiro"; echo x > hooks/y.json`, 2],
       // $HOME from a bare cd never pushes out a directory collected earlier.
       // (.kiro and five doublings collect 63; one absolute cd makes the cap's 64.)
