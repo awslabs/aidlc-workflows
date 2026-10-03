@@ -2197,7 +2197,7 @@ function setupMapRows(
   const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
   const modelDetail = sessionSet
-    ? sessionModelsDetail(projectionProductName(root, distribution), policy)
+    ? sessionModelsDetail(modelHarness(distribution), policy)
     : !policy || modelPolicyIsEmpty(policy)
     ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset

@@ -510,9 +510,10 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 
 - **GitHub Copilot, Cursor, and Kiro IDE:** in the host, for the whole session.
   Every agent uses the model and effort of the chat you run `/aidlc` in, and
-  nothing AI-DLC records changes that. Only a `model:` line you add to an
-  agent file by hand changes one agent, until the next refresh; see
-  [Customization](13-customization.md).
+  nothing AI-DLC records changes that. On Kiro IDE, a `model:` line you add
+  to an agent's `.md` file by hand changes that agent until the next refresh
+  (see [Customization](13-customization.md)); on Copilot such a pin is not
+  portable, because the CLI and VS Code read model names differently.
 - **Claude Code, Codex CLI, and opencode:** the session's model and effort
   drive the conductor and every agent that inherits; `aidlc config models`
   can set agent efforts (the `balanced` preset sets them to medium) and
@@ -531,10 +532,12 @@ model, without Opus:
   on a hard Unit, then lower it again. On GitHub Copilot, Cursor, Kiro IDE,
   and Kiro CLI that is the session's effort. On Claude Code, Codex CLI, and
   opencode, Code Generation runs on the developer agent, which follows the
-  session only while no preset or effort is recorded for it; otherwise set
-  its effort before the workflow starts, for example
-  `aidlc config models --agent developer --effort high --project --yes`,
-  because config does not refresh agent files while a workflow is active.
+  session only while no preset or effort is recorded for it. Otherwise its
+  effort is the recorded one for every Unit of the workflow: to raise it,
+  record it before the workflow starts, for example
+  `aidlc config models --agent developer --effort high --project --yes`, and
+  it then applies to all of Code Generation, because config does not refresh
+  agent files while a workflow is active.
 - **Change model or effort between stages, in a new chat.** See
   [Changing Model Mid-Workflow](11-session-management.md#changing-model-mid-workflow).
 

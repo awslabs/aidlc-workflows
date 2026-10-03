@@ -20,6 +20,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
+  HARNESS_PRODUCT_NAMES,
   MODEL_PRESETS,
   modelPolicyDoctorIssues,
   modelPolicySurfaceDrift,
@@ -1009,16 +1010,55 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.fix).toContain("effort policy is not expressible on kiro");
 
     // Beside a harness that applies the preset, the preset is not called
-    // inert; each harness gets its own account.
+    // inert; each harness gets its own account, from the policy's real state.
     const mixed = temp("aidlc-t293-doctor-session-mixed-");
     cpSync(join(DIST, "claude"), mixed, { recursive: true });
     cpSync(join(DIST, "cursor"), mixed, { recursive: true });
+    expect(modelsPolicyCheck(mixed, true)).toEqual({
+      pass: true,
+      label: "Models: no recorded policy for Claude Code; " +
+        "every agent uses your Cursor session's model and effort",
+    });
     preset(mixed);
     expect(modelsPolicyCheck(mixed, true)).toEqual({
       pass: true,
       label: "Models: recorded policy is expressible on Claude Code; " +
         "every agent uses your Cursor session's model and effort",
     });
+    // Two session-set harnesses and no other: the preset applies on neither.
+    // They are listed in the project's harness discovery order.
+    const hosts = temp("aidlc-t293-doctor-session-hosts-");
+    cpSync(join(DIST, "cursor"), hosts, { recursive: true });
+    cpSync(join(DIST, "kiro-ide"), hosts, { recursive: true });
+    preset(hosts);
+    const inert = "the recorded balanced preset does not apply here";
+    expect(modelsPolicyCheck(hosts, true)).toEqual({
+      pass: true,
+      label: `Models: every agent uses your Kiro IDE session's model and effort; ${inert}; ` +
+        `every agent uses your Cursor session's model and effort; ${inert}`,
+    });
+  });
+
+  test("the host names messages use match each shipped harness", () => {
+    // The names are fixed in the tools so a project file cannot change them;
+    // they must still say what each harness calls itself.
+    for (const [harness, dir] of [
+      ["claude", ".claude"],
+      ["codex", ".codex"],
+      ["copilot", ".aidlc"],
+      ["cursor", ".cursor"],
+      ["kiro", ".kiro"],
+      ["kiro-ide", ".kiro"],
+      ["opencode", ".aidlc"],
+    ] as const) {
+      const shipped = JSON.parse(
+        readFileSync(join(DIST, harness, dir, "tools", "data", "harness.json"), "utf-8"),
+      ) as { productName: string };
+      expect(HARNESS_PRODUCT_NAMES[harness], harness).toBe(shipped.productName);
+    }
+    expect(Object.keys(HARNESS_PRODUCT_NAMES).sort()).toEqual(
+      ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
+    );
   });
 });
 

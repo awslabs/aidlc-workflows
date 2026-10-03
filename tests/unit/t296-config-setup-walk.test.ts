@@ -756,9 +756,12 @@ describe("t296 first-run config setup walk", () => {
         .toContain(`"productName": "${product}"`);
     }
 
-    // The product name comes from a project file, so anything but a plain
-    // name falls back to the harness id instead of reaching the terminal.
-    for (const [harness, dir] of [["copilot", ".aidlc"], ["cursor", ".cursor"]] as const) {
+    // The project's harness file cannot change which host the row names, nor
+    // put escape sequences on the terminal.
+    for (const [harness, dir, product, spoof] of [
+      ["copilot", ".aidlc", "GitHub Copilot", "Cursor"],
+      ["cursor", ".cursor", "Cursor", "GitHub Copilot"],
+    ] as const) {
       const path = project(`aidlc-t296-session-models-name-${harness}-`);
       const scaffold = run([
         "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
@@ -767,14 +770,16 @@ describe("t296 first-run config setup walk", () => {
       expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
       const descriptorPath = join(path, dir, "tools", "data", "harness.json");
       const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
-      descriptor.productName = "Copilot\u001b]0;owned\u0007\u001b[2J";
-      writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
-      const rerun = run(["config", "--project-dir", path], path, env, "n\n");
-      expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
-      expect(rerun.stdout, harness).not.toContain("\u001b");
-      expect(rerun.stdout, harness).not.toContain("\u0007");
-      expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
-        .toContain(`every agent uses your ${harness} session's model and effort`);
+      for (const name of ["Copilot\u001b]0;owned\u0007\u001b[2J", spoof]) {
+        descriptor.productName = name;
+        writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+        const rerun = run(["config", "--project-dir", path], path, env, "n\n");
+        expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+        expect(rerun.stdout, harness).not.toContain("\u001b");
+        expect(rerun.stdout, harness).not.toContain("\u0007");
+        expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
+          .toContain(`every agent uses your ${product} session's model and effort`);
+      }
     }
 
     // Kiro CLI can carry a per-agent model, so its row still asks.

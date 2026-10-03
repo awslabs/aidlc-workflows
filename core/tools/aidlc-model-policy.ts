@@ -172,11 +172,24 @@ export function sessionSetsAgentModels(harness: ModelHarness): boolean {
   return !honesty.model && !honesty.effort;
 }
 
+// The product each harness id names, for messages that point at the host.
+// Fixed here rather than read from the project, so a project file cannot name
+// another host.
+export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Object.freeze({
+  claude: "Claude Code",
+  codex: "Codex CLI",
+  copilot: "GitHub Copilot",
+  cursor: "Cursor",
+  kiro: "Kiro CLI",
+  "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
+});
+
 // The one sentence setup and doctor show on those harnesses. A recorded policy
 // (often a team's, for teammates on other harnesses) is named so nobody reads
-// it as applied here.
+// it as applied here; pass null where another installed harness applies it.
 export function sessionModelsDetail(
-  productName: string,
+  harness: ModelHarness,
   policy: ModelPolicyRecord | null,
 ): string {
   const recorded = modelPolicyIsEmpty(policy)
@@ -184,7 +197,7 @@ export function sessionModelsDetail(
     : policy?.preset
     ? `; the recorded ${policy.preset} preset does not apply here`
     : "; the recorded policy does not apply here";
-  return `every agent uses your ${productName} session's model and effort${recorded}`;
+  return `every agent uses your ${HARNESS_PRODUCT_NAMES[harness]} session's model and effort${recorded}`;
 }
 
 export type AgentTiers = Record<string, Tier>;

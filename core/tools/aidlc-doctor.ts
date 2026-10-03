@@ -47,8 +47,10 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  HARNESS_PRODUCT_NAMES,
   isModelHarness,
   modelPolicyDoctorIssues,
+  modelPolicyIsEmpty,
   sessionModelsDetail,
   sessionSetsAgentModels,
   type ModelHarness,
@@ -185,15 +187,9 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
   };
 }
 
-const PRODUCT_NAMES: Record<string, string> = {
-  claude: "Claude Code",
-  codex: "Codex CLI",
-  copilot: "GitHub Copilot",
-  cursor: "Cursor",
-  kiro: "Kiro CLI",
-  "kiro-ide": "Kiro IDE",
-  opencode: "opencode",
-};
+function productName(distribution: string): string {
+  return isModelHarness(distribution) ? HARNESS_PRODUCT_NAMES[distribution] : distribution;
+}
 
 export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorCheck {
   const harnesses = discoverProjectHarnesses(projectDir);
@@ -239,27 +235,23 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   // Where the session sets every agent, say where the lever is instead. A
   // recorded policy is named as not applying only when no other installed
   // harness can apply it.
-  const product = (distribution: string) => PRODUCT_NAMES[distribution] ?? distribution;
-  const sessionSet = harnesses
+  const installed = harnesses
     .map((harness) => harness.distribution)
-    .filter((distribution): distribution is ModelHarness =>
-      isModelHarness(distribution) && sessionSetsAgentModels(distribution)
-    );
+    .filter((distribution): distribution is ModelHarness => isModelHarness(distribution));
+  const sessionSet = installed.filter((distribution) => sessionSetsAgentModels(distribution));
   if (sessionSet.length > 0) {
-    const others = harnesses
-      .map((harness) => harness.distribution)
-      .filter((distribution) => !sessionSet.includes(distribution as ModelHarness));
+    const others = installed.filter((distribution) => !sessionSet.includes(distribution));
+    const policyFor = (distribution: ModelHarness) =>
+      modelPolicyForHarness(resolved.models, distribution);
+    const othersNamed = others.map(productName).join(", ");
     const parts = [
-      ...(others.length > 0
-        ? [`recorded policy is expressible on ${others.map(product).join(", ")}`]
-        : []),
+      ...(others.length === 0
+        ? []
+        : others.some((distribution) => !modelPolicyIsEmpty(policyFor(distribution)))
+        ? [`recorded policy is expressible on ${othersNamed}`]
+        : [`no recorded policy for ${othersNamed}`]),
       ...sessionSet.map((distribution) =>
-        sessionModelsDetail(
-          product(distribution),
-          harnesses.length === 1
-            ? modelPolicyForHarness(resolved.models, distribution)
-            : null,
-        )
+        sessionModelsDetail(distribution, others.length === 0 ? policyFor(distribution) : null)
       ),
     ];
     return { pass: true, label: `Models: ${parts.join("; ")}` };
@@ -340,7 +332,7 @@ function humanReport(
   output += renderSection(machine);
   output += `\n${heading(`Project${
     harness
-      ? ` (${harness.harnessDir}, ${PRODUCT_NAMES[harness.distribution] ?? harness.distribution})`
+      ? ` (${harness.harnessDir}, ${productName(harness.distribution)})`
       : ""
   }`, out)}\n`;
   output += renderSection(project, findingRows);
