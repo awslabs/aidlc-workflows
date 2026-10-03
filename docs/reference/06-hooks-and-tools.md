@@ -613,8 +613,7 @@ and direct state-tool refusals also withhold it from dispatched agents, as do
 delegated-agent and reviewer-scope redirects. Either way it is a key the person
 turns deliberately rather than one that turns itself, and once turned nothing
 asks again for that piece of work.
-Human-presence refusals instead say `This needs a fresh human turn: wait for the person to reply, then record it again.`
-They never advertise a switch.
+Human-presence refusals instead say that no new reply from the person is on record, and what happened to one they already sent (the harness's `hookActivation.missedReply` steps, or that `/aidlc --doctor` shows whether the hooks run). They never ask the person to reply again, and never advertise a switch.
 
 **Changed inputs after approval.** They no longer reach the decision table.
 Once the person approved a plan, other code moving is one notice line on every

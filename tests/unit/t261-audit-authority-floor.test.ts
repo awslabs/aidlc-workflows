@@ -348,6 +348,9 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("Refusing to switch Construction to autonomous");
+    // Run when the person chooses it; never a scripted re-ask.
+    expect(refused.out).toContain("Run it after they choose it.");
+    expect(refused.out).not.toContain("Ask the human to confirm");
 
     mintHumanTurn(proj);
     const granted = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);

@@ -1822,14 +1822,14 @@ if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
-      "An approval gate is open and no human has acted since it opened. The gate " +
-        "requires a typed human turn before any tool call proceeds. Acknowledge the " +
-        "gate as a human, then continue. If you already replied, Kiro may not be " +
-        "running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
-        "banner shows at the top of the window (select Manage, then Trust), run " +
-        `"Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
-        "the aidlc agent in the chat panel's agent picker, then reply again. In Kiro " +
-        "CLI, exit and start `kiro-cli` again in this folder, then reply again.\n",
+      "An approval gate is open and no reply from the person is on record since it " +
+        "opened, so no tool call runs until they answer it. If they already replied, " +
+        "Kiro did not pass that reply to AI-DLC's hooks in this window, so it was not " +
+        "recorded. Tell them that, and that trusting the folder if the Restricted Mode " +
+        "banner shows at the top of the window (select Manage, then Trust), running " +
+        `"Developer: Reload Window" from the Command Palette (${palette}), and choosing ` +
+        "the aidlc agent in the chat panel's agent picker lets their next message be " +
+        "recorded. In Kiro CLI, starting `kiro-cli` again in this folder does the same.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }

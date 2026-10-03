@@ -684,6 +684,8 @@ describe("t333 (3) resolution precedence", () => {
     expect(memoryStrictHoldsGuardPolicy(proj, content)).toBe(true);
     const sentence = fenceSwitchSentence(proj, "review-freeze", content);
     expect(sentence).toContain("cannot be turned off from chat");
+    // It says why, so the person knows what to fix.
+    expect(sentence).toContain("until it is fixed: ");
     expect(sentence).not.toContain("config set guard.review-freeze off");
   });
 
@@ -2330,7 +2332,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const error = JSON.parse(refused.stderr).error;
     expect(error).toStartWith(refusal);
     expect(error).toContain("AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count as a human reply.");
-    expect(error).toEndWith("This needs a fresh human turn: wait for the person to reply, then record it again.");
+    expect(error).toEndWith("Unset AIDLC_UNATTENDED before returning to interactive mode, then submit a new human response.");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(mutationRows(proj)).toEqual(ledger);
     expect(readFileSync(join(intents, "intents.json"), "utf-8")).toBe(registry);
