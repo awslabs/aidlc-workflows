@@ -362,6 +362,7 @@ describe("t-dotnet-build-outputs", () => {
     expect(step2).toContain("follow the repo's `.gitignore` files");
     expect(step2).toContain("skip build outputs, dependency folders, and IDE and tool caches");
     expect(step2).toContain("\"What to Skip\"");
+    expect(step2).toContain("beside a project file), without opening them.");
 
     const guide = prose("knowledge", "aidlc-developer-agent", "code-analysis-guide.md");
     const skip = guide.slice(guide.indexOf("## What to Skip"), guide.indexOf("## Source File Classification"));
@@ -369,5 +370,11 @@ describe("t-dotnet-build-outputs", () => {
     expect(skip).toContain(".NET `bin/` and `obj/` beside a `.csproj`");
     expect(skip).toContain("Node's `bin/www`");
     expect(guide).toContain("Classify every source file that \"What to Skip\" leaves in");
+    // The project file beside a folder decides; the scan opens a file only when
+    // nothing beside the folder tells, so .NET output is never read to check.
+    expect(skip).toContain("Decide from the files beside a folder, not by opening it.");
+    expect(skip).toContain("skip them without listing or reading anything inside");
+    expect(skip).toContain("Open one file in a folder only when nothing beside it tells which.");
+    expect(skip).not.toContain("Open a file in it to tell which.");
   });
 });
