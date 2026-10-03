@@ -39,6 +39,7 @@ const {
   prepareSdkStageFixture,
   stageApprovalQuestionBoundary,
 } = await import("../harness/sdk-drive.ts");
+const { assertResultOk } = await import("../harness/assert.ts");
 
 const STAGE = "reverse-engineering";
 const TS = "2026-01-01T00:00:00Z";
@@ -457,5 +458,7 @@ describe("the answer stream stays open while subagents still run", () => {
     const driven = await driveAidlc("fixture", { projectDir: project, timeoutMs: 300 });
     expect(driven.timedOut).toBe(true);
     expect(driven.resultEvent?.subtype).toBe("success");
+    // The earlier success does not make the timed-out run pass.
+    expect(() => assertResultOk(driven)).toThrow("the drive timed out");
   });
 });
