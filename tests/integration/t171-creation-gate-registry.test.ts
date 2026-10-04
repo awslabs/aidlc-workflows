@@ -826,6 +826,38 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         }
       });
 
+      test("a setting typed with the request reaches the record the continue option picks", () => {
+        const record = seedOneIntentNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+        // Its select command carries the setting, and a reply naming the option runs the same.
+        expect(ask.select_commands[0].command).toContain("--depth comprehensive");
+        for (const text of ["1", "Part of existing work"]) expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
+        // It selects the record, then continues it with the setting.
+        const step = emitted(ask.select_commands[0].command);
+        expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+        const commands = [...String(step.message).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+        expect(commands).toHaveLength(2);
+        expect(runEmittedCommand(commands[0]).status).toBe(0);
+        expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(record);
+        const applied = emitted(commands[1]);
+        expect(applied.kind, JSON.stringify(applied).slice(0, 300)).toBe("print");
+        expect(applied.message).toContain("config set depth comprehensive");
+        expect(runEmittedCommand(printedCommand(applied.message)).status).toBe(0);
+        expect(readFileSync(join(intentsDir(proj), record, "aidlc-state.md"), "utf-8")).toContain("- **Depth**: Comprehensive");
+      });
+
+      test("with two records, the setting rides the continue command of whichever one is picked", () => {
+        seedTwoIntentsNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        for (const row of ask.select_commands) expect(row.command).toContain(`--record ${row.selector} --depth comprehensive`);
+        const which = directive("1");
+        expect(which.ask_type).toBe("intent-pick");
+        expect(which.select_commands).toEqual(ask.select_commands);
+      });
+
       test("with one record listed, the reshape option reshapes it, exactly as its reshape command does", () => {
         seedOneIntentNoCursor();
         const ask = routingAsk();

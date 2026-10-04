@@ -2069,7 +2069,11 @@ function pickedRouteRecordAsk(
   const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
   const selectors = records.selectable.map(({ selector }) => selector);
   if (route === "continue") {
-    return intentPickAskDirective(`Which piece of work is this part of: ${records.list}?`, selectors);
+    return intentPickAskDirective(
+      `Which piece of work is this part of: ${records.list}?`,
+      selectors,
+      routingSelectCommands(question.id, selectors, existingWork),
+    );
   }
   return intentPickAskDirective(
     `Which piece of work should I reshape: ${records.list}?`,
@@ -2133,6 +2137,21 @@ function routingReshapeCommand(questionId: string, selector: string, existingWor
   return `${aidlcToolInvocation("orchestrate")} next compose --request ${questionId} --record ${shellArg(selector)}${existingWork}`;
 }
 
+// A routing question's answer that this is part of a listed record: with
+// settings typed with the request, it selects that record and continues it
+// with them; with none, it is the record's plain select command.
+function routingSelectCommands(
+  questionId: string,
+  selectors: string[],
+  existingWork: string,
+): Array<{ selector: string; command: string }> {
+  if (existingWork.length === 0) return selectCommands(selectors);
+  return selectors.map((selector) => ({
+    selector,
+    command: `${aidlcToolInvocation("orchestrate")} next --continue --request ${questionId} --record ${shellArg(selector)}${existingWork}`,
+  }));
+}
+
 function newWorkRoutingAskDirective(
   question: string,
   numberedProseQuestion: string,
@@ -2177,7 +2196,7 @@ function newWorkRoutingAskDirective(
     ...(availableIntents
       ? {
         available_intents: availableIntents,
-        select_commands: selectCommands(availableIntents),
+        select_commands: routingSelectCommands(stored.id, availableIntents, carried.existingWork),
         reshape_commands: availableIntents.map((selector) => ({
           selector,
           command: routingReshapeCommand(stored.id, selector, carried.existingWork),
@@ -5854,7 +5873,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
     return;
   }
-  if (routingAnswer && pickedRecords && routingAnswer.route === "continue") {
+  // Settings typed with the request ride a continue answer to the record it
+  // picks; with none, it is that record's plain select command.
+  const typedForExistingWork = (routingAnswer?.question.settings?.existingWork.length ?? 0) > 0;
+  if (routingAnswer && pickedRecords && routingAnswer.route === "continue" && !typedForExistingWork) {
     // Its select command, exactly as the question supplied it.
     flags.intent = undefined;
     flags.workspaceCommand = parseNextFlags(["intent", pickedRecords.selectable[0].selector]).workspaceCommand;
@@ -5863,6 +5885,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.request = routingAnswer.question.id;
     if (routingAnswer.route === "continue") {
       flags.continue = true;
+      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
     } else if (routingAnswer.route === "reshape") {
       flags.compose = true;
       if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
@@ -6275,8 +6298,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // A reshape answer that chose a listed record selects it, then reshapes it:
   // no stop between the two, and only a record the question offered.
   if (flags.record !== undefined) {
-    if (!flags.compose || question?.origin !== "routing") {
-      emit(errorDirective("--record answers a new-work routing question's reshape; run the command that question supplied."));
+    if (!(flags.compose || flags.continue) || question?.origin !== "routing") {
+      emit(errorDirective("--record answers a new-work routing question's continue or reshape; run the command that question supplied."));
       return;
     }
     if (!question.askedAbout?.targets.some((target) => target.intent === flags.record)) {
@@ -6284,9 +6307,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       return;
     }
     if (!(selection.space === question.askedAbout.space && selection.intent === flags.record)) {
+      const route = flags.continue ? "--continue" : "compose";
       emit(printDirective(
-        `To reshape ${flags.record}, run \`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
+        `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run \`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
+          `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
       ));
       return;
     }
