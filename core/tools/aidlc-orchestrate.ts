@@ -413,6 +413,19 @@ import {
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
 // not an error to throw. Composes engineStateFilePath() for the canonical location.
+// The deepest folder every path shares (POSIX paths), or "" when none does.
+function commonFolder(paths: readonly string[]): string {
+  if (paths.length === 0) return "";
+  const split = paths.map((path) => path.split("/").slice(0, -1));
+  const shared: string[] = [];
+  for (let index = 0; index < split[0].length; index++) {
+    const segment = split[0][index];
+    if (split.some((parts) => parts[index] !== segment) || segment.includes("<")) break;
+    shared.push(segment);
+  }
+  return shared.join("/");
+}
+
 function loadStateFileIfPresent(projectDir: string): string | null {
   const path = engineStateFilePath(projectDir);
   if (!existsSync(path)) return null;
@@ -12499,6 +12512,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       if (gateReply.kind === "print") {
         const next = nextInScopeStage(slug, scope, loadStateFileIfPresent(pd) ?? undefined);
         gateReply.next_stage = next ? next.name : null;
+        // Where the stage's output is, said with the gate, so the person can
+        // look even when no summary comes before the question.
+        const folder = commonFolder(resolveProduces(node, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)));
+        if (folder) gateReply.narration = `${node.name} is ready for your review: what it produced is in ${folder}/.`;
       }
     }
     emit(gateReply);

@@ -2102,6 +2102,10 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     const opened = orchestrate(["report", "--stage", "feasibility", "--result", "awaiting-approval"], p, noReview);
     expect(opened.status, opened.out).toBe(0);
     expect(lastDirective(opened.stdout)).toMatchObject({ kind: "print", next_stage: "Scope Definition" });
+    // Where the stage's output is, said with the gate.
+    expect(String(lastDirective(opened.stdout).narration)).toMatch(
+      /^Feasibility[^:]* is ready for your review: what it produced is in aidlc\/spaces\/default\/intents\/[^/]+\/ideation\/feasibility\/\.$/,
+    );
 
     // Scope Definition is taken off the plan while Feasibility is still open.
     const q = feasibilityDone();
