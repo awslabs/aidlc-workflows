@@ -65,6 +65,7 @@ import {
   stateFilePath,
   stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
+import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
@@ -479,25 +480,6 @@ if (target === "verb-intercept") {
     out = cmd.error;
   } else {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    const compiledArgs = (() => {
-      if (cmd.source === "plugin-verb") {
-        if (cmd.subcommand === "plugin-list") return ["plugin", "list", ...forwarded];
-        if (cmd.subcommand === "plugin-sync") return ["plugin", "sync", ...forwarded];
-        if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
-        if (cmd.subcommand === "plugin-validate") return ["plugin", "validate", ...forwarded];
-        if (cmd.subcommand === "plugin-build") return ["plugin", "build", ...forwarded];
-        if (cmd.subcommand === "help") return ["plugin", "help"];
-      }
-      if (cmd.source === "knowledge-verb") {
-        // The knowledge verb IS the subcommand, so no translation table -- but
-        // the noun must be restored, since the compiled CLI dispatches on it.
-        if (cmd.subcommand === "help") return ["knowledge", "help"];
-        return ["knowledge", cmd.subcommand, ...forwarded];
-      }
-      if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
-      if (cmd.subcommand === "intent-create") return ["intent", "create", ...forwarded];
-      return [cmd.subcommand, ...forwarded];
-    })();
     // Which tool owns the subcommand. Every terminal family before DocumentKB
     // lived in aidlc-utility.ts, so this was a constant; `knowledge` verbs live
     // in their own tool, so the non-compiled path must pick one. Getting this
@@ -508,7 +490,7 @@ if (target === "verb-intercept") {
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(
       executable
-        ? [executable, "engine", ...compiledArgs]
+        ? [executable, ...terminalDispatcherArgv(cmd)]
         : [process.execPath, ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );

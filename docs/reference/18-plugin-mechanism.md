@@ -299,10 +299,11 @@ directly with Bun, no shell, with `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
 run with `BUN_BE_BUN=1`, which the script inherits, so an `aidlc` command the
 script runs would start Bun instead: check with Bun APIs, not by running
 `aidlc`. A disabled plugin's script remains inert. When
-`harness.json` has no `plugins` selection, every installed plugin known from the
-full stage/scope metadata is eligible. Discovery requires that the plugin own at
-least one stage or scope; a plugin that ships only tools, sensors, or knowledge
-does not contribute an identity that doctor can discover.
+`harness.json` has no `plugins` selection, every installed plugin is eligible:
+one that owns a stage or scope, or one whose composition left a sidecar under
+`tools/data/` (`plugin-contrib-`, `plugin-owned-`, or `plugin-compose-<plugin>.json`).
+A plugin that ships only sensors or overlays is therefore discoverable and
+selectable once it is composed.
 
 The script writes one JSON object to stdout:
 

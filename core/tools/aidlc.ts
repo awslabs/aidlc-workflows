@@ -984,7 +984,7 @@ export const ROUTES: readonly Route[] = [
     // this literal, because reading the route is exactly what missed it.
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize"],
+    verbs: ["onboard", "sync", "list", "show", "associate", "dissociate", "rebind", "summarize", "help"],
     tool: TOOLS.knowledge,
     ...PUBLIC_ENGINE,
     // ONE line in the human help, which is capped at 20 lines: it is a summary
@@ -2559,6 +2559,48 @@ function routeById(id: string): Route {
   const route = ROUTES.find((candidate) => candidate.id === id);
   if (!route) throw new Error(`dispatcher route registry is missing ${id}`);
   return route;
+}
+
+// The plugin terminal subcommands (classifyTerminalCommand) and the
+// `engine plugin` verb each one runs.
+const PLUGIN_TERMINAL_VERBS: Readonly<Record<string, string>> = {
+  "plugin-list": "list",
+  "plugin-sync": "sync",
+  "select-plugins": "select",
+  "plugin-validate": "validate",
+  "plugin-build": "build",
+};
+
+/**
+ * The dispatcher argv (after `aidlc`, or after the copy channel's
+ * `bun <harness>/tools/aidlc.ts`) for one classified `/aidlc` terminal command
+ * (classifyTerminalCommand in aidlc-lib.ts). Most of these live under
+ * `engine`, but a verb this table makes public at the top level (doctor,
+ * version) has no `engine` spelling, and `/aidlc`'s own usage is the engine's
+ * `orchestrate help`, the text `aidlc-utility.ts help` prints, not the
+ * binary's command list. The engine's read-only flag directive and the Kiro
+ * adapters' native path all read this.
+ */
+export function terminalDispatcherArgv(command: {
+  subcommand: string;
+  arg?: string;
+  args?: readonly string[];
+  source: string;
+}): string[] {
+  const forwarded = command.args ?? (command.arg !== undefined ? [command.arg] : []);
+  if (command.source === "plugin-verb" && PLUGIN_TERMINAL_VERBS[command.subcommand]) {
+    return ["engine", "plugin", PLUGIN_TERMINAL_VERBS[command.subcommand], ...forwarded];
+  }
+  if (command.source === "knowledge-verb") {
+    return ["engine", "knowledge", command.subcommand, ...forwarded];
+  }
+  if (command.subcommand === "help") return ["engine", "orchestrate", "help"];
+  if (command.subcommand === "space-create") return ["engine", "space", "create", ...forwarded];
+  if (command.subcommand === "intent-create") return ["engine", "intent", "create", ...forwarded];
+  const publicTop = ROUTES.some((route) =>
+    route.namespace === "public" && route.group === "top" && route.verbs.includes(command.subcommand)
+  );
+  return publicTop ? [command.subcommand, ...forwarded] : ["engine", command.subcommand, ...forwarded];
 }
 
 export function routePolicyFor(argv: readonly string[]): Route | null {
