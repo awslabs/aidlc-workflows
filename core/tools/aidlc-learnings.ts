@@ -125,9 +125,10 @@ import {
   relativeMemoryPath,
   relativeRecordDir,
   resolveProjectDir,
+  resolveBoltDag,
   resolveWorkflowSelection,
   runtimeGraphPath,
-  unitMajorConstructionStageSlugs,
+  constructionCheckpointsApply,
   spacesRoot,
   validSpaceFlag,
   withAuditLock,
@@ -135,6 +136,7 @@ import {
   harnessDir,
 } from "./aidlc-lib.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
 
 // --- Exit-code convention (plan §2) ---
 //   0 success
@@ -343,24 +345,35 @@ function resolveMemoryPath(
   return derived;
 }
 
-// Built one Unit at a time, Current Stage stays on the first per-Unit stage
-// every Unit has not finished while a Unit walks the later ones, so a stage
-// of that same open per-Unit run is the Unit's own.
-function unitWalkStage(stateContent: string, current: string, slug: string): boolean {
-  if (getField(stateContent, "Construction Iteration")?.trim() !== "unit-major") return false;
-  const block = unitMajorConstructionStageSlugs(getField(stateContent, "Scope")?.trim() ?? "", stateContent);
-  return block.includes(current) && block.includes(slug);
+// A Construction checkpoint the person approves covers every stage its Unit
+// walked, while Current Stage waits on the first one until every Unit is past
+// it. A stage of the checkpoint now at its approval (ready, not yet approved)
+// is the one that just ran.
+function checkpointStage(projectDir: string, stateContent: string, slug: string): boolean {
+  if (!constructionCheckpointsApply(stateContent)) return false;
+  try {
+    const dag = resolveBoltDag(projectDir);
+    if (dag.state !== "ok") return false;
+    const units = dag.batches.flat();
+    return units.some((unit) => {
+      const kind = constructionCheckpointKind(stateContent, unit, units);
+      const checkpoint = resolveConstructionCheckpoint(projectDir, unit, kind, stateContent);
+      return checkpoint.ready && !checkpoint.approved && checkpoint.stages.includes(slug);
+    });
+  } catch {
+    return false;
+  }
 }
 
 // The §13 ritual runs while the just-completed stage is still the Active
 // (Current Stage) row at the approval gate. Reject a slug that isn't the
 // active one — the orchestrator must surface the stage it just ran.
-function assertActiveStage(stateContent: string, slug: string): void {
+function assertActiveStage(projectDir: string, stateContent: string, slug: string): void {
   const current = getField(stateContent, "Current Stage");
   if (current === null) {
     fail("state file has no Current Stage field", 1);
   }
-  if (current !== slug && !unitWalkStage(stateContent, current, slug)) {
+  if (current !== slug && !checkpointStage(projectDir, stateContent, slug)) {
     // --slug takes a stage's slug. When the value is no stage at all (an
     // intent's record name is the usual one), name the active stage to pass.
     const retry = !findStageBySlug(slug) && findStageBySlug(current)
@@ -397,7 +410,7 @@ function handleSurface(args: string[], projectDir: string): void {
     fail(`could not read state: ${errorMessage(e)}`, 1);
   }
 
-  assertActiveStage(stateContent, slug);
+  assertActiveStage(projectDir, stateContent, slug);
 
   const memRel = resolveMemoryPath(projectDir, slug, pinnedIntent, space);
   const memAbs = join(projectDir, memRel);

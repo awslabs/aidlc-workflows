@@ -124,6 +124,20 @@ function next(p: string) {
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
     artifact_reuse?: { decision: string; unit: string };
     ask_type?: string; narration?: string; plan_approval?: { status?: string; feedback?: string };
+    protocol_modules?: string[];
+  };
+}
+
+// `learnings surface` against the fixture. A compiled graph also lists the
+// stages, whose diary paths surface reads.
+function learningsSurface(p: string) {
+  const graphPath = join(seededRecordDir(p), "runtime-graph.json");
+  return (slug: string) => {
+    const graph = JSON.parse(readFileSync(graphPath, "utf-8"));
+    if (!Array.isArray(graph.stages)) writeFileSync(graphPath, JSON.stringify({ stages: [], ...graph }));
+    return spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-learnings.ts"), "surface", "--slug", slug, "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   };
 }
 
@@ -248,6 +262,42 @@ describe("t342 Construction checkpoint routing", () => {
     expect(following.stage).toBe("functional-design");
     expect(following.unit).toBe("beta");
     expect(following.construction_checkpoint).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A live run built two Units one at a time with checkpoints and learnings
+  // on: the checkpoint offered no learnings, and the agent's own try at each
+  // stage was refused because Current Stage waits on the first one.
+  test("a Unit's checkpoint offers one learnings ritual for the stages it covers", () => {
+    const p = fixture();
+    const surface = learningsSurface(p);
+    // Before alpha's checkpoint, a later stage is not the stage that just ran.
+    cover(p, "alpha", stages.slice(0, 2));
+    expect(surface("nfr-requirements").stderr).toContain('slug mismatch: requested "nfr-requirements"');
+    cover(p, "alpha", stages.slice(2));
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
+    expect(directive.protocol_modules).toEqual(["construction", "learnings"]);
+    for (const slug of stages) {
+      const surfaced = surface(slug);
+      expect(surfaced.status, `${slug}: ${surfaced.stderr}`).toBe(0);
+    }
+    expect(surface("requirements-analysis").status).toBe(1);
+    // Approved, the checkpoint's stages no longer wait on the person.
+    approve(p, "alpha");
+    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+  });
+
+  test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
+    const p = fixture({ stance: "on", iteration: "stage-major" });
+    seedBoltDag(p, [{ name: "beta", depends_on: ["alpha"] }, "alpha"], [["alpha"], ["beta"]]);
+    const surface = learningsSurface(p);
+    cover(p, "alpha");
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.kind, JSON.stringify(directive)).toBe("skeleton");
+    expect(directive.protocol_modules).toEqual(["construction", "learnings"]);
+    for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
+    approve(p, "alpha", "skeleton");
+    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major reviews alpha before starting beta", () => {

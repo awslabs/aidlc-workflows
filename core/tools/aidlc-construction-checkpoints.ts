@@ -11,6 +11,7 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
+  constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
   VERIFICATION_COMMAND_RECOVERY,
@@ -69,6 +70,16 @@ import {
 import { formatReceivedReply, readApprovalGateReply } from "./aidlc-reply-reader.ts";
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
+
+// The walking skeleton's first Unit stops at the skeleton checkpoint; every
+// other Unit, and every Unit without the skeleton, at its own Unit checkpoint.
+export function constructionCheckpointKind(
+  stateContent: string,
+  unit: string,
+  allUnits: readonly string[],
+): ConstructionCheckpointKind {
+  return constructionSkeletonOn(stateContent) && unit === allUnits[0] ? "skeleton" : "unit";
+}
 
 export interface ConstructionCheckpointProof {
   version: 4;

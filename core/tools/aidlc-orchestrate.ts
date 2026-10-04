@@ -326,6 +326,7 @@ import {
   checkpointPolicyEnabled,
   loadConstructionEvidence,
   resolveConstructionCheckpoint,
+  constructionCheckpointKind,
   type ConstructionCheckpointKind,
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
@@ -7518,6 +7519,11 @@ function applyConstructionCheckpointShape(
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
   directive.protocol_modules = ["construction"];
+  // A checkpoint the person approves offers one learnings ritual for the
+  // stages it covers, as a stage's own approval gate does.
+  if (directive.ceremony.learnings === "on" && checkpoint.human_required) {
+    directive.protocol_modules.push("learnings");
+  }
 }
 
 function applySwarmCheckpointShape(
@@ -9384,10 +9390,7 @@ function unitMajorWalkStep(
       if (stop) return stop;
     }
     if (checkpoints && stateContent) {
-      const kind: ConstructionCheckpointKind =
-        constructionSkeletonOn(stateContent) && u === allUnits[0]
-          ? "skeleton"
-          : "unit";
+      const kind = constructionCheckpointKind(stateContent, u, allUnits);
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
     }
