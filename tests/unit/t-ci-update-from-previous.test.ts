@@ -32,10 +32,10 @@ describe("ci-update-from-previous helpers", () => {
       hooks: { Stop: [{ hooks: [{ type: "command", command: "aidlc engine hook continue-workflow" }] }] },
       statusLine: { command: "aidlc engine statusline" },
     }));
-    writeFileSync(join(tree, "hooks", "guard.kiro.hook"), JSON.stringify({
-      then: { command: "aidlc engine adapter kiro state-transition-guard aidlc-developer-agent" },
-      when: { patterns: ["aidlc engine adapter *"] },
-    }));
+    // A Kiro IDE hook file, written as text: its "then" key is the hook's action.
+    writeFileSync(join(tree, "hooks", "guard.kiro.hook"),
+      '{"then":{"command":"aidlc engine adapter kiro state-transition-guard aidlc-developer-agent"},' +
+        '"when":{"patterns":["aidlc engine adapter *"]}}');
     writeFileSync(join(tree, "hooks", "notes.md"), "aidlc engine hook session-start\n");
     writeFileSync(join(tree, "broken.json"), "{ not json");
     expect(hookCommands(tree)).toEqual([

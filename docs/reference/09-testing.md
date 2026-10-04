@@ -1388,6 +1388,11 @@ The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
+The `update-from-previous` job (`scripts/ci-update-from-previous.ts`) updates an
+install of the last stable release to the candidate on Linux, macOS and Windows
+and runs every harness project's hooks, refresh and doctor. When it fails, the
+preview still publishes, its notes open with a warning and the report gains a
+line for it; `release.yml` does not publish a stable release that fails it.
 `Release result` requires successful preview publication or an intentional
 skip. Full Suite runs separately: the preview records its run ID, downloads
 that run's evidence and reports its real result, without propagating its failure.

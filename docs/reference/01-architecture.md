@@ -633,7 +633,12 @@ out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
 `aidlc-runtime-X.Y.Z.tar.gz`, and emits the flat `version.json` plus
 `checksums.txt`, both installers, and binaries. The staging job re-verifies and
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
-its checksums and test it. `publish` downloads the same candidate, re-verifies
+its checksums and test it. The `update-from-previous` job, on Linux, macOS and
+Windows, installs the last stable release with its own installer, sets up a
+project for every harness, runs `aidlc update` to the candidate, and checks that
+each project's hooks, `aidlc config --yes` refresh and doctor still work. A
+stable release does not publish when it fails; a preview publishes with a
+warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
 the complete inventory, and uploads one `attested-release` workflow artifact.
 `release` rechecks the tag and checksums, creates the GitHub Release in this
