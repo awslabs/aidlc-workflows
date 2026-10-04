@@ -201,20 +201,27 @@ describe("the stage gate records the choice the agent read, with the person's wo
   // CLI approval that also asks for the next step was refused as "approved and
   // asked for a change"; the skip it asks for is the agent's next command. A
   // Claude Code CLI approval at Reverse Engineering was refused as not matching
-  // an offered choice, and the person had to type "Approve".
+  // an offered choice, and the person had to type "Approve". On Copilot, "move
+  // on" was read as Request Changes, and "keep going" and "next" as unclear.
   test.each([
     "approve, and skip the deployment stuff, there is nothing to deploy for this fix",
     "ok that makes sense, approve",
+    "move on",
+    "keep going",
+    "next",
   ])("%s records the approval with their words and asks nothing again", (words) => {
+    expect(exactOptionPick(words, ["Approve", "Request Changes"])).toBeNull();
     says(proj, words);
     const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
     expect(done.kind, JSON.stringify(done)).toBe("done");
     expect(JSON.stringify(done)).not.toContain("nothing was recorded");
     expect(JSON.stringify(done)).not.toContain("asked for a change in the same reply");
     expect(JSON.stringify(done)).not.toContain("did not match an offered choice");
+    expect(JSON.stringify(done)).not.toContain("picked Request Changes");
     const approved = events(proj, "GATE_APPROVED");
     expect(approved).toHaveLength(1);
     expect(auditBlockField(approved[0].block, "Person Reply")).toBe(words);
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
   });
 
   // From a live Kiro CLI run: at an open stage gate the person typed only a
