@@ -475,6 +475,8 @@ its lead inline and dispatches only its support agents:
 | 2.4 User Stories | mob | lead inline; `aidlc-design-agent` + `aidlc-developer-agent` + `aidlc-quality-agent` in parallel | 4 participants | The lead drafts; mutually blind collaborators write contribution files; the lead integrates before the gate |
 | 3.5 Code Generation | subagent | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on unit specification |
 
+With collaborators off (every shipped scope except `enterprise`), the directive's `support_agents` is empty and the first three rows run their lead alone: the developer is the pipeline's only link, and no spokes, mob round, or contribution files follow.
+
 Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-based scanner inside `aidlc-utility intent-create`; rules are documented in `aidlc-common/stages/initialization/workspace-detection.md`.
 
 The 6-step process:

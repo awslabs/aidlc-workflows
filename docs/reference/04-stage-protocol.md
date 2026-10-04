@@ -672,7 +672,9 @@ mutually blind quality, developer, and devsecops contributions, human interview,
 then lead integration. Its gate offers **Approve** / **Request Changes**; after
 Approve, `practices-promote` must commit both the affirmed timestamp and a
 `PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
-conductor reports the stage approved.
+conductor reports the stage approved. With collaborators off (the scope setting,
+shipped on only for `enterprise`), the directive lists no support agents and each
+of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5).
 
 ### The 11 Domain Agents
 

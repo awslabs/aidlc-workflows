@@ -191,7 +191,7 @@ Application code in workspace root:
 
 ## Feature Walkthrough
 
-This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases.
+This example builds a notification service for a task management application. The **feature** scope runs all 33 stages at Standard depth. This walkthrough highlights key stages across all phases. It runs with collaborators on (`/aidlc --collaborators on`), so the Inception ensembles below show their full roster; the feature scope ships them off, and then those stages run with the lead agent only.
 
 ### Invocation
 

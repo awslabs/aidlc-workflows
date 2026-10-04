@@ -116,8 +116,8 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 ## Scope settings
 
-The grid decides which stages run; five scope settings decide how much
-ceremony runs inside them. Every front/report proposal names all five in its
+The grid decides which stages run; six scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all six in its
 `scopeSettings` member, in the scope file's own words, with a 1-2 sentence
 `scopeSettingsRationale`:
 
@@ -139,12 +139,12 @@ ceremony runs inside them. Every front/report proposal names all five in its
   Any value can change, reviews included: a review level set for the piece of
   work replaces its scope's ceiling.
 - Validate the final grid with the chosen values and its route (`--matched
-  <scope>` or `--custom`); either flag makes the five settings and the Guard
+  <scope>` or `--custom`); either flag makes the six settings and the Guard
   Policy required, and the validator checks each against the words the scope
   loader accepts.
 - For a custom grid, start from the validator's `custom_start.scope_settings`:
-  the classic scope's values (in core, summary confirmation off, reviews
-  advisory, the rest on), whichever stock scope the plan runs on. The plan
+  the classic scope's values (in core, summary confirmation and collaborators
+  off, reviews advisory, the rest on), whichever stock scope the plan runs on. The plan
   picks its own stages; only the ceremony starts from classic. Without a
   `custom_start` echo, start from the validator's nearest stock scope. A
   matched proposal that the human's edit turns custom keeps the Guard Policy
@@ -174,11 +174,12 @@ ceremony runs inside them. Every front/report proposal names all five in its
   audit trail; `plan_approval: off` removes only the plan stop, and a
   memory-held strict Guard Policy keeps it on. A global kill switch
   (`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
-  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) still forces its ceremony off
+  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`,
+  `AIDLC_DISABLE_COLLABORATORS=1`) still forces its ceremony off
   whatever the scope says. The validator names one that forces an `on` value
   off on this machine; mark that value in the gate row, since the scope stores
   `on` but the ceremony will not run until the switch is cleared.
-- The human sees the five values as one gate row, and whatever they ask for
+- The human sees the six values as one gate row, and whatever they ask for
   there is done. A change keeps the route and applies to this piece of work;
   only lowering a matched proposal's Guard Policy makes it custom. Plan
   approval keeps the value the plan starts from: only the person turns it
