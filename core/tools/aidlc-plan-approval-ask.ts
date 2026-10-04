@@ -1293,6 +1293,9 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
     const open = currentPlanApprovalAsk(projectDir, "some");
     const replies = open?.record.replies ?? [];
     if (open === null || open.record.mode !== "ask" || replies.length === 0) return [];
+    // Kept words can be a question about the switch ("skip plan approval?"),
+    // which is no reply: the files open only after a reply to the question.
+    if (open.record.repliesFrom && !personRepliedAfter(projectDir, open.record.repliesFrom)) return [];
     // In a question about several plans a bare pick ("2") does not say which
     // plan: nothing opens until the person says more in their own words.
     if (open.record.targets.length > 1 && exactOptionPick(replies[replies.length - 1].text, open.record.choices) !== null) {
@@ -1684,11 +1687,19 @@ export function requestPlanApprovalReviewNow(projectDir: string): string | null 
         "changed. Tell the person, then record it again.";
     }
     // The person looks again: an answer recorded for these plans before (a
-    // misread, or one they changed their mind about) no longer decides them.
+    // misread, or one they changed their mind about) no longer decides them,
+    // and the question shown again is a fresh one, answered only by a reply
+    // after it.
     const asked = readPlanApprovalAsk(projectDir, intentId);
-    if (asked?.results?.some((result) => units.includes(result.unit))) {
-      const results = asked.results.filter((result) => !units.includes(result.unit));
-      const reopened: PlanApprovalAskRecord = { ...asked };
+    // A request that names no plan is about the question on record, if any.
+    const looked: Array<string | null> = units.length > 0 ? units : (asked?.targets.map((target) => target.unit) ?? []);
+    if (asked && (asked.results?.some((result) => looked.includes(result.unit)) ||
+      asked.targets.some((target) => looked.includes(target.unit)))) {
+      const results = (asked.results ?? []).filter((result) => !looked.includes(result.unit));
+      const reopened: PlanApprovalAskRecord = {
+        ...asked, askId: randomBytes(16).toString("hex"), repliesFrom: auditMark(projectDir), bound: true,
+      };
+      delete reopened.replies;
       if (results.length > 0) reopened.results = results; else delete reopened.results;
       writePlanApprovalAsk(projectDir, reopened);
     }

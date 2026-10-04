@@ -1080,6 +1080,34 @@ describe("when the stage rules arrive in parts", () => {
     expect(build.directive.plan_approval).toEqual({ status: "approved" });
   });
 
+  // AIDA F34: the question shown again after "Review the plan" is a fresh one.
+  test("after Request Changes and \"Review the plan\", Approve Plan waits for a new reply, then records", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "2");
+    reply(proj, "review the plan first");
+    expect(answer(proj, "Review the plan").message).toContain("wants to review the plan");
+    const shown = next(proj);
+    expect(shown.kind, JSON.stringify(shown)).toBe("ask");
+    const early = answer(proj, "Approve Plan");
+    expect(early.code, early.message).not.toBe(0);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    reply(proj, "ok, approve it");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  // AIDA F34: a question about the switch is kept as words but is no reply, so
+  // the plan's files stay closed.
+  test("\"skip plan approval?\" leaves the plan files closed to edits", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "skip plan approval?");
+    expect(guardWrite(proj, join(stageDir(proj), "code-generation-plan.md")).code).toBe(2);
+    expect(guardWrite(proj, join(stageDir(proj), "unit-test-instructions.md")).code).toBe(2);
+  });
+
   test("'review the plan first' said while the rules are arriving asks again before anything is built", () => {
     const proj = withRulesInParts(project());
     askFor(proj);
