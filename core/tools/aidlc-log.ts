@@ -1283,8 +1283,13 @@ function pendingSummaryDecision(
 // checkpoint), the person answered it, and the conductor then recorded the
 // question with its checkpoint. Their reply to the question as first asked
 // answers it, so they are not asked again. Holds only within one shard, with
-// that reply between the two records and nothing else asked or answered for
-// this stage and work item in between.
+// that reply between the two records and nothing else asked or answered in
+// between, for this or any other work item: that reply may have been for it.
+// A question asked or answered, or a gate shown or decided, for any work item.
+const PLAIN_SUMMARY_INTERVENING_EVENTS = new Set([
+  "DECISION_RECORDED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED", "PLAN_APPROVAL_RECORDED", "STAGE_AWAITING_APPROVAL", "GATE_APPROVED", "GATE_REJECTED",
+]);
 function plainSummaryAnsweredBefore(
   pd: string,
   stage: string,
@@ -1306,12 +1311,12 @@ function plainSummaryAnsweredBefore(
     const sameItem = auditBlockField(row.block, "Stage") === stage &&
       (auditBlockField(row.block, "Unit") ?? undefined) === unit &&
       (auditBlockField(row.block, "Workflow") ?? undefined) === workflow;
-    if (!sameItem) continue;
-    if (row.event === "DECISION_RECORDED") {
+    if (sameItem && row.event === "DECISION_RECORDED") {
       return replied && auditBlockField(row.block, "Checkpoint") === null &&
         isSummaryConfirmationOptions(auditBlockField(row.block, "Options") ?? undefined);
     }
-    if (["QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED", "STAGE_COMPLETED"].includes(row.event)) return false;
+    if (PLAIN_SUMMARY_INTERVENING_EVENTS.has(row.event)) return false;
+    if (sameItem && row.event === "STAGE_COMPLETED") return false;
   }
   return false;
 }

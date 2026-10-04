@@ -184,6 +184,31 @@ describe("t-summary-confirmation-plain-form: the plain form is refused where it 
     expect(rows(proj, "HUMAN_TURN")).toHaveLength(turns);
   });
 
+  test("a reply after another question in between is that question's, not the plain summary's", () => {
+    const { proj, questions } = project();
+    appendAuditEntry("DECISION_RECORDED", {
+      Stage: STAGE, Decision: "Does this all look correct?", Options: "Looks correct,Request changes",
+    }, proj);
+    // Another work item's question was asked, and the person replied to it.
+    appendAuditEntry("DECISION_RECORDED", { Stage: "user-stories", Decision: "Which persona first?", Options: "Admin,Guest" }, proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const decision = run(
+      ["decision", "--stage", STAGE, "--checkpoint", "summary-confirmation", "--questions-file", questions,
+        "--decision", "Does this all look correct?", "--options", "Looks correct,Request changes"],
+      proj,
+    );
+    expect(decision.status, decision.stderr).toBe(0);
+    writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:\n", "[Answer]: Looks correct\n"));
+    const recorded = run(
+      ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
+        "--details", "Looks correct"],
+      proj,
+    );
+    expect(recorded.status).toBe(1);
+    expect(recorded.error).toContain("no human reply has arrived after this question");
+    expect(rows(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
+  });
+
   test("a summary recorded with its checkpoint after an unrelated reply still waits for the person", () => {
     const { proj, questions } = project();
     // A reply before any summary question is not an answer to it.
