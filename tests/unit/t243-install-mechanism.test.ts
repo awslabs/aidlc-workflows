@@ -30,7 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createTarGz,
   extractTarGz,
@@ -2370,6 +2370,163 @@ describe("t243 project initialization", () => {
     expect(readFileSync(projectOnly, "utf-8")).toContain("Project-only skill.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  describe("project-owned files under the harness dir (#1516)", () => {
+    const skillRel = ".claude/skills/my-team-skill/SKILL.md";
+    const skillBody = "---\nname: my-team-skill\ndescription: A project-owned skill.\n---\n\n# My team skill\n";
+    const manifestRel = ".claude/tools/data/aidlc-manifest.json";
+
+    function manifestOf(
+      project: string,
+    ): { frameworkVersion: string; files: Record<string, string>; shippedOnly?: true } {
+      return JSON.parse(readFileSync(join(project, manifestRel), "utf-8"));
+    }
+
+    function put(project: string, rel: string, body: string): void {
+      mkdirSync(join(project, dirname(rel)), { recursive: true });
+      writeFileSync(join(project, rel), body);
+    }
+
+    function installedProject(): string {
+      const project = temp("aidlc-t243-owned-");
+      mkdirSync(join(project, ".git"));
+      const installed = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      return project;
+    }
+
+    function refresh(project: string, extra: string[] = []) {
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, ...extra], project);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      return refreshed;
+    }
+
+    test("a project-owned skill survives repeated refreshes and is never recorded as framework-owned", () => {
+      const project = installedProject();
+      put(project, skillRel, skillBody);
+
+      for (let pass = 1; pass <= 3; pass++) {
+        const refreshed = refresh(project);
+        expect(existsSync(join(project, skillRel)), `refresh ${pass}`).toBe(true);
+        expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(skillRel);
+        expect(refreshed.stdout + refreshed.stderr).not.toMatch(/remove[^\n]*my-team-skill/);
+      }
+      const dry = refresh(project, ["--dry-run", "--json"]);
+      const actions = (JSON.parse(dry.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      }).data.actions;
+      expect(actions.find((action) => action.path === skillRel)).toEqual({
+        path: skillRel,
+        action: "preserve",
+        detail: "project-owned",
+      });
+      expect(actions.find((action) => action.path === manifestRel)?.detail).not.toBe("project-owned");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a project-owned stage the staged merge rewrites is never recorded either", () => {
+      const project = installedProject();
+      const stageRel = ".claude/aidlc-common/stages/construction/team-review.md";
+      const shipped = readFileSync(
+        join(CLAUDE_RELEASE, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"),
+        "utf-8",
+      );
+      const stage = shipped
+        .replace("slug: build-and-test", "slug: team-review")
+        .replace("name: Build and Test", "name: Team Review")
+        .replace(/produces:\n(?: {2}- .+\n)+/, "produces:\n  - team-review-notes\n");
+      expect(stage).toContain("slug: team-review");
+      put(project, stageRel, stage);
+      put(
+        project,
+        ".claude/tools/data/plugin-contrib-demo.json",
+        `${JSON.stringify({ "team-review": { produces: ["demo-extra"] } }, null, 2)}\n`,
+      );
+
+      for (let pass = 1; pass <= 3; pass++) {
+        refresh(project);
+        expect(existsSync(join(project, stageRel)), `refresh ${pass}`).toBe(true);
+        expect(manifestOf(project).files, `refresh ${pass}`).not.toHaveProperty(stageRel);
+        expect(existsSync(join(project, ".claude/tools/data/plugin-contrib-demo.json")), `refresh ${pass}`).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a framework file the release no longer ships is still removed", () => {
+      const project = installedProject();
+      const retiredRel = ".claude/skills/aidlc-retired-probe/SKILL.md";
+      const retiredBody = "---\nname: aidlc-retired-probe\n---\n\nShipped by an earlier release.\n";
+      put(project, retiredRel, retiredBody);
+      const manifest = manifestOf(project);
+      expect(manifest.shippedOnly).toBe(true);
+      manifest.files[retiredRel] = sha256Bytes(retiredBody);
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const refreshed = refresh(project);
+      expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
+      expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("project files an older refresh recorded are kept and dropped from the record", () => {
+      const project = installedProject();
+      const notesRel = ".claude/knowledge/team-notes/notes.md";
+      put(project, skillRel, skillBody);
+      put(project, notesRel, "Team notes, edited after the older refresh.\n");
+      const manifest = manifestOf(project);
+      delete manifest.shippedOnly;
+      manifest.files[skillRel] = sha256Bytes(skillBody);
+      manifest.files[notesRel] = sha256Bytes("Team notes.\n");
+      writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+
+      for (let pass = 1; pass <= 2; pass++) {
+        refresh(project);
+        expect(readFileSync(join(project, skillRel), "utf-8"), `refresh ${pass}`).toBe(skillBody);
+        expect(readFileSync(join(project, notesRel), "utf-8"), `refresh ${pass}`)
+          .toBe("Team notes, edited after the older refresh.\n");
+        const after = manifestOf(project);
+        expect(after.files).not.toHaveProperty(skillRel);
+        expect(after.files).not.toHaveProperty(notesRel);
+        expect(after.shippedOnly).toBe(true);
+      }
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a record-only adoption leaves the manifest unmarked, so the next refresh keeps project files", () => {
+      const project = temp("aidlc-t243-owned-copy-");
+      cpSync(CLAUDE_COPY, project, { recursive: true });
+      mkdirSync(join(project, ".git"));
+      put(project, skillRel, skillBody);
+      const machine = { AIDLC_INSTALL_ROOT: temp("aidlc-t243-owned-machine-") };
+      const recorded = run(INIT, [
+        "config", "models", "--project-dir", project, "--project", "--preset", "balanced", "--yes",
+      ], project, machine);
+      expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+      expect(manifestOf(project).shippedOnly).toBeUndefined();
+
+      const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project, machine);
+      expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      expect(readFileSync(join(project, skillRel), "utf-8")).toBe(skillBody);
+      expect(manifestOf(project).files).not.toHaveProperty(skillRel);
+      expect(manifestOf(project).shippedOnly).toBe(true);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  });
+
+  test("a host subagent in .claude/agents does not stop a refresh", () => {
+    const project = temp("aidlc-t243-host-agent-");
+    mkdirSync(join(project, ".git"));
+    const installed = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+    ], project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const hostAgent = join(project, ".claude", "agents", "foo-agent.md");
+    const body = "---\nname: foo-agent\ndescription: A subagent another tool installed.\ntools: Read\n---\n\nYou review pull requests.\n";
+    writeFileSync(hostAgent, body);
+
+    const refreshed = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], project);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout + refreshed.stderr).not.toContain("missing required frontmatter");
+    expect(readFileSync(hostAgent, "utf-8")).toBe(body);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("pre-manifest adoption preserves all mutable harness policy keys", () => {
     const project = temp("aidlc-t243-policy-adoption-");
     cpSync(CLAUDE_COPY, project, { recursive: true });
@@ -2569,6 +2726,120 @@ describe("t243 project initialization", () => {
     expect(readFileSync(target)).toEqual(before);
     expect(transactionSourceHash(project)).toBe(projectBefore);
   }, 60_000);
+
+  // Copied harnesses each run their own engine and hooks against the project's
+  // workflows, so these cases drive the copy channel.
+  function kiroUnderRunningWorkflow(prefix: string): { project: string; stampPath: string; kiroStamp: Record<string, unknown> } {
+    const project = temp(prefix);
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+    const intentDir = join(intentsDir, "260919-add-split");
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(join(intentsDir, "intents.json"), `${JSON.stringify([{
+      uuid: "deadbeef-0000-4000-8000-000000000003",
+      slug: "add-split",
+      dirName: "260919-add-split",
+      scope: "feature",
+      status: "in-flight",
+    }], null, 2)}\n`);
+    writeFileSync(join(intentDir, "aidlc-state.md"), "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n");
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    return { project, stampPath, kiroStamp: JSON.parse(readFileSync(stampPath, "utf-8")) };
+  }
+
+  test("a copied harness added from another release while a workflow runs is refused with the fetch of the running release", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-split-");
+    const addClaude = (...extra: string[]) => run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", ...extra,
+    ], project);
+
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = addClaude("--yes");
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${AIDLC_VERSION}, but the workflow running in this project (default/260919-add-split) uses ${NEXT_VERSION}`,
+    );
+    expect(payload.message).toContain(`aidlc-copy-runtime-${NEXT_VERSION}.tar.gz`);
+    // The rerun fetches the running release instead of the files named.
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    const previewed = addClaude("--dry-run");
+    expect(previewed.status, previewed.stdout + previewed.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+    writeFileSync(stampPath, `${JSON.stringify(kiroStamp, null, 2)}\n`);
+    const added = addClaude("--yes");
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a copied harness added beside a release that predates sharing a project waits for the workflow", () => {
+    const { project, stampPath, kiroStamp } = kiroUnderRunningWorkflow("aidlc-t243-add-version-predates-");
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    // Before harnesses could share a project, no release shared .gitignore.
+    const descriptorPath = join(project, ".kiro", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<Record<string, unknown>>;
+    };
+    for (const integration of descriptor.rootIntegrations) delete integration.shared;
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `refusing to add claude ${AIDLC_VERSION} while 1 workflow(s) are active: default/260919-add-split`,
+    );
+    expect(payload.message).toContain("kiro 2.9.0");
+    expect(payload.remediation ?? "").toContain("Complete the workflow");
+    expect(payload.remediation ?? "").not.toMatch(/config --harness|--download/);
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned project's add from other files names the pinned release, not the running workflow", () => {
+    const { project } = kiroUnderRunningWorkflow("aidlc-t243-add-version-pinned-");
+    writeFileSync(join(project, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const source = temp("aidlc-t243-add-version-source-");
+    cpSync(CLAUDE_RELEASE, source, { recursive: true });
+    const sourceStamp = join(source, ".claude", "tools", "data", "aidlc-stamp.json");
+    const stamp = JSON.parse(readFileSync(sourceStamp, "utf-8"));
+    writeFileSync(sourceStamp, `${JSON.stringify({ ...stamp, frameworkVersion: NEXT_VERSION }, null, 2)}\n`);
+    const refused = run(INIT, [
+      "config", "--project-dir", project, "--from", source, "--harness", "claude", "--json", "--yes",
+    ], project);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+    const payload = JSON.parse(refused.stdout) as { message: string; remediation?: string };
+    expect(payload.message).toContain(
+      `the files passed to --from are ${NEXT_VERSION}, but this project is pinned to ${AIDLC_VERSION}`,
+    );
+    expect(payload.message).not.toContain("refusing to add");
+    expect(payload.remediation ?? "").toMatch(/ --download$/);
+    expect(payload.remediation ?? "").not.toContain("--from");
+    expect(existsSync(join(project, ".claude"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("adding a harness on another version is allowed once no workflow runs", () => {
+    const project = temp("aidlc-t243-add-version-idle-");
+    mkdirSync(join(project, ".git"));
+    const kiro = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes",
+    ], project);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const stampPath = join(project, ".kiro", "tools", "data", "aidlc-stamp.json");
+    const kiroStamp = JSON.parse(readFileSync(stampPath, "utf-8"));
+    writeFileSync(stampPath, `${JSON.stringify({ ...kiroStamp, frameworkVersion: "2.9.0" }, null, 2)}\n`);
+    const added = run(INIT, [
+      "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--yes",
+    ], project);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(existsSync(join(project, ".claude"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("exact legacy root signatures are adopted", () => {
     const project = temp("aidlc-t240-legacy-adopt-");
@@ -5200,6 +5471,7 @@ describe("t243 release lifecycle", () => {
     process.env.AIDLC_BIN_DIR = join(machine, "bin");
     const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
     try {
+      expect(releaseReservation).not.toBeNull();
       const protectedPrune = run(
         LIFECYCLE,
         ["versions", "prune", "--yes"],
@@ -5210,7 +5482,7 @@ describe("t243 release lifecycle", () => {
       expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(true);
       expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
     } finally {
-      releaseReservation();
+      releaseReservation?.();
       if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
       else process.env.AIDLC_INSTALL_ROOT = saved.root;
       if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
@@ -5220,7 +5492,169 @@ describe("t243 release lifecycle", () => {
     const pruned = run(LIFECYCLE, ["versions", "prune", "--yes"], project, env);
     expect(pruned.status, pruned.stdout + pruned.stderr).toBe(0);
     expect(existsSync(join(machine, "versions", NEXT_VERSION))).toBe(false);
-    expect(existsSync(join(machine, "reservations"))).toBe(false);
+    // Release keeps the directory; removing it outside the lock races other reservations.
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")(
+    "a dispatched-version reservation waits out a live transaction lock holder",
+    () => {
+      const activeRelease = fixtureRelease();
+      const retainedRelease = fixtureRelease(NEXT_VERSION);
+      const machine = temp("aidlc-t243-reservation-wait-machine-");
+      const project = temp("aidlc-t243-reservation-wait-project-");
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      expect(run(LIFECYCLE, [
+        "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+      ], project, env).status).toBe(0);
+      expect(run(LIFECYCLE, [
+        "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+      ], project, env).status).toBe(0);
+
+      const saved = {
+        root: process.env.AIDLC_INSTALL_ROOT,
+        bin: process.env.AIDLC_BIN_DIR,
+      };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const holder = spawnSync("sh", ["-c", "sleep 1 >/dev/null 2>&1 & echo $!"], {
+          encoding: "utf-8",
+        });
+        const pid = Number(holder.stdout.trim());
+        expect(Number.isSafeInteger(pid) && pid > 0, holder.stderr).toBe(true);
+        const lockPath = join(machineTransactionRoot(), ".aidlc-transaction.lock");
+        writeFileSync(lockPath, `${JSON.stringify({ pid, staging: ".aidlc-txn-held" })}\n`);
+
+        const releaseReservation = reserveDispatchedVersion(NEXT_VERSION);
+        try {
+          expect(releaseReservation).not.toBeNull();
+          expect(readdirSync(join(machine, "reservations"))).toHaveLength(1);
+          expect(existsSync(lockPath)).toBe(false);
+        } finally {
+          releaseReservation?.();
+        }
+        expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+    NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+  );
+
+  test("parallel dispatched-version reservations all land, as parallel hooks make them", async () => {
+    const activeRelease = fixtureRelease();
+    const retainedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-parallel-machine-");
+    const project = temp("aidlc-t243-reservation-parallel-project-");
+    const barrier = temp("aidlc-t243-reservation-parallel-barrier-");
+    mkdirSync(join(project, ".git"));
+    const env = {
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+    };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", activeRelease,
+    ], project, env).status).toBe(0);
+    expect(run(LIFECYCLE, [
+      "versions", "install", NEXT_VERSION, "--from", retainedRelease,
+    ], project, env).status).toBe(0);
+
+    // Each child signals ready, then all reserve at once when `go` appears.
+    const child = join(barrier, "reserve.ts");
+    writeFileSync(child, [
+      `import { existsSync, writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      `const { reserveDispatchedVersion } = await import(${
+        JSON.stringify(pathToFileURL(LIFECYCLE).href)
+      });`,
+      `const barrier = ${JSON.stringify(barrier)};`,
+      `writeFileSync(join(barrier, "ready-" + process.pid), "");`,
+      `while (!existsSync(join(barrier, "go"))) Bun.sleepSync(5);`,
+      `const release = reserveDispatchedVersion(${JSON.stringify(NEXT_VERSION)});`,
+      `if (!release) throw new Error("the reservation gave up on a busy lock");`,
+      `Bun.sleepSync(Math.random() * 50);`,
+      `release();`,
+      "",
+    ].join("\n"));
+    const children = Array.from({ length: 8 }, () =>
+      Bun.spawn([BUN, child], {
+        cwd: project,
+        env: { ...process.env, ...env },
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+    );
+    const results = Promise.all(children.map(async (spawned) => {
+      const [status, stderr] = await Promise.all([
+        spawned.exited,
+        new Response(spawned.stderr).text(),
+      ]);
+      return { status, stderr };
+    }));
+    const deadline = Date.now() + NATIVE_STARTUP_TIMEOUT_MS;
+    while (
+      readdirSync(barrier).filter((name) => name.startsWith("ready-")).length < children.length &&
+      children.every((spawned) => spawned.exitCode === null) &&
+      Date.now() < deadline
+    ) {
+      await Bun.sleep(10);
+    }
+    writeFileSync(join(barrier, "go"), "");
+    for (const result of await results) {
+      expect(result.status, result.stderr).toBe(0);
+    }
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    expect(existsSync(join(machine, ".aidlc-transaction.lock"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned hook still runs, with a one-line note, when the machine lock stays busy", async () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-busy-machine-");
+    const project = temp("aidlc-t243-reservation-busy-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const hookEnv = { ...env, AIDLC_PROJECT_DIR: project, AIDLC_PIN_RESERVATION_TIMEOUT_MS: "200" };
+    const note = `so this ran on aidlc ${NEXT_VERSION} without waiting for it to finish`;
+
+    const free = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+    expect(free.status, free.stdout + free.stderr).toBe(0);
+    expect(free.stderr).not.toContain(note);
+
+    // A live process that never releases stands in for a stuck lock owner.
+    const holder = Bun.spawn([BUN, "-e", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const lockPath = join(machine, ".aidlc-transaction.lock");
+    try {
+      writeFileSync(lockPath, `${JSON.stringify({ pid: holder.pid, staging: ".aidlc-txn-held" })}\n`);
+      const busy = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+      expect(busy.status, busy.stdout + busy.stderr).toBe(0);
+      expect(busy.stderr).toContain(
+        `aidlc: another AI-DLC command is still changing this machine's install, ${note}.`,
+      );
+      expect(existsSync(lockPath)).toBe(true);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -5912,9 +6346,16 @@ describe("t243 projection channel", () => {
           "sha256:d397e69ac701a663158ccb43fda3f0a23c86365f29419a8c9a5e3287a490370d",
           "sha256:87e4c1237816c477096f2291f1204885692bf39e487afb3d9f67cf7e9b2c84fb",
           "sha256:1d51ae4ca4f74f842336dce75bc66bb4bbf55ce2de7c802ab059504cca99fd7b",
+          "sha256:631688bc85683ea22c9415cb345c69169cff4ac45ec006c258217cd261a7793f",
         ],
       },
       codex: {
+        ".gitignore": [
+          "sha256:f919e4bac1790bd1a371d371af473ccbc644f3bb80e4569d190c9364fad771b3",
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+          "sha256:ced6459be00ce352fe298e1ff07759933fa2ebf07a9151ef2f1af995579f7afd",
+          "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
+        ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
           "sha256:47678f42e0233de9b0164eb4ec318a3ba3196074d6ec88f69aa7980bc1f2fd0d",
@@ -5939,6 +6380,12 @@ describe("t243 projection channel", () => {
         ],
       },
       kiro: {
+        ".gitignore": [
+          "sha256:83449fdda4644b319cbea5dcbde11919722b5dd6761f4edb4caf0e0e53dc9c6b",
+          "sha256:469dbf89f83865b58b2ae4c51dd2f2fe51fd80a9e2033bfb233688141d0cf632",
+          "sha256:af1b98a4b8c0e288aa8177655495b4a65220dbed2e149a67780aff1e8f379c9d",
+          "sha256:2f413414992c405c11a8bccb230574c2f58cec8fd2906cd37b7cd62bb33a97d8",
+        ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
           "sha256:992307cc3fac05d81958851b2ca51db3723fea604c8d2636814ef9b2e9f7a848",
@@ -5958,6 +6405,12 @@ describe("t243 projection channel", () => {
         ],
       },
       "kiro-ide": {
+        ".gitignore": [
+          "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
+          "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
+          "sha256:9dca2d16f38509dacc876574d67391f84476e9eea349c2f5250b0325895ce0b8",
+          "sha256:e0829e668399a331c6fda7c267e3983b56ee23029ce8d5520394e3e70cf7d21d",
+        ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
           "sha256:8159f54fcfe2a2ef807227cb12a3c83327e3851672ea47294812dde411f0de69",
@@ -5977,6 +6430,11 @@ describe("t243 projection channel", () => {
         ],
       },
       cursor: {
+        ".gitignore": [
+          "sha256:b4bf7694361e76aae9feabc5d985d09afb7863cf8458b0c9aaa73f20a589582f",
+          "sha256:a87496436cb23f303dee533322bd0896e981e14be1a7abd18e76aa5e113be02c",
+          "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
+        ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
           "sha256:2907b5293bfd8bd9d5f8b7a8025bfe23edd0ffcd31f925761916088517880936",
@@ -5989,6 +6447,11 @@ describe("t243 projection channel", () => {
         ],
       },
       opencode: {
+        ".gitignore": [
+          "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+          "sha256:ced6459be00ce352fe298e1ff07759933fa2ebf07a9151ef2f1af995579f7afd",
+          "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
+        ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
           "sha256:d86a61b7376772dcc7afdaefd63ce185f99d9c32d0e455668cf3b52f91a13d40",
@@ -6002,6 +6465,11 @@ describe("t243 projection channel", () => {
         ],
       },
       copilot: {
+        ".gitignore": [
+          "sha256:f52e6097d36c2e5bc199a2529469a4c6e7c507f7960f94a0b2b46f9aeee60e56",
+          "sha256:1a25bf94915b9f1c67136cfb36f5c82c03c6f6540deddd2af9e760e0f93069df",
+          "sha256:a739ce7cf309c603b4c962313a53cb2a238888b73c204a86f928cd61dcb3e548",
+        ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
           "sha256:1b8b3b4b10de3307a927429a676f5dd7440099a6d18859f603328b5ed239e6c7",

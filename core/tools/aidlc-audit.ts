@@ -20,12 +20,14 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
+  auditShardHostSegment,
   readActiveAuditShardEvents,
   UNTRUSTED_AUDIT_NOTICE,
   sortAttemptEvents,
   attemptEventIsCrossShardTied,
   BoltIdentityError,
   claimAttemptFields,
+  cloneIdFileContent,
   cloneIdPath,
   errorMessage,
   hasUnsafeSingleLineCharacter,
@@ -191,6 +193,10 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // The person said the work is a new project or existing code: the folder
+  // rescanned and the type recorded as theirs. Emitted by aidlc-utility.ts
+  // handleReclassify.
+  "WORKSPACE_RECLASSIFIED",
   // A piece of work's plan kept as a reusable scope. Emitted by
   // aidlc-utility.ts handleScopeSave.
   "SCOPE_SAVED",
@@ -210,6 +216,7 @@ const VALID_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
@@ -331,6 +338,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  WORKSPACE_RECLASSIFIED: "Workspace Reclassified",
   SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -341,6 +349,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
@@ -467,6 +476,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  // The applied Construction policy decides which stage starts are attempt
+  // boundaries for Unit receipts, so only its typed setters may record it.
+  "CONSTRUCTION_POLICY_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
@@ -539,6 +551,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",
   "UNIT_PAUSED",
@@ -1422,7 +1435,10 @@ function handleAuditFork(args: string[], projectDir: string): void {
             ? fsConstants.O_NOFOLLOW
             : 0;
         const bytes = Buffer.from(
-          `${randomUUID().replace(/-/g, "").slice(0, 12)}\n`,
+          cloneIdFileContent(
+            randomUUID().replace(/-/g, "").slice(0, 12),
+            auditShardHostSegment(),
+          ),
         );
         let cloneFd: number | undefined;
         try {

@@ -61,6 +61,11 @@ workflow triggers, but no push-to-`main` trigger. CI does not run again on
   documentation or its build inputs change on `main`.
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
+- [Merge queue runner notice](.github/workflows/merge-queue-notice.yml) runs
+  after each merge-queue CI run. When the queue dropped a PR only because a
+  GitHub-hosted runner failed, it comments on the PR so the author knows it
+  was not their change and a maintainer can add it back; it never changes the
+  queue.
 
 For explicitly approved full-suite testing before merge, a maintainer can run:
 
@@ -131,7 +136,7 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 ```
 
 The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
-`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/12`
 without a filter to repeat a whole unit shard. For smoke, integration or e2e,
 omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
 model gates, checks out the immutable source and retains sanitized logs under

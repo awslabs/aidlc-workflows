@@ -72,7 +72,7 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 | PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
 When UserPromptSubmit carries a typed fence or Guard Policy switch, the adapter forwards it to the core human-turn hook, which applies it at prompt time under the payload session and returns an `AIDLC Guard Policy:` note; shell setters are not run inside the adapter.
-On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` (`--clear-bypass` undoes it) for once every piece of work is complete. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
+On empty-prompt builds such as IDE 1.0.242, the per-turn `prompt-empty` marker makes the adapter refuse lowering shell commands (exit 2 with stderr), including environment-prefixed invocations and summary confirmation `off`, and `verb-intercept` emits a once-per-session capability note explaining that active work cannot be lowered on that build and directing the person to update to a prompt-capable IDE or start new work from a lower-default scope; for summary confirmation and for plan approval both also name the person's project-wide terminal command `<invoke> config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` or `--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD` (`--clear-bypass` undoes it), which also works while the work runs. Raising to `strict` or turning a fence or summary confirmation `on` remains available.
 Before forwarding an empty prompt, the adapter renames a sole retired
 `Change Control: relaxed|off` line to `Guard Policy` automatically without
 changing its value or source label and without a policy audit row. It prints
@@ -303,8 +303,8 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   programs are not checked.
 - **stop** — reads the modern Stop event's `session_id` and prefers it over the
   workspace-global SessionStart marker, so concurrent chats consume only their
-  own post-create handoff receipts. Legacy agentStop and broken modern channels
-  fall back to the retained identity.
+  own post-create and post-switch handoff receipts. Legacy agentStop and broken
+  modern channels fall back to the retained identity.
 - **record-human-turn** — reads the modern `session_id` and answer payload, or
   the legacy `USER_PROMPT`; it can submit an exact directive-issued choice but
   never reveals, rotates, or transfers another chat's protected capability.

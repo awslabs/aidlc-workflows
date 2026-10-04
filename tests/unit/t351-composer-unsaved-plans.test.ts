@@ -430,36 +430,58 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(existsSync("/tmp/t351-pwn")).toBe(false);
   });
 
-  test("a running workflow's stages change only through the reshape gate", () => {
-    const proj = createTestProject();
-    tempDirs.push(proj);
-    seedAidlcMemory(proj);
-    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+  test("a running workflow's named stage changes apply at once, with the undo named", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]).status).toBe(0);
+    // The person named the stage: no compose gate re-asks it.
     const d = nextDirective(proj, ["--skip", "team-formation"]);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("--skip and --add shape a new workflow's stages when it is created");
-    expect(d.message).toContain('compose "<the change>"');
+    expect(d.kind).toBe("print");
+    expect(d.message).not.toContain("next compose");
+    const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
+    expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
+    expect(d.message).toContain('"Skipped team-formation. To undo it, type `/aidlc --add team-formation`."');
+    const words = command.split(" ");
+    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    expect(applied.status, applied.out).toBe(0);
+    expect(applied.out).toContain("1 skipped (team-formation)");
+    expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
+    // Asking again changes nothing, so nothing is sent and no undo is named.
+    const again = nextDirective(proj, ["--skip", "team-formation"]);
+    expect(again.kind).toBe("print");
+    expect(again.message).not.toContain("engine recompose");
+    expect(again.message).toContain('"Team-formation is already skipped. The plan is unchanged."');
+
+    // A setting typed with it runs first, so neither request is dropped.
+    const both = nextDirective(proj, ["--add", "team-formation", "--depth", "minimal"]);
+    expect(both.kind).toBe("print");
+    const setting = both.message.indexOf("config set depth minimal");
+    expect(setting, both.message).toBeGreaterThan(-1);
+    expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
+    expect(both.message).toContain("To undo it, type `/aidlc --skip team-formation`.");
+
     const combined = nextDirective(proj, ["compose", "--skip", "team-formation", "trim it"]);
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
+    expect(combined.message).not.toContain("at creation");
   });
 });
 
 describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
   test("the saved scope is the running plan, with its settings, and resolves at once", () => {
     const proj = installedProject();
-    expect(createComposed(proj, ["--learnings", "off", "--review", "none", "--depth", "standard"]).status).toBe(0);
+    // bugfix asks no learnings question; this work turns it on, and the saved scope keeps that.
+    expect(createComposed(proj, ["--learnings", "on", "--review", "none", "--depth", "standard"]).status).toBe(0);
     expect(stateOf(proj)).toContain("- **Depth**: Standard");
     const stateBefore = stateOf(proj);
     const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]);
     expect(saved.status, saved.out).toBe(0);
     expect(saved.out).toContain("Saved as scope quick-fix (");
-    expect(saved.out).toContain("sensors on, learnings off, summary confirmation on, reviews none).");
+    expect(saved.out).toContain("sensors on, learnings on, summary confirmation off, reviews none).");
     expect(saved.out).toContain('Next time: /aidlc --scope quick-fix "<what to build>"');
     // The running work is left as it is.
     expect(stateOf(proj)).toBe(stateBefore);
     const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
-    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: off", "review_cap: none", "  - parser-fix"]) {
+    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: on", "summary_confirmation: off", "review_cap: none", "  - parser-fix"]) {
       expect(record, line).toContain(line);
     }
     expect(scopeFiles(proj)).toContain("aidlc-quick-fix.md");
@@ -719,10 +741,11 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     const validated = validate(proj, plan, ["--custom"]);
     expect(validated.status, validated.out).toBe(0);
     expect(validated.body).toMatchObject({ routing: "custom", base_scope: "bugfix" });
-    expect(validated.body.creation_settings).toEqual({ summary_confirmation: "off" });
+    // bugfix asks no learnings question; classic does, so the plan turns it back on.
+    expect(validated.body.creation_settings).toEqual({ learnings: "on" });
     // What the conductor runs on approval: no --guard-policy for off, one flag per creation setting.
     const changes = validated.body.plan_changes as { skip: string[]; add: string[] };
-    const args = ["intent-create", "--scope", "bugfix", "--summary-confirmation", "off", "--arguments", "x", "--label", "classic-ceremony"];
+    const args = ["intent-create", "--scope", "bugfix", "--learnings", "on", "--arguments", "x", "--label", "classic-ceremony"];
     if (typeof validated.body.creation_depth === "string") args.push("--depth", validated.body.creation_depth);
     if (changes.skip.length > 0) args.push("--skip", changes.skip.join(","));
     if (changes.add.length > 0) args.push("--add", changes.add.join(","));
@@ -732,6 +755,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     });
     expect(created.status, created.stdout + created.stderr).toBe(0);
     const state = stateOf(proj);
+    expect(state).toMatch(/^- \*\*Learnings\*\*: on\b/m);
     expect(state).toMatch(/^- \*\*Summary Confirmation\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Guard Policy\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Plan Approval\*\*: on\b/m);

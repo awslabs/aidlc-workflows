@@ -26,6 +26,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
+const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const temporary: string[] = [];
 
 afterAll(() => {
@@ -401,6 +402,60 @@ describe("t296 first-run config setup walk", () => {
     expect(walk.stdout).not.toContain("Provider [");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("Copilot: the Trust row and step name VS Code's switches and leave CLI trust to Copilot's own prompt", () => {
+    const path = project("aidlc-t296-copilot-trust-");
+    const copilotHome = temp("aidlc-t296-copilot-home-");
+    const configPath = join(copilotHome, "config.json");
+    const env = hookPathEnv("aidlc", true, { COPILOT_HOME: copilotHome });
+    const vsCode =
+      "In VS Code, hooks also need a trusted folder and Chat: Use Hooks on (your organization can switch it off); AI-DLC cannot see either.";
+    const remember = 'choose "Yes, and remember this folder for future sessions"';
+    const trustRow = (stdout: string) => setupRows(stdout).find((line) => line.includes("Trust"));
+    const step = () =>
+      run(["config", "trust", "--project-dir", path, "--harness", "copilot"], path, env, "y\n");
+
+    // No CLI config yet: nothing to flag, but the row does not call it ready.
+    const scaffold = run(
+      ["config", "--project-dir", path, "--from", COPILOT_RELEASE, "--harness", "copilot", "--mcp", "none", "--yes"],
+      path,
+      env,
+      "n\n",
+    );
+    expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+    expect(trustRow(scaffold.stdout)).toBe(
+      "    [ok]     Trust       no Copilot CLI config yet (the CLI asks to trust the folder on its first run); in VS Code, check the folder is trusted and Chat: Use Hooks is on",
+    );
+    const absent = step();
+    expect(absent.stdout).toContain(vsCode);
+    expect(absent.stdout).toContain(`headless copilot -p runs included), run copilot in this folder once and ${remember}`);
+    expect(existsSync(configPath)).toBe(false);
+
+    // The CLI has not trusted it: flagged, and the step names the CLI's own
+    // prompt. Trusting a folder lets its code run, so AI-DLC never edits the
+    // CLI's config, whatever it is answered.
+    const original = `{\n  "trustedFolders": [${JSON.stringify(join(copilotHome, "elsewhere"))}]\n}\n`;
+    writeFileSync(configPath, original);
+    const untrusted = run(["config", "--project-dir", path], path, env, "n\n");
+    expect(untrusted.status, untrusted.stdout + untrusted.stderr).toBe(0);
+    expect(trustRow(untrusted.stdout)).toBe("    [needs]  Trust       Copilot CLI has not trusted this folder");
+    expect(untrusted.stdout).toContain("trust        bun .aidlc/tools/aidlc.ts config trust");
+    const named = step();
+    expect(named.status, named.stdout + named.stderr).toBe(0);
+    expect(named.stdout).toContain(vsCode);
+    expect(named.stdout).toContain(`The Copilot CLI has not trusted this folder. To trust it, run copilot in this folder once and ${remember}.`);
+    expect(named.stdout).not.toContain("[y/N]");
+    expect(readFileSync(configPath, "utf-8")).toBe(original);
+
+    // Trusted (a folder above the project counts).
+    writeFileSync(configPath, JSON.stringify({ trustedFolders: [join(path, "..")] }));
+    const after = run(["config", "--project-dir", path], path, env, "n\n");
+    expect(after.status, after.stdout + after.stderr).toBe(0);
+    expect(trustRow(after.stdout)).toBe(
+      "    [ok]     Trust       no Copilot CLI trust issue; in VS Code, check the folder is trusted and Chat: Use Hooks is on",
+    );
+    expect(step().stdout).toContain("The Copilot CLI already trusts this folder");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("an incomplete workspace shell is reported once, never walked, with the command that rebuilds it", () => {
     const path = project("aidlc-t296-shell-missing-");
     const env = hookPathEnv("aidlc", true);
@@ -708,5 +763,89 @@ describe("t296 first-run config setup walk", () => {
       // (heading plus indented detail lines) must not leak under --quiet.
       expect(quiet.stdout.trimEnd().split(/\r?\n/), section).toEqual([line]);
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("where the session sets every agent's model and effort, the Models row names it and is never walked", () => {
+    // These hosts cannot pin an agent's model or effort, so a recorded policy
+    // changes nothing there. The row says where the lever is, counts as done,
+    // and never sends the person into the models wizard or the closing list.
+    const hosts = [
+      ["copilot", ".aidlc", "GitHub Copilot"],
+      ["cursor", ".cursor", "Cursor"],
+      ["kiro-ide", ".kiro", "Kiro IDE"],
+    ] as const;
+    const env = hookPathEnv("aidlc", true);
+    for (const [harness, dir, product] of hosts) {
+      const path = project(`aidlc-t296-session-models-${harness}-`);
+      const args = [
+        "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
+        "--harness", harness, "--mcp", "none", "--yes",
+      ];
+      const fresh = run(args, path, env, "n\n");
+      expect(fresh.status, fresh.stdout + fresh.stderr).toBe(0);
+      const models = setupRows(fresh.stdout).find((line) => line.includes("Models"));
+      expect(models, harness).toContain("[ok]");
+      expect(models, harness).toContain(
+        `every agent uses your ${product} session's model and effort`,
+      );
+      expect(models, harness).not.toContain("does not apply");
+      expect(fresh.stdout, harness).not.toContain("config models");
+      expect(fresh.stdout, harness).not.toContain("Models [Enter keep everything");
+      expect(existsSync(join(path, "aidlc.settings.json")), harness).toBe(false);
+
+      // A team's recorded preset (often for teammates on other harnesses) is
+      // named so nobody reads it as applied here.
+      writeFileSync(join(path, "aidlc.settings.json"), `${JSON.stringify({
+        schemaVersion: 1,
+        models: { schemaVersion: 1, preset: "balanced" },
+      }, null, 2)}\n`);
+      const rerun = run(["config", "--project-dir", path], path, env, "n\n");
+      expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+      expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
+        .toContain(
+          `[ok]     Models      every agent uses your ${product} session's model and effort; ` +
+            "the recorded balanced preset does not apply here",
+        );
+      expect(rerun.stdout, harness).not.toContain("config models");
+      expect(readFileSync(join(path, dir, "tools", "data", "harness.json"), "utf-8"), harness)
+        .toContain(`"productName": "${product}"`);
+    }
+
+    // The project's harness file cannot change which host the row names, nor
+    // put escape sequences on the terminal.
+    for (const [harness, dir, product, spoof] of [
+      ["copilot", ".aidlc", "GitHub Copilot", "Cursor"],
+      ["cursor", ".cursor", "Cursor", "GitHub Copilot"],
+    ] as const) {
+      const path = project(`aidlc-t296-session-models-name-${harness}-`);
+      const scaffold = run([
+        "config", "--project-dir", path, "--from", join(REPO_ROOT, "dist-release", harness),
+        "--harness", harness, "--mcp", "none", "--yes",
+      ], path, env, "n\n");
+      expect(scaffold.status, scaffold.stdout + scaffold.stderr).toBe(0);
+      const descriptorPath = join(path, dir, "tools", "data", "harness.json");
+      const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+      for (const name of ["Copilot\u001b]0;owned\u0007\u001b[2J", spoof]) {
+        descriptor.productName = name;
+        writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+        const rerun = run(["config", "--project-dir", path], path, env, "n\n");
+        expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+        expect(rerun.stdout, harness).not.toContain("\u001b");
+        expect(rerun.stdout, harness).not.toContain("\u0007");
+        expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
+          .toContain(`every agent uses your ${product} session's model and effort`);
+      }
+    }
+
+    // Kiro CLI can carry a per-agent model, so its row still asks.
+    const kiro = project("aidlc-t296-session-models-kiro-");
+    const kiroRun = run([
+      "config", "--project-dir", kiro, "--from", join(REPO_ROOT, "dist-release", "kiro"),
+      "--harness", "kiro", "--mcp", "none", "--yes",
+    ], kiro, env, "n\n");
+    expect(kiroRun.status, kiroRun.stdout + kiroRun.stderr).toBe(0);
+    expect(setupRows(kiroRun.stdout).find((line) => line.includes("Models")))
+      .toContain("[needs]  Models      no recorded policy; agents inherit your session model and effort");
+    expect(kiroRun.stdout).toContain("models       bun .kiro/tools/aidlc.ts config models");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

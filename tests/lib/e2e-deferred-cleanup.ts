@@ -18,6 +18,15 @@ function plainDirectory(path: string): (atPath?: string) => void {
   };
 }
 
+/** Where the coordinator's live report sits for a file's artifact directory:
+ *  `<logDir>/e2e-results.json` for `<logDir>/e2e-artifacts/<file>`, and for
+ *  `<logDir>/e2e-artifacts/<file>/attempt-<n>` when isolated files may retry.
+ *  The worker and the coordinator both locate it here, so they agree. */
+export function coordinatorReportPath(artifactDir: string): string {
+  const fileDir = /^attempt-[1-9]\d*$/.test(basename(artifactDir)) ? dirname(artifactDir) : artifactDir;
+  return join(dirname(dirname(fileDir)), "e2e-results.json");
+}
+
 function readPlain(path: string): string {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Invalid deferred Codex cleanup control file");
@@ -64,7 +73,7 @@ export async function retainDeferredCodexFixtures(
   const status = JSON.parse(readPlain(config.status));
   if (status.token !== config.token || !["running", "exited", "error"].includes(status.phase)) throw invalid();
 
-  const reportPath = join(dirname(dirname(artifactDir)), "e2e-results.json");
+  const reportPath = coordinatorReportPath(artifactDir);
   const report = JSON.parse(readPlain(reportPath));
   const rows = Array.isArray(report.files) ? report.files.filter((row: Record<string, unknown>) =>
     row.worker === Number(env.AIDLC_TEST_WORKER_ID) &&

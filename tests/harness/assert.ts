@@ -112,6 +112,11 @@ export function assertAuditEvent(result: DriveResult, event: string): void {
  * run_claude fixture's exit-124 heuristic is exactly what this replaces.
  */
 export function assertResultOk(result: DriveResult): void {
+  // A drive that ran out of time may still hold an earlier result from a turn
+  // that ended while work was pending; that run did not complete.
+  if (result.timedOut) {
+    fail("the drive timed out, so the run did not complete, whatever result it saw earlier.");
+  }
   const ev = result.resultEvent;
   if (ev === undefined) {
     fail(

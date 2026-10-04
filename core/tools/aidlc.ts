@@ -427,7 +427,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [--version <version>|--list]"],
+    all: ["rollback [--version <version>|--list] [--allow-harness-loss]"],
   },
   {
     id: "top-use",
@@ -1017,6 +1017,7 @@ export const ROUTES: readonly Route[] = [
     classification: "translation",
     verbs: [
       "detect",
+      "reclassify",
       "codekb",
       "codekb-scope-diff",
       "codekb-snapshot",
@@ -1028,6 +1029,7 @@ export const ROUTES: readonly Route[] = [
     ...HIDDEN_ENGINE,
     targets: {
       detect: "detect",
+      reclassify: "reclassify",
       codekb: "codekb-path",
       "codekb-scope-diff": "codekb-scope-diff",
       "codekb-snapshot": "codekb-snapshot",
@@ -1183,6 +1185,26 @@ function text(fd: number, value: string | Uint8Array): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Opt-in hook phase trace; aidlc-hook-trace.ts owns the switch and the format.
+// It is loaded only when its variable is set, so a runtime tree without that
+// file dispatches exactly as before.
+function hookTrace(phase: string, detail?: Record<string, unknown>): void {
+  if (!process.env.AIDLC_HOOK_TRACE_DIR) return;
+  try {
+    (require("./aidlc-hook-trace.ts") as typeof import("./aidlc-hook-trace.ts")).hookTrace(phase, detail);
+  } catch {
+    // Diagnostics only.
+  }
+}
+
+// Hooks enter as `engine hook <name>`, or through a harness adapter as
+// `engine adapter <harness> <target>`; only those routes are traced.
+export function tracedHookRoute(argv: readonly string[]): "hook" | "adapter" | undefined {
+  return argv[0] === "engine" && (argv[1] === "hook" || argv[1] === "adapter") && argv[2]
+    ? argv[1]
+    : undefined;
 }
 
 function dispatcherDir(): string {
@@ -2263,14 +2285,21 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
     });
     child.stdin.write(await readStdin());
     child.stdin.end();
-    return await child.exited;
+    hookTrace("hook-child-started", { childPid: child.pid });
+    const childCode = await child.exited;
+    hookTrace("hook-run-end", { code: childCode });
+    return childCode;
   }
+  hookTrace("hook-import-begin");
   const mod = await import(pathToFileURL(action.path).href);
+  hookTrace("hook-import-end");
   if (typeof mod.run !== "function") {
     text(2, `aidlc engine hook ${action.name}: hook does not export run(input)\n`);
     return 1;
   }
-  return await mod.run(await readStdin());
+  const code = await mod.run(await readStdin());
+  hookTrace("hook-run-end", { code });
+  return code;
 }
 
 async function runStatusline(action: Extract<Action, { type: "statusline" }>): Promise<number> {
@@ -2306,7 +2335,9 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
     process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
   try {
+    hookTrace("adapter-import-begin");
     const mod = await import(pathToFileURL(action.path).href);
+    hookTrace("adapter-import-end");
     if (typeof mod.run !== "function") {
       text(2, `aidlc engine adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
       return 1;
@@ -2341,7 +2372,11 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
         input = await readStdinWithTimeout(ceiling);
       }
     }
-    return await mod.run(action.target, input, action.extraArgs);
+    // An adapter that runs core hooks as child processes shows a stuck child
+    // as a file that ends before adapter-run-end.
+    const code = await mod.run(action.target, input, action.extraArgs);
+    hookTrace("adapter-run-end", { code });
+    return code;
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;
@@ -2669,6 +2704,12 @@ async function dispatchPinnedVersion(
     );
   }
   const releaseReservation = reserveDispatchedVersion(result.version);
+  if (!releaseReservation) {
+    text(
+      2,
+      `aidlc: another AI-DLC command is still changing this machine's install, so this ran on aidlc ${result.version} without waiting for it to finish.\n`,
+    );
+  }
   try {
     const child = Bun.spawnSync([result.executable, ...argv], {
       cwd: process.cwd(),
@@ -2683,7 +2724,7 @@ async function dispatchPinnedVersion(
     });
     return child.exitCode ?? 1;
   } finally {
-    releaseReservation();
+    releaseReservation?.();
   }
 }
 
@@ -3007,6 +3048,17 @@ export async function main(rawArgv: string[]): Promise<void> {
   const argv = canonicalizeLegacyCopilotHookArgv(rawArgv);
   process.exitCode = 0;
   bufferedStdin = null;
+  const tracedHook = tracedHookRoute(argv);
+  if (tracedHook !== undefined && process.env.AIDLC_HOOK_TRACE_DIR) {
+    // runtimeStartedAt against this line's time shows a slow runtime start.
+    hookTrace("dispatcher-start", {
+      ...(tracedHook === "hook" ? { hook: argv[2] } : { adapter: argv[2], target: argv[3] }),
+      runtimeStartedAt: new Date(performance.timeOrigin).toISOString(),
+      platform: process.platform,
+      runtime: process.versions.bun ?? process.version,
+    });
+    process.on("exit", (code) => hookTrace("exit", { code }));
+  }
   configureColor(argv);
   const projectDirOption = projectDirFlag(argv);
   if (projectDirOption.error) {
@@ -3122,7 +3174,9 @@ export async function main(rawArgv: string[]): Promise<void> {
     route?.routeOnly === "statusline" ||
     (route?.routeOnly === "adapter" && !kasAdapterInvocation(argv))
   ) {
-    await readStdin();
+    if (tracedHook !== undefined) hookTrace("stdin-begin");
+    const input = await readStdin();
+    if (tracedHook !== undefined) hookTrace("stdin-end", { bytes: Buffer.byteLength(input, "utf8") });
   }
   if (
     route?.id === "top-config" &&
@@ -3167,6 +3221,11 @@ if (import.meta.main) {
   // synchronous to import (completions imports its route table during dispatch).
   const keepAlive = setInterval(() => {}, 1_000);
   void main(process.argv.slice(2)).catch((error) => {
+    // Recorded before the message is rendered, so a failing stderr write
+    // still leaves the reason in the trace. Only hook routes are traced.
+    if (tracedHookRoute(canonicalizeLegacyCopilotHookArgv(process.argv.slice(2))) !== undefined) {
+      hookTrace("dispatcher-error", { message: errorMessage(error) });
+    }
     process.exitCode = renderDispatcherFailure(
       process.argv.slice(2),
       1,

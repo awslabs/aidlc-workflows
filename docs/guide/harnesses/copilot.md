@@ -50,7 +50,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
     list covers (the folder itself or a folder above it). The list is in
     `config.json` under `COPILOT_HOME`, else `~/.copilot`
     (`%USERPROFILE%\.copilot` on Windows). An interactive `copilot` run asks
-    you to confirm folder trust before it takes a prompt. Headless
+    you to confirm folder trust before it takes a prompt; choose "Yes, and
+    remember this folder for future sessions" to record it. `aidlc config`
+    tells you when the list does not cover the folder. Headless
     `copilot -p` runs additionally need
     `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`.
   - VS Code agent mode never reads that list. Its hooks run only in a
@@ -59,7 +61,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
     organization can switch off. A skipped hook leaves no message in the
     chat; the Agent Debug Logs panel shows it.
   - `/aidlc --doctor` warns when the CLI list does not cover the folder. It
-    cannot see the VS Code switches.
+    cannot see the VS Code switches, but once a stage has started with no
+    hook run, AI-DLC says so in the chat (see "AI-DLC says when its hooks
+    have not run" below).
 - **A model provider** — nothing in this install pins a model. Signed-in
   Copilot works as-is; BYOK works with no GitHub auth at all (e.g. Amazon
   Bedrock's Anthropic-compatible endpoint:
@@ -67,7 +71,9 @@ that ship the neutral-only block. Keep those imports when merging project instru
   `COPILOT_PROVIDER_TYPE=anthropic`, a bearer token, and
   `COPILOT_MODEL=<catalog name>` + `COPILOT_PROVIDER_WIRE_MODEL=<Bedrock
   model id>` — `copilot help providers` documents the set). In VS Code, use
-  the model picker or a Custom Endpoint provider.
+  the model picker or a Custom Endpoint provider. Every AI-DLC agent uses the
+  model and effort of your Copilot session, so choose them there; see
+  [Choosing a Model and Effort](../18-install-and-lifecycle.md#choosing-a-model-and-effort).
 
 ## Install
 
@@ -150,6 +156,15 @@ then use the ignored local `dist/copilot/` output.
   stage's rules, and during Code Generation it does not start the developer
   agent until you have approved the plan. The agent gets the same "approve the
   plan first" refusal on both surfaces.
+- **AI-DLC says when its hooks have not run.** Both surfaces skip repo hooks
+  without a word in the chat (see Folder trust above), so AI-DLC watches for
+  it. Once a stage has started in a workflow where no hook has ever run, each
+  step the agent receives carries one sentence saying so and naming the
+  switches to check, and the agent tells you once. Before your first Copilot
+  chat in the folder, `/aidlc --doctor` warns "AIDLC hooks have not run in this
+  project yet"; after a stage it fails with the same steps. A hook that runs
+  but crashes still lets your action through, and leaves its error line in
+  `.aidlc-engine/hooks-health/<hook>.drops`, which doctor reads.
 - **Hooks enforce natively.** The adapter
   (`.aidlc/hooks/aidlc-copilot-adapter.ts`, wired by
   `.github/hooks/aidlc.json`) converts a core-guard block into Copilot's
@@ -185,7 +200,15 @@ then use the ignored local `dist/copilot/` output.
     VS Code's terminal is PowerShell or cmd, a backslash is a plain path
     separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
     without a click; only a backslash right before a double quote keeps the
-    prompt. In a Git Bash or WSL terminal a backslash still keeps it;
+    prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
+    PowerShell terminal one `cd` or `Set-Location` to the project folder
+    itself, by its full path, may come first:
+    `cd C:\work\app; aidlc engine orchestrate next` runs like
+    `aidlc engine orchestrate next`, also while a plan waits for approval. A
+    `cd` to any other folder, a subfolder included, keeps the prompt, and
+    while a plan waits for approval it is refused, because the installed
+    `aidlc` takes the folder it runs in as the project. Run the command
+    without the `cd`, or `cd` to the project folder itself;
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file
@@ -220,8 +243,9 @@ then use the ignored local `dist/copilot/` output.
     remote (all but `unit merge-status`);
   - commands that run code AI-DLC does not ship or rewrite its installed
     skills: `engine sensor fire` and the `engine sensor-*` checks (they run
-    your project's linter and type checker), `engine knowledge onboard` and
-    `sync` (they run the document extractor your harness names),
+    your project's linter and type checker), `engine knowledge onboard`,
+    `sync`, and `engine workspace document-input --onboard` (they run the
+    document extractor your harness names),
     `engine plugin sync`, `select`, and `build`, `plugin build`, and
     `engine gen runners` and `runner-scopes`.
 
@@ -399,9 +423,10 @@ The doctor checks the engine tree and every adapter dependency, root
 `AGENTS.md`, the `.github` wiring files, the Copilot CLI version floor, folder
 trust, and reminds about the headless env var. The Copilot CLI is optional: a
 VS Code-only install reports `Harness CLI: optional copilot is not installed`
-and passes. VS Code puts its own `copilot` command on its terminals' PATH that
-only prints "Cannot find GitHub Copilot CLI" when the CLI is absent; the doctor
-reads that as not installed, not as an old version. An installed CLI below the
+and passes. VS Code puts its own stand-in `copilot` on its terminals' PATH
+that asks "Install GitHub Copilot CLI? (y/N)" when the CLI is absent, so the
+doctor and first-run setup never run it: they look past that folder for a real
+CLI and report it as not installed when there is none. An installed CLI below the
 floor is a warning, never a failure. The deterministic engine tests for
 this harness are `tests/unit/t248-copilot-packaging.test.ts`,
 `t249-copilot-adapter.test.ts`, `t250-copilot-adapter-security.test.ts`, and

@@ -73,7 +73,7 @@ import {
 } from "./aidlc-testing-posture.ts";
 import { readStopForNow } from "./aidlc-reply-reader.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
-import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
+import { isTypedGuardSwitchQuestion, type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
   CodeGenerationPlanUnitState,
@@ -145,6 +145,18 @@ export function readPlanApprovalAsk(projectDir: string, intentId: string): PlanA
     typeof value.question === "string" && Array.isArray(value.choices) &&
     (value.mode === "ask" || value.mode === "editing")
     ? value : null;
+}
+
+/**
+ * Where the person stands on the recorded Plan Approval question: not answered
+ * yet, editing the files themselves, or answered (a choice is recorded and the
+ * next `next` carries it out). Null when no question is recorded.
+ */
+export function planApprovalAskState(projectDir: string): "unanswered" | "editing" | "answered" | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (record === null) return null;
+  if (record.mode === "editing") return "editing";
+  return (record.results?.length ?? 0) > 0 ? "answered" : "unanswered";
 }
 
 function writePlanApprovalAsk(projectDir: string, record: PlanApprovalAskRecord): void {
@@ -980,6 +992,8 @@ function readAskReplyWords(text: string, record: PlanApprovalAskRecord, bound: b
   const grouped = units.length > 1;
   const reply = normalized(text);
   if (!reply) return { kind: "none", notice: UNCLEAR_NOTICE };
+  // "skip plan approval?" asks about the switch: it is neither an answer nor a change.
+  if (isTypedGuardSwitchQuestion(text)) return { kind: "none", notice: QUESTION_NOTICE };
   if (EDIT_RE.test(reply)) return { kind: "edit" };
   if (record.mode === "editing" && DONE_RE.test(reply)) return { kind: "approve" };
   if (grouped && record.pendingChange !== undefined) {

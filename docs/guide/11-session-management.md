@@ -86,6 +86,17 @@ contribution file, dispatches only the missing quality/developer/devsecops
 spokes, then continues with the human interview and lead integration. It does
 not repeat completed spokes.
 
+Code Generation resumes from the plan's ticks. The developer agent ticks each
+step in `code-generation-plan.md` as it finishes it. If the build stops part
+way (a model or provider error, the editor closed), the next run of the same
+approved plan picks up at the first unticked step, and you see one line such as
+"Picking up unit-2's code at step 5 of 9 (1-4 done; redoing 3, its files were
+missing)." A ticked step whose named files are no longer on disk is redone.
+Redo, Request Changes, and approving the plan again start its steps fresh: the
+plan's ticks are cleared when the new build starts, and only the ticks it makes
+count if it is cut off in turn. Editing the plan after approval also starts
+fresh.
+
 ---
 
 ## Recovery Breadcrumb
@@ -120,6 +131,36 @@ Claude Code automatically summarizes earlier conversation context when the conte
 3. If no warning appears, choose **Resume from last checkpoint** to continue normally
 
 Compaction is a normal part of long sessions. The state file and artifacts on disk ensure no completed work is lost.
+
+---
+
+## Changing Model Mid-Workflow
+
+Switching to another model inside a running chat is slow and uses many tokens:
+the new model reads the whole conversation again before it answers. On Claude
+models the provider's cache of the conversation belongs to one model, so none
+of it carries over, and changing the effort level in the same chat usually
+discards it too.
+
+AI-DLC keeps everything it needs on disk, so a new chat is the cheaper switch:
+
+1. Stop at a stage boundary: approve the stage and ask to stop in the same
+   reply, for example `Approved. Stop here for today.` The workflow parks
+   before the next stage starts (see
+   [Interaction Modes](07-interaction-modes.md)). `/aidlc park` also parks it
+   where it is.
+2. Open a new chat or session and choose the new model and effort there. On
+   Kiro IDE, also choose the **aidlc** agent in the chat panel's agent picker,
+   because a new chat starts on Kiro's Default agent (see
+   [Start AI-DLC in a Kiro IDE chat](harnesses/kiro-ide.md#start-ai-dlc-in-a-kiro-ide-chat)).
+3. Run `/aidlc --resume`. The new chat reads the saved state, artifacts, and
+   audit trail from disk instead of the old conversation, and continues where
+   the workflow stopped.
+
+Anything the old chat discussed but did not write to a file does not carry
+over, which is why the end of a stage is the best moment. On Codex CLI, type
+`$aidlc` instead of `/aidlc`. For which model and effort to choose, see
+[Choosing a Model and Effort](18-install-and-lifecycle.md#choosing-a-model-and-effort).
 
 ---
 

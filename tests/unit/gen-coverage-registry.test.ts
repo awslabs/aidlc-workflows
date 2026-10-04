@@ -15,7 +15,9 @@
 //      test cannot legitimately cover a unit whose minMechanism is `cli`.
 //   3. `--check` exits 1 (naming the gap) when a NEW uncovered unit is injected
 //      into a temp copy of the source, and exits 0 when the temp tree is clean.
-//   4. The RATCHET catches a simulated covered-count DECREASE.
+//   4. The RATCHET names a unit the committed registry covers that lost its
+//      claim, and the committed file carries no totals, so two PRs that add
+//      different units merge with git into exactly the regenerated registry.
 //   5. The SUBCOMMAND CROSS-CHECK (anti-rot guard b) holds for real source:
 //      the structured parser count equals the independent dispatch-site count.
 //
@@ -34,13 +36,12 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -57,8 +58,11 @@ import {
   parseIfDispatchCases,
   parseObjectDispatchKeys,
   parseSwitchDispatchCases,
-  ratchetFromRows,
+  classCounts,
+  lostClaims,
+  type RegistryRow,
   registryJson,
+  sortRegistryRows,
   subcommandCrossCheck,
   UNIT_CLASSES,
 } from "../gen-coverage-registry.ts";
@@ -247,7 +251,6 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
     root: string;
     srcRoot: string;
     registry: string;
-    ratchet: string;
     auditPath: string;
   } {
     const root = mkdtempSync(join(tmpdir(), "cov-check-"));
@@ -275,7 +278,6 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
       { recursive: true },
     );
     const registry = join(root, ".coverage-registry.json");
-    const ratchet = join(root, ".coverage-ratchet.json");
     const auditPath = join(
       srcRoot,
       "dist", "claude",
@@ -283,7 +285,7 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
       "tools",
       "aidlc-audit.ts",
     );
-    return { root, srcRoot, registry, ratchet, auditPath };
+    return { root, srcRoot, registry, auditPath };
   }
 
   function genInto(t: ReturnType<typeof buildTempTree>) {
@@ -296,7 +298,6 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
         ...process.env,
         AIDLC_COVERAGE_SRC_ROOT: t.srcRoot,
         AIDLC_COVERAGE_REGISTRY: t.registry,
-        AIDLC_COVERAGE_RATCHET: t.ratchet,
       },
     });
   }
@@ -309,7 +310,6 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
         ...process.env,
         AIDLC_COVERAGE_SRC_ROOT: t.srcRoot,
         AIDLC_COVERAGE_REGISTRY: t.registry,
-        AIDLC_COVERAGE_RATCHET: t.ratchet,
       },
     });
   }
@@ -383,7 +383,7 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
   test("missing committed registry: --check exits 1", () => {
     const t = buildTempTree();
     try {
-      // Generate ratchet only path? Simpler: never generate, just check.
+      // Never generate, just check.
       const chk = checkAgainst(t);
       expect(chk.status).toBe(1);
       expect(chk.stderr).toMatch(/does not exist/);
@@ -394,63 +394,192 @@ describe("--check freshness diff (the ratchet mechanism)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. The RATCHET catches a simulated covered-count DECREASE.
+// 4. The RATCHET names a lost claim; the committed file merges cleanly.
 // ---------------------------------------------------------------------------
-describe("ratchet anti-regression (covered count cannot silently drop)", () => {
-  test("a committed ratchet with a HIGHER baseline than reality fails --check", () => {
+describe("ratchet anti-regression (a covered unit cannot silently lose its claim)", () => {
+  test("a unit the committed registry covers but the source no longer does fails --check by name", () => {
     const root = mkdtempSync(join(tmpdir(), "cov-ratchet-"));
     try {
       // Reuse the real source via the default root (no SRC override) but point
-      // the committed baselines at temp files we control.
+      // the committed registry at a temp file we control.
       const registry = join(root, ".coverage-registry.json");
-      const ratchet = join(root, ".coverage-ratchet.json");
-
-      // Generate honest baselines from real source.
-      const gen = spawnSync(process.execPath, [TOOL], {
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          AIDLC_COVERAGE_REGISTRY: registry,
-          AIDLC_COVERAGE_RATCHET: ratchet,
-        },
+      const env = { ...process.env, AIDLC_COVERAGE_REGISTRY: registry };
+      const run = (args: string[]) => spawnSync(process.execPath, [TOOL, ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
       });
-      expect(gen.status).toBe(0);
-
-      // Now SIMULATE a regression: bump the committed ratchet's `function`
-      // covered count ABOVE what the registry actually shows. The current
-      // reality (6 covered) is now BELOW the inflated baseline -> ratchet fails.
-      const r = JSON.parse(readFileSync(ratchet, "utf-8"));
-      const realFn = r.coveredByClass.function;
-      r.coveredByClass.function = realFn + 5;
-      writeFileSync(ratchet, `${JSON.stringify(r, null, 2)}\n`);
-
-      const chk = spawnSync(process.execPath, [TOOL, "--check"], {
-        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-        encoding: "utf-8",
-        env: {
-          ...process.env,
-          AIDLC_COVERAGE_REGISTRY: registry,
-          AIDLC_COVERAGE_RATCHET: ratchet,
-        },
-      });
+      expect(run([]).status).toBe(0);
+      // SIMULATE a lost claim: the committed registry says covered, reality does not.
+      const doc = JSON.parse(readFileSync(registry, "utf-8")) as { units: RegistryRow[] };
+      const victim = doc.units.find((unit) => unit.status === "UNCOVERED")!;
+      victim.status = "covered";
+      victim.coveredBy = [{ file: "tests/unit/t-gone.test.ts", mechanism: "none" }];
+      writeFileSync(registry, `${JSON.stringify(doc, null, 2)}\n`);
+      const chk = run(["--check"]);
       expect(chk.status).toBe(1);
-      expect(chk.stderr).toContain("RATCHET FAILED");
-      expect(chk.stderr).toContain("function");
-      expect(chk.stderr).toContain("DROPPED");
+      expect(chk.stderr).toContain(`RATCHET FAILED: ${victim.unitClass} unit "${victim.unitId}" is covered in the committed registry but now UNCOVERED`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  test("ratchetFromRows derives covered-count-per-class from the rows", () => {
+  test("a covered unit whose code was deleted or renamed is a freshness change, never a ratchet failure", () => {
+    const root = mkdtempSync(join(tmpdir(), "cov-ratchet-gone-"));
+    try {
+      const registry = join(root, ".coverage-registry.json");
+      const env = { ...process.env, AIDLC_COVERAGE_REGISTRY: registry };
+      const run = (args: string[]) => spawnSync(process.execPath, [TOOL, ...args], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env,
+      });
+      expect(run([]).status).toBe(0);
+      // The committed registry still lists a covered unit the source no longer has.
+      const doc = JSON.parse(readFileSync(registry, "utf-8")) as { units: RegistryRow[] };
+      doc.units.push({
+        unitClass: "function", unitId: "function:deletedOrRenamedHelper", minMechanism: "none",
+        coveredBy: [{ file: "tests/unit/t-deleted.test.ts", mechanism: "none" }], status: "covered",
+      });
+      writeFileSync(registry, `${JSON.stringify(doc, null, 2)}\n`);
+      const chk = run(["--check"]);
+      expect(chk.status).toBe(1);
+      expect(chk.stderr).toContain("FRESHNESS DIFF FAILED");
+      expect(chk.stderr).not.toContain("RATCHET FAILED");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("lostClaims ignores units that are still covered and units removed from the source", () => {
+    const row = (unitId: string, status: RegistryRow["status"]): RegistryRow =>
+      ({ unitClass: "audit", unitId, minMechanism: "none", coveredBy: [], status });
+    const committed = [row("KEPT", "covered"), row("LOST", "covered"), row("REMOVED", "covered"), row("NEVER", "UNCOVERED")];
+    const fresh = [row("KEPT", "covered"), row("LOST", "UNCOVERED"), row("NEVER", "UNCOVERED")];
+    expect(lostClaims(committed, fresh).map((r) => r.unitId)).toEqual(["LOST"]);
+  });
+
+  test("classCounts derives per-class totals from the rows; the committed file stores none", () => {
     const { rows } = buildRegistry();
-    const r = ratchetFromRows(rows);
-    // Sanity: function covered count equals the rows' covered functions.
-    const fnCovered = rows.filter(
-      (x) => x.unitClass === "function" && x.status === "covered",
-    ).length;
-    expect(r.coveredByClass.function).toBe(fnCovered);
+    const counts = classCounts(rows);
+    expect(counts.function.covered).toBe(rows.filter((x) => x.unitClass === "function" && x.status === "covered").length);
+    expect(Object.values(counts).reduce((n, c) => n + c.total, 0)).toBe(rows.length);
+    const committed = JSON.parse(readFileSync(join(TESTS_DIR, ".coverage-registry.json"), "utf-8"));
+    expect(Object.keys(committed)).toEqual(["generator", "generatedFrom", "unitClasses", "minMechanism", "units"]);
+  });
+
+  test("two PRs that each add or cover a different unit merge with git, in either order, into exactly the regenerated registry", () => {
+    const { rows } = buildRegistry();
+    const clone = (list: RegistryRow[]): RegistryRow[] => list.map((r) => ({ ...r, coveredBy: [...r.coveredBy] }));
+    const probe = (unitId: string): RegistryRow => ({
+      unitClass: "function", unitId, minMechanism: "none",
+      coveredBy: [{ file: `tests/unit/t-${unitId.split(":")[1]}.test.ts`, mechanism: "none" }], status: "covered",
+    });
+    const cover = (list: RegistryRow[], index: number): RegistryRow[] => {
+      const out = clone(list);
+      out[index] = { ...out[index], status: "covered", coveredBy: [{ file: "tests/unit/t-probe.test.ts", mechanism: "cli" }] };
+      return out;
+    };
+    // Two adjacent UNCOVERED units: the closest two edits can sit.
+    const gap = rows.findIndex((r, i) => r.status === "UNCOVERED" && rows[i + 1]?.status === "UNCOVERED");
+    expect(gap).toBeGreaterThanOrEqual(0);
+    const cases: Array<[string, RegistryRow[], RegistryRow[], RegistryRow[]]> = [
+      ["new units in different places", sortRegistryRows([...clone(rows), probe("function:aaaMergeProbeA")]),
+        sortRegistryRows([...clone(rows), probe("function:zzzMergeProbeB")]),
+        sortRegistryRows([...clone(rows), probe("function:aaaMergeProbeA"), probe("function:zzzMergeProbeB")])],
+      ["claims for two neighbouring units", cover(rows, gap), cover(rows, gap + 1), cover(cover(rows, gap), gap + 1)],
+    ];
+    for (const [label, a, b, both] of cases) {
+      for (const [first, second] of [[a, b], [b, a]]) {
+        const repo = mkdtempSync(join(tmpdir(), "cov-merge-"));
+        try {
+          const git = (...args: string[]) => {
+            const r = spawnSync("git", args, { cwd: repo, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+            return r;
+          };
+          const commit = (doc: RegistryRow[], message: string) => {
+            writeFileSync(join(repo, "registry.json"), registryJson(doc));
+            expect(git("add", "registry.json").status).toBe(0);
+            expect(git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", message).status).toBe(0);
+          };
+          expect(git("init", "-q", "-b", "main").status).toBe(0);
+          expect(git("config", "core.autocrlf", "false").status).toBe(0);
+          commit(rows, "base");
+          expect(git("checkout", "-qb", "first").status).toBe(0);
+          commit(first, "first PR");
+          expect(git("checkout", "-q", "main").status).toBe(0);
+          expect(git("checkout", "-qb", "second").status).toBe(0);
+          commit(second, "second PR");
+          const merge = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "merge", "-q", "--no-edit", "first");
+          expect(merge.status, `${label}: ${merge.stdout}${merge.stderr}`).toBe(0);
+          expect(readFileSync(join(repo, "registry.json"), "utf-8"), label).toBe(registryJson(both));
+        } finally {
+          rmSync(repo, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  test("two PRs that each add a CLI-spawning test merge with git, in either order: each touches only its own file and its generated registry", () => {
+    const { rows } = buildRegistry();
+    // Two audit units that sit next to each other in the registry: the closest two claims can sit.
+    const at = rows.findIndex((r, i) => r.unitClass === "audit" && rows[i + 1]?.unitClass === "audit");
+    expect(at).toBeGreaterThanOrEqual(0);
+    const sides = [
+      { name: "t-spawn-a", claim: `audit:${rows[at].unitId}` },
+      { name: "t-spawn-b", claim: `audit:${rows[at + 1].unitId}` },
+    ];
+    const spawner = (claim: string) => [
+      `// covers: ${claim}`,
+      'import { spawnSync } from "node:child_process";',
+      "const BUN = process.execPath;",
+      'const TOOL = "../../dist/claude/.claude/tools/aidlc-state.ts";',
+      'test("x", () => { expect(spawnSync(BUN, [TOOL, "show"]).status).toBe(0); });',
+      "",
+    ].join("\n");
+    for (const [first, second] of [[sides[0], sides[1]], [sides[1], sides[0]]]) {
+      const repo = mkdtempSync(join(tmpdir(), "cov-merge-spawners-"));
+      try {
+        const registry = join(repo, "registry.json");
+        const git = (...args: string[]) => spawnSync("git", args, { cwd: repo, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+        // The real generator, reading claims from this repo's tiers and writing its registry here.
+        const generate = () => {
+          const run = spawnSync(process.execPath, [TOOL], {
+            encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+            env: { ...process.env, AIDLC_COVERAGE_TESTS_DIR: repo, AIDLC_COVERAGE_REGISTRY: registry },
+          });
+          expect(run.status, run.stderr).toBe(0);
+        };
+        const commit = (message: string) => {
+          expect(git("add", "-A").status).toBe(0);
+          expect(git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", message).status).toBe(0);
+        };
+        const pr = (side: { name: string; claim: string }) => {
+          expect(git("checkout", "-q", "main").status).toBe(0);
+          expect(git("checkout", "-qb", side.name).status).toBe(0);
+          writeFileSync(join(repo, "unit", `${side.name}.test.ts`), spawner(side.claim));
+          generate();
+          commit(side.name);
+          // The PR's whole diff: its own test file and the regenerated registry, nothing shared besides.
+          expect(git("diff", "--name-only", "main", side.name).stdout.trim().split("\n")).toEqual(["registry.json", `unit/${side.name}.test.ts`]);
+        };
+        expect(git("init", "-q", "-b", "main").status).toBe(0);
+        expect(git("config", "core.autocrlf", "false").status).toBe(0);
+        mkdirSync(join(repo, "unit"));
+        writeFileSync(join(repo, "unit", "t-existing.test.ts"), 'test("x", () => {});\n');
+        generate();
+        commit("base");
+        pr(first);
+        pr(second);
+        const merge = git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "merge", "-q", "--no-edit", first.name);
+        expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
+        const merged = readFileSync(registry, "utf-8");
+        for (const side of sides) {
+          const unit = (JSON.parse(merged) as { units: RegistryRow[] }).units.find((r) => `audit:${r.unitId}` === side.claim)!;
+          expect(unit).toMatchObject({ status: "covered", coveredBy: [{ file: `tests/unit/${side.name}.test.ts`, mechanism: "cli" }] });
+        }
+        generate();
+        expect(readFileSync(registry, "utf-8")).toBe(merged);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    }
   });
 });
 
@@ -593,8 +722,7 @@ describe("determinism", () => {
 
 // THE LIVE RATCHET — runs `--check` against the REAL committed registry (no
 // env seam). Every other --check test above drives a synthetic temp tree; this
-// one gates the actual tests/.coverage-registry.json + .coverage-ratchet.json
-// on disk, so a clean checkout whose committed registry has drifted from the
+// one gates the actual tests/.coverage-registry.json on disk, so a clean checkout whose committed registry has drifted from the
 // real source (e.g. a new subcommand/event/scope landed without regenerating)
 // FAILS the suite. Without this, the ratchet's "cannot silently rot" promise is
 // unenforced — the committed artifact can drift while the suite stays green.
@@ -611,7 +739,7 @@ describe("committed coverage registry is fresh (the live CI ratchet)", () => {
       // `bun tests/gen-coverage-registry.ts` to regenerate + commit the files.
       throw new Error(
         "committed coverage registry is STALE — run `bun tests/gen-coverage-registry.ts` " +
-          "to regenerate tests/.coverage-registry.json + .coverage-ratchet.json.\n" +
+          "to regenerate tests/.coverage-registry.json.\n" +
           (chk.stdout || "") +
           (chk.stderr || ""),
       );
@@ -629,13 +757,15 @@ describe("committed coverage registry is fresh (the live CI ratchet)", () => {
 // subprocess (claude -p, a bun/node spawn of an aidlc-*.ts tool, or a bash
 // spawn of run-tests.sh) -> cli. These tests pin three properties:
 //
-//   (a) THREE KNOWN-ANSWER FIXTURES — body wins over the segment; the codeView
-//       comment-strip recovers a swallowed spawn; an import is not a drive.
-//   (b) THE none->cli RECLASSIFICATION SET — broadening the cli arm beyond
-//       `claude -p` reclassifies exactly the deterministic tool/hook/runner
-//       spawners. This is the milestone 3 deliverable; the set is MEASURED off disk and
-//       pinned here so a predicate regression (a missed spawn, or a false
-//       positive flipping an import-only floor test) reds immediately.
+//   (a) KNOWN-ANSWER FIXTURES, both directions: body wins over the segment;
+//       the codeView comment-strip recovers a swallowed spawn; a real spawn or
+//       shared driver derives cli; an import, a comment, or a non-runtime spawn
+//       is not a drive and stays none.
+//   (b) WHOLE TREE: there is no hand-kept list of spawner files. A mechanism
+//       matters only through a coverage claim, and every claim's mechanism is
+//       pinned twice: by the committed registry (`--check` fails when a
+//       predicate change moves any claim), and by (c). A list that every
+//       spawner-adding PR appended to only made those PRs collide.
 //   (c) HONESTY: derived == recorded — for every committed coverage claim, the
 //       mechanism the registry stored equals mechanismsOf(body) recomputed live,
 //       so the registry can never record a mechanism the body does not drive.
@@ -718,6 +848,23 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
+  test.each([
+    ["runCheckpointTool", "swarm-checkpoint", 'runCheckpointTool(pd, "tools/aidlc-bolt.ts", ["abort"])'],
+    ["runChangeControlTool", "change-control-plan-approval", "runChangeControlTool([BUN, GUARD], project)"],
+  ])("%s derives cli through its shared t334/t344 fixture", (name, module, call) => {
+    const src = [
+      "// covers: subcommand:aidlc-bolt:abort",
+      `import { ${name} } from "../harness/${module}.ts";`,
+      'test("x", () => {',
+      `  const r = ${call};`,
+      "  expect(r.code).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+    // Named only in a comment or an import, the helper drives nothing.
+    expect(mechanismsOf("t99.none.test.ts", src.replace(`  const r = ${call};`, `  // ${call}`))).toEqual(["none"]);
+  });
+
   test("a // inside a string literal (a URL) does NOT truncate the real spawn", () => {
     // codeView strips comments while respecting string literals — so the "//" in
     // an "https://…" string is NOT treated as a line-comment opener. This fixture
@@ -764,509 +911,44 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t200.scope-exclusion.test.ts", src)).toEqual(["none"]);
   });
 
-  // Recursively list every t*.test.ts under tests/ (the level dirs + harness).
-  // Tier-list-independent on purpose: the design discovers a test by its living
-  // in a directory, so this walk mirrors that rather than hard-coding TEST_TIERS.
-  function allTestTsFiles(root: string): string[] {
-    const out: string[] = [];
-    for (const e of readdirSync(root, { withFileTypes: true })) {
-      const p = join(root, e.name);
-      if (e.isDirectory()) {
-        // Skip the transient run-output + node_modules; everything else is fair game.
-        if (e.name === "logs" || e.name === "node_modules") continue;
-        out.push(...allTestTsFiles(p));
-      } else if (e.name.endsWith(".test.ts")) {
-        out.push(p);
-      }
-    }
-    return out;
-  }
-
-  function testsRelativePath(abs: string): string {
-    return relative(TESTS_DIR, abs).replace(/\\/g, "/");
-  }
-
-  // (b) The milestone 3 reclassification set — MEASURED off disk, pinned here. A file is
-  // a none->cli reclassification when its filename segment says `none` but its
-  // body derives `cli` (a deterministic tool/hook/runner subprocess). If the
-  // predicate regresses (misses a spawn, or false-positives an import-only floor
-  // test), this list changes and the test reds — naming exactly which file moved.
-  //
-  // MAINTENANCE (read before you touch this): this pin is a deliberate manual
-  // ratchet. When a later PR adds or rewrites a DETERMINISTIC test that spawns an
-  // aidlc-*.ts tool / a hook / run-tests.sh under the bun-or-node runtime (milestone 4's
-  // floor rewrites and milestone 5's .sh->bun ports will do exactly this), that file is a
-  // new none->cli member and this test WILL red. That red is correct — add the
-  // new file's tests/-relative path to this array (the failure message prints the
-  // exact path that moved). Do NOT relax the assertion; the whole point is that a
-  // new spawning test cannot silently change the cli surface without a human edit.
-  //
-  // MR6 NOTE: the suffix drop removed every `.cli`/`.none` filename segment, so
-  // mechanismOfTestFile now seeds `none` for ALL suffix-free files. The set below
-  // is therefore the FULL cli-spawner list (every .test.ts whose body derives cli
-  // from a suffix-free name) — the former `.cli`-suffixed spawners joined the set
-  // when their segment stopped saying cli. Same predicate, same honesty ratchet:
-  // a new spawning test still cannot land without a human edit here.
-  const EXPECTED_NONE_TO_CLI = [
-    "unit/t341-orchestrate-wait.test.ts",
-    "unit/t343-intent-create-positionals.test.ts",
-    "unit/t343-raw-html-consumer-contracts.test.ts",
-    "unit/t349-composer-scope-settings.test.ts",
-    "unit/t349-engine-error-relay.test.ts",
-    "unit/t351-composer-unsaved-plans.test.ts",
-    "integration/t-review-verdict-unit-state.test.ts",
-    "unit/t-runner-production-guards.test.ts",
-    "unit/t-summary-confirmation-plain-form.test.ts",
-    "integration/t-guard-native-remedies.test.ts",
-    "integration/t-guard-recovery-production.test.ts",
-    // spawns bun on a scratch copy of the runner, whose file list names the
-    // runtime-budget tool that sdk-drive.ts loads through the credential broker
-    "integration/t-e2e-native-cancellation.test.ts",
-    "unit/t-kiro-ide-native-recovery.test.ts",
-    // spawns the real `next`, human-turn hook, and guard: the engine's question,
-    // the person's reply, and what the guard refuses are process boundaries
-    "unit/t-plan-approval-ask.test.ts",
-    // spawns the real `next`, human-turn hook, utility setter, and guard: who
-    // turns plan approval off, and what the engine builds, are process boundaries
-    "unit/t-plan-approval-switch.test.ts",
-    // spawns the real engine, human-turn hook, Kiro adapter, and worker brief: one
-    // approval through the rule parts to the build is a process boundary
-    "unit/t-plan-approval-stock-parts.test.ts",
-    // spawns the real `next` and `continue` on the packaged Copilot tree: the
-    // printed result is what VS Code's terminal tool keeps or cuts
-    "unit/t-copilot-directive-budget.test.ts",
-    "unit/t220-tier-projection-module.test.ts",
-    "unit/t233-upstream-coverage-matching.test.ts",
-    "unit/t231-handler-additions.test.ts",
-    "unit/t238-build-binaries.test.ts",
-    "unit/t243-install-mechanism.test.ts",
-    "unit/t256-workspace-doctor.test.ts",
-    "unit/t267-usage.test.ts",
-    "unit/t270-metrics-transport.test.ts",
-    "unit/t280-contract-design-wiring.test.ts",
-    "unit/t282-state-version-doctor.test.ts",
-    "unit/t283-copilot-engine-cursor.test.ts",
-    // spawns the repository's own CI validator (.github/scripts/ai-pr-review.ts)
-    "unit/t300-ai-pr-review.test.ts",
-    "unit/t304-codekb-cumulative-merge.test.ts",
-    "unit/t306-learnings-cid-collision-followup.test.ts",
-    "unit/t324-doctor-hooks-disabled.test.ts",
-    "unit/t330-transaction-filesystem.test.ts",
-    "unit/t240-opencode-packaging.test.ts",
-    "unit/t241-opencode-adapter.test.ts",
-    "unit/t244-install-management.test.ts",
-    "unit/t242-plugin-state.test.ts",
-    "unit/t263-reviewer-terminal-ordering.test.ts",
-    "unit/t264-review-freeze-hook.test.ts",
-    "unit/t266-conversation-language-rule.test.ts",
-    "unit/t273-scope-aware-phase-dirs.test.ts",
-    "unit/t248-copilot-packaging.test.ts",
-    "unit/t249-copilot-adapter.test.ts",
-    "unit/t250-copilot-adapter-security.test.ts",
-    "unit/t275-cursor-packaging.test.ts",
-    "unit/t276-cursor-adapter.test.ts",
-    "unit/t277-validate-grid-nearest-stock.test.ts",
-    "unit/t281-sensor-traceability.test.ts",
-    "unit/t324-team-unit-progress-gates.test.ts",
-    // t289 spawns `bun test <driver>` to force a UUID collision in a SUBPROCESS.
-    // Two rows can only collide if the id source is replaced, and an in-file
-    // mock.module leaks the patched module into sibling tests -- so the patch is
-    // confined to a child process. The spawn is the point, not an accident.
-    "unit/t289-knowledge-onboard-boundary.test.ts",
-    // t278 spawns real processes because concurrency cannot be faked in-process:
-    // two onboards in ONE process serialise on the reentrant audit lock and prove
-    // nothing about two PROCESSES contending for the OS lock.
-    "unit/t298-knowledge-transaction.test.ts",
-    // t294 runs the REAL packager (`bun scripts/package.ts`) because the seam it
-    // tests IS the packager: a mocked writer would prove nothing about what ships
-    // into the five committed harness.json files.
-    "unit/t294-document-extractors-seam.test.ts",
-    // t295's Finding-4 stat-before-read RSS probe spawns a child `bun` process
-    // running the shipped tool once, because the property under test is the
-    // CHILD process's own memory growth -- measuring in-process would conflate
-    // the tool's allocations with the test runner's.
-    "unit/t295-knowledge-extraction.test.ts",
-    // t292 spawns the tool once, to assert `list --all` is REJECTED. Asserting
-    // that behaviourally beats grepping the source for "--all", which matched the
-    // comment explaining the flag does not exist.
-    "unit/t292-knowledge-list-show.test.ts",
-    // t297 creates real intents through the shipped tool, because a hand-written
-    // intents.json would let the test agree with a fiction rather than with the
-    // registry shape the code actually meets.
-    "unit/t297-knowledge-intents.test.ts",
-    // t284 spawns a fake extractor on PATH to force a version change, which is
-    // the only way to observe the retry-on-unchanged-digest inversion.
-    "unit/t284-knowledge-sync-rebind.test.ts",
-    // t285 drives the shipped tool as a subprocess to measure the exit code of an
-    // inactive-intent refusal: in-process the throw is catchable, so the pre-write
-    // guarantee (nothing written before the lock) could not be observed.
-    "unit/t285-knowledge-skill.test.ts",
-    // t287 spawns the shipped tool as a real subprocess for the same reason
-    // t278 does: the CAS/publish-gate race between `sync` and a concurrent
-    // `rebind` cannot be forced deterministically in-process, and the
-    // write-failure/self-heal injections drive a real `sync` CLI invocation so
-    // its exit code (not a catchable in-process throw) is what's observed.
-    "unit/t287-knowledge-sync-cas.test.ts",
-    // t293 spawns `aidlc.ts knowledge <verb>` -- the COMPILED dispatcher, not the
-    // knowledge tool -- because that indirection is the defect it exists to catch:
-    // every other knowledge test invoked `aidlc-knowledge.ts` directly, so the
-    // public command returned `unknown verb` for every verb (seven at the time
-    // this defect was found; an eighth, `summarize`, was added later) while 460
-    // tests stayed green. A journey through the documented workflow cannot be
-    // run in-process without bypassing the exact layer under test.
-    "unit/t293-knowledge-journey.test.ts",
-    // t316 spawns the real directive-emitting CLI because memory bootstrap is
-    // observable only at the process boundary where projectDir and the shipped
-    // harness template are both present.
-    "unit/t316-run-stage-memory-bootstrap.test.ts",
-    // t301 spawns `aidlc.ts knowledge summarize` through the compiled
-    // dispatcher (same §8.12 discipline as t293), and its two ACTION-only
-    // probes drive real concurrent subprocesses (a race between two
-    // `summarize` publications) and a pre-placed directory forcing a real
-    // filesystem write failure -- neither is observable from an in-process
-    // call.
-    "unit/t326-knowledge-summarize.test.ts",
-    // t314 spawns the shipped standalone validator to pin its process exit
-    // codes and exact JSON/human output contracts outside a framework project.
-    "unit/t314-plugin-validate.test.ts",
-    // t315 spawns a copied standalone builder from an isolated temp tree and
-    // byte-compares every emitted host projection with committed dist output.
-    "unit/t315-plugin-build.test.ts",
-    // t316 spawns the shipped compose-tier tool against copied plugin/install
-    // trees to prove candidate isolation, drops, graph checks, and idempotency.
-    "unit/t316-plugin-test.test.ts",
-    // t317 creates a deterministic plugin from copied tools, then proves the
-    // scaffold validates, builds, and composes without checkout paths.
-    "unit/t317-plugin-create.test.ts",
-    // t327 drives the real next/continue transport because stable authority
-    // publication is observable only across the emitted continuation cursor.
-    "unit/t327-code-generation-authority-publication.test.ts",
-    // t328 drives the shipped log, human-turn, and begin CLIs so protected
-    // challenge/response receipts and cross-process lock ordering are genuine.
-    "unit/t328-plan-approval-runtime-authority.test.ts",
-    // t337 spawns the shipped doctor to pin the "Workspace source boundary
-    // binds" row, which reads a real source walk against a real workspace.
-    "unit/t337-source-boundary-reason.test.ts",
-    "unit/t339-construction-autonomy-gates.test.ts",
-    "unit/t340-grouped-plan-approval.test.ts",
-    "unit/t340-kiro-ide-ignore-sources-doctor.test.ts",
-    "unit/t340-plan-approval-batch.test.ts",
-    "unit/t341-construction-checkpoints.test.ts",
-    "unit/t342-construction-checkpoint-routing.test.ts",
-    "unit/t343-swarm-checkpoints.test.ts",
-    "unit/t344-swarm-checkpoint-retry.test.ts",
-    "unit/t345-full-suite-workflow.test.ts",
-    "unit/t345-sensor-detail-prune.test.ts",
-    "unit/t349-audit-trail-guard.test.ts",
-    "unit/t350-audit-read-commands.test.ts",
-    "integration/t102.test.ts",
-    "integration/t104.test.ts",
-    "integration/t105.test.ts",
-    "integration/t106.test.ts",
-    "integration/t111-session-skills-contract.test.ts",
-    "integration/t112.serial.test.ts",
-    "integration/t118.test.ts",
-    "integration/t120-classify-roundtrip.test.ts",
-    "integration/t121-stop-hook-enforce.test.ts",
-    "integration/t195-stop-hook-compose-carveout.test.ts",
-    "integration/t311-gate-sensor-enforcement.test.ts",
-    // t350 spawns the shipped aidlc-state.ts gate-start to prove the
-    // reverse-engineering sensors reach the CodeKB (#771).
-    "integration/t350-codekb-gate-sensors.test.ts",
-    // t327 spawns the public aidlc.ts dispatcher to prove the documented plugin
-    // authoring routes reach the standalone validator and shared builder.
-    "integration/t327-plugin-author-routes.test.ts",
-    "integration/t327-stop-hook-subagent-inflight.test.ts",
-    "integration/t127-single-stage-invariant.test.ts",
-    "integration/t128-custom-runner.test.ts",
-    "integration/t130-scope-runners.test.ts",
-    "integration/t131-hooks-settings-fire.test.ts",
-    "integration/t135-invoke-swarm.test.ts",
-    "integration/t136.test.ts",
-    "integration/t137.test.ts",
-    "integration/t145-packaging-parity.test.ts",
-    "integration/t145-state-lock-concurrency.test.ts",
-    "integration/t162-per-intent-layout-cli.test.ts",
-    "integration/t163-reaper-steal-race.test.ts",
-    "integration/t164-shard-ordering-and-lock-bucket.test.ts",
-    "integration/t165-intent-create-p4.test.ts",
-    "integration/t166-multi-repo-construction.test.ts",
-    "integration/t171-creation-gate-registry.test.ts",
-    "integration/t172-migration-audit-trail.test.ts",
-    "integration/t173-session-switch-restamp.test.ts",
-    "integration/t175-space-create-memory-isolation.test.ts",
-    "integration/t185-stage-artifact-guard.test.ts",
-    "integration/t188-plugin-compose.serial.test.ts",
-    "integration/t224-plugin-selection.test.ts",
-    "integration/t300-plugin-kit.test.ts",
-    "integration/t304-loopback-review-receipt-replay.test.ts",
-    "integration/t307-loopback-unitmajor-replay.test.ts",
-    "integration/t314-plugin-reinstall-doctor.test.ts",
-    // t341 is t314's composed-scope twin: it spawns the shipped graph/doctor
-    // tools to walk a reinstall, so its body is a deterministic spawner even
-    // though its filename segment carries no mechanism.
-    "integration/t341-composed-scope-durability.test.ts",
-    "integration/t21b.test.ts",
-    "integration/t31-help.test.ts",
-    "integration/t325-team-unit-claims.test.ts",
-    "integration/t326-team-unit-merge.test.ts",
-    // t326's guard cases drive the shipped aidlc-unit/aidlc-state CLIs through
-    // the shared fixture's runMergeTool spawn (tests/harness/team-unit-merge.ts).
-    "integration/t326-team-unit-merge-guards.test.ts",
-    "integration/t327-team-dispatcher.test.ts",
-    "integration/t32-stage-graph-consistency.test.ts",
-    "integration/t351-fresh-clone-participation.test.ts",
-    "integration/t33-hook-concurrency.test.ts",
-    "integration/t328-authority-rebinding.test.ts",
-    "integration/t329-guard-recovery-loop.test.ts",
-    "integration/t339-classic-upgrade-inflight.test.ts",
-    "integration/t39.test.ts",
-    "integration/t45.test.ts",
-    "integration/t49.test.ts",
-    "integration/t51.test.ts",
-    "integration/t52-drift-meta-validation.test.ts",
-    "integration/t66.test.ts",
-    "integration/t75.test.ts",
-    "integration/t78-bolt-worktree-lifecycle.test.ts",
-    "integration/t89.test.ts",
-    "integration/t90.test.ts",
-    "integration/t91.test.ts",
-    "integration/t92.test.ts",
-    "integration/t93.test.ts",
-    "integration/t95-sensor-fire-hook-feature.test.ts",
-    "integration/t96.test.ts",
-    "integration/t98.test.ts",
-    "integration/t-custom-harness-compile.test.ts",
-    "integration/t45-revision-loop.test.ts",
-    "integration/t46-parallel-bolt.test.ts",
-    "integration/t47-failure-injection.test.ts",
-    "integration/t48-runtime-graph-end-to-end.test.ts",
-    "integration/t49-bolt-sensor-failures.test.ts",
-    "integration/t99-learnings-gate-flow.test.ts",
-    "smoke/t05-run-tests-parallel.test.ts",
-    "smoke/t130-scope-runners.test.ts",
-    "smoke/t148-kiro-file-structure.test.ts",
-    "smoke/t86-stage-protocol-section-13.test.ts",
-    "e2e/t-acp-kiro-new-work-routing.serial.test.ts",
-    "e2e/t-acp-kiro-rule-preload.serial.test.ts",
-    "e2e/t-exec-codex-journey-workspace.serial.test.ts",
-    "e2e/t-ide-kiro-checkpoint.serial.test.ts",
-    "e2e/t-ide-kiro-new-work-routing.serial.test.ts",
-    "e2e/t-tui-custom-harness.serial.test.ts",
-    "e2e/t-tui-kiro-intent-capture.serial.test.ts",
-    "e2e/t-tui-render-colour.serial.test.ts",
-    "e2e/t-tui-t27-depth-override.serial.test.ts",
-    "unit/gen-coverage-registry.test.ts",
-    "unit/t-claude-hook-project-root.test.ts",
-    "unit/t-config-pin-mid-workflow.test.ts",
-    "unit/t-guard-plan-continuation-swarm.test.ts",
-    "unit/t-kiro-acp-protocol-trace.test.ts",
-    "unit/t-memory-seed.test.ts",
-    "unit/t-native-hook-project-root.test.ts",
-    "unit/t-own-words-gates.test.ts",
-    "unit/t-plan-approval-recovery-paths.test.ts",
-    "unit/t-recorded-bypass-parity.test.ts",
-    "unit/t-request-changes-own-words.test.ts",
-    "unit/t-tui-process-identity.test.ts",
-    "unit/t07-hook-audit-logger.test.ts",
-    "unit/t08.test.ts",
-    "unit/t09.test.ts",
-    "unit/t10-hook-session-start.test.ts",
-    "unit/t100-memory-template-lifecycle.test.ts",
-    "unit/t103.test.ts",
-    "unit/t11.test.ts",
-    "unit/t112-learnings-distribution-guard.test.ts",
-    "unit/t114-orchestrate-next.test.ts",
-    "unit/t115.test.ts",
-    "unit/t116-directive-path-resolution.test.ts",
-    "unit/t117.test.ts",
-    "unit/t118.test.ts",
-    "unit/t124-scope-transpose.test.ts",
-    "unit/t125-scope-files.test.ts",
-    "unit/t125.test.ts",
-    "unit/t129-stage-runner-drift.test.ts",
-    "unit/t13-hook-input-robustness.test.ts",
-    "unit/t133-bolt-dag-compile.test.ts",
-    "unit/t142-tui-drive-setting-sources.test.ts",
-    "unit/t144-harness-seam.test.ts",
-    "unit/t147-kiro-hook-adapter.test.ts",
-    "unit/t149-codex-hook-adapter.test.ts",
-    "unit/t150-codex-packaging.test.ts",
-    "unit/t155-template-override.test.ts",
-    "unit/t158-memory-writer-reader-seam.test.ts",
-    "unit/t161-per-intent-lock-reaper.test.ts",
-    "unit/t168-statusline-orientation.test.ts",
-    "unit/t169-session-resume-rebind.test.ts",
-    "unit/t170-audit-logger-per-intent.test.ts",
-    "unit/t179-orchestrate-rollforward-guard.test.ts",
-    "unit/t180-kiro-rollforward-seam.test.ts",
-    "unit/t182-codekb-placement.test.ts",
-    "unit/t248-codekb-scope-diff.test.ts",
-    "unit/t184-stage-graph-drift.test.ts",
-    "unit/t186-foreach-per-unit-iteration.test.ts",
-    "unit/t188-human-presence-gate.test.ts",
-    "unit/t190-validate-grid.test.ts",
-    "unit/t191-composed-scope-write.test.ts",
-    "unit/t194-recompose.test.ts",
-    "unit/t198-compose-surfaces.test.ts",
-    "unit/t199-learnings-memory-path.test.ts",
-    "unit/t201-swarm-batch-advance.test.ts",
-    "unit/t202-gate-next-stage.test.ts",
-    "unit/t203-nested-workspace-detection.test.ts",
-    "unit/t204-compose-marker-doctor.test.ts",
-    "unit/t206-optional-produces-coverage.test.ts",
-    "unit/t207-unit-kind-schema.test.ts",
-    "unit/t208-unit-kind-pruning.test.ts",
-    "unit/t211-detect-submodules.test.ts",
-    "unit/t212-doctor-submodules.test.ts",
-    "unit/t221-reviewer-scope-hook.test.ts",
-    "unit/t218-kiro-ide-hook-adapter.test.ts",
-    "unit/t222-plugin-runner-naming.test.ts",
-    "unit/t223-naming-enforcement.test.ts",
-    "unit/t232-phase-progress-flip.test.ts",
-    "unit/t205-gate-revision-backstop.test.ts",
-    "unit/t214-routing-cost-strings.test.ts",
-    "unit/t209-unit-major-iteration.test.ts",
-    "unit/t210-iteration-knob-default.test.ts",
-    "unit/t17.test.ts",
-    "unit/t18.test.ts",
-    "unit/t19.test.ts",
-    "unit/t20.test.ts",
-    "unit/t215-bolt-dag-selfheal.test.ts",
-    "unit/t225-scope-name-decoupling.test.ts",
-    "unit/t227-tool-entrypoint-exports.test.ts",
-    "unit/t228-hook-run-exports.test.ts",
-    "unit/t229-workspace-parser.test.ts",
-    "unit/t230-dispatcher-routes.test.ts",
-    "unit/t235-ensemble-modes.test.ts",
-    "unit/t236-ensemble-evidence-gate.test.ts",
-    "unit/t242-state-transition-guard.test.ts",
-    "unit/t243-doctor-bundle.test.ts",
-    "unit/t247-claim-sources-sensor.test.ts",
-    "unit/t258-ars-subcommand.test.ts",
-    "unit/t261-audit-authority-floor.test.ts",
-    "unit/t260-unit-lifecycle-receipts.test.ts",
-    "unit/t262-plugin-sensor-name-guard.test.ts",
-    "unit/t265-plan-approval-guard.test.ts",
-    "unit/t266-review-class.test.ts",
-    "unit/t271-review-iteration-ceiling.test.ts",
-    "unit/t272-unit-major-code-gen.test.ts",
-    "unit/t248-steering-content-delivery.test.ts",
-    "unit/t278-per-unit-wave.test.ts",
-    "unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
-    "unit/t293-config-models.test.ts",
-    "unit/t294-config-diagnostics.test.ts",
-    "unit/t295-config-choices.test.ts",
-    "unit/t296-config-setup-walk.test.ts",
-    "unit/t298-settings-hierarchy.test.ts",
-    "unit/t299-first-run-wizard.test.ts",
-    "unit/t304-round18-acceptance-fixes.test.ts",
-    "unit/t305-public-cli-color.test.ts",
-    "unit/t291-review-receipt-recovery.test.ts",
-    "unit/t302-protocol-modules.test.ts",
-    "unit/t304-review-brief.test.ts",
-    "unit/t317-gate-pending-doctor.test.ts",
-    "unit/t318-session-binding-helpers.test.ts",
-    "unit/t319-doctor-hooks-blocked.test.ts",
-    "unit/t315-pipeline-link-receipts.test.ts",
-    "unit/t329-document-input.test.ts",
-    "unit/t330-release-channel-grammar.test.ts",
-    "unit/t331-preview-channel-lifecycle.test.ts",
-    "unit/t313-plugin-doctor-checks.test.ts",
-    "unit/t320-review-confirmation-deadlock.test.ts",
-    "unit/t321-source-recovery-freeze.test.ts",
-    "unit/t322-fix-round-hardening.test.ts",
-    "unit/t323-review-verdict-closure.test.ts",
-    "unit/t328-nodag-per-unit-continuity.test.ts",
-    "unit/t312-orchestrate-session-binding.test.ts",
-    "unit/t255-workspace-sync.test.ts",
-    "unit/t314-minimal-scope-performance.test.ts",
-    "unit/t314-source-freshness-receipts.test.ts",
-    // t305 runs the shipped review/state tools because source-attribution
-    // acceptance depends on actual audit receipts and completion refusals.
-    "unit/t305-per-unit-attribution-receipts.test.ts",
-    // t312 spawns aidlc-attest/aidlc-log because commit-provenance acceptance
-    // is defined over real receipts, manual git commits, and CLI exit codes.
-    "unit/t312-attest-resolve-anchor.test.ts",
-    "unit/t27.test.ts",
-    "unit/t29.test.ts",
-    "unit/t30-hook-session-end.test.ts",
-    "unit/t31.test.ts",
-    "unit/t33.test.ts",
-    "unit/t331-guard-deadlock-liveness.test.ts",
-    "unit/t332-summary-authorization.test.ts",
-    "unit/t333-change-control.test.ts",
-    "unit/t334-change-control-plan-approval.test.ts",
-    "unit/t335-change-control-review-summary.test.ts",
-    "unit/t336-change-control-surfaces.test.ts",
-    "unit/t338-ceremony-verb.test.ts",
-    "unit/t34.test.ts",
-    "unit/t340-default-scope-resolver.test.ts",
-    "unit/t35.test.ts",
-    "unit/t36.test.ts",
-    "unit/t37.test.ts",
-    "unit/t38.test.ts",
-    "unit/t60.test.ts",
-    "unit/t61.test.ts",
-    "unit/t63.test.ts",
-    "unit/t67.test.ts",
-    "unit/t68-version-changelog-sync.test.ts",
-    "unit/t72.test.ts",
-    "unit/t76.test.ts",
-    "unit/t77-bolt-worktree-flags.test.ts",
-    "unit/t79.test.ts",
-    "unit/t80.test.ts",
-    "unit/t81.test.ts",
-    "unit/t82-hold-merge-invariant.test.ts",
-    "unit/t83-doctor-orphan-worktree.test.ts",
-    "unit/t84.test.ts",
-    "unit/t85.test.ts",
-    "unit/t94-sensor-fire-hook.test.ts",
-    "unit/t96.test.ts",
-    "unit/t97.test.ts",
-    "integration/t311-session-binding-writers.serial.test.ts",
-    "e2e/t113.test.ts",
-    "e2e/t122-stop-hook-e2e.test.ts",
-    "e2e/t126-emitter-pairing-cofire.test.ts",
-    "e2e/t301-express-scope-routing.test.ts",
-    "e2e/t302-deployment-pipeline-skip-fallback.test.ts",
-    "e2e/t53.test.ts",
-    "e2e/t60-construction-worktrees-enterprise.test.ts",
-    "e2e/t61-construction-worktrees-feature.test.ts",
-    "e2e/t62-construction-worktrees-mvp.test.ts",
-    "e2e/t63-construction-worktrees-poc.test.ts",
-    "e2e/t64-construction-worktrees-workshop.test.ts",
-    "e2e/t65-construction-worktrees-bugfix.test.ts",
-    "e2e/t66-construction-worktrees-refactor.test.ts",
-    "e2e/t67-construction-worktrees-security-patch.test.ts",
-    "e2e/t02.test.ts",
-    "e2e/t03.test.ts",
-    "e2e/t04.test.ts",
-    "e2e/t05.test.ts",
-    "e2e/t06.test.ts",
-    "e2e/t07-audit-fork-merge.test.ts",
-    "e2e/t09-halt-and-ask-preservation.test.ts",
-    "e2e/t10-halt-and-ask-discard.test.ts",
-    "e2e/t11-halt-and-ask-retry-correlation.test.ts",
-    "e2e/t12-bolt-runtime-graph-fork.test.ts",
-    "e2e/t134-swarm-referee.test.ts",
-    "e2e/t138-scope-exclusion-counts.test.ts",
-    // t-ide-kiro constructs its approval-gate fixture by spawning the real
-    // shipped tools (runSetupTool), so its body is a deterministic spawner
-    // even though its filename segment carries no mechanism.
-  ];
-
-  test("the none->cli reclassification set is exactly the deterministic spawners", () => {
-    const measured: string[] = [];
-    for (const abs of allTestTsFiles(TESTS_DIR)) {
-      const base = basename(abs);
-      const seg = mechanismOfTestFile(base);
-      const set = mechanismsOf(base, readFileSync(abs, "utf-8"));
-      if (seg === "none" && set.includes("cli")) {
-        measured.push(testsRelativePath(abs));
-      }
-    }
-    expect(measured.sort()).toEqual([...EXPECTED_NONE_TO_CLI].sort());
+  test.each([
+    // The runtime spawn runs no tool: only the stripped import names one.
+    ["an in-process import of a shipped tool beside a bare runtime spawn", [
+      'import { spawnSync } from "node:child_process";',
+      'import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";',
+      'test("x", () => {',
+      '  expect(spawnSync(process.execPath, ["--version"]).status).toBe(0);',
+      '  expect(getField("- **A**: b", "A")).toBe("b");',
+      "});",
+    ]],
+    // The import strip misses a path on a continuation line; a spawn that is
+    // not a bun/node runtime keeps the file out of cli anyway.
+    ["a multi-line tool import beside a git spawn", [
+      'import { spawnSync } from "node:child_process";',
+      "import {",
+      "  getField,",
+      '} from "../../dist/claude/.claude/tools/aidlc-lib.ts";',
+      'test("x", () => {',
+      '  expect(spawnSync("git", ["status"]).status).toBe(0);',
+      '  expect(getField("- **A**: b", "A")).toBe("b");',
+      "});",
+    ]],
+    ["a spawn named only in a comment", [
+      '// const r = spawnSync(BUN, ["../../dist/claude/.claude/tools/aidlc-state.ts", "show"]);',
+      'test("x", () => { expect(1).toBe(1); });',
+    ]],
+    ["a git spawn beside a tool path it only reads", [
+      'import { spawnSync } from "node:child_process";',
+      'import { readFileSync } from "node:fs";',
+      'const TOOL = "../../dist/claude/.claude/tools/aidlc-state.ts";',
+      'test("x", () => {',
+      '  expect(spawnSync("git", ["status"]).status).toBe(0);',
+      '  expect(readFileSync(TOOL, "utf-8")).toContain("export");',
+      "});",
+    ]],
+  ])("%s is not a drive and stays none", (_label, body) => {
+    const src = ["// covers: function:getField", ...body].join("\n");
+    expect(mechanismsOf("t99.test.ts", src)).toEqual(["none"]);
   });
 
   // (c) HONESTY — derived == recorded over the whole committed registry. Every

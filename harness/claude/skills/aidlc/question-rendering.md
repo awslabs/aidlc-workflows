@@ -126,9 +126,10 @@ Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly
 and run the matching checkpoint-specific `aidlc-log.ts answer` command. Strip
 any source letter, punctuation, and option description before writing:
 `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
-a self-selected answer are invalid. On Request changes, ask **"What should change?"**
-and END THE TURN again; do not update any answer until that feedback
-arrives. Then record the feedback, update the affected answers, reset this tag
+a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
+until that feedback arrives. Then record the feedback, update the affected answers, reset this tag
 to blank, and present the consolidated summary again. Do not generate the
 artifact until the file contains the human's explicit `[Answer]: Looks correct`
 and the receipt command succeeds. Never merge this checkpoint with the later

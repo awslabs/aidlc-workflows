@@ -33,9 +33,9 @@ const DELEGATION_AGENTS = [
   "aidlc-operations-agent",
 ] as const;
 
-const composerPaths = [".kiro/scopes/**", ".kiro/tools/data/scope-grid.json"];
-// The grid file the composer writes before each validate-grid run (the
-// proposalPath detect --json prints). Outside .kiro/, so no deny carve-out.
+// The composer's one file: the grid it writes before each validate-grid run
+// (the proposalPath detect --json prints). It writes no scope and not the
+// scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
 const spacePaths = ["aidlc/spaces/**"];
 
@@ -48,12 +48,8 @@ const quoted = (paths: readonly string[]) =>
 // every dispatch path; it names no MCP server, so a persona reaches none (an
 // @mcp wildcard would expose every user- and workspace-level server).
 function personaFrontmatter(agent: string): string[] {
-  const writePaths =
-    agent === "aidlc-composer-agent" ? [...composerPaths, composerProposalPath] : spacePaths;
-  // Engine-owned trees are never a persona's to write. The composer's two
-  // outputs live under .kiro/, so they are carved out of the deny; a deny
-  // otherwise beats every allow.
-  const denyExclude = agent === "aidlc-composer-agent" ? composerPaths : [];
+  const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
+  // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
     "permissions:",
@@ -78,7 +74,6 @@ function personaFrontmatter(agent: string): string[] {
     `        - "aidlc/.aidlc-sessions/**"`,
     // The person's words kept for a stage gate's Request Changes.
     `        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`,
-    ...(denyExclude.length > 0 ? ["      exclude:", ...quoted(denyExclude)] : []),
   ];
 }
 
@@ -134,14 +129,18 @@ const manifest: HarnessManifest = {
       "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
       "panel's agent picker, then send a message. In Kiro CLI, exit and start `kiro-cli` " +
       `again in this folder. An ACP client ${KIRO_CLI_ACP_HOOKS}`,
+    // Says what happened and what lets their next message be recorded; it adds
+    // no step to the refusal it joins.
     missedReply:
-      "If the person already replied, Kiro may not be running AIDLC hooks in this window: " +
-      "ask them to trust the folder if the Restricted Mode banner shows at the top of the " +
-      'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
-      "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
-      "panel's agent picker, then reply again. In Kiro CLI, ask them to exit and start " +
-      "`kiro-cli` again in this folder, then reply again. If they use an ACP client, tell " +
-      `them their client ${KIRO_CLI_ACP_HOOKS}`,
+      "If the person already replied, that reply was not recorded: Kiro may not be running " +
+      "AI-DLC's hooks in this window. Tell them that, and that trusting the folder if the " +
+      "Restricted Mode banner shows at the top of the window (select Manage, then Trust), " +
+      'running "Developer: Reload Window" from the Command Palette (Ctrl+Shift+P, or ' +
+      "Cmd+Shift+P on macOS), and choosing the aidlc agent in the chat panel's agent picker " +
+      "should let their next message be recorded; if it still is not, `/aidlc --doctor` shows " +
+      "why. In Kiro CLI, starting `kiro-cli` again in this folder does the same. If they use " +
+      "an ACP client, tell them their client " +
+      KIRO_CLI_ACP_HOOKS,
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:
@@ -167,6 +166,8 @@ const manifest: HarnessManifest = {
           "sha256:648f12cb08d05e7bdf97ad4e69e36b7d2b76687d047811d58d196623fd9191bf",
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:e82d7773f981dabccc1a0a8a31dad4feb26c2af4a65cc7d686bb2a0581ce0ecb",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:9dca2d16f38509dacc876574d67391f84476e9eea349c2f5250b0325895ce0b8",
         ],
       },
     },

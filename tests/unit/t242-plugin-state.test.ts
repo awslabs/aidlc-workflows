@@ -21,9 +21,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import {
+  announcePrune,
   collectPluginStatus,
   comparePluginState,
-  confirmPrune,
   discoverPluginInventory,
   normalizeInstalledPlugin,
   pluginSourceHash,
@@ -34,6 +34,7 @@ import {
   type PluginInventory,
   type ProjectEvidence,
 } from "../../core/tools/aidlc-plugin.ts";
+import { aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -440,6 +441,108 @@ describe("t242 fixture-proved host inventories", () => {
       join(rootA, ".claude-plugin", "plugin.json"),
       join(rootB, ".claude-plugin", "plugin.json"),
     ].sort());
+  });
+
+  test("local and project Claude records apply only in their own project", () => {
+    const cache = pluginRoot();
+    const other = pluginRoot();
+    const workspace = temp("aidlc-claude-scoped-");
+    const [projectA, projectB, projectC] = ["a", "b", "c"].map((name) => {
+      mkdirSync(join(workspace, name), { recursive: true });
+      return join(workspace, name);
+    });
+    mkdirSync(join(projectC, "sub", "deep"), { recursive: true });
+    const record = (scope: string, installPath: string, projectPath?: string) => ({
+      scope,
+      installPath,
+      version: "0.1.0",
+      ...(projectPath === undefined ? {} : { projectPath }),
+    });
+    const fixtureDir = temp("aidlc-claude-scoped-registry-");
+    const writeRegistry = (records: unknown[]): void => {
+      writeFileSync(join(fixtureDir, "installed.json"), JSON.stringify({
+        version: 2,
+        plugins: { "aidlc-test-pro@mkt": records },
+      }));
+    };
+    writeFileSync(join(fixtureDir, "settings.json"), "{}");
+    process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY = join(fixtureDir, "installed.json");
+    process.env.AIDLC_CLAUDE_SETTINGS = join(fixtureDir, "settings.json");
+    const keysIn = (project: string) => {
+      const result = discoverPluginInventory(".claude", project);
+      return { installed: result.installed.map((item) => item.root), invalid: result.invalid };
+    };
+
+    writeRegistry([record("local", cache, projectA), record("local", cache, projectB)]);
+    expect(keysIn(projectA)).toEqual({ installed: [cache], invalid: [] });
+    expect(keysIn(projectB)).toEqual({ installed: [cache], invalid: [] });
+    expect(keysIn(projectC)).toEqual({ installed: [], invalid: [] });
+
+    writeRegistry([record("local", cache, join(projectC, "sub", "deep"))]);
+    expect(keysIn(projectC).installed).toEqual([cache]);
+    expect(keysIn(`${projectC}x`).installed).toEqual([]);
+
+    writeRegistry([record("project", cache, projectA), record("user", other)]);
+    expect(keysIn(projectA).invalid).toEqual([
+      expect.objectContaining({ key: "test-pro", message: expect.stringContaining("ambiguous") }),
+    ]);
+    expect(keysIn(projectB)).toEqual({ installed: [other], invalid: [] });
+
+    writeRegistry([record("user", other, projectA)]);
+    expect(keysIn(projectB)).toEqual({ installed: [other], invalid: [] });
+
+    writeRegistry([record("user", cache), record("local", cache, projectA)]);
+    expect(keysIn(projectA)).toEqual({ installed: [cache], invalid: [] });
+
+    writeRegistry([record("local", cache, projectA), record("local", other, projectA)]);
+    expect(keysIn(projectA).installed).toEqual([]);
+    expect(keysIn(projectA).invalid[0].paths).toEqual([
+      join(cache, ".claude-plugin", "plugin.json"),
+      join(other, ".claude-plugin", "plugin.json"),
+    ].sort());
+  });
+
+  test("a project Claude record also counts in a clone or worktree whose settings enable it", () => {
+    const cache = pluginRoot();
+    const other = pluginRoot();
+    const workspace = temp("aidlc-claude-clone-");
+    const [origin, clone, unrelated] = ["origin", "clone", "unrelated"].map((name) => {
+      mkdirSync(join(workspace, name, ".claude"), { recursive: true });
+      return join(workspace, name);
+    });
+    const fixtureDir = temp("aidlc-claude-clone-registry-");
+    const writeRegistry = (records: unknown[]): void => {
+      writeFileSync(join(fixtureDir, "installed.json"), JSON.stringify({
+        version: 2,
+        plugins: { "aidlc-test-pro@mkt": records },
+      }));
+    };
+    writeFileSync(join(fixtureDir, "settings.json"), "{}");
+    process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY = join(fixtureDir, "installed.json");
+    process.env.AIDLC_CLAUDE_SETTINGS = join(fixtureDir, "settings.json");
+    const record = (scope: string, installPath: string, projectPath: string) => ({
+      scope,
+      installPath,
+      version: "0.1.0",
+      projectPath,
+    });
+    const keysIn = (project: string) => {
+      const result = discoverPluginInventory(".claude", project);
+      return { installed: result.installed.map((item) => item.root), invalid: result.invalid };
+    };
+    const enabled = JSON.stringify({ enabledPlugins: { "aidlc-test-pro@mkt": true } });
+    writeFileSync(join(clone, ".claude", "settings.json"), enabled);
+
+    writeRegistry([record("project", cache, origin), record("local", other, unrelated)]);
+    expect(keysIn(clone)).toEqual({ installed: [cache], invalid: [] });
+    expect(keysIn(join(workspace, "none"))).toEqual({ installed: [], invalid: [] });
+
+    writeRegistry([record("project", cache, origin), record("local", other, clone)]);
+    expect(keysIn(clone)).toEqual({ installed: [other], invalid: [] });
+
+    writeRegistry([record("project", cache, origin)]);
+    writeFileSync(join(clone, ".claude", "settings.json"), "{");
+    expect(keysIn(clone)).toEqual({ installed: [], invalid: [] });
   });
 });
 
@@ -883,6 +986,15 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "data",
       "plugin-compose-test-pro.json",
     ))).toBe(false);
+    // The way back the prune notice names: reinstall in the host, then sync.
+    withClaudeFixture(TEST_PRO);
+    const restored = await syncPlugins(project, [], ".claude");
+    expect(restored.synced).toEqual(["test-pro"]);
+    expect(existsSync(stage)).toBe(true);
+    expect(readFileSync(
+      join(project, ".claude", "skills", "aidlc", "SKILL.md"),
+      "utf-8",
+    )).toContain("| test-pro-integration |");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("prune refuses a locally modified owned file without deleting it", async () => {
@@ -907,28 +1019,28 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("interactive prune confirmation resolves on a line without waiting for EOF", async () => {
-    const input = new PassThrough() as PassThrough & { isTTY: boolean };
+  test("at a terminal, prune names what goes and how to get it back, then proceeds without a question", () => {
     const output = new PassThrough();
-    input.isTTY = true;
-    const confirmation = confirmPrune([], ["test-pro"], input, output);
-    input.write("y\n");
-
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await expect(Promise.race([
-        confirmation,
-        new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("confirmation waited for EOF")),
-            remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
-        }),
-      ])).resolves.toBeUndefined();
-      expect(input.readableEnded).toBe(false);
-      expect(output.read()?.toString() ?? "").toContain("Prune composed content");
+      // Nothing is written to stdin: there is no question to answer.
+      announcePrune(["--prune-missing"], ["test-pro", "other"], { isTTY: true }, output);
+      const said = output.read()?.toString() ?? "";
+      expect(said).toBe(
+        "Pruning missing plugin(s) test-pro, other: removing the files they added to this project, " +
+          "their additions to stage files, and their composition records. To get them back, reinstall " +
+          `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
+      );
+      expect(said).not.toContain("[y/N]");
     } finally {
-      clearTimeout(timer);
-      input.destroy();
       output.destroy();
     }
+    // Without a terminal (a script or an agent), --yes stays the go-ahead.
+    expect(() => announcePrune(["--prune-missing"], ["test-pro"], { isTTY: false }, new PassThrough()))
+      .toThrow("plugin sync --prune-missing requires --yes in non-interactive mode");
+    const quiet = new PassThrough();
+    announcePrune(["--prune-missing", "--yes"], ["test-pro"], { isTTY: false }, quiet);
+    announcePrune(["--prune-missing"], [], { isTTY: false }, quiet);
+    expect(quiet.read()).toBeNull();
+    quiet.destroy();
   });
 });

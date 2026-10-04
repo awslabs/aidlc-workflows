@@ -50,12 +50,15 @@ const manifest: HarnessManifest = {
       "that .kiro/agents/aidlc.json still has its hooks block and that `aidlc` resolves from " +
       "a non-interactive shell (`aidlc config runtime --check`). To run Kiro CLI on v3, use " +
       "the kiro-ide distribution instead.",
+    // Says what happened and what lets the next chat record replies; it adds no
+    // step to the refusal it joins.
     missedReply:
-      "If the person already replied, Kiro CLI may not be running AIDLC hooks in this " +
-      "session: they run on its v2 engine with the aidlc agent active, and a session on the " +
-      "v3 engine does not run them as shipped, so it never records the reply. Ask them to " +
-      "exit and start `kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder " +
-      "(an ACP client starts `kiro-cli acp --agent-engine v2`), then reply again.",
+      "If the person already replied, that reply was not recorded: Kiro CLI may not be " +
+      "running AI-DLC's hooks in this session. They run on its v2 engine with the aidlc " +
+      "agent active, and a session on the v3 engine does not run them as shipped. Tell them " +
+      "that, and that starting `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder " +
+      "(an ACP client starts `kiro-cli acp --agent-engine v2`) should let the next chat record " +
+      "their replies; if it still does not, `/aidlc --doctor` shows why.",
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",
@@ -72,6 +75,8 @@ const manifest: HarnessManifest = {
           "sha256:83449fdda4644b319cbea5dcbde11919722b5dd6761f4edb4caf0e0e53dc9c6b",
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:469dbf89f83865b58b2ae4c51dd2f2fe51fd80a9e2033bfb233688141d0cf632",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:af1b98a4b8c0e288aa8177655495b4a65220dbed2e149a67780aff1e8f379c9d",
         ],
       },
     },

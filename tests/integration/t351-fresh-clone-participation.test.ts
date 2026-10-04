@@ -150,6 +150,11 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     });
     expect(dispatch.code).toBe(2);
     expect(dispatch.stderr).toContain("has not joined");
+    // The way in is named in this tree's spelling: `next` asks the person which work this is.
+    expect(dispatch.stderr).toContain(
+      "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+    );
+    expect(dispatch.stderr).toContain("it asks the person which piece of work this conversation is for");
     // A second start in the same conversation stays unjoined.
     expect(hook("session-start", { hook_event_name: "SessionStart", source: "resume" }).code).toBe(0);
     expect(readSessionBinding(proj, SESSION)?.intent).toBeNull();
@@ -376,7 +381,8 @@ describe("t351 fresh clone with a teammate's lone intent record", () => {
     }).code).toBe(0);
     expect(readSessionBinding(proj, SESSION)).toMatchObject({ intent: record, source: "switch" });
     expect(readSessionIntentUuid(proj, SESSION)).toBe(stamp);
-    expect(readSessionIntentHandoff(proj, SESSION)).toBeNull();
+    // Only the switch's own receipt is there, until the next prompt (#1263).
+    expect(readSessionIntentHandoff(proj, SESSION)).toMatchObject({ via: "switch", toIntentUuid: stamp });
     expect(workflowParticipation(proj, resolveWorkflowSelection(proj, { sessionId: SESSION }))).toBe("participant");
   });
 

@@ -48,12 +48,10 @@
 import {
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
@@ -86,6 +84,7 @@ import {
   normalizeDriveLetter,
   recordGuardStoodAside,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   loadScopeMapping,
@@ -93,6 +92,7 @@ import {
   parseCheckboxes,
   parseStateStageSuffixes,
   readActiveDirectiveMarker,
+  activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
   resolveBoltDag,
@@ -103,10 +103,15 @@ import {
   stateFilePath,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
+import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
 import {
+  AS_ITS_OWN_COMMAND,
   beginCodeGeneration,
   beginCodeGenerationBatch,
   codeGenerationExecutionAllowed,
+  type CodeGenerationIssuance,
+  codeGenerationIssuance,
   codeGenerationPlanApprovalFence,
   codeGenerationRecordDir,
   codeGenerationRulesArrivingReason,
@@ -277,7 +282,16 @@ export interface PlanApprovalVerdict {
   mentioned: string[];
   /** The handoff carried the plan's review appendix, bytes the approval excludes. */
   appendixInBrief?: boolean;
+  /** What is wrong with the handoff itself, when that (not the approval) refuses it. */
+  handoff?: HandoffDefect;
 }
+
+/**
+ * A developer handoff that names no target or several, names one this
+ * workflow does not build, or carries the wrong contract line for an
+ * approved plan.
+ */
+export type HandoffDefect = "targets" | "unknown-target" | "contract";
 
 function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean {
   return (
@@ -355,7 +369,7 @@ export function evaluatePlanApprovalDispatch(
     ...markedStages.map((stage) => `stage:${stage}`),
   ];
   if (markedUnits.length + markedStages.length !== 1) {
-    return { block: true, mentioned };
+    return { block: true, mentioned, handoff: "targets" };
   }
   const target =
     markedUnits.length === 1
@@ -370,15 +384,16 @@ export function evaluatePlanApprovalDispatch(
   // appendix is refused whether the approval is otherwise current or not.
   const appendixInBrief =
     target !== undefined && promptCarriesReviewAppendix(promptText, target.reviewAppendix);
+  const approved = approvalEvidenceIsCurrent(target);
+  const contractMatches = contractMarkers.length === 1 && contractMarkers[0] === target?.contractHash;
+  const handoff: HandoffDefect | undefined = target === undefined
+    ? "unknown-target"
+    : approved && !contractMatches ? "contract" : undefined;
   return {
-    block:
-      target === undefined ||
-      !approvalEvidenceIsCurrent(target) ||
-      contractMarkers.length !== 1 ||
-      contractMarkers[0] !== target.contractHash ||
-      appendixInBrief,
+    block: target === undefined || !approved || !contractMatches || appendixInBrief,
     mentioned,
     ...(appendixInBrief ? { appendixInBrief: true } : {}),
+    ...(handoff ? { handoff } : {}),
   };
 }
 
@@ -396,6 +411,40 @@ function promptCarriesReviewAppendix(
   return fold(promptText).includes(content);
 }
 
+// Every command a refusal names is spelled the way this install runs it, so
+// the agent can run it as printed (the native `aidlc engine ...`, or the
+// source tree's `bun <harness-dir>/tools/...`), and `next` is always named
+// with how to run it so this guard reads it as that command.
+function nextOnItsOwn(): string {
+  return `\`${aidlcToolInvocation("orchestrate")} next\` ${AS_ITS_OWN_COMMAND}`;
+}
+
+/** The Code Generation targets the current step builds (null: the zero-Unit stage-level work). */
+export type BriefTargets = Array<string | null>;
+
+function issuanceTargets(issued: CodeGenerationIssuance): BriefTargets {
+  return issued.kind === "invoke-swarm" ? issued.units : [issued.unit?.trim() || null];
+}
+
+// The `brief` that hands the developer one target and its contract, for the
+// targets the current step builds, else for the one target the handoff names.
+// Never a placeholder: a refusal names only commands that run as printed.
+function briefCommand(mentioned: string[], targets: BriefTargets | null = null): string {
+  const tool = aidlcToolInvocation("testing-posture");
+  const named = targets && targets.length > 0
+    ? targets
+    : mentioned.length === 1
+      ? [mentioned[0] === `stage:${GUARDED_STAGE}` ? null : mentioned[0]]
+      : null;
+  if (named === null) {
+    return `\`${tool} brief\` for the target the current step names (\`--unit\` and its Unit, or ` +
+      "`--stage-level` for zero-Unit work)";
+  }
+  return named
+    .map((unit) => `\`${tool} brief ${unit === null ? "--stage-level" : `--unit ${quoteCommandArgument(unit)}`}\``)
+    .join(" or ");
+}
+
 export function appendixBlockReason(mentioned: string[]): string {
   const scope =
     mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -405,7 +454,7 @@ export function appendixBlockReason(mentioned: string[]): string {
     `Code generation cannot start for ${scope} because the developer handoff carries the ` +
     "plan's terminal `## Review` appendix. That appendix is excluded from the approval " +
     "fingerprint, so nobody approved it as work. Hand the developer the plan BODY and the " +
-    "unit-test instructions only: run `aidlc-testing-posture.ts brief` for this target and " +
+    `unit-test instructions only: run ${briefCommand(mentioned)} and ` +
     "pass its output verbatim, then retry the handoff."
   );
 }
@@ -414,7 +463,11 @@ export function appendixBlockReason(mentioned: string[]): string {
 // PreToolUse error channel. Self-explaining and redirecting: it names the
 // missing evidence and the exact stage steps that produce it, so the
 // conductor self-corrects instead of retrying the same call.
-export function blockReason(mentioned: string[], detail: string | null = null): string {
+export function blockReason(
+  mentioned: string[],
+  detail: string | null = null,
+  targets: BriefTargets | null = null,
+): string {
   const scope =
     mentioned.length === 1
       ? mentioned[0] === `stage:${GUARDED_STAGE}`
@@ -426,10 +479,31 @@ export function blockReason(mentioned: string[], detail: string | null = null): 
   return (
     `Code generation cannot start for ${scope} because its plan and test instructions are ` +
     `not approved yet.${detail ? ` Reason: ${detail}.` : ""} Finish code-generation-plan.md and ` +
-    `unit-test-instructions.md, then run \`next\`: the engine asks the person to approve the plan, and ` +
-    `the \`next\` after their answer hands over the build. Then retry the developer handoff with ` +
-    `"AIDLC-UNIT: <unit>" or "AIDLC-STAGE: code-generation", followed by ` +
-    `"AIDLC-TESTING-CONTRACT: <contract hash>".`
+    `unit-test-instructions.md, then run ${nextOnItsOwn()}: the engine asks the person to ` +
+    `approve the plan, and the \`next\` after their answer hands over the build. Then hand the ` +
+    `developer the output of ${briefCommand(mentioned, targets)} first, as printed: it names the one ` +
+    "target and its Testing Contract."
+  );
+}
+
+// A developer handoff refused for what is wrong with the handoff itself, so
+// it never says the plan is unapproved when it is approved.
+export function handoffBlockReason(
+  mentioned: string[],
+  cause: HandoffDefect,
+  targets: BriefTargets | null = null,
+): string {
+  const what = cause === "targets"
+    ? mentioned.length > 1
+      ? `names several targets (${mentioned.join(", ")})`
+      : "names no target"
+    : cause === "unknown-target"
+      ? `names ${mentioned[0]}, which is not a Code Generation target of this workflow`
+      : "has an AIDLC-TESTING-CONTRACT line that is missing, repeated, or not the approved plan's";
+  return (
+    `Code generation cannot start: the developer handoff ${what}. Hand the developer the output of ` +
+    `${briefCommand(mentioned, targets)} first, exactly as printed: it names the one target and its ` +
+    "Testing Contract. Do not write AIDLC-UNIT, AIDLC-STAGE, or AIDLC-TESTING-CONTRACT lines yourself."
   );
 }
 
@@ -463,8 +537,8 @@ export function mutationBlockReason(
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
     `matching approval.${detail ? ` Reason: ${detail}.` : ""} Writes inside the selected code-generation record directory remain ` +
-    `available for planning. When the plan is ready, run \`next\`: the engine asks the person to approve ` +
-    `it before any code is written.`
+    `available for planning. When the plan is ready, run ${nextOnItsOwn()}: the engine asks ` +
+    `the person to approve it before any code is written.`
   );
 }
 
@@ -474,26 +548,125 @@ export function mutationBlockReason(
 function engineQuestionOpenReason(): string {
   return (
     "Code changes wait while AI-DLC's recovery question is open. Answer it first: " +
-    "run `next` to show the question again, then carry out the choice the person makes. " +
+    `run ${nextOnItsOwn()} to show the question again, then carry out the choice the person makes. ` +
     "Reading, `next`, and the commands that carry out the choice they picked still work, " +
     "as do the record-folder edits a picked fix needs."
   );
 }
 
-function authorityBlockReason(reason: string): string {
+/**
+ * Where the person's approval stands for the target a stale or waiting
+ * directive was building: they approved these files; they approved an earlier
+ * version and a lowered fence lets the build go on with the changes; or plan
+ * approval is off for this work, so nobody was asked.
+ */
+interface PlanStanding {
+  scope: string;
+  stands: "approved" | "earlier" | "off";
+}
+
+// What ends an authority refusal, said the same way under every Guard Policy:
+// what is stale, where the person's approval stands when it does, and the fresh
+// `next` that issues the current step again. The agent never asks the person
+// again for a judgement they already gave.
+function authorityRemedy(
+  reason: string,
+  standing: PlanStanding | null,
+  asked: ReturnType<typeof planApprovalAskState> = null,
+): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
+    // The question is still open, so only an approval of these exact files is
+    // the person's approval; any other answer they gave is carried out by `next`.
+    if (standing?.stands === "approved") {
+      return `The person has approved the plan for ${standing.scope}. Run ${nextOnItsOwn()}, ` +
+        "and follow the step it prints.";
+    }
+    if (asked === "answered") {
+      return `The person has answered the plan question. Run ${nextOnItsOwn()}, and follow the step ` +
+        "it prints: it carries out their choice. Do not show them the question again.";
+    }
+    if (asked === "editing") {
+      return "The person is editing the plan files themselves: leave those files to them. When they say " +
+        `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
+    }
     return (
       "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
-      "the turn, and run `next` after they answer. Nothing is built or changed until then, and the plan " +
-      "files stay as the person sees them."
+      `the turn, and after they answer, run ${nextOnItsOwn()}. Nothing is built or changed until then, and ` +
+      "the plan files stay as the person sees them."
     );
+  }
+  const stands = standing === null
+    ? ""
+    : standing.stands === "earlier"
+      ? `The person approved an earlier version of the plan for ${standing.scope}, and the Guard Policy ` +
+        "lets the build go on with the changes: do not ask them to approve it again yourself. "
+      : standing.stands === "off"
+        ? `Plan approval is off for the plan for ${standing.scope}, so it needs no approval: ` +
+          "do not ask the person to approve it. "
+        : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
+  return `${reason}. ${stands}Run ${nextOnItsOwn()}, and follow the step it prints.`;
+}
+
+function authorityBlockReason(
+  reason: string,
+  standing: PlanStanding | null = null,
+  asked: ReturnType<typeof planApprovalAskState> = null,
+): string {
+  if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
+    return authorityRemedy(reason, standing, asked);
   }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
-    `${reason}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive; ` +
-    "no stage-level fallback is permitted."
+    authorityRemedy(reason, standing)
   );
+}
+
+// Where the person's approval stands for the target a stale or waiting
+// directive was building, judged the way `next` judges it when it issues that
+// directive again: receipt-backed approval of these exact files, or (with the
+// fence lowered) an earlier approval the build may go on from. Null when
+// neither holds, or when that cannot be told, so nothing is claimed.
+function planStanding(projectDir: string, marker: ActiveDirectiveMarker | null): PlanStanding | null {
+  if (marker?.version !== 2 || normalizeStageName(marker.stage) !== GUARDED_STAGE) return null;
+  const issued = codeGenerationIssuance(marker, true);
+  if (issued === null) return null;
+  const targets = issuanceTargets(issued);
+  const kinds = new Set<PlanStanding["stands"]>();
+  try {
+    for (const unit of targets) {
+      const approval = evaluateCodeGenerationApproval(projectDir, { unit }, issued);
+      // Plan approval off built this plan without asking: nobody approved it.
+      if (approval.skipped) {
+        kinds.add("off");
+        continue;
+      }
+      if (approval.ok) {
+        kinds.add("approved");
+        continue;
+      }
+      if (!codeGenerationExecutionAllowed(projectDir, { unit }, approval, issued)) return null;
+      kinds.add("earlier");
+    }
+  } catch {
+    return null;
+  }
+  // Mixed standings across a group are said as the least the person gave.
+  const stands = kinds.has("earlier") ? "earlier" : kinds.has("approved") ? "approved" : "off";
+  return {
+    scope: issued.kind === "invoke-swarm"
+      ? `Units ${targets.join(", ")}`
+      : targets[0] === null ? "the zero-Unit stage-level implementation" : `unit ${targets[0]}`,
+    stands,
+  };
+}
+
+// Why the step went out of date, when the write that did it was recorded (the
+// chat compacted, the state moved): said as the refusal's reason, ahead of the
+// way out. Empty when nothing was recorded.
+function outOfDateClause(marker: ActiveDirectiveMarker): string {
+  const why = activeDirectiveOutOfDateReason(marker);
+  return why === null ? "" : `: ${why}`;
 }
 
 // --- Evidence gathering ---------------------------------------------------------
@@ -1611,9 +1784,13 @@ async function evaluate(
   if (hookOutsideGate(workflow)) {
     const dispatchInput = parsed.tool_input ?? {};
     if (!DISPATCH_TOOLS.has(parsed.tool_name ?? "") || dispatchInput.subagent_type !== GUARDED_AGENT) return 0;
+    // `next` asks which work this is, so the record's name stays out of the
+    // refusal: a record from a clone is a teammate's, and its name can carry
+    // words addressed to the agent.
     process.stderr.write(
-      "AI-DLC: this conversation has not joined the selected workflow, " +
-        "so it cannot dispatch that workflow's developer. Select the intent with the intent command, then dispatch again.\n",
+      "AI-DLC: this conversation has not joined the selected workflow, so it cannot dispatch that " +
+        `workflow's developer. Run ${nextOnItsOwn()}: it asks the person which piece of work this ` +
+        "conversation is for. Dispatch again once it has joined.\n",
     );
     return 2;
   }
@@ -1632,8 +1809,7 @@ async function evaluate(
 
   try {
     const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
   } catch {
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
@@ -1660,6 +1836,16 @@ async function evaluate(
   let verdict: PlanApprovalVerdict;
   let units: UnitEvidence[] = [];
   let authorityFailure: string | null = null;
+  // Where the person's approval stands while the directive naming its target
+  // is stale or still the question: the refusal says so (see authorityRemedy).
+  let standing: PlanStanding | null = null;
+  // The targets the current step builds, so a refusal names their exact brief.
+  let briefTargets: BriefTargets | null = null;
+  // The person's answer to the open Plan Approval question, when one is recorded.
+  let asked: ReturnType<typeof planApprovalAskState> = null;
+  // What is wrong with the developer handoff itself, said only once the plan it
+  // hands over may be built: before that, the `brief` it would name refuses too.
+  let handoffDefect: HandoffDefect | null = null;
   let rulesArriving: string | null = null;
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
@@ -1669,9 +1855,10 @@ async function evaluate(
     })}\n`);
     return 2;
   };
-  const refuseExecutionIneligible = (reason: string): number => {
+  // `lead` false: the reason is already a whole refusal that says what cannot happen.
+  const refuseExecutionIneligible = (reason: string, lead = true): number => {
     process.stderr.write(`${JSON.stringify({
-      error: `Code Generation cannot start: ${reason.trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.`,
+      error: `${lead ? "Code Generation cannot start: " : ""}${reason.trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.`,
       code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
     })}\n`);
     return 2;
@@ -1690,6 +1877,10 @@ async function evaluate(
     const activeDirective = readActiveDirectiveMarker(projectDir, state);
     const durableStage = normalizeStageName(currentStage);
     const directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+    const issuance = activeDirective?.version === 2 && directiveStage === GUARDED_STAGE
+      ? codeGenerationIssuance(activeDirective)
+      : null;
+    if (issuance !== null) briefTargets = issuanceTargets(issuance);
     const dispatchPrompt = [toolInput.prompt, toolInput.description]
       .filter((value): value is string => typeof value === "string")
       .join("\n");
@@ -1752,6 +1943,20 @@ async function evaluate(
           currentStage: activeDirective.stage,
           units,
         });
+        // A directive that names no target (a step gone stale, a question, a
+        // pause) carries no approval to a worker, so this is the same refusal
+        // a write gets, with the fresh `next` that issues the build again.
+        if (verdict.block && issuance === null) {
+          authorityFailure =
+            `the developer handoff cannot select one approval target from directive kind "${activeDirective.kind}"` +
+            outOfDateClause(activeDirective);
+          standing = planStanding(projectDir, activeDirective);
+        } else if (
+          verdict.handoff &&
+          briefTargets?.every((unit) => codeGenerationExecutionAllowed(projectDir, { unit }))
+        ) {
+          handoffDefect = verdict.handoff;
+        }
       } else if (mutation.swarmUnits) {
         const selected = mutation.swarmUnits;
         const foreign = selected.filter((unit) =>
@@ -1797,6 +2002,15 @@ async function evaluate(
         // built or changed until they answer, including the plan files, so an
         // answer the agent wrote can never stand in for theirs.
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
+        standing = planStanding(projectDir, activeDirective);
+        // Loaded only here: the question's own record, read the way its owner
+        // reads it, and kept off the path every other tool call takes.
+        try {
+          const { planApprovalAskState: askState } = await import("../tools/aidlc-plan-approval-ask.ts");
+          asked = askState(projectDir);
+        } catch {
+          asked = null;
+        }
         verdict = { block: true, mentioned: [] };
       } else if (
         activeDirective.kind === "invoke-swarm" &&
@@ -1811,7 +2025,9 @@ async function evaluate(
         return 0;
       } else if (activeDirective.kind !== "run-stage") {
         authorityFailure =
-          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"`;
+          `workspace mutation cannot select one approval target from directive kind "${activeDirective.kind}"` +
+          outOfDateClause(activeDirective);
+        standing = planStanding(projectDir, activeDirective);
         verdict = { block: true, mentioned: [] };
       } else {
         const unit = activeDirective.unit?.trim() || null;
@@ -1856,6 +2072,27 @@ async function evaluate(
       `Plan Approval authority evaluation failed closed: ${errorMessage(e)}`;
     verdict = { block: true, mentioned: [] };
   }
+  // No refusal names a switch. `guard.plan-approval off` is plan approval off
+  // for the whole piece of work, which only the person ever proposes; an edited
+  // plan is asked about again by `next`, and the reason says so. The same words
+  // refuse with the fence on and, where a lowered fence still refuses, with it
+  // off; `detail` is then the evaluator's reason for the target it could not start.
+  const refusalProse = (detail: string | null): string =>
+    authorityFailure
+      ? authorityBlockReason(authorityFailure, standing, asked)
+      : blockedMutation
+      ? mutationBlockReason(
+          blockedMutation.target,
+          blockedMutation.unit,
+          blockedMutation.opaqueShell,
+          detail ?? blockedMutation.detail,
+        )
+      : verdict.appendixInBrief
+      ? appendixBlockReason(verdict.mentioned)
+      : handoffDefect
+      ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
+      : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets);
+
   // The rules still arriving is about the delivery, not the plan, so it holds
   // under every Guard Policy and is said on its own: a lowered fence has
   // nothing to stand aside for, and no Plan Approval block is recorded.
@@ -1911,19 +2148,14 @@ async function evaluate(
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     }
     if (gate?.decision === "stand-aside") {
+      // A lowered fence lets changed content through after an approval; it never
+      // supplies a missing directive, target, or approval. Those refusals say
+      // what they say with the fence on, so each names the step that ends it.
       if (authorityFailure) {
-        return refuseExecutionIneligible(
-          authorityFailure === NO_CURRENT_DIRECTIVE
-            ? `${authorityFailure}. Run a fresh \`aidlc-orchestrate.ts next\` and use that exact directive.`
-            : authorityFailure === ENGINE_QUESTION_OPEN
-              ? engineQuestionOpenReason()
-            : authorityFailure === PLAN_APPROVAL_ASK_OPEN
-              ? authorityBlockReason(authorityFailure)
-              : authorityFailure,
-        );
+        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked));
       }
       if (verdict.mentioned.length === 0) {
-        return refuseExecutionIneligible("No valid execution target was identified. Run a fresh next and use the current worker brief.");
+        return refuseExecutionIneligible(refusalProse(null), false);
       }
       const selected = verdict.mentioned.map((mentioned) => {
         const target = { unit: mentioned === `stage:${GUARDED_STAGE}` ? null : mentioned };
@@ -1935,7 +2167,7 @@ async function evaluate(
       for (const { target, approval } of selected) {
         if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
         if (!codeGenerationExecutionAllowed(projectDir, target, approval)) {
-          return refuseExecutionIneligible(approval.reason || "An approved, executable plan is required for every selected target.");
+          return refuseExecutionIneligible(refusalProse(approval.reason || null), false);
         }
       }
       // A blocked path is written the way the write-audit hook writes one
@@ -1948,25 +2180,10 @@ async function evaluate(
             ? blockedMutation.target
             : normalizeDriveLetter(blockedMutation.target.replace(/\\/g, "/"))
           : toolName;
-      const guardAuthority = gate.authority;
-      let recorded: boolean | undefined;
-      const recordContinuation = (): boolean => {
-        recorded ??= recordGuardStoodAside(projectDir, {
-          fence: "plan-approval",
-          authority: guardAuthority,
-          stage: GUARDED_STAGE,
-          tool: toolName,
-          details: detail,
-        });
-        return recorded;
-      };
       // A lowered fence keeps its permission decision, but an existing genuine
       // approval still needs source provenance before execution. Reuse the
       // locked start transaction even when edited content made the verdict fail.
       // This hook emits its own stand-aside row below, so begin only reports drift.
-      if (!recordContinuation()) {
-        return refuseProvenanceFailure("The lowered-fence continuation could not be recorded in the audit ledger.");
-      }
       try {
         for (const notice of beginCodeGenerationBatch(
           projectDir, selected.map(({ target }) => target), { recordContinuation: false },
@@ -1976,8 +2193,22 @@ async function evaluate(
       } catch (e) {
         return refuseProvenanceFailure(errorMessage(e));
       }
-      recordContinuation();
-      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail));
+      // The row is written once the build has started (the start just held and
+      // released the same lock), so it never claims a pass that did not happen.
+      // It is this fence's account of what it let through, not approval
+      // evidence: a ledger that cannot take it never refuses the person's
+      // lowered fence. The line says it was not recorded, and the doctor lists it.
+      const recorded = recordGuardStoodAside(projectDir, {
+        fence: "plan-approval",
+        authority: gate.authority,
+        stage: GUARDED_STAGE,
+        tool: toolName,
+        details: detail,
+      });
+      if (!recorded) {
+        recordHookDrop(projectDir, HOOK_NAME, `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
+      }
+      writeGuardStoodAside(guardStoodAsideLine("plan-approval", gate.source, detail, recorded));
       return 0;
     }
   }
@@ -2020,23 +2251,7 @@ async function evaluate(
     // Advisory emission only.
   }
 
-  // No refusal names a switch. `guard.plan-approval off` is plan approval off
-  // for the whole piece of work, which only the person ever proposes; an edited
-  // plan is asked about again by `next`, and the reason below says so.
-  const prose =
-    `${authorityFailure
-      ? authorityBlockReason(authorityFailure)
-      : blockedMutation
-      ? mutationBlockReason(
-          blockedMutation.target,
-          blockedMutation.unit,
-          blockedMutation.opaqueShell,
-          blockedMutation.detail,
-        )
-      : verdict.appendixInBrief
-      ? appendixBlockReason(verdict.mentioned)
-      : blockReason(verdict.mentioned, receiptDetail(units, verdict.mentioned))}`;
-  process.stderr.write(`${prose}\n`);
+  process.stderr.write(`${refusalProse(null)}\n`);
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 

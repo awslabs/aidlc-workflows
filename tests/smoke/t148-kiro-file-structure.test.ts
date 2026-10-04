@@ -250,14 +250,13 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
-  test("the Kiro CLI composer's write grant covers its grid proposal file", () => {
+  test("the Kiro CLI composer may write only its grid proposal file", () => {
     // The composer writes its grid to the proposalPath detect prints before
-    // each validate-grid run, so that write is allowed like its scope writes.
+    // each validate-grid run. It writes no scope and not the scope grid:
+    // saving a scope is the engine's `scope save`.
     const config = readJson(join(K, "agents", "aidlc-composer-agent.json"));
     const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;
     expect(settings.fs_write?.allowedPaths).toEqual([
-      ".kiro/scopes/**",
-      ".kiro/tools/data/scope-grid.json",
       "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json",
     ]);
   });
@@ -333,21 +332,19 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm).toContain("      effect: allow");
       expect(fm).toContain(`        - "bun .kiro/tools/aidlc-*"`);
       expect(fm).toContain("    - capability: fs_read");
-      // Engine-owned trees are denied to every persona; the composer alone
-      // carves its two .kiro/ outputs out of that deny.
+      // Engine-owned trees are denied to every persona, the composer too: it
+      // writes only its grid proposal, never a scope or the scope grid.
       const deny = fm.slice(fm.indexOf("    - capability: fs_write\n      effect: deny"));
       expect(deny, file).toContain(`        - ".kiro/**"`);
       expect(deny, file).toContain(`        - "aidlc/.aidlc-sessions/**"`);
       expect(deny, file).toContain(`        - "aidlc/spaces/*/intents/*/.aidlc-engine/gate-words/**"`);
+      expect(deny, file).not.toContain("exclude:");
       if (file === "aidlc-composer-agent.md") {
-        expect(deny).toContain(`      exclude:\n        - ".kiro/scopes/**"\n        - ".kiro/tools/data/scope-grid.json"`);
         // The grid file it writes before each validate-grid run (the
-        // proposalPath detect prints) is allowed like its scope writes.
-        expect(fm.slice(0, fm.indexOf("    - capability: fs_write"))).toContain(
-          `    - capability: filesystem\n      effect: allow\n      match:\n        - ".kiro/scopes/**"\n        - ".kiro/tools/data/scope-grid.json"\n        - "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json"`,
+        // proposalPath detect prints) is its only write.
+        expect(fm.slice(fm.indexOf("    - capability: filesystem"), fm.indexOf("    - capability: fs_write"))).toBe(
+          `    - capability: filesystem\n      effect: allow\n      match:\n        - "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json"\n`,
         );
-      } else {
-        expect(deny, file).not.toContain("exclude:");
       }
       expect(fm).not.toContain("disallowedTools:");
     }

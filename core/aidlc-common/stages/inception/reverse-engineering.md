@@ -58,7 +58,10 @@ Read `<record>/aidlc-state.md` to confirm:
 
 If the project is not brownfield, run
 `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result skipped --reason "<reason>"`.
-The engine records the skip and advances to the next in-scope stage.
+The engine records the skip and advances to the next in-scope stage. The
+project type is the person's call, not the scan's: when they have said this is
+existing code, do not skip; run `{{INVOKE}} engine orchestrate next --project-type brownfield`
+and follow what it returns.
 
 #### Resolve the intent's repo set (multi-repo)
 

@@ -311,7 +311,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       writeFileSync(configPath, '{ "trustedFolders": [] }\n');
       const untrusted = runDoctor();
       expect(`${untrusted.stdout}${untrusted.stderr}`).toContain(
-        `fix: add ${JSON.stringify(project)} to trustedFolders in ${configPath}`,
+        `choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(project)} to trustedFolders in ${configPath} yourself`,
       );
 
       writeFileSync(configPath, '{ "trustedFolders": [\n');
@@ -374,7 +374,7 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       expect(untrusted).toContain("warn  Copilot CLI has not trusted this folder");
       expect(untrusted).not.toContain("project folder in ~/.copilot/config.json trustedFolders");
       expect(untrusted).toContain(
-        `fix: add ${JSON.stringify(project)} to trustedFolders in ${configPath}`,
+        `choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(project)} to trustedFolders in ${configPath} yourself`,
       );
 
       // VS Code hands Windows paths over as c:\..., and the CLI matches

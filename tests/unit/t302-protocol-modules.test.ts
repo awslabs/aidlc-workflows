@@ -212,6 +212,19 @@ describe("t302 conditional protocol modules", () => {
     });
   });
 
+  // bugfix declares learnings and summary confirmation off in its own
+  // frontmatter: no "Anything to add for next time?" ritual and no summary to
+  // confirm, while sensors, the advisory reviewer, and plan approval stay.
+  test("bugfix requirements-analysis keeps the advisory reviewer and sensors, without learnings", () => {
+    const directive = directiveFor("requirements-analysis", "bugfix");
+    expect(moduleList(directive)).toEqual(["reviewer"]);
+    expect(directive.review_class).toBe("advisory");
+    expect(directive.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
+    expect(directive.ceremony).toEqual({
+      sensors: "on", learnings: "off", summary_confirmation: "off", plan_approval: "on",
+    });
+  });
+
   test("kill switches omit learnings and sensors while retaining the classic advisory reviewer", () => {
     const directive = directiveFor("requirements-analysis", "classic", false, {
       AIDLC_DISABLE_SENSORS: "1",

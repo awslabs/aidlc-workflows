@@ -1051,7 +1051,7 @@ describe("t328 (5) the per-Unit walk", () => {
     ).toBe(false);
     const stoppedAfterComplete = p.stopHook();
     expect(stoppedAfterComplete.stdout).not.toContain(
-      "exact delivered AIDLC run-stage",
+      "Otherwise carry on with that stage's steps",
     );
   });
 

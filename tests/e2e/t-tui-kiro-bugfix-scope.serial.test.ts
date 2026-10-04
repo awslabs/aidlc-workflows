@@ -3,9 +3,9 @@
 // t-tui-kiro-bugfix-scope.serial.test.ts — the Kiro twin of
 // t-tui-t50-bugfix-scope: drive the BUGFIX-scope workflow through a REAL
 // keystroke-driven `kiro-cli chat` on the shipped dist/kiro tree, answering
-// the known Q1-Q4 guide batch with explicit per-question numbers, confirming
-// the consolidated summary, and answering the mandatory learnings prompt before
-// each separate approval prompt. It then TERMINATES on the
+// the known Q1-Q4 guide batch with explicit per-question numbers and then
+// each approval prompt; bugfix asks no learnings question and shows no
+// consolidated summary to confirm. It then TERMINATES on the
 // on-disk Completed counter crossing the post-init milestone — the same
 // milestone the Claude twin (and its .sh ancestor) pinned: init=3 + >=2
 // Inception stages = Completed >= 5.
@@ -37,7 +37,6 @@ import {
   cleanupTuiProjectAfterKill,
   createKiroNumberedProseAnswerState,
   KIRO_SRC,
-  markdownH2Section,
   nextKiroNumberedProseAnswer,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
@@ -169,7 +168,8 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         // Completed >= 5 (init 3 + >=2 Inception).
         const deadline = Date.now() + remainingWorkMs();
         let answers = 0;
-        const answerState = createKiroNumberedProseAnswerState();
+        // bugfix turns learnings off, so approvals come with no learning response.
+        const answerState = createKiroNumberedProseAnswerState({ learnings: false });
         while (Date.now() < deadline) {
           if (completedCount(sandbox) >= 5) break;
           if (!waitFor(session, IDLE_PATTERN, remainingWorkMs(), 1500)) continue;
@@ -181,24 +181,13 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
               `Kiro stopped at an unrecognized bugfix prompt:\n${screen.slice(-4000)}`,
             );
           }
-          if (answer === "Looks correct") {
-            expect(
-              existsSync(
-                join(
-                  recordDirFor(sandbox),
-                  "inception",
-                  "requirements-analysis",
-                  "requirements.md",
-                ),
-              ),
-            ).toBe(false);
-          }
           send(session, answer);
           answers += 1;
         }
         expect(answers).toBeGreaterThan(0);
-        expect(answerState.confirmedSummaries.size).toBeGreaterThanOrEqual(1);
-        expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(2);
+        // bugfix turns learnings and summary confirmation off.
+        expect(answerState.confirmedSummaries.size).toBe(0);
+        expect(answerState.learningsAnswered).toBe(0);
         expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(2);
         expect(completedCount(sandbox)).toBeGreaterThanOrEqual(5);
 
@@ -210,11 +199,7 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         );
         expect(existsSync(questionsPath)).toBe(true);
         const questions = readFileSync(questionsPath, "utf-8");
-        const confirmation = markdownH2Section(
-          questions,
-          "Consolidated Summary Confirmation",
-        );
-        expect(confirmation).toMatch(/^\[Answer\]: Looks correct\s*$/m);
+        expect(questions).not.toContain("Consolidated Summary Confirmation");
 
         // State surface — the Claude twin's assertion shapes (t50:309-330):
         // loose scope/brownfield matches (live init writes vary the field

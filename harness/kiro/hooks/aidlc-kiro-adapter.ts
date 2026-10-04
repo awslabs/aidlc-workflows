@@ -57,6 +57,7 @@ import {
   hookDebug,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  isAidlcAgentFile,
   isAutonomousMode,
   leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
@@ -191,7 +192,8 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
   const workers = agents.filter((agent) =>
     /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
     agent !== "aidlc-composer-agent" &&
-    existsSync(join(rosterDir, `${agent}.md`))
+    existsSync(join(rosterDir, `${agent}.md`)) &&
+    isAidlcAgentFile(join(rosterDir, `${agent}.md`))
   );
   if (workers.length === 0) return null;
   // Use the same active-space cursor as repointHarnessIncludes. Validate the
