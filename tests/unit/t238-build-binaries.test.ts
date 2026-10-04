@@ -606,7 +606,7 @@ describe("t238 build-binaries release builder", () => {
         [kept[0], "# Team practices\n\n- Affirmed: trunk-based development\n"],
         [kept[1], "# Project rules\n\n- Learned: run the linter before review\n"],
         [kept[2], "payments\n"],
-        [".gitignore", "node_modules\n.env.local\n"],
+        [".gitignore", "node_modules\n.env\nsecrets/\n"],
         ["AGENTS.md", "# Shop\n\nOur own notes for agents.\n"],
       ]);
       for (const [path, body] of teamFiles) {
@@ -618,6 +618,10 @@ describe("t238 build-binaries release builder", () => {
       for (const [path, body] of teamFiles) {
         expect(readFileSync(join(upgraded, path), "utf-8"), path).toBe(body);
       }
+      // The team's secrets file stays ignored, so `git add -A` never picks it up.
+      writeFileSync(join(upgraded, ".env"), "API_KEY=team-secret\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: upgraded }).status).toBe(0);
+      expect(spawnSync("git", ["check-ignore", "-q", ".env"], { cwd: upgraded }).status).toBe(0);
 
       const manualProject = join(runtimeChannels, "manual-project");
       cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });
