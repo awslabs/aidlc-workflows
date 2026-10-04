@@ -466,6 +466,21 @@ describe("t304 copied projection configuration", () => {
     expect(result.stdout + result.stderr).not.toContain('{"error"');
   });
 
+  // A --from folder with no release files in it is named, with the files
+  // config needs and the command that fetches them, never a placeholder.
+  test("a --from folder without release files says what config needs", () => {
+    const project = readmeCopyProject();
+    const empty = join(project, "notes");
+    mkdirSync(empty, { recursive: true });
+    const result = runCopied(project, ["config", "--from", empty, "--harness", "claude", "--yes"]);
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain(`error: ${JSON.stringify(empty)} holds no AI-DLC release files\n`);
+    expect(fixLine(result.stdout)).toBe(
+      "pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/claude/; or fetch them with bun .claude/tools/aidlc.ts config --download",
+    );
+    expect(result.stdout).not.toContain("valid-release-data");
+  });
+
   test("bare config announces and uses the recognized copied-projection walk", () => {
     const project = readmeCopyProject();
     const result = runCopied(project, ["config"], {

@@ -10289,8 +10289,16 @@ export async function main(
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
       candidate.distribution === selected?.stamp.distribution
     );
+    // A --from folder with no AI-DLC harness in it (or several) is said in the
+    // person's words, with the files it needs.
+    const harnessCount = from ? /expected exactly one projected harness directory, found (\d+)/.exec(rawMessage)?.[1] : undefined;
+    const fromMessage = harnessCount === undefined
+      ? rawMessage
+      : harnessCount === "0"
+      ? `${JSON.stringify(from)} holds no AI-DLC release files`
+      : `${JSON.stringify(from)} holds ${harnessCount} AI-DLC harness folders, and config needs the one for this project`;
     emitResult(failure(
-      rawMessage,
+      fromMessage,
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
@@ -10313,7 +10321,9 @@ export async function main(
             error.remedy.harness
           }${projectTarget(projectDir)}`
         : from
-        ? configCommand("--from <valid-release-data>")
+        ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${
+          configCommand("--download")
+        }`
         : selected?.projectProjection && copiedHarness
         ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`
         : configCommand("--harness <name>"),
