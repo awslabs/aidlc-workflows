@@ -601,10 +601,10 @@ the command was found in, and says that a harness started from a terminal
 needs no change and that editing `.bashrc` or `.zshrc` does not change the
 check.
 
-The harness CLI check requires `claude`, `kiro-cli`, `codex >= 0.145.0`, or
+The harness CLI check requires `claude`, `kiro-cli >= 2.6.0`, `codex >= 0.145.0`, or
 `opencode` for their matching harnesses. Copilot CLI and the Cursor `agent` CLI
 are advisory because those installs may be driven only by VS Code or the IDE.
-The `kiro-ide` distribution requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal.
+The `kiro-ide` distribution requires no separate CLI; `kiro-cli` is optional there, needed only to run AI-DLC from a terminal, and is checked against 2.24.1 when present.
 
 ### Provider Diagnostics
 

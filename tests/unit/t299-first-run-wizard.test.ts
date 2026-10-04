@@ -800,8 +800,9 @@ describe("t299 first-run setup wizard", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Both Kiro rows probe `kiro-cli`. The kiro-ide row counts it only from
-  // 2.24.1, the oldest Kiro CLI it has been checked on; below that, the kiro
-  // row is the one detected, so setup takes it without asking.
+  // 2.24.1, the oldest Kiro CLI it has been checked on; below that, down to the
+  // kiro row's 2.6, the kiro row is the one detected, so setup takes it
+  // without asking.
   test("a Kiro CLI below the kiro-ide floor detects only the kiro row", () => {
     const old = runWizard("\n", {
       harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.24.0" } },
@@ -817,6 +818,16 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(supported.status, supported.stdout + supported.stderr).toBe(0);
     expect(supported.stdout).toContain("Choose the harness for this project first.");
+
+    // Below the kiro row's own 2.6 floor neither Kiro row is detected, so
+    // setup asks instead of taking one; the person still can choose Kiro CLI.
+    const unsupported = runWizard("5\n\n", {
+      harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.5.9" } },
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(unsupported.stdout).toContain("No supported harness CLI was detected. Choose one to configure:");
+    expect(unsupported.status, unsupported.stdout + unsupported.stderr).toBe(0);
+    expect(existsSync(join(unsupported.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro IDE's terminal selects Kiro IDE and ends with trust, reload, and agent steps", () => {

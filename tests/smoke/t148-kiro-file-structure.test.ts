@@ -672,7 +672,7 @@ describe("t148 dist/kiro file structure", () => {
     // so they must not send a Kiro IDE user to /aidlc while the chat is still on
     // Default.
     const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
-    expect(readme.split("\n").find((line) => line.startsWith("| Kiro IDE 1.x / Kiro CLI v3 |"))).toContain(
+    expect(readme.split("\n").find((line) => line.startsWith("| Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) |"))).toContain(
       "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` |",
     );
     expect(readme).toContain("In Kiro IDE, first choose **aidlc**\nin the chat panel's agent picker.");

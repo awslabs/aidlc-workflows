@@ -722,7 +722,7 @@ describe("t294 runtime diagnostics", () => {
       status: "found",
     }));
     // 2.24.1 is the oldest Kiro CLI this row has been checked on; an older one
-    // still serves the kiro row, which has no floor.
+    // down to 2.6 still serves the kiro row.
     const oldKiro = {
       which: () => "/opt/kiro/bin/kiro-cli",
       run: () => ({ status: 0, stdout: "kiro-cli 2.24.0\n" }),
@@ -735,6 +735,15 @@ describe("t294 runtime diagnostics", () => {
     expect(probeHarnessCli("kiro", oldKiro)).toEqual(expect.objectContaining({
       command: "kiro-cli",
       status: "found",
+    }));
+    // The kiro row's own floor is the 2.6 its guide asks for.
+    expect(probeHarnessCli("kiro", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.5.9\n" }),
+    })).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "too-old",
+      minimumVersion: "2.6.0",
     }));
   });
 

@@ -273,9 +273,11 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
   });
 });
 
-// The names measured at PreToolUse on Kiro CLI 2.27.1 (v3) and Kiro IDE 1.2.4:
-// the same mutating tools on both surfaces, a different dispatch tool on each.
-describe("t245 Kiro tool-name table classifies the measured names", () => {
+// The names Kiro CLI v3 and Kiro IDE 1.x report for writes, shells, delegations
+// and reads (as seen in PreToolUse payloads on Kiro CLI 2.27.1 and Kiro IDE
+// 1.2.4; the captures are not in this repository) keep the classification the
+// adapter gave them before the table. This pins the table, not the capture.
+describe("t245 Kiro tool-name table keeps the adapter's classification", () => {
   test("writes, shells and delegations on both surfaces", () => {
     expect(canonicalWriteTool("fs_write")).toBe("Write");
     expect(canonicalWriteTool("str_replace")).toBe("Edit");

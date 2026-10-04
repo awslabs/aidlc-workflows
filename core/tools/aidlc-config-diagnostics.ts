@@ -876,10 +876,13 @@ const HARNESS_CLI: Record<
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
   },
+  // The 2.x line is where the hooks, skills and workspace default agent this
+  // distribution relies on shipped; the guide asks for 2.6 or later.
   kiro: {
     command: "kiro-cli",
     required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.6.0",
+    install: "Install or upgrade Kiro CLI to 2.6.0 or later.",
   },
   // Probed so a machine with only a supported Kiro CLI detects this row next to
   // the kiro row: first-run setup then asks instead of silently choosing the
