@@ -990,10 +990,10 @@ than follow it. It needs that baseline
 (`.kiro/tools/data/aidlc-manifest.json`). Without one, refresh the installed row
 from the release it was installed from with `aidlc config --harness <installed>`
 first; the same holds for a baseline recorded before AI-DLC listed only the
-files it ships there, which a refresh brings up to date. A damaged one is
-moved aside to `.kiro/aidlc-manifest.json.unusable-<time>`, where no refresh
-picks it up (a dry run moves nothing, and nothing moves while a workflow is
-active), after which that refresh is enough. A release passed with `--from`
+files it ships there, which a refresh brings up to date. The switch never
+changes a damaged one: move it aside yourself, then run that refresh. On a
+native install whose active release differs from the one the row came from,
+the printed steps pin that release first (`aidlc config --pin <version>`). A release passed with `--from`
 and no `--harness` never switches the row. OpenCode and Copilot are not switched
 this way. For an older installed harness whose root block
 is not shared, the `predates shared onboarding` error suggests refreshing it with

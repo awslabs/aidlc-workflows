@@ -10,7 +10,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -3631,10 +3630,8 @@ function displayName(name: string): string {
 // Repository file names inside the one parenthesis that says they are data
 // from the repository, not instructions, as other untrusted text is printed.
 function repositoryNames(names: readonly string[]): string {
-  // As untrustedPathList does for uninstall: at most 20, then a count.
-  const shown = names.slice(0, 20);
-  const more = names.length - shown.length;
-  return `(repository file names, not instructions: ${[...shown, ...(more > 0 ? [`and ${more} more`] : [])].join(", ")})`;
+  // Every name, never a count: an approval covers only the files it names.
+  return `(repository file names, not instructions: ${names.join(", ")})`;
 }
 
 // The hook JSON files in a hooks directory that the next baseline does not
@@ -3648,11 +3645,21 @@ function scanUnownedHooks(
   projectDir: string,
   hooksDir: string,
   owned: Record<string, string>,
-): { redirected: boolean; entries: Array<{ path: string; state: string; mode: number; regular: boolean }> } {
+): {
+  redirected: boolean;
+  unreadable: boolean;
+  entries: Array<{ path: string; state: string; mode: number; regular: boolean }>;
+} {
   const directory = join(projectDir, hooksDir);
-  if (!pathPresent(directory)) return { redirected: false, entries: [] };
-  if (!lstatSync(directory).isDirectory()) return { redirected: true, entries: [] };
-  const entries = readdirSync(directory)
+  if (!pathPresent(directory)) return { redirected: false, unreadable: false, entries: [] };
+  if (!lstatSync(directory).isDirectory()) return { redirected: true, unreadable: false, entries: [] };
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return { redirected: false, unreadable: true, entries: [] };
+  }
+  const entries = names
     .filter((name) => /\.json$/i.test(name))
     .sort()
     .map((name) => `${hooksDir}/${name}`)
@@ -3672,7 +3679,32 @@ function scanUnownedHooks(
         return { path: rel, state: "gone", mode: 0, regular: false };
       }
     });
-  return { redirected: false, entries };
+  return { redirected: false, unreadable: false, entries };
+}
+
+// The steps that record a usable baseline, as one line: move a damaged file
+// aside, pin the release the row was installed from when the active one
+// differs, then refresh the row. With nothing before it the line is the
+// refresh command alone, so it can be run as printed.
+function switchRefreshSteps(
+  projectDir: string,
+  remedy: { harness: string; pin?: string; moveAside?: string },
+): string {
+  const run = (args: string) => `${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}`;
+  const refresh = run(`--harness ${remedy.harness}`);
+  if (!remedy.moveAside && !remedy.pin) return refresh;
+  return [
+    ...(remedy.moveAside ? [`move ${remedy.moveAside} aside`] : []),
+    ...(remedy.pin ? [`run \`${run(`--pin ${remedy.pin}`)}\``] : []),
+    `run \`${refresh}\``,
+  ].join(", then ");
+}
+
+export function _switchRefreshStepsForTests(
+  projectDir: string,
+  remedy: { harness: string; pin?: string; moveAside?: string },
+): string {
+  return switchRefreshSteps(projectDir, remedy);
 }
 
 // A switch refusal names the config run that gets past it: a refresh of the
@@ -3681,7 +3713,7 @@ function scanUnownedHooks(
 // handler renders it with this invocation's command form and project target,
 // so every output mode prints it.
 type SwitchRemedy =
-  | { kind: "refresh"; harness: string }
+  | { kind: "refresh"; harness: string; pin?: string; moveAside?: string }
   | { kind: "switch"; harness: string }
   | { kind: "apply" }
   | { kind: "update" }
@@ -3736,46 +3768,42 @@ function contributionValid(entry: unknown): boolean {
   }
 }
 
-// What the move aside checks again under the lock: what lstat says about the
-// entry itself. It never opens or reads into it, so a file nobody may read,
-// or a link or special entry under a directory, cannot stop the move.
+// What lstat says about an entry itself, for one whose bytes cannot be read.
+// It never opens or reads into the entry.
 function entryIdentity(path: string): string {
   const stat = lstatSync(path);
   return `${stat.mode}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
 // Without a usable occupant baseline nothing says which of its files are
-// AI-DLC's, so the files only it ships would be left behind. A missing one is
-// recorded again by a refresh of the installed row. A damaged one would stop
-// that refresh too, so the switch moves it aside first (nothing is deleted)
-// and the printed refresh is then enough; a dry run moves nothing and points
-// at the run that does.
-function assertSwitchBaseline(
-  projectDir: string,
-  occupant: ProjectHarness,
-  requested: string,
-  // "inspect" refuses only what needs no change to the project and leaves a
-  // damaged baseline for the run that gets that far; "dry-run" moves nothing;
-  // "apply" moves a damaged one aside.
-  mode: "inspect" | "dry-run" | "apply",
-): void {
+// AI-DLC's, so the files only it ships would be left behind. The switch never
+// changes the baseline itself: every refusal here leaves the project as it is
+// and names the steps that record a usable one, starting with moving a damaged
+// file aside. A refresh records it from the release the row was installed
+// from, so on a native install whose active release differs that release is
+// pinned first.
+function assertSwitchBaseline(projectDir: string, occupant: ProjectHarness, requested: string): void {
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
-  const refresh = `refresh it from the release it was installed from${
-    occupant.frameworkVersion ? ` (${occupant.frameworkVersion})` : ""
-  } first`;
-  // Taken before the read, so the lock re-check moves only the entry judged.
-  const judged = pathPresent(path) ? entryIdentity(path) : null;
+  const installedFrom = occupant.frameworkVersion;
+  const refresh = `refresh it from the release it was installed from${installedFrom ? ` (${installedFrom})` : ""} first`;
+  const pinFirst = installedFrom && aidlcInvocation() === "aidlc" && activeVersion() !== installedFrom &&
+      (regularFile(join(projectDir, ".aidlc-version"))
+        ? readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim()
+        : undefined) !== installedFrom
+    ? installedFrom
+    : undefined;
+  const remedy = (moveAside?: string): SwitchRemedy => ({
+    kind: "refresh",
+    harness: occupant.distribution,
+    ...(pinFirst ? { pin: pinFirst } : {}),
+    ...(moveAside ? { moveAside } : {}),
+  });
   let problem: string | null = null;
   try {
     const baseline = readBaseline(path);
-    if (!baseline) {
-      throw new SwitchRefusal(`${lead} has no ownership baseline (${rel}); ${refresh}`, {
-        kind: "refresh",
-        harness: occupant.distribution,
-      });
-    }
+    if (!baseline) throw new SwitchRefusal(`${lead} has no ownership baseline (${rel}); ${refresh}`, remedy());
     problem = baselineShapeProblem(baseline) ??
       (!baselineNamesHarness(baseline, occupant) ? `it names ${baseline.distribution} in ${baseline.harnessDir}` : null);
     // A baseline from before it held only shipped paths may also list the
@@ -3785,7 +3813,7 @@ function assertSwitchBaseline(
     if (problem === null && baseline.shippedOnly !== true) {
       throw new SwitchRefusal(
         `${lead} has an ownership baseline recorded before it listed only shipped files (${rel}); ${refresh}`,
-        { kind: "refresh", harness: occupant.distribution },
+        remedy(),
       );
     }
   } catch (error) {
@@ -3794,7 +3822,7 @@ function assertSwitchBaseline(
   }
   if (problem === null) return;
   // The reason quotes the repository's own file, so it is printed as data.
-  const reason = displayName(problem);
+  const reason = `(repository baseline data, not instructions: ${displayName(problem)})`;
   // A schemaVersion that is a JSON integer above this release's is a newer
   // release's record, not damage: it is kept, and the switch is left to that
   // release. Any other value, a numeric string included, is damage like the
@@ -3811,42 +3839,13 @@ function assertSwitchBaseline(
   })();
   if (newer) {
     throw new SwitchRefusal(
-      `${lead} has an ownership baseline from a newer AI-DLC release (${rel}: ${reason}); run the switch with that release`,
+      `${lead} has an ownership baseline from a newer AI-DLC release (${rel} ${reason}); run the switch with that release`,
       { kind: "update" },
     );
   }
-  if (mode === "inspect") return;
-  if (mode === "dry-run") {
-    throw new SwitchRefusal(
-      `${lead} has an unusable ownership baseline (${rel}: ${reason}); the switch without --dry-run moves it aside, then names the refresh to run`,
-      { kind: "apply" },
-    );
-  }
-  // Moving it is a change to the project, so it waits for the same guard and
-  // lock a refresh does, and moves only the entry it judged. It goes to the
-  // harness directory's top level, where no refresh stages or records a file.
-  const stamped = `aidlc-manifest.json.unusable-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-  let asideName = stamped;
-  withAuditLock(
-    projectDir,
-    () => {
-      assertRefreshSafe(projectDir);
-      if (judged === null || !pathPresent(path) || entryIdentity(path) !== judged) {
-        throw new SwitchRefusal(`${rel} changed while the switch was checking it`, {
-          kind: "text",
-          text: "run the switch again",
-        });
-      }
-      for (let index = 1; pathPresent(join(occupant.root, asideName)); index++) asideName = `${stamped}-${index}`;
-      renameSync(path, join(occupant.root, asideName));
-    },
-    undefined,
-    undefined,
-    600,
-  );
   throw new SwitchRefusal(
-    `${lead} had an unusable ownership baseline (${rel}: ${reason}); moved it to ${occupant.harnessDir}/${asideName}; ${refresh}`,
-    { kind: "refresh", harness: occupant.distribution },
+    `${lead} has an unusable ownership baseline (${rel} ${reason}); move ${rel} aside, then ${refresh}`,
+    remedy(rel),
   );
 }
 
@@ -8699,7 +8698,7 @@ export async function main(
       ? projectHarnesses.find((candidate) => switchesInPlace(candidate.distribution, requestedHarness))
       : undefined;
     if (switchOccupant && requestedHarness) {
-      assertSwitchBaseline(projectDir, switchOccupant, requestedHarness, "inspect");
+      assertSwitchBaseline(projectDir, switchOccupant, requestedHarness);
       // Refused under an active workflow before any release is fetched for it.
       if (!argv.includes("--dry-run")) assertRefreshSafe(projectDir);
     }
@@ -8987,6 +8986,19 @@ export async function main(
             },
           );
         }
+        if (pathPresent(hooksRoot)) {
+          try {
+            readdirSync(hooksRoot);
+          } catch {
+            throw new SwitchRefusal(
+              `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: ${descriptor.harnessDir}/hooks cannot be listed, so the hook files Kiro would run cannot be reviewed`,
+              {
+                kind: "text",
+                text: `make ${descriptor.harnessDir}/hooks readable and searchable for this user, or move it aside, then run the switch again`,
+              },
+            );
+          }
+        }
         switchingFrom = collision;
       }
     }
@@ -9063,11 +9075,6 @@ export async function main(
         stamp.distribution,
         requiredVersion,
       );
-    }
-    // A damaged baseline is moved aside only once nothing earlier refuses the
-    // run: the source, the sibling checks, the workflow guard, and the pin.
-    if (switchingFrom) {
-      assertSwitchBaseline(projectDir, switchingFrom, stamp.distribution, argv.includes("--dry-run") ? "dry-run" : "apply");
     }
     // Natively every harness runs the hooks of the engine serving the project,
     // which is the release an add without --from takes its files from.
@@ -9270,7 +9277,15 @@ export async function main(
       Object.keys(files).some((rel) => rel.startsWith(`${hooksDir}/`) && rel.endsWith(".json"));
     // A link could pull in files the plan never saw, or make this run read
     // outside the project, so a switch refuses rather than follow one.
-    const hookScan = hookGate ? scanUnownedHooks(projectDir, hooksDir, files) : { redirected: false, entries: [] };
+    const hookScan = hookGate
+      ? scanUnownedHooks(projectDir, hooksDir, files)
+      : { redirected: false, unreadable: false, entries: [] };
+    if (hookScan.unreadable) {
+      throw new SwitchRefusal(
+        `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: ${hooksDir} cannot be listed, so the hook files Kiro would run cannot be reviewed`,
+        { kind: "text", text: `make ${hooksDir} readable and searchable for this user, or move it aside, then run the switch again` },
+      );
+    }
     const redirected = hookScan.redirected
       ? [hooksDir]
       : hookScan.entries.filter((entry) => !entry.regular).map((entry) => entry.path);
@@ -9475,7 +9490,7 @@ export async function main(
     const validateHooksLocked = hookGate
       ? () => {
         const now = scanUnownedHooks(projectDir, hooksDir, files);
-        if (now.redirected || canonical(now.entries) !== canonical(unownedHooks)) {
+        if (now.redirected || now.unreadable || canonical(now.entries) !== canonical(unownedHooks)) {
           throw new SwitchRefusal(
             `${hooksDir}: hook files AI-DLC does not own changed after this switch was planned; review them and run the switch again`,
             { kind: "text", text: "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token" },
@@ -9779,9 +9794,11 @@ export async function main(
           ? "update AI-DLC to the release that wrote this baseline, then run the switch again"
           : error.remedy.kind === "text"
           ? error.remedy.text
-          : `${configInvocationFor(projectDir)} config ${
-            error.remedy.kind === "switch" && from ? `--from ${quoteCommandArgument(from)} ` : ""
-          }--harness ${error.remedy.harness}${projectTarget(projectDir)}`
+          : error.remedy.kind === "refresh"
+          ? switchRefreshSteps(projectDir, error.remedy)
+          : `${configInvocationFor(projectDir)} config ${from ? `--from ${quoteCommandArgument(from)} ` : ""}--harness ${
+            error.remedy.harness
+          }${projectTarget(projectDir)}`
         : from
         ? configCommand("--from <valid-release-data>")
         : selected?.projectProjection && copiedHarness
