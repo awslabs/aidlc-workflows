@@ -239,10 +239,16 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
   });
 
-  test("slash commands and typed guard switches are not feedback", () => {
+  test("slash commands and typed guard switches are not feedback, nor a reply to the gate", () => {
     expect(isTypedGuardSwitchPrompt("guard policy relaxed")).toBe(true);
     says(proj, "/aidlc --status");
     says(proj, "guard policy relaxed");
+    const refused = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message).toContain("a command to AIDLC, not a reply to this question");
+    expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
+    // A reply whose words the harness did not deliver.
+    appendAuditEntry("HUMAN_TURN", {}, proj);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(PARAPHRASE);
     expect(field(proj, "GATE_REJECTED", "Conductor Summary")).toBeNull();

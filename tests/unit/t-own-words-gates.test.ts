@@ -217,6 +217,36 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(auditBlockField(approved[0].block, "Person Reply")).toBe(words);
   });
 
+  // From a live Kiro CLI run: at an open stage gate the person typed only a
+  // command to AIDLC, the agent took it for an approval, and the gate was
+  // approved with no words of theirs. A command is no reply to the gate: the
+  // agent carries it out, and the gate waits for the person's reply.
+  test("a turn that is only \"/aidlc --scope mvp\" is no reply: the approval is refused until the person replies", () => {
+    says(proj, "/aidlc --scope mvp");
+    const turn = events(proj, "HUMAN_TURN").at(-1);
+    expect(auditBlockField(turn?.block ?? "", "Reply")).toBe("command");
+    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "approve"]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message).toContain("a command to AIDLC, not a reply to this question: carry out the command");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+
+    says(proj, "approve");
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe("approve");
+  });
+
+  // Kiro IDE's prompt hook carries no text: that turn is still a reply.
+  test("a turn with no text is a reply, as before", () => {
+    says(proj, "");
+    expect(auditBlockField(events(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Reply")).toBeNull();
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(1);
+  });
+
   test("the receipt carries the person's words, never the agent's text", () => {
     says(proj, "lgtm");
     report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve, the person said so"]);

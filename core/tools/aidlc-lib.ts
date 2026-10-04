@@ -10721,10 +10721,20 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
 // resolution provably after the latest turn is an answer record and no question
 // was logged since that turn, so answers already used that reply; "consumed" when some other resolution used it or the
 // order cannot be proven; "none" when no turn is on record or a listed audit
-// shard could not be read.
+// shard could not be read. With `replies`, a turn that was only a command to
+// AIDLC (its HUMAN_TURN row says `Reply: command`) is not a reply to the
+// question, so it is left out.
 export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
 
-export function humanTurnState(projectDir: string): HumanTurnState {
+// The HUMAN_TURN mark for a turn that was only a command to AIDLC.
+export const COMMAND_TURN_REPLY = "command";
+
+// A human turn that replied, more than a command to AIDLC.
+export function isReplyTurn(row: { event: string; block: string }): boolean {
+  return row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== COMMAND_TURN_REPLY;
+}
+
+export function humanTurnState(projectDir: string, options: { replies?: boolean } = {}): HumanTurnState {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
   // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
@@ -10777,6 +10787,7 @@ export function humanTurnState(projectDir: string): HumanTurnState {
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
+      if (options.replies && ev === "HUMAN_TURN" && !isReplyTurn({ event: ev, block: blocks[i] })) continue;
       events.push({
         ts: auditBlockField(blocks[i], "Timestamp") ?? "",
         shard: s,
@@ -10854,13 +10865,32 @@ export function humanActedSinceGate(projectDir: string): boolean {
   return humanTurnState(projectDir) === "acted";
 }
 
+// The person replied since the last decision: a turn that was only a command to
+// AIDLC ("/aidlc --scope mvp") is no reply to the question that is open. A
+// decision on that question (a stage gate, an answer) needs this; what the
+// command itself asks for needs only humanActedSinceGate.
+export function humanRepliedSinceGate(projectDir: string): boolean {
+  return humanTurnState(projectDir, { replies: true }) === "acted";
+}
+
+// Said when a decision is refused for want of a reply, and the person's message
+// since the question was a command to AIDLC.
+export function commandTurnHint(projectDir: string): string {
+  return humanActedSinceGate(projectDir)
+    ? " The person's message since then was a command to AIDLC, not a reply to this question: carry out the " +
+      "command and leave the question open for their reply."
+    : "";
+}
+
 // A person has spoken since the last decision, and that is on record: a human
 // turn exists (an empty ledger, which reads as acted for older workflows, does
 // not count). Lowering a check the person asked for in their own words needs it.
-export function personSpokeSinceGate(projectDir: string): boolean {
-  if (!humanActedSinceGate(projectDir)) return false;
+// With `replies`, the turn must be a reply, not only a command to AIDLC.
+export function personSpokeSinceGate(projectDir: string, options: { replies?: boolean } = {}): boolean {
+  if (humanTurnState(projectDir, options) !== "acted") return false;
   try {
-    return readAuditShardEvents(projectDir).some((row) => row.event === "HUMAN_TURN");
+    return readAuditShardEvents(projectDir).some((row) =>
+      options.replies ? isReplyTurn(row) : row.event === "HUMAN_TURN");
   } catch {
     return false;
   }
@@ -11273,10 +11303,10 @@ export function presenceFloorHolds(
 
 // The interview path (handleAnswer) uses the SAME resolution-boundary check: a
 // QUESTION_ANSWERED is itself a gate resolution, so "a human turn since the last
-// resolution" gives one-answer-per-human-turn for free. Thin alias for call-site
+// resolution" gives one-answer-per-reply for free. Thin alias for call-site
 // readability; both paths share one definition so the predicate cannot drift.
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
-  return humanActedSinceGate(projectDir);
+  return humanRepliedSinceGate(projectDir);
 }
 
 // The state stores a human-readable command, but only the latest tool-owned

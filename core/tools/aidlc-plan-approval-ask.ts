@@ -30,6 +30,7 @@ import {
   collectStalePlanApprovalReceipts,
   errorMessage,
   getField,
+  isReplyTurn,
   latestMainWorkflowStageRunFloorForProject,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -1214,7 +1215,8 @@ export interface PlanApprovalAnswerResult {
  * replied since it was shown, or when a named Unit is not one it asks about.
  */
 function humanTurnCount(projectDir: string): number {
-  return readAuditShardEvents(projectDir).filter((row) => row.event === "HUMAN_TURN").length;
+  // A turn that was only a command to AIDLC is no reply that could change a pick.
+  return readAuditShardEvents(projectDir).filter(isReplyTurn).length;
 }
 
 // A Request Changes on record stands until the person replies after it,

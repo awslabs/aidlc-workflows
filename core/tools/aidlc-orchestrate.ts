@@ -12445,7 +12445,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         (flags.userInput?.trim()
           ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
           : "names no choice") +
-        (personSpokeSinceGate(pd)
+        (personSpokeSinceGate(pd, { replies: true })
           ? ". The person has replied since the gate was shown: report the choice they made with --user-input " +
             '("Approve", say), without asking them again.'
           : ". No reply from the person is on record since the gate was shown: show the gate with every offered " +

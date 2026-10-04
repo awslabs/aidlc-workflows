@@ -72,10 +72,12 @@ import {
   hookExecutionRecoveryText,
   hookLiveness,
   holdsAuditLock,
+  commandTurnHint,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   humanTurnMintAllowed,
   humanTurnState,
+  isReplyTurn,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
@@ -1145,7 +1147,8 @@ function pendingSummaryDecision(
   questionsFile: string,
 ): { pending: boolean; humanAfterDecision: boolean; ambiguity?: string } {
   const entries = readAuditShardEvents(pd).filter((entry) => {
-    if (entry.event === "HUMAN_TURN") return true;
+    // A turn that was only a command to AIDLC is no reply to the summary.
+    if (entry.event === "HUMAN_TURN") return isReplyTurn(entry);
     if (entry.event === "STAGE_COMPLETED") {
       return (
         auditBlockField(entry.block, "Stage") === stage &&
@@ -1297,7 +1300,7 @@ function plainSummaryAnsweredBefore(
   let replied = false;
   for (const row of rows) {
     if (row.event === "HUMAN_TURN") {
-      replied = true;
+      replied ||= isReplyTurn(row);
       continue;
     }
     const sameItem = auditBlockField(row.block, "Stage") === stage &&
@@ -2071,13 +2074,13 @@ function handleAnswer(args: string[]): void {
       // latest reply, the person did reply: the answers from that reply belong
       // in one entry, so say that instead of asking them to reply again.
       error(
-        humanTurnState(pd) === "answered" && humanTurnMintAllowed()
+        humanTurnState(pd, { replies: true }) === "answered" && humanTurnMintAllowed()
           ? "Cannot record this answer because the person's latest reply is already recorded as an answer. "
             + "Record every answer from one reply in a single answer entry, and wait for the next reply "
             + "before recording another."
           : "Cannot record this answer because no new human reply has arrived for the question. "
             + "Wait for the human to type an answer, then try again."
-            + unattendedHumanPresenceHint(),
+            + commandTurnHint(pd) + unattendedHumanPresenceHint(),
       );
     }
 

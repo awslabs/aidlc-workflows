@@ -67,6 +67,7 @@ import {
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
+  COMMAND_TURN_REPLY,
   consumeSharedDirectiveAsk,
   forgetGateWords,
   hookContextLine,
@@ -394,7 +395,12 @@ try {
       let keptWordsOffset: number | null = null;
       try {
         withAuditLock(projectDir, () => {
-          appendAuditEntryUnlocked("HUMAN_TURN", sessionId ? { Session: sessionId } : {}, projectDir);
+          // A turn that is only a command to AIDLC is no reply to an open
+          // question: the row says so, and decisions on that question skip it.
+          appendAuditEntryUnlocked("HUMAN_TURN", {
+            ...(sessionId ? { Session: sessionId } : {}),
+            ...(notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
+          }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading
           // (recordGateWords in aidlc-lib.ts). A slash command, typed guard
@@ -443,7 +449,7 @@ try {
         // A reply the engine's guard-recovery ask took as its answer is that
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
-        if (consumeSharedDirectiveAsk(projectDir, humanResponseText) && offset !== null) {
+        if (consumeSharedDirectiveAsk(projectDir, notAReply ? "" : humanResponseText) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
           } catch {

@@ -96,7 +96,8 @@ import {
   humanAuthorityState,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  humanActedSinceGate,
+  commandTurnHint,
+  humanRepliedSinceGate,
   humanPresenceGuardDisabled,
   humanTurnMintAllowed,
   hookActivation,
@@ -5818,12 +5819,12 @@ function verifyApprovalDecision(
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
-    !humanActedSinceGate(pd)
+    !humanRepliedSinceGate(pd)
   ) {
     error(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${unattendedHumanPresenceHint()}`,
+        `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
     );
   }
   // The conductor reports the choice the person made; a report that names none
@@ -5942,11 +5943,11 @@ function handleApprove(args: string[]): void {
     }
     if (
       !humanPresenceGuardDisabled() &&
-      !humanActedSinceGate(pd)
+      !humanRepliedSinceGate(pd)
     ) {
       error(
         `Refusing to approve unit "${teamGate.unit}" for "${slug}": a real human ` +
-          "has not acted at this gate since it opened.",
+          `has not acted at this gate since it opened.${commandTurnHint(pd)}`,
       );
     }
     const timestamp = isoTimestamp();
@@ -6347,7 +6348,7 @@ function handleReject(args: string[]): void {
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
-    !humanActedSinceGate(pd)
+    !humanRepliedSinceGate(pd)
   ) {
     if (recoveryResetNeedsHuman) {
       error(
@@ -6359,7 +6360,7 @@ function handleReject(args: string[]): void {
     error(
       `Cannot request changes for "${slug}" because no new human reply has been received ` +
         `for this approval question. Wait for the human to type Request Changes and their ` +
-        `feedback, then retry.${unattendedHumanPresenceHint()}`,
+        `feedback, then retry.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
     );
   }
 
