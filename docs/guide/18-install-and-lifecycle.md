@@ -1124,9 +1124,8 @@ a pin, natively that is `aidlc config --harness <name>` for each tree not on the
 engine's release. On a copied project each tree runs its own release, so the
 others are refreshed from the newest tree's release, its
 `aidlc-copy-runtime-<version>.tar.gz` passed with `--from`; a tree no config run has
-recorded first takes one `--download` refresh at its own release. While a
-workflow runs, the warning names the tool whose files are on that release to
-continue in, and the commands to run after the workflow completes.
+recorded first takes one `--download` refresh at its own release. Open work
+carries on through the refresh, so there is no need to wait for it to finish.
 
 AI-DLC's `.gitignore` lines are its own entries only. Earlier releases also
 put a generic template (logs, `node_modules`, `dist`, editor files) at the top
