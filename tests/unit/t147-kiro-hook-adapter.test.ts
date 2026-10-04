@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv, function:RELAY_AS_TEXT_BLOCK
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv, function:relayAsTextBlock
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -50,7 +50,7 @@ import {
   readAuditShardEvents,
   readIntentRegistry,
   readSessionBinding,
-  RELAY_AS_TEXT_BLOCK,
+  relayAsTextBlock,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
@@ -815,10 +815,17 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
       // Kiro renders the reply as Markdown, which joins single line breaks; a
       // fenced text block keeps doctor and help on their own lines.
-      expect(r.stdout).toContain(`relay that output to the user ${RELAY_AS_TEXT_BLOCK}, then STOP.`);
+      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then STOP.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("the relay fence is longer than any backtick run in the output", () => {
+    expect(relayAsTextBlock("Machine  ok\n")).toContain("(```text on its own line before it, ``` after it)");
+    // A document's own code fence stays inside the block.
+    expect(relayAsTextBlock("# Notes\n```ts\nconst a = 1;\n```\n")).toContain("(````text on its own line before it, ```` after it)");
+    expect(relayAsTextBlock("````md\n````\n")).toContain("(`````text on its own line before it, ````` after it)");
   });
 
   test("3b: plain-text sanitizer drops unterminated 7-bit and 8-bit controls", () => {

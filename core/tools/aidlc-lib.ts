@@ -1801,9 +1801,14 @@ export function decodeHarnessPlainText(
 
 // How the conductor shows a relayed terminal command's output: Kiro renders the
 // reply as Markdown, which joins single line breaks, so doctor and help read as
-// one block of text; a fenced text block keeps their lines and indentation.
-export const RELAY_AS_TEXT_BLOCK =
-  "inside one fenced text block (```text on its own line before it, ``` after it), exactly as it is";
+// one block of text; a fenced text block keeps their lines and indentation. The
+// fence is longer than any run of backticks in the output, so a document's own
+// code fence stays inside the block.
+export function relayAsTextBlock(output: string): string {
+  const longest = Math.max(0, ...(output.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `inside one fenced text block (${fence}text on its own line before it, ${fence} after it), exactly as it is`;
+}
 
 // A Kiro prompt hook hands the conductor a terminal command's output as context
 // text. That output can carry project text (a document body, a path, a state

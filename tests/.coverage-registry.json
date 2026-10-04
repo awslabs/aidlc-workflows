@@ -8501,7 +8501,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:RELAY_AS_TEXT_BLOCK",
+      "unitId": "function:relayAsTextBlock",
       "minMechanism": "none",
       "coveredBy": [
         {
