@@ -5536,17 +5536,14 @@ function copiedProjectSource(
       rmSync(cleanup, { recursive: true, force: true });
       throw new Error(`copied projection is missing managed directory ${directory}`);
     }
-    // The project's own copy of the release is its regular files. A link or
-    // what a host tool installed for itself is never release content, so it
-    // stays where it is and out of the source.
+    // What a host tool installed for itself (links in its node_modules
+    // included) is never release content, so it stays where it is and out of
+    // the source. Any other link still stops here: a rule read through one
+    // would be left out of the compiled plan.
     cpSync(source, join(root, directory), {
       recursive: true,
       preserveTimestamps: true,
-      filter: (path) => {
-        const stat = lstatSync(path);
-        return (stat.isDirectory() || stat.isFile()) &&
-          !hostToolPath(relative(projectDir, path).replaceAll("\\", "/"));
-      },
+      filter: (path) => !hostToolPath(relative(projectDir, path).replaceAll("\\", "/")),
     });
   }
   for (const integration of descriptor.rootIntegrations) {

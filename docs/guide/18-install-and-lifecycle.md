@@ -943,9 +943,9 @@ Refresh preserves:
 - upstream-authored orchestrator prose while rebuilding its compiled stage and
   scope regions from the preserved project composition
 - what a host tool installs for itself inside a folder AI-DLC manages, such as
-  the `package.json`, `.gitignore`, and `node_modules/` opencode writes under
-  `.opencode/` at its first start, and any link: config never copies, owns, or
-  removes these
+  the `package.json`, `.gitignore`, and `node_modules/` (links included)
+  opencode writes under `.opencode/` at its first start: config never copies,
+  owns, or removes these
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the

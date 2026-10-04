@@ -10,7 +10,6 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -326,7 +325,7 @@ describe("t304 copied projection configuration", () => {
   });
 
   test.skipIf(process.platform === "win32")(
-    "copied projection metadata must be regular files, and a nested link is left where it is",
+    "copied projection metadata and nested content must be regular files",
     () => {
       const metadataProject = readmeCopyProject();
       const descriptorPath = join(
@@ -353,8 +352,6 @@ describe("t304 copied projection configuration", () => {
         "projected path traverses a symlink: .claude/tools/data/aidlc-projection.json",
       );
 
-      // A link is never release content: config leaves it in place, never
-      // reads through it, and never owns it, and the person's command is done.
       const nestedProject = readmeCopyProject();
       const outside = join(temp("aidlc-t304-link-"), "outside.txt");
       writeFileSync(outside, "outside\n");
@@ -367,14 +364,10 @@ describe("t304 copied projection configuration", () => {
         "--project",
         "--yes",
       ]);
-      expect(nested.status, nested.stdout + nested.stderr).toBe(0);
-      expect(lstatSync(join(nestedProject, ".claude", "linked-outside")).isSymbolicLink()).toBe(true);
-      expect(readFileSync(outside, "utf-8")).toBe("outside\n");
-      const manifest = JSON.parse(readFileSync(
-        join(nestedProject, ".claude", "tools", "data", "aidlc-manifest.json"),
-        "utf-8",
-      )) as { files: Record<string, string> };
-      expect(Object.keys(manifest.files)).not.toContain(".claude/linked-outside");
+      expect(nested.status).not.toBe(0);
+      expect(nested.stdout + nested.stderr).toContain(
+        "links and special files are not valid projection content",
+      );
     },
   );
 

@@ -7,8 +7,8 @@
 // files as its source, so those used to stop every config command ("links and
 // special files are not valid projection content"), and without a link they
 // were taken over as AI-DLC's own files. config now leaves them where they are,
-// never owns them, and never removes them; a person's own link in the
-// workspace stays too.
+// never owns them, and never removes them. Any other link still stops config
+// (t304), since a rule read through one would be left out of the plan.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -78,10 +78,6 @@ function startedOpencodeProject(): { project: string; machine: string } {
   writeFileSync(join(tool, "node_modules", "msgpackr", "bin", "download.js"), "console.log('prebuilds');\n");
   if (LINKS) {
     symlinkSync("../msgpackr/bin/download.js", join(tool, "node_modules", ".bin", "download-msgpackr-prebuilds"));
-    const outside = join(temp("aidlc-host-tool-doc-"), "notes.md");
-    writeFileSync(outside, "# Team notes\n");
-    mkdirSync(join(project, "aidlc", "spaces", "default", "knowledge"), { recursive: true });
-    symlinkSync(outside, join(project, "aidlc", "spaces", "default", "knowledge", "notes.md"));
   }
   return { project, machine: temp("aidlc-host-tool-machine-") };
 }
@@ -116,7 +112,6 @@ describe("config leaves what a host tool installed for itself alone", () => {
     expect(readFileSync(join(project, ".opencode", "package.json"), "utf-8")).toBe(packageBefore);
     if (LINKS) {
       expect(lstatSync(join(project, ".opencode", "node_modules", ".bin", "download-msgpackr-prebuilds")).isSymbolicLink()).toBe(true);
-      expect(lstatSync(join(project, "aidlc", "spaces", "default", "knowledge", "notes.md")).isSymbolicLink()).toBe(true);
     }
   });
 
@@ -138,6 +133,18 @@ describe("config leaves what a host tool installed for itself alone", () => {
     expect(readFileSync(join(project, ".opencode", "package.json"), "utf-8")).toContain("1.18.40");
     expect(readFileSync(join(project, ".opencode", ".gitignore"), "utf-8")).toContain("node_modules");
     expect(owned(project).filter(hostToolPath)).toEqual([]);
+  });
+
+  test.skipIf(!LINKS)("a linked rule file still stops config rather than leaving the rule out of the plan", () => {
+    const { project, machine } = startedOpencodeProject();
+    const team = join(project, "aidlc", "spaces", "default", "memory", "team.md");
+    const shared = join(temp("aidlc-host-tool-shared-"), "team.md");
+    writeFileSync(shared, readFileSync(team, "utf-8"));
+    rmSync(team);
+    symlinkSync(shared, team);
+    const result = config(project, machine, ["models", "--agent", "developer", "--effort", "high", "--project", "--yes"]);
+    expect(result.status).not.toBe(0);
+    expect(result.output).toContain("memory/team.md: links and special files are not valid projection content");
   });
 
   test("no release ships a file the host-tool rule leaves out", () => {
