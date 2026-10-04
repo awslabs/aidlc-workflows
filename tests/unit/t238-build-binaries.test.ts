@@ -623,6 +623,35 @@ describe("t238 build-binaries release builder", () => {
       expect(spawnSync("git", ["init", "-q"], { cwd: upgraded }).status).toBe(0);
       expect(spawnSync("git", ["check-ignore", "-q", ".env"], { cwd: upgraded }).status).toBe(0);
 
+      // A Kiro project that later takes the Claude copy keeps Kiro's per-machine
+      // files ignored: the copy leaves .gitignore alone, and the next session
+      // start adds Claude's lines beside Kiro's.
+      const kiroThenClaude = join(runtimeChannels, "kiro-then-claude");
+      mkdirSync(kiroThenClaude);
+      writeFileSync(join(kiroThenClaude, ".gitignore"), "node_modules\n");
+      const sessionStart = (harnessDir: string): void => {
+        const started = spawnSync(BUN, [join(kiroThenClaude, harnessDir, "hooks", "aidlc-session-start.ts")], {
+          cwd: kiroThenClaude,
+          input: "{}",
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: kiroThenClaude },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(started.status, `${harnessDir}: ${started.stdout}${started.stderr}`).toBe(0);
+      };
+      cpSync(join(copyRoot, "runtime", "kiro"), kiroThenClaude, { recursive: true });
+      sessionStart(".kiro");
+      const kiroIgnore = readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8");
+      expect(kiroIgnore).toContain("aidlc/.aidlc-turn-counter");
+      cpSync(join(copyRoot, "runtime", "claude"), kiroThenClaude, { recursive: true });
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toBe(kiroIgnore);
+      sessionStart(".claude");
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toStartWith("node_modules\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: kiroThenClaude }).status).toBe(0);
+      for (const path of ["aidlc/.aidlc-turn-counter", "aidlc/.aidlc-readonly-latch", ".claude/settings.local.json"]) {
+        expect(spawnSync("git", ["check-ignore", "-q", path], { cwd: kiroThenClaude }).status, path).toBe(0);
+      }
+
       const manualProject = join(runtimeChannels, "manual-project");
       cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });
       const manualStatusline = spawnSync(BUN, [
