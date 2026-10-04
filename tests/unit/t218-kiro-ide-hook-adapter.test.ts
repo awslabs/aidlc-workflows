@@ -5466,6 +5466,45 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
   });
 });
 
+describe("t218 enforce-approval-gate lets only the engine-issued chosen setter through", () => {
+  test("the Construction setting the person chose runs at an open gate; an altered form waits", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      const shard = join(seededAuditDir(dir), pinnedShardName());
+      writeFileSync(
+        shard,
+        readFileSync(shard, "utf-8") +
+        "\n## WORKFLOW_STARTED\n**Timestamp**: 2025-12-31T00:00:00Z\n**Event**: WORKFLOW_STARTED\n**Scope**: feature\n\n---\n" +
+        "\n## STAGE_STARTED\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n" +
+        "\n## HUMAN_TURN\n**Timestamp**: 2026-01-01T00:00:01Z\n**Event**: HUMAN_TURN\n**Session**: kiro-ide-person\n\n---\n" +
+          "\n## CONSTRUCTION_POLICY_RECORDED\n**Timestamp**: 2026-01-01T00:00:02Z\n**Event**: CONSTRUCTION_POLICY_RECORDED\n" +
+          "**Stage**: requirements-analysis\n**Checkpoint**: Construction Policy\n**Field**: Construction Iteration\n" +
+          "**Value**: unit-major\n**Session**: kiro-ide-person\n**User Input**: Approve\n\n---\n",
+        "utf-8",
+      );
+      const gate = (command: string) =>
+        runIdeStdin(dir, "enforce-approval-gate", JSON.stringify({
+          hook_event_name: "PreToolUse", cwd: dir, tool_name: "execute_bash", tool_input: { command },
+        }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+      const setter = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
+      const applied = gate(setter);
+      expect(applied.code, applied.stderr).toBe(0);
+      for (const altered of [`PATH=./bin ${setter}`, `env FOO=1 ${setter}`, `./bin/${setter}`]) {
+        expect(gate(altered).code, altered).toBe(2);
+      }
+      expect(gate("bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved").code)
+        .toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // Kiro IDE runs every PreToolUse hook even after one blocks (measured on
 // 1.1.14), so terminal-command-guard still runs after the approval gate refuses
 // the call and must not act on it.

@@ -11151,30 +11151,28 @@ const CONSTRUCTION_POLICY_SETTER_FIELDS: Readonly<Record<string, string>> = {
   "set-construction-execution": "Construction Execution",
 };
 
-// One literal Construction policy setter for this project (no chain, pipe,
-// redirection or expansion) and the field and value it sets, or null.
-function literalConstructionPolicySetter(
-  command: string,
-  projectDir: string,
-): { field: string; value: string } | null {
+// One Construction policy setter in exactly a form the engine issues, and the
+// field and value it sets, or null: `aidlc engine state <setter> <value>`,
+// `bun <harness>/tools/aidlc.ts engine state <setter> <value>`, or
+// `bun <harness>/tools/aidlc-state.ts <setter> <value>`, with the executable
+// named bare. No prelude, environment assignment, wrapper, interpreter option,
+// other path, chain, pipe, redirection or expansion matches.
+function literalConstructionPolicySetter(command: string): { field: string; value: string } | null {
   const literal = parseLiteralShellInvocation(command);
-  if (!literal) return null;
-  const invocation = engineInvocationFromWords(literal.argv, literal.rawWords);
-  if (invocation === null || typeof invocation === "string") return null;
-  if (
-    (literal.directory !== null && !sameDirectory(literal.directory, projectDir)) ||
-    (invocation.projectDir !== null &&
-      !sameDirectory(resolvePath(literal.directory ?? projectDir, invocation.projectDir), projectDir))
-  ) return null;
-  let args = invocation.args;
-  if (invocation.command === "aidlc") {
-    if (args[0] !== "state") return null;
-    args = args.slice(1);
-  } else if (!/^aidlc-state(?:\.ts)?$/.test(invocation.command)) {
+  if (!literal || literal.directory !== null) return null;
+  const words = literal.argv;
+  if (words.length !== literal.rawWords.length || words.some((word, i) => word !== literal.rawWords[i])) {
     return null;
   }
-  const field = CONSTRUCTION_POLICY_SETTER_FIELDS[args[0] ?? ""];
-  return field !== undefined && args.length === 2 ? { field, value: args[1] } : null;
+  const tools = `${harnessDir()}/tools`;
+  let rest: string[];
+  if (words[0] === "aidlc" && words[1] === "engine" && words[2] === "state") rest = words.slice(3);
+  else if (words[0] === "bun" && words[1] === `${tools}/aidlc.ts` && words[2] === "engine" && words[3] === "state") {
+    rest = words.slice(4);
+  } else if (words[0] === "bun" && words[1] === `${tools}/aidlc-state.ts`) rest = words.slice(2);
+  else return null;
+  const field = CONSTRUCTION_POLICY_SETTER_FIELDS[rest[0] ?? ""];
+  return field !== undefined && rest.length === 2 ? { field, value: rest[1] } : null;
 }
 
 // The human-presence floors' one rule (Kiro CLI and Kiro IDE): whether a tool
@@ -11192,7 +11190,7 @@ export function presenceFloorHolds(
 ): boolean {
   if (!stateContent || !hasOpenGate(stateContent)) return false;
   if (humanActedSinceGate(projectDir)) return false;
-  const setter = literalConstructionPolicySetter(command, projectDir);
+  const setter = literalConstructionPolicySetter(command);
   if (setter !== null && constructionPolicyReceiptApplies(projectDir, setter.field, setter.value)) {
     return false;
   }

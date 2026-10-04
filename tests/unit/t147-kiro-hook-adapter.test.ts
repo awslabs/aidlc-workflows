@@ -2288,6 +2288,29 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
       ));
       const applied = guard(dir, toUnitMajor);
       expect(applied.code, applied.stderr).toBe(0);
+      // Each form the engine issues for it runs; any other spelling waits, so
+      // nothing but the state tool itself can run on that choice.
+      for (const issued of [
+        "aidlc engine state set-construction-iteration unit-major",
+        "bun .kiro/tools/aidlc-state.ts set-construction-iteration unit-major",
+      ]) {
+        expect(guard(dir, issued).code, issued).toBe(0);
+      }
+      for (const altered of [
+        `PATH=./bin ${toUnitMajor}`,
+        `env FOO=1 ${toUnitMajor}`,
+        `command ${toUnitMajor}`,
+        `exec ${toUnitMajor}`,
+        `cd ${dir} && ${toUnitMajor}`,
+        "./bin/bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "bun --preload ./x.ts .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "bun ./other/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "/tmp/aidlc engine state set-construction-iteration unit-major",
+        `${toUnitMajor} --project-dir /tmp`,
+        "bun .kiro/tools/aidlc.ts engine state set-construction-iteration 'unit-major'",
+      ]) {
+        expect(guard(dir, altered).code, altered).toBe(2);
+      }
       // Nothing else rides on that choice: another value, a command chained to
       // the setter, and the gate's own approval still wait for the person.
       for (const command of [
