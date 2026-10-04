@@ -1905,7 +1905,10 @@ describe("t244 Windows and completion release surfaces", () => {
       const executableFixture = existsSync(output) ? output : `${output}.exe`;
       expect(existsSync(executableFixture)).toBe(true);
 
-      for (const version of ["1.0.0", "1.1.0"]) {
+      // Releases after the first one with the current helper, which is the
+      // helper this test drives.
+      const [older, newer] = [NEXT_VERSION, LIVE_PIN_VERSION];
+      for (const version of [older, newer]) {
         const root = join(machine, "versions", version);
         const runtime = join(root, "runtime", "claude");
         mkdirSync(root, { recursive: true });
@@ -1985,7 +1988,7 @@ describe("t244 Windows and completion release surfaces", () => {
         );
       };
       try {
-        activate("1.0.0");
+        activate(older);
         // Windows PowerShell 5.1 forwarding @args itself drops empty arguments
         // and strips embedded double quotes.
         const argv = [
@@ -2020,15 +2023,17 @@ describe("t244 Windows and completion release surfaces", () => {
         writeFileSync(activeVersionPath(), "not-a-version\n");
         expectRefusal(/^aidlc: active version marker .+active-version is malformed\. /);
         writeFileSync(activeVersionPath(), marker);
-        const retained = join(machine, "versions", "1.0.0", "aidlc.exe");
+        const retained = join(machine, "versions", older, "aidlc.exe");
         renameSync(retained, `${retained}.moved`);
         expectRefusal(/^aidlc: active executable .+aidlc\.exe is missing\. /);
         renameSync(`${retained}.moved`, retained);
         writeFileSync(activeExecutablePath(), "C:\\outside\\aidlc.exe\r\n");
         expectRefusal(
-          /^aidlc: active command target C:\\outside\\aidlc\.exe does not match active version 1\.0\.0 /,
+          new RegExp(
+            `^aidlc: active command target C:\\\\outside\\\\aidlc\\.exe does not match active version ${older.replaceAll(".", "\\.")} `,
+          ),
         );
-        activate("1.1.0");
+        activate(newer);
         const rollback = run(
           LIFECYCLE,
           ["rollback"],
@@ -2037,7 +2042,7 @@ describe("t244 Windows and completion release surfaces", () => {
         );
         expect(rollback.status, rollback.stdout + rollback.stderr).toBe(0);
         expect(readActiveExecutable()).toBe(
-          join(machine, "versions", "1.0.0", "aidlc.exe"),
+          join(machine, "versions", older, "aidlc.exe"),
         );
         const doctor = run(
           DISPATCHER,
