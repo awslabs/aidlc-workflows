@@ -65,7 +65,6 @@ import {
 import {
   hookOutsideGate,
   enterHookWorkflow,
-  personSpokeSinceGate,
   acquireAuditLock,
   type ActiveDirectiveMarker,
   assertNoSymlinkInChainOrThrow,
