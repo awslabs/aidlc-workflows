@@ -45,7 +45,7 @@
 //      directive advances, the signature changes and the counter resets to 0,
 //      so a healthy loop is never throttled.
 //
-// Nine turn-stop carve-outs keep the hook from punishing a turn that ended
+// Ten turn-stop carve-outs keep the hook from punishing a turn that ended
 // for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -120,6 +120,10 @@
 //      survive the Stop hook's own `next` probe. Allow that wait before probing,
 //      including under autonomous Construction when the guard requires human
 //      input. Once the response is ready, continuation is enforced again.
+//  10. A QUESTION FROM THE ENGINE: the last step `next` handed out was an `ask`
+//      (where new work goes, which plan to start it with), and the person has
+//      not written since (askTurnEndIsOpen). The probe's own `next` would hand
+//      back the work in progress, so this too is read before probing.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -150,6 +154,7 @@ import {
   getField,
   stateDigest,
   hasCurrentSharedResumeWait,
+  askTurnEndIsOpen,
   hasCurrentSharedGuardRecoveryWait,
   hasPendingDecision,
   hookChildEnv,
@@ -1743,6 +1748,16 @@ if (!copilotSession) {
       projectDir,
       HOOK_NAME,
       "active guard-recovery question is waiting on the human; allowing the stop before the shared next probe",
+    );
+    return allowStop();
+  }
+  // The engine's last word was a question for the person, such as where new
+  // work goes; `next` alone would hand back the work in progress instead.
+  if (askTurnEndIsOpen(projectDir)) {
+    recordHookTrace(
+      projectDir,
+      HOOK_NAME,
+      "the engine's last step was a question for the person; allowing the stop before the shared next probe",
     );
     return allowStop();
   }

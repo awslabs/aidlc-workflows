@@ -248,6 +248,7 @@ import {
   recordHookDrop,
   recoveryGuidance,
   markEngineTouch,
+  markAskTurnEnd,
   kiroIdeLegacyPlanApprovalSessionId,
   relativeCodekbDir,
   relativeRecordDirForSelection,
@@ -887,6 +888,16 @@ function writePrepared(prepared: PreparedEmission): void {
   // same work handed over again, or a `continue` to the next part), ends a
   // switch's one-shot stop, so the loop holds it like any other work (#1263).
   const kind = prepared.transported.kind;
+  // An ask is the person's to answer, so the turn ends at it on purpose; any
+  // other step the agent is handed means the turn goes on.
+  const askDir = prepared.projectDir ?? engineProjectDir;
+  if (askDir) {
+    try {
+      markAskTurnEnd(resolveProjectDir(askDir), kind === "ask");
+    } catch {
+      /* advisory: the Stop hook falls back to its usual checks */
+    }
+  }
   if (
     prepared.projectDir && !isReadOnlyEngineProbe() &&
     (kind === "run-stage" || kind === "load-steering" || kind === "invoke-swarm")
