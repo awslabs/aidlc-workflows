@@ -2411,11 +2411,13 @@ function appendPluginDoctorChecks(
     const startedAt = Date.now();
     // SIGKILL hard-bounds the direct script process. Detached grandchildren can
     // still outlive that process; plugins must not create them.
-    const run = spawnSync(process.execPath, [realScriptPath], {
+    const executable = compiledExecutable();
+    const run = spawnSync(executable ?? process.execPath, [realScriptPath], {
       cwd: projectDir,
       encoding: "utf-8",
       env: {
         ...process.env,
+        ...(executable ? { BUN_BE_BUN: "1" } : {}),
         AIDLC_PROJECT_DIR: projectDir,
         AIDLC_HARNESS_DIR: harness,
         AIDLC_PLUGIN_NAME: plugin,
@@ -9738,8 +9740,8 @@ function handleCodekbPublish(
   );
 }
 
-// `aidlc-utility.ts codekb-scope-diff [--repo <name>] [--compare <timestamp.md>]
-// [--json]` - read-only. The deterministic half of the reverse-engineering
+// `aidlc-utility.ts codekb-scope-diff [--repo <name>] [--compare <timestamp.md>
+// | --check <timestamp.md> | --mint --paths <csv>] [--json]` - read-only. The deterministic half of the reverse-engineering
 // rerun guard (the store is shared space-level knowledge; compare mode reports
 // which paths/components are no longer claimed as verified deep coverage).
 //
@@ -9760,6 +9762,11 @@ function handleCodekbPublish(
 // scope block's `fingerprint:` line at synthesis time. Prints `unknown` when
 // not computable (non-git or invalid pathspec), which the block records
 // verbatim.
+//
+// Check mode (--check <timestamp.md>): VALID with what the block records and
+// whether its fingerprint matches the source now (current, stale, unknown), or
+// INVALID with the parse error. Needs no store, so a first scan can check its
+// candidate before publication.
 //
 // Always exits 0 with the verdict in the output (read-only query - mirrors
 // codekb-path; refusals are for lifecycle verbs). No mkdir, no state write,
@@ -9804,6 +9811,48 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     if (asJson) process.stdout.write(`${JSON.stringify({ repo, store: `${storeDir}/`, ...payload })}\n`);
     else process.stdout.write(`${human}\n`);
   };
+
+  // Check mode answers, without a store, what publication will ask of a
+  // timestamp written for it: does its scope block parse, and does its
+  // fingerprint match the source now.
+  if (flags.check !== undefined) {
+    const checkPath = flags.check;
+    if (!checkPath || checkPath === "true" || !existsSync(checkPath)) {
+      die(`codekb-scope-diff --check: file not found: ${checkPath && checkPath !== "true" ? checkPath : "(missing path)"}`);
+    }
+    const checked = parseReScope(readFileSync(checkPath, "utf-8"));
+    if (!checked.ok) {
+      emit(
+        { verdict: "INVALID", reason: checked.reason, detail: checked.detail },
+        `INVALID (${checked.reason}): ${checked.detail}. Fix the Scope of Analysis block and check it again.`,
+      );
+      return;
+    }
+    const scope = checked.scope;
+    const current = codekbScopeFingerprint(repoDir, scope.analyzedPaths, fingerprintExcludes);
+    const fingerprint = scope.fingerprint === null || current === null
+      ? "unknown"
+      : scope.fingerprint === current ? "current" : "stale";
+    emit(
+      {
+        verdict: "VALID",
+        kind: scope.kind,
+        intent: scope.intent,
+        analyzed_paths: scope.analyzedPaths,
+        analyzed_components: scope.analyzedComponents,
+        shallow_paths: scope.shallowPaths,
+        fingerprint,
+      },
+      `VALID: kind ${scope.kind}, ${scope.analyzedPaths.length} analyzed path(s), ` +
+        `${scope.analyzedComponents.length} component(s), ${scope.shallowPaths.length} shallow path(s). ` +
+        (fingerprint === "current"
+          ? "The fingerprint matches the source now."
+          : fingerprint === "stale"
+            ? "The fingerprint does not match the source now: mint it again over analyzed.paths and paste the output."
+            : "The fingerprint is unknown here, so publication will check it."),
+    );
+    return;
+  }
 
   if (!existsSync(storePath)) {
     emit(
