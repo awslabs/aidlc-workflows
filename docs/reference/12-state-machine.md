@@ -1613,8 +1613,9 @@ The projection remains read-only and advisory. `next` keeps its normal
 directive kind and adds a machine-readable `stage_validity` field for stale,
 revalidation, or unavailable results. Untracked-only histories appear in
 `/aidlc --status` rather than every `next`.
-The suggested recovery is `/aidlc --stage <earliest-affected-stage>`, but this
-release does not enforce it. Schema-1, receipt-less, and capture-failed
+The warning names the earliest affected stage and the words to redo it (the
+same move as `/aidlc --stage <earliest-affected-stage>`), but this release does
+not enforce it. Schema-1, receipt-less, and capture-failed
 histories remain untracked/fail-open until a normal re-completion writes schema
 2. The scope is AI-DLC Markdown artifact validity;
 source-code, Git-tree, CI, deployment, and external-system validity require

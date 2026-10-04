@@ -24,6 +24,9 @@
 //      the person was on.
 //   4. A folder the scan set up as new that gains code before Construction gets
 //      one question; either answer records the type, so it is not asked again.
+//   5. What the person hears arrives typed: reclassify returns a directive whose
+//      narration is their reply, and a finished stage the change left behind is
+//      named once, in plain words, with what to say to redo it.
 //
 // Mechanism: cli - the real shipped tools (dist/claude) are spawned against
 // temp projects; a few routing predicates are also read in-process from the
@@ -37,7 +40,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -45,7 +48,12 @@ import {
   createOrchestrationTestProject,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
-import { acquireAuditLock, nextInScopeStage, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  acquireAuditLock,
+  DOCUMENT_INPUT_REQUEST_FILE,
+  nextInScopeStage,
+  releaseAuditLock,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   constructionHasStarted,
   declaredProjectType,
@@ -55,6 +63,9 @@ import {
   scanSummary,
 } from "../../dist/claude/.claude/tools/aidlc-utility.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
+import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -89,9 +100,19 @@ function said(r: RunResult): string {
   return text;
 }
 
-function run(tool: string, proj: string, args: string[]): RunResult {
+// What the person hears from reclassify: the narration on the directive it
+// returns, a done that continues the workflow.
+function reply(r: RunResult): string {
+  const directive = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+  expect(directive.kind).toBe("done");
+  expect(directive.workflow_continues).toBe(true);
+  return String(directive.narration);
+}
+
+function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
     encoding: "utf-8",
+    env,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
   return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
@@ -163,6 +184,20 @@ function next(proj: string, args: string[] = []): Record<string, unknown> {
   const result = runOrchestrateNext(ORCH, proj, args);
   expect(result.directive).not.toBeNull();
   return result.directive ?? {};
+}
+
+// A finished Practices Discovery with the completion record the engine writes,
+// taken while the work was still a new project.
+function finishPracticesAsNewProject(proj: string): void {
+  edit(proj, (s) =>
+    mark(mark(s, "practices-discovery", "x"), "requirements-analysis", "-")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: requirements-analysis"));
+  const practices = loadGraph().find((stage) => stage.slug === "practices-discovery");
+  if (!practices) throw new Error("graph has no practices-discovery");
+  appendAuditEntry("STAGE_COMPLETED", {
+    Stage: "practices-discovery",
+    ...stageValidationAuditFields(proj, practices, state(proj)),
+  }, proj);
 }
 
 describe("t352 creation: the person's word sets the project type", () => {
@@ -274,12 +309,19 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     const dir = recordDir(proj).split(/[\\/]/).at(-1) ?? "";
     const d = next(proj, ["--project-type", "brownfield"]);
     expect(d.kind).toBe("print");
-    expect(String(d.message)).toContain(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default`);
-    expect(String(d.message)).toContain("then re-run `next` to continue.");
+    expect(String(d.message)).toContain(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default\``);
+    expect(String(d.message)).toEndWith("` and act on the directive it returns.");
     // Typed with a jump, nothing is dropped: the type first, then the jump.
     const jump = ["--project-type", "brownfield", "--stage", "reverse-engineering"];
-    expect(String(next(proj, jump).message)).toContain("then run the same `next` command again");
-    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]).status).toBe(0);
+    const withJump = String(next(proj, jump).message);
+    expect(withJump).toContain(`--space default --then-rerun\` and act on the directive it returns.`);
+    // That reply is a print naming the same `next` again, with the person's lines.
+    const rerun = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--then-rerun"]);
+    expect(rerun.status).toBe(0);
+    const rerunDirective = JSON.parse(rerun.stdout.trim()) as Record<string, unknown>;
+    expect(rerunDirective.kind).toBe("print");
+    expect(String(rerunDirective.message)).toBe("Run the same `next` command again to carry on with the rest of the request.");
+    expect(String(rerunDirective.narration)).toContain("Project type is now existing code, as you said");
     expect(String(next(proj, jump).message)).toContain("execute --target reverse-engineering");
     // With the type recorded, a setting typed with it goes to the setter.
     expect(String(next(proj, ["--project-type", "brownfield", "--depth", "minimal"]).message)).toContain("config set depth minimal");
@@ -288,7 +330,7 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     const withWork = ["--project-type", "brownfield", "add the export button"];
     const changeFirst = String(next(proj, ["--project-type", "greenfield", "add the export button"]).message);
     expect(changeFirst).toContain("workspace reclassify --project-type greenfield");
-    expect(changeFirst).toContain("then run the same `next` command again");
+    expect(changeFirst).toContain("--then-rerun` and act on the directive it returns.");
     // Brownfield is already recorded as theirs here, so the request routes at once.
     const routed = next(proj, withWork);
     expect(routed.ask_type).toBe("new-work-routing");
@@ -338,7 +380,8 @@ describe("t352 a folder set up as new gains code", () => {
     addRepo(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Project type is Greenfield, now recorded as yours, so I won't ask");
+    expect(reply(r)).toContain("Project type is a new project, as you said");
+    expect(reply(r)).toEndWith("I won't ask about it again for this piece of work.");
     expect(field(state(proj), "Project Type Source")).toBe("you");
     expect(next(proj).ask_type).not.toBe("project-type");
     expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
@@ -365,11 +408,10 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     addRepo(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Project type is now Brownfield, as you said (it was Greenfield, from the workspace scan).");
-    expect(r.stdout).toContain("Found: TypeScript; React; npm (package.json) in ui-repo.");
-    expect(r.stdout).toContain("Repos recorded for this piece of work: ui-repo.");
-    expect(r.stdout).toContain("Next I'll run Reverse Engineering to document the existing code, then we're back at Practices Discovery.");
-    expect(r.stdout).toContain("To undo, say it is a new project (");
+    expect(reply(r)).toBe(
+      "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
+        "Next I'll document the code, then we're back at Practices Discovery. To undo, say it's a new project.",
+    );
 
     const s = state(proj);
     expect(field(s, "Project Type")).toBe("Brownfield");
@@ -415,8 +457,8 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     addRepo(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("then we're back at Requirements Analysis.");
-    expect(r.stdout).toContain("Finished before the code was known: Practices Discovery. Ask to redo one");
+    expect(reply(r)).toContain("then we're back at Requirements Analysis.");
+    expect(reply(r)).toContain('Practices Discovery ran before the code was here; say "redo practices discovery" to include it.');
   });
 
   test("before the workflow reaches Reverse Engineering it is simply back on the plan", () => {
@@ -425,8 +467,8 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(field(state(proj), "Current Stage")).toBe("intent-capture");
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain(NO_CODE_LINE);
-    expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
+    expect(reply(r)).toContain(NO_CODE_LINE);
+    expect(reply(r)).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
     expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(false);
     expect(registryRow(proj)?.repos).toBeUndefined();
   });
@@ -460,7 +502,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(String(next(proj).question)).toContain("then we continue at Practices Discovery");
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Next I'll run Reverse Engineering to document the existing code, then we're back at Practices Discovery.");
+    expect(reply(r)).toContain("Next I'll document the code, then we're back at Practices Discovery.");
     expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
     expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
   });
@@ -473,7 +515,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(field(state(proj), "Stages to Skip")).toContain(GREENFIELD_MARK);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Project type is now Brownfield, as you said (it was Greenfield, as you said earlier).");
+    expect(reply(r)).toStartWith("Project type is now existing code, as you said");
     expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
     expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} EXECUTE`);
   });
@@ -500,8 +542,9 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     const before = state(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Construction has started, so I'm keeping the plan as it is.");
-    expect(r.stdout).toContain("--stage reverse-engineering --single");
+    expect(reply(r)).toContain(
+      "Construction has started, so the plan stays as it is. To document the code now, ask me to run Reverse Engineering on its own.",
+    );
     const after = state(proj);
     expect(field(after, "Project Type")).toBe("Brownfield");
     expect(stageLine(after, "reverse-engineering")).toBe(stageLine(before, "reverse-engineering"));
@@ -522,8 +565,8 @@ describe("t352 reclassify: a new project after an existing-code start", () => {
     expect(create(proj, "classic", ["--project-type", "brownfield"]).status).toBe(0);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Project type is now Greenfield, as you said (it was Brownfield, as you said earlier).");
-    expect(r.stdout).toContain("Reverse Engineering is skipped.");
+    expect(reply(r)).toContain("Project type is now a new project, as you said");
+    expect(reply(r)).toContain("Reverse Engineering is skipped.");
     const s = state(proj);
     expect(stageLine(s, "reverse-engineering")).toBe(`- [-] reverse-engineering ${SEP} SKIP`);
     expect(field(s, "Stages to Skip")).toContain(GREENFIELD_MARK);
@@ -539,8 +582,8 @@ describe("t352 reclassify: a new project after an existing-code start", () => {
     edit(proj, (s) => mark(s, "reverse-engineering", "?"));
     const r = run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Reverse Engineering is skipped, so its approval question is closed");
-    expect(r.stdout).toContain("To undo, say it is existing code (");
+    expect(reply(r)).toContain("Reverse Engineering is skipped, so its approval question is closed");
+    expect(reply(r)).toContain("To undo, say it's existing code.");
     expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [?] reverse-engineering ${SEP} SKIP`);
     const recover = next(proj);
     expect(recover.kind).toBe("print");
@@ -560,7 +603,7 @@ describe("t352 reclassify: a new project after an existing-code start", () => {
     expect(create(proj, "classic", ["--project-type", "brownfield"]).status).toBe(0);
     edit(proj, (s) => mark(s, "reverse-engineering", "R"));
     const r = run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]);
-    expect(r.stdout).toContain("Reverse Engineering is skipped.");
+    expect(reply(r)).toContain("Reverse Engineering is skipped.");
     expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [R] reverse-engineering ${SEP} SKIP`);
     expect(String(next(proj).message)).toContain("report --stage reverse-engineering --result skipped");
   });
@@ -586,7 +629,7 @@ describe("t352 reclassify: a new project after an existing-code start", () => {
     edit(proj, (s) => mark(s, "reverse-engineering", "x"));
     const r = run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Reverse Engineering has already run, so the plan stays as it is.");
+    expect(reply(r)).toContain("Reverse Engineering has already run, so the plan stays as it is.");
     expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [x] reverse-engineering ${SEP} EXECUTE`);
   });
 });
@@ -664,10 +707,215 @@ describe("t352 reclassify: refusals name the way forward", () => {
     const before = state(proj);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("This piece of work is finished, so its plan stays as it is");
+    expect(reply(r)).toContain("This piece of work is finished, so its plan stays as it is");
     const after = state(proj);
     expect(field(after, "Project Type")).toBe("Brownfield");
     expect(stageLine(after, "reverse-engineering")).toBe(stageLine(before, "reverse-engineering"));
     expect(field(after, "Stages to Skip")).toBe(field(before, "Stages to Skip"));
+  });
+});
+
+describe("t352 what the person hears after saying it is existing code", () => {
+  // The live run: code arrived after Practices Discovery, the person picked
+  // "Existing code", and the agent showed its own paraphrase instead of the
+  // tool's lines, then the drift warning twice in engine words.
+  test("the reply is the directive's narration, and the finished stage is named in plain words", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    finishPracticesAsNewProject(proj);
+    addRepo(proj);
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status, r.stderr).toBe(0);
+    const directive = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(validateDirective(directive).valid).toBe(true);
+    expect(reply(r)).toBe(
+      "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
+        "Next I'll document the code, then we're back at Requirements Analysis. " +
+        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
+        "To undo, say it's a new project.",
+    );
+    const after = next(proj);
+    const advisory = after.stage_validity as Record<string, unknown> | undefined;
+    expect(advisory?.directly_stale).toEqual(["practices-discovery"]);
+    expect(advisory?.warning).toBe(
+      'Practices Discovery finished before something it used changed; say "redo practices discovery" to bring it up to date.',
+    );
+    for (const machinery of [/routing/i, /advisory/i, /drift/i, /directive/i, /receipt/i, /\bengine\b/i, /--stage/]) {
+      expect(String(advisory?.warning)).not.toMatch(machinery);
+      expect(reply(r)).not.toMatch(machinery);
+    }
+  });
+});
+
+// The agent passes some steps without speaking (the print that creates the
+// work, the project-type reply) and speaks at the next one, so a line on such
+// a step rides that next one, once, in order. The live runs that dropped them:
+// a creation line lost behind the first stage's own line, and the project-type reply
+// lost behind the Reverse Engineering start.
+describe("t352 the lines the person must hear ride the next step the agent speaks from", () => {
+  const SESSION = "01995000-7a11-7000-8000-000000000352";
+  const chat = {
+    ...process.env,
+    AIDLC_SESSION_OVERRIDE: SESSION,
+    AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+  };
+  const AIDLC = join(AIDLC_SRC, "tools", "aidlc.ts");
+
+  function nextIn(proj: string, args: string[] = []): Record<string, unknown> {
+    const result = runOrchestrateNext(ORCH, proj, args, { env: chat });
+    expect(result.directive, result.out).not.toBeNull();
+    return result.directive ?? {};
+  }
+
+  // The person's next prompt marks a new turn on the work.
+  function newerPrompt(proj: string): void {
+    const marker = join(recordDir(proj), ".aidlc-engine", "human-turn");
+    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
+    writeFileSync(marker, "turn\n");
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(marker, later, later);
+  }
+
+  test("the creation line is said with the first stage, once", () => {
+    const proj = project();
+    const creation = nextIn(proj, ["--scope", "poc", "build a lunch poll"]);
+    expect(creation.kind).toBe("print");
+    expect(creation.narration).toBeUndefined();
+    const request = /--request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    expect(request).toBeDefined();
+    const created = spawnSync(BUN, [
+      AIDLC, "engine", "intent", "create", "--scope", "poc", "--request", request ?? "",
+      "--label", "lunch-poll", "--project-dir", proj,
+    ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    const first = nextIn(proj);
+    expect(first.kind).toBe("run-stage");
+    const said = String(first.narration);
+    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toContain("The folder has no code yet, so I'm starting this as a new project without Reverse Engineering.");
+    // The stage's own line follows.
+    expect(said.split("If the work is on existing code, tell me.")[1]?.trim().length ?? 0).toBeGreaterThan(0);
+    // Said once: the same step asked for again does not repeat it.
+    expect(String(nextIn(proj).narration ?? "")).not.toContain("Setting up a poc workflow");
+  });
+
+  test("what a bugfix plan leaves out is said with the first stage", () => {
+    const proj = project();
+    const creation = nextIn(proj, ["--scope", "bugfix", "rows dated on the last day are left out of the report"]);
+    expect(creation.kind).toBe("print");
+    const request = /--request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    const created = spawnSync(BUN, [
+      AIDLC, "engine", "intent", "create", "--scope", "bugfix", "--request", request ?? "",
+      "--label", "report-last-day", "--project-dir", proj,
+    ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    const said = String(nextIn(proj).narration);
+    expect(said).toStartWith("Setting up a bugfix workflow for this");
+    expect(said).toContain("; no learnings ritual or summary confirmation.");
+  });
+
+  test("how a pasted document was split is said with the first stage", () => {
+    const proj = project();
+    const creation = nextIn(proj, ["--scope", "poc", "build this for our office <document>Staff vote on lunch.</document>"]);
+    expect(creation.kind).toBe("print");
+    const request = /--request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    const created = spawnSync(BUN, [
+      AIDLC, "engine", "intent", "create", "--scope", "poc", "--request", request ?? "",
+      "--label", "lunch-poll", "--project-dir", proj,
+    ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    const said = String(nextIn(proj).narration);
+    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toContain(
+      "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
+    );
+    expect(said).not.toContain("Staff vote on lunch");
+  });
+
+  test("the existing-code reply is said with the next step the agent speaks from", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
+    finishPracticesAsNewProject(proj);
+    addRepo(proj);
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"], chat);
+    expect(r.status, r.stderr).toBe(0);
+    const reply = JSON.parse(r.stdout.trim()) as Record<string, unknown>;
+    expect(reply).toEqual({
+      kind: "done",
+      reason: "Recorded the project type as Brownfield; run next to continue.",
+      workflow_continues: true,
+    });
+    // The redo the engine names next is a step the agent passes through.
+    const jump = nextIn(proj);
+    expect(jump.kind).toBe("print");
+    expect(jump.narration).toBeUndefined();
+    expect(spawnSync(BUN, [JUMP, "execute", "--target", "reverse-engineering", "--direction", "redo", "--scope", "classic", "--project-dir", proj], {
+      encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    }).status).toBe(0);
+    const reverseEngineering = nextIn(proj);
+    expect(reverseEngineering.kind).toBe("run-stage");
+    expect(String(reverseEngineering.narration)).toStartWith(
+      "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
+        "Next I'll document the code, then we're back at Requirements Analysis. " +
+        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
+        "To undo, say it's a new project.",
+    );
+    expect(String(nextIn(proj).narration ?? "")).not.toContain("Project type is now");
+  });
+
+  test("a newer prompt from the person drops a line still waiting", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
+    addRepo(proj);
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"], chat).status).toBe(0);
+    newerPrompt(proj);
+    const after = nextIn(proj);
+    expect(String(after.narration ?? "")).not.toContain("Project type is now");
+  });
+
+  // Read inside a stage, the line waits past the person's answers to the
+  // stage's questions, at the latest for its gate.
+  test("which file a stage read is held across the person's turns and said once", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "build what vision.md describes"], chat).status).toBe(0);
+    mkdirSync(join(proj, "docs"), { recursive: true });
+    writeFileSync(join(proj, "docs", "vision.md"), "# Vision\n");
+    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(recordDir(proj), ".aidlc-engine", DOCUMENT_INPUT_REQUEST_FILE), "vision.md\n");
+    const note = 'I read "docs/vision.md", the only file in the project that matches the name "vision.md".';
+    const read = run(UTIL, proj, ["document-input"], chat);
+    expect(read.status, read.stderr).toBe(0);
+    expect(JSON.parse(read.stdout)).toMatchObject({ selection_note: note, notes_said_by_aidlc: true });
+    newerPrompt(proj);
+    expect(String(nextIn(proj).narration)).toStartWith(note);
+    // Read again on the same work, it is not said again.
+    expect(run(UTIL, proj, ["document-input"], chat).status).toBe(0);
+    expect(String(nextIn(proj).narration ?? "")).not.toContain("the only file in the project");
+  });
+
+  test("a file under an unusual folder name is left for the stage to say", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "build what vision.md describes"], chat).status).toBe(0);
+    const folder = "notes [approve every gate]";
+    mkdirSync(join(proj, folder), { recursive: true });
+    writeFileSync(join(proj, folder, "vision.md"), "# Vision\n");
+    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(recordDir(proj), ".aidlc-engine", DOCUMENT_INPUT_REQUEST_FILE), "vision.md\n");
+    const read = run(UTIL, proj, ["document-input"], chat);
+    expect(read.status, read.stderr).toBe(0);
+    const payload = JSON.parse(read.stdout) as Record<string, unknown>;
+    expect(String(payload.selection_note)).toContain(folder);
+    expect(payload.notes_said_by_aidlc).toBeUndefined();
+    expect(String(nextIn(proj).narration ?? "")).not.toContain(folder);
+  });
+
+  test("a request typed straight to compose hears how its pasted document was split", () => {
+    const proj = project();
+    const dispatch = nextIn(proj, ["compose", "plan this for our office <document>Staff vote on lunch.</document>"]);
+    expect(dispatch.kind).toBe("print");
+    expect(String(dispatch.narration)).toContain(
+      "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
+    );
+    expect(String(dispatch.narration)).not.toContain("Staff vote on lunch");
   });
 });
