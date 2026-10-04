@@ -44,7 +44,8 @@ const HARNESSES: Harness[] = [
     dir: ".claude",
     lines: () => [
       "Choose Yes when Claude Code asks to change this project's settings, then answer the question below.",
-      "Your organization's Claude Code settings block this project. Ask your Claude Code administrator to allow project hooks.",
+      "Claude Code is still starting with its hooks off. If you started it with a setting that turns hooks off, " +
+        "start it again without that setting; otherwise ask your Claude Code administrator to allow project hooks.",
     ],
   },
   {

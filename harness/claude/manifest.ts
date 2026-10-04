@@ -32,9 +32,11 @@ const manifest: HarnessManifest = {
   hookActivation: {
     recovery:
       'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in ' +
-      "the same chat. If your organization's Claude Code settings block this project, ask your " +
-      "Claude Code administrator to allow project hooks. If AI-DLC was set up while Claude Code " +
-      "was open, exit Claude Code and start it again in this folder, then type <entry>.",
+      "the same chat. If you started Claude Code with a setting that turns hooks off, start it " +
+      "again without that setting. If your organization's Claude Code settings block this " +
+      "project, ask your Claude Code administrator to allow project hooks. If AI-DLC was set up " +
+      "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
+      "<entry>.",
     agentStep:
       "Claude Code is not running AI-DLC's hooks in this project. First show the person this " +
       'line: "Choose Yes when Claude Code asks to change this project\'s settings, then answer ' +
@@ -43,9 +45,10 @@ const manifest: HarnessManifest = {
       "does not exist; Claude Code asks the person before it changes its settings. It works in " +
       "this chat: do not ask for a restart and do not mention /hooks. Then run <next> and act " +
       "on what it returns, so the waiting question shows again. If it brings back this same " +
-      "message, the block is the organization's: show this line instead and end your turn: " +
-      '"Your organization\'s Claude Code settings block this project. Ask your Claude Code ' +
-      'administrator to allow project hooks."',
+      "message, the hooks are still off from outside this project: show this line instead and " +
+      'end your turn: "Claude Code is still starting with its hooks off. If you started it with a ' +
+      "setting that turns hooks off, start it again without that setting; otherwise ask your " +
+      'Claude Code administrator to allow project hooks."',
   },
   harnessDir: ".claude",
   orchestratorSkillPath: ".claude/skills/aidlc/SKILL.md",
