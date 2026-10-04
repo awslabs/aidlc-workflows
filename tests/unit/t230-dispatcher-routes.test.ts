@@ -3025,6 +3025,40 @@ describe("t230 dispatcher help and errors", () => {
   });
 });
 
+// A copy runs its tools through `bun <harness>/tools/aidlc.ts`, which spawns
+// each tool. Input piped to the command reaches the tool, read to its end even
+// when the writer is slow, as in the compiled binary.
+describe("t230 a tool run through the dispatcher reads piped input", () => {
+  test("validate-grid reads a proposal written slowly to stdin", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-stdin-"));
+    tempProjects.add(projectDir);
+    cpSync(join(REPO_ROOT, "dist", "claude"), projectDir, { recursive: true });
+    const graph = JSON.parse(
+      readFileSync(join(projectDir, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string }>;
+    const proposal = JSON.stringify({ stages: Object.fromEntries(graph.map(({ slug }) => [slug, "EXECUTE"])) });
+    // A pipe, as a shell or a script's subprocess gives it.
+    const child = Bun.spawn([
+      BUN,
+      join(projectDir, ".claude", "tools", "aidlc.ts"),
+      "engine", "graph", "validate-grid", "--project-type", "greenfield", "--proposal", "/dev/stdin",
+    ], { cwd: projectDir, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const half = Math.floor(proposal.length / 2);
+    child.stdin.write(proposal.slice(0, half));
+    child.stdin.flush();
+    await new Promise((wait) => setTimeout(wait, 400));
+    child.stdin.write(proposal.slice(half));
+    child.stdin.end();
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, `${stdout}${stderr}`).toBe(0);
+    expect(JSON.parse(stdout).valid, stdout).toBe(true);
+  });
+});
+
 describe("t230 dispatcher hook routing", () => {
   test("adapter routing separates harness, target, and extra arguments", () => {
     const codex = resolveAction( ["engine", "adapter", "codex", "session-start"]);

@@ -2106,6 +2106,9 @@ function runDelegateDev(tool: string, args: string[]): number {
   try {
     const child = Bun.spawnSync([bunExecutable(), toolPath(tool), ...args], { /* dev-mode bun spawn */
       cwd: process.cwd(),
+      // The tool reads the same stdin it would read in the compiled binary,
+      // so input piped to the command (`--proposal /dev/stdin`) arrives.
+      stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",
       env: {

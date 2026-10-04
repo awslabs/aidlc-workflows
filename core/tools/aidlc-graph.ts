@@ -3540,7 +3540,10 @@ const COMMANDS: Record<string, Handler> = {
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(proposalPath, "utf-8"));
+      // A proposal piped in (`--proposal /dev/stdin` or `-`) is read from the
+      // command's own input to its end, whatever kind of pipe carries it.
+      const fromStdin = proposalPath === "/dev/stdin" || proposalPath === "-";
+      parsed = JSON.parse(readFileSync(fromStdin ? 0 : proposalPath, "utf-8"));
     } catch (err) {
       console.error(
         `validate-grid: cannot read ${proposalPath}: ${errorMessage(err)}` +
