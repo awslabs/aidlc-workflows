@@ -41,6 +41,27 @@ export const RECORDABLE_PROJECT_BYPASSES = [
 export type RecordableProjectBypass =
   (typeof RECORDABLE_PROJECT_BYPASSES)[number];
 
+// The recorded switches that take a check away from the person, in the words
+// the person hears while one is off. Usage tracking, sensors and learnings take
+// no decision from them, so they stay quiet.
+export const PERSON_CHECK_SWITCH_LABELS: Readonly<
+  Partial<Record<RecordableProjectBypass, string>>
+> = {
+  AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "plan approval check",
+  AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "review freeze check",
+  AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "reviewer read scope check",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "human presence check",
+  AIDLC_DISABLE_SUMMARY_CONFIRMATION: "summary confirmation",
+  AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "summary confirmation check",
+  AIDLC_SKIP_ARTIFACT_GUARD: "stage output check",
+  AIDLC_SKIP_REVISION_BACKSTOP: "revision backstop",
+  AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "pipeline handoff check",
+};
+
+export const PERSON_CHECK_SWITCHES = RECORDABLE_PROJECT_BYPASSES.filter(
+  (name) => PERSON_CHECK_SWITCH_LABELS[name] !== undefined,
+);
+
 export type ProjectFlagsRecord = {
   schemaVersion: 1;
   defaultScope?: string;

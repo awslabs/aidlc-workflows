@@ -64,7 +64,7 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
 // agent identity, reads the scripts here and asks delegatedLifecycleCommand
 // about each verb to build each persona's own shell deny.
 const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
-const DELEGATED_JUMP_VERBS = ["execute"];
+const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
 // Team Unit coordination: claims, publication, the merge pin, the human merge
 // gate, and landing. merge-status and status are reads.
 const DELEGATED_UNIT_VERBS = ["adopt", "claim", "release", "participate", "publish", "pin", "gate", "land"];
@@ -353,7 +353,7 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const verb = match[4];
     if (tool === "orchestrate" && verb === "report") return true;
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
-    if (tool === "jump" && verb === "execute") return true;
+    if (tool === "jump" && (verb === "execute" || verb === "reopen")) return true;
   }
   const nativeInvocation =
     /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+(orchestrate|state|jump)[ \t]+([a-z][a-z0-9-]*)\b/g;
@@ -362,7 +362,7 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const verb = match[2];
     if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
     if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
-    if (tool === "jump" && verb === "execute") return true;
+    if (tool === "jump" && (verb === "execute" || verb === "reopen")) return true;
   }
   return false;
 }

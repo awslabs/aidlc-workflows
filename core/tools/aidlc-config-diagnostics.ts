@@ -26,7 +26,11 @@ import {
   kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
-import type { ModelHarness } from "./aidlc-model-policy.ts";
+import {
+  HARNESS_PRODUCT_NAMES,
+  sessionSetsAgentModels,
+  type ModelHarness,
+} from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
   localSettingsPath,
@@ -64,6 +68,17 @@ export function harnessOwnsModelAccess(
   harness: ModelHarness,
 ): harness is Exclude<ModelHarness, BedrockOrientedHarness> {
   return HARNESS_OWNED_MODEL_ACCESS.has(harness);
+}
+
+// On hosts where the session sets every agent's model (Copilot, Cursor), no
+// provider answer means the session's own model access, as the Models row
+// says: not a gap for setup, doctor or `--check`. Bedrock stays a choice there.
+export function providerAnswerIsTheSession(harness: ModelHarness): boolean {
+  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+}
+
+export function sessionModelAccessFact(harness: ModelHarness): string {
+  return `model access comes with your ${HARNESS_PRODUCT_NAMES[harness]} session`;
 }
 
 export function ownedModelAccessFact(product: string): string {
@@ -3149,6 +3164,8 @@ export function providerDoctorCheck(
         // gap only where AI-DLC configures the provider.
         label: record
           ? "Providers: recorded answers have no unmet actions"
+          : providerAnswerIsTheSession(selected.harness)
+          ? `Providers: ${sessionModelAccessFact(selected.harness)}; no answer needed`
           : "Providers: using shipped fallback; no recorded answers",
       };
     }
@@ -3181,6 +3198,9 @@ export function providerDoctorCheck(
 export function flagsDoctorCheck(
   projectDir: string,
   harnessDirHint?: string,
+  // The lines naming each check a recorded switch has turned off (doctor
+  // builds them; this module stays free of the engine library).
+  switchesOff: readonly string[] = [],
 ): DiagnosticDoctorCheck {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -3194,6 +3214,16 @@ export function flagsDoctorCheck(
       selected.harness,
       record,
     );
+    // A check switched off stays visible: a warning, never a failure.
+    const off = switchesOff;
+    if (off.length > 0) {
+      return {
+        pass: false,
+        severity: "warn",
+        label: `Flags: ${off.length} check${off.length === 1 ? "" : "s"} switched off`,
+        fix: [...off, ...issues.map((issue) => issue.message)].join(" "),
+      };
+    }
     return issues.length === 0
       ? {
           pass: true,

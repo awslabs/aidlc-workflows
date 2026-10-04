@@ -4350,10 +4350,13 @@ process.stdin.on("end", () => server.stop(true));
       stdin: "pipe", stdout: "ignore", stderr: "pipe",
     });
     const remoteStderr = new Response(remote.stderr).text();
-    const requests = (): Array<{ event: string; delayed?: boolean }> =>
-      existsSync(trace)
-        ? readFileSync(trace, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
-        : [];
+    // The server can still be appending when this reads (the delayed request
+    // logs after finalize returns), so parse only newline-terminated lines.
+    const requests = (): Array<{ event: string; delayed?: boolean }> => {
+      if (!existsSync(trace)) return [];
+      const text = readFileSync(trace, "utf-8");
+      return text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    };
     const failures: unknown[] = [];
     try {
       const startupDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;

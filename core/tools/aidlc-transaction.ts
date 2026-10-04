@@ -30,7 +30,12 @@ import {
   machineTransactionRoot,
   windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
-import { runWithOwnerStampedLock, withAuditLock } from "./aidlc-lib.ts";
+import {
+  processGeneration,
+  processStartedAtMs,
+  runWithOwnerStampedLock,
+  withAuditLock,
+} from "./aidlc-lib.ts";
 
 export type TransactionOperation =
   | { kind: "write"; path: string; data: string; mode?: number; expected?: string | "absent" }
@@ -339,6 +344,27 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+// A killed holder's PID can pass to a later process, which cannot hold a lock
+// written before it started. Locks record the holder's process generation;
+// a lock from a release that recorded none is judged by when it was written,
+// with a margin for timestamp rounding and small clock steps.
+const LATER_PROCESS_MARGIN_MS = 2_000;
+
+function heldByLaterProcess(pid: number, recorded: unknown, ownerPath: string): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2_147_483_647) return false;
+  if (typeof recorded === "string" && recorded) {
+    const observed = processGeneration(pid);
+    return observed !== null && observed !== recorded;
+  }
+  const started = processStartedAtMs(pid);
+  if (started === null) return false;
+  try {
+    return started > lstatSync(ownerPath).mtimeMs + LATER_PROCESS_MARGIN_MS;
+  } catch {
+    return false;
+  }
+}
+
 function clearStaleLock(lockPath: string): void {
   const directory = pathExists(lockPath) && lstatSync(lockPath).isDirectory();
   const ownerPath = directory ? join(lockPath, "owner.json") : lockPath;
@@ -352,7 +378,13 @@ function clearStaleLock(lockPath: string): void {
     if (!directory && (error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new Error(`cannot verify transaction lock ${lockPath}`);
   }
-  let lock: { schemaVersion?: unknown; pid?: unknown; host?: unknown; token?: unknown } = {};
+  let lock: {
+    schemaVersion?: unknown;
+    pid?: unknown;
+    host?: unknown;
+    token?: unknown;
+    processGeneration?: unknown;
+  } = {};
   try {
     lock = JSON.parse(raw) as typeof lock;
   } catch {
@@ -377,7 +409,11 @@ function clearStaleLock(lockPath: string): void {
       "directory locking requires one host and one shared mount",
     );
   }
-  if (typeof lock.pid === "number" && processIsAlive(lock.pid)) {
+  if (
+    typeof lock.pid === "number" &&
+    processIsAlive(lock.pid) &&
+    !heldByLaterProcess(lock.pid, lock.processGeneration, ownerPath)
+  ) {
     throw new Error(`another AI-DLC mutation holds ${lockPath}`);
   }
   const moved = join(dirname(lockPath), `.aidlc-lock-dead-${randomUUID()}`);
@@ -402,6 +438,9 @@ function clearStaleLock(lockPath: string): void {
     throw new Error(`another AI-DLC mutation holds ${lockPath}`);
   }
   rmSync(moved, { recursive: directory, force: true });
+  process.stderr.write(
+    "aidlc: an earlier AI-DLC command stopped before it finished, so its lock was cleared.\n",
+  );
 }
 
 type HeldLock =
@@ -465,6 +504,12 @@ function transactionHostIdentity(): string {
   return transactionHost;
 }
 
+// Omitted where the platform has no generation; older releases ignore it.
+function processGenerationField(): { processGeneration?: string } {
+  const generation = processGeneration(process.pid);
+  return generation ? { processGeneration: generation } : {};
+}
+
 function acquireDirectoryLock(root: string, lockPath: string, staging: string): HeldLock {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -482,6 +527,7 @@ function acquireDirectoryLock(root: string, lockPath: string, staging: string): 
       host: transactionHostIdentity(),
       token: randomUUID(),
       staging: basename(staging),
+      ...processGenerationField(),
     })}\n`;
     let descriptor: number | null = null;
     try {
@@ -689,7 +735,11 @@ function acquireLock(root: string, lockPath: string, staging: string): HeldLock 
     let descriptor: number | null = null;
     try {
       descriptor = openSync(candidate, "wx", 0o600);
-      const identity = `${JSON.stringify({ pid: process.pid, staging: basename(staging) })}\n`;
+      const identity = `${JSON.stringify({
+        pid: process.pid,
+        staging: basename(staging),
+        ...processGenerationField(),
+      })}\n`;
       writeSync(descriptor, identity);
       fsyncSync(descriptor);
       linkTransactionLock(root, candidate, lockPath);

@@ -239,7 +239,10 @@ function assertDeletionPlan(
     !Array.isArray(plan.preserved)
   ) throw new Error("Windows uninstall requires an explicit file plan");
   const rootKey = planPathKey(root);
-  const commandKey = planPathKey(command);
+  // A bin directory may sit outside the root; the only files there are
+  // aidlc.cmd and the Git Bash launcher beside it.
+  const commandKeys = [planPathKey(command), planPathKey(join(dirname(command), "aidlc"))];
+  const besideCommand = (path: string): boolean => commandKeys.includes(planPathKey(path));
   const withinRoot = (path: string): boolean =>
     planPathKey(path).startsWith(`${rootKey}${sep}`);
   const absolutePath = (path: unknown): path is string =>
@@ -251,7 +254,7 @@ function assertDeletionPlan(
     planPathKey(path) !== planPathKey(parse(path).root) &&
     planPathKey(path) !== planPathKey(homedir());
   for (const path of plan.preserved) {
-    if (!absolutePath(path) || (!withinRoot(path) && planPathKey(path) !== commandKey)) {
+    if (!absolutePath(path) || (!withinRoot(path) && !besideCommand(path))) {
       throw new Error("invalid Windows uninstall preserved path");
     }
   }
@@ -264,7 +267,7 @@ function assertDeletionPlan(
       !file || typeof file !== "object" || Array.isArray(file) ||
       Object.keys(file).sort().join(",") !== "expected,path" ||
       !safePath(file.path) || planPathKey(file.path) === rootKey ||
-      (!withinRoot(file.path) && planPathKey(file.path) !== commandKey) ||
+      (!withinRoot(file.path) && !besideCommand(file.path)) ||
       typeof file.expected !== "string" || !/^sha256:[0-9a-f]{64}$/.test(file.expected) ||
       (!purge && settings.has(planPathKey(file.path))) ||
       files.has(planPathKey(file.path)) ||
@@ -373,7 +376,7 @@ function Assert-UninstallTargetBoundary([string]$Path, [bool]$Directory) {
       $Path -match '(?:^|[\\/])\.git(?:[\\/]|$)' -or
       ($Path -eq $diskRoot -and -not $Directory) -or
       ($Path -ne $diskRoot -and -not (Test-UninstallWithin $Path $diskRoot) -and
-        ($Directory -or $Path -ne $diskCommand))) {
+        ($Directory -or ($Path -ne $diskCommand -and $Path -ne $diskGitBashLauncher)))) {
     throw "outside Windows uninstall target boundary: $Path"
   }
 }
@@ -707,6 +710,9 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
     "Assert-PathCleanup $journal $command",
     "$diskRoot = Convert-UninstallPath $root",
     "$diskCommand = Convert-UninstallPath $command",
+    // The Git Bash launcher beside aidlc.cmd: the one other file a bin
+    // directory outside the root holds.
+    "$diskGitBashLauncher = Convert-UninstallPath ([IO.Path]::Combine([IO.Path]::GetDirectoryName($command), 'aidlc'))",
     "$diskFence = Convert-UninstallPath $fence",
     "$diskJournal = Convert-UninstallPath $JournalPath",
     "$diskCleanup = Convert-UninstallPath $cleanup",
@@ -731,7 +737,7 @@ export function windowsUninstallCleanupScript(journal: WindowsUninstallJournal):
   $resuming = [string]$journal.progress -in @('removing', 'finalizing')
   $keep = @($deletionScope.preserved | ForEach-Object { Convert-UninstallPath ([string]$_) })
   foreach ($path in $keep) {
-    if ($path -ne $diskCommand -and -not (Test-UninstallWithin $path $diskRoot)) {
+    if ($path -ne $diskCommand -and $path -ne $diskGitBashLauncher -and -not (Test-UninstallWithin $path $diskRoot)) {
       throw 'invalid Windows uninstall preserved path'
     }
   }

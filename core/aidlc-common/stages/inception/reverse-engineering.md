@@ -250,9 +250,11 @@ project's own and is scanned as usual.
 Tell the developer to scan only what people wrote: follow the repo's
 `.gitignore` files, and skip build outputs, dependency folders, and IDE and
 tool caches even where nothing ignores them (for example .NET `bin/` and
-`obj/` beside a project file). The "What to Skip" section of
+`obj/` beside a project file), without opening them. The "What to Skip"
+section of
 `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md` lists
-them and says when a folder with one of those names holds hand-written code.
+them and says how the files beside a folder tell when one of those names holds
+hand-written code.
 
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
@@ -286,6 +288,12 @@ Delegate to Task tool with aidlc-architect-agent:
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
 - Pass the developer scan handoff path, not its body; the architect reads that file
 - Include workspace state from aidlc-state.md
+- Tell the architect that when it checks the project's source it follows the
+  developer's rule: it leaves AI-DLC's own install and every folder the "What
+  to Skip" section of
+  `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md`
+  skips (for example .NET `bin/` and `obj/` beside a project file) unlisted
+  and unopened, and names none of their files in the artifacts
 
 Architect synthesizes scan results into a complete 9-artifact candidate:
 1. **business-overview.md** — Business domain, purpose, key functionality
@@ -462,6 +470,9 @@ Use stage-protocol.md completion template:
   ```
 
   (COVERS, or no prior store, needs no warning line.)
+- Leave the knowledge base's freshness check out of the summary (what its
+  fingerprint covers, what would make it out of date): the person has nothing
+  to do about it.
 - Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
 - Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes. If any repo returned NARROWER, the Approve option's description must say which stores now have narrower verified coverage (e.g. "Accept the narrower verified coverage for <repos>; continue to Requirements Analysis").
 

@@ -4665,6 +4665,44 @@ describe("t294 config diagnostics CLI", () => {
       pass: true,
       label: "Providers: using shipped fallback; no recorded answers",
     }));
+
+    // Where the session sets every agent's model, no answer means the
+    // session's own model access: `--check` and doctor say what setup says.
+    for (const [harness, harnessDir, product, where] of [
+      ["copilot", ".aidlc", "GitHub Copilot", ""],
+      ["cursor", ".cursor", "Cursor", " in the Cursor IDE"],
+    ] as const) {
+      const project = install(harness);
+      const check = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], project, env);
+      expect(check.status, check.stdout + check.stderr).toBe(0);
+      expect(check.stdout).toContain(
+        `providers needs no answer for ${harness}; model access comes with your ${product} session; ` +
+          `to use your own Amazon Bedrock access${where} instead, run '`,
+      );
+      expect(check.stdout).toContain(` config providers --harness ${harness}'`);
+      expect(check.stdout).not.toContain("shipped fallback");
+      // Run from elsewhere, the command still names the project.
+      const elsewhere = temp(`aidlc-t294-elsewhere-${harness}-`);
+      const away = run([
+        "config",
+        "providers",
+        "--project-dir",
+        project,
+        "--check",
+      ], elsewhere, env);
+      expect(away.status, away.stdout + away.stderr).toBe(0);
+      expect(away.stdout).toContain(`config providers --harness ${harness} --project-dir `);
+      expect(providerDoctorCheck(project, harnessDir)).toEqual(expect.objectContaining({
+        pass: true,
+        label: `Providers: model access comes with your ${product} session; no answer needed`,
+      }));
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("only Kiro owns its own model access; every other harness is Bedrock-oriented", () => {
