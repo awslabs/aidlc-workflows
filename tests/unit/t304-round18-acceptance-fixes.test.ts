@@ -850,6 +850,28 @@ describe("t304 copied projection configuration", () => {
     }
   }, 120_000);
 
+  test("a harness override pointing at the runtime never turns its printed command into the project's tool", async () => {
+    const runtime = unpackedRuntime("codex");
+    const project = fullCopyProject();
+    // The project ships its own .codex dispatcher, which must never run.
+    mkdirSync(join(project, ".codex", "tools"), { recursive: true });
+    writeFileSync(
+      join(project, ".codex", "tools", "aidlc.ts"),
+      'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("./ran", import.meta.url), "");\n',
+    );
+    writeFileSync(join(project, ".aidlc-version"), "not a release\n");
+    const env = { AIDLC_HARNESS_DIR: relative(project, join(runtime, "..", "..")) };
+    const result = await runAsync([BUN, runtime, "config"], { cwd: project, env });
+    expect(result.status, result.stdout + result.stderr).toBe(2);
+    const fix = result.stdout.split("\n").find((item) => item.startsWith("usage: "))?.slice("usage: ".length) ?? "";
+    expect(fix).toContain(join("codex", ".codex", "tools", "aidlc.ts"));
+    expect(fix).toEndWith(" config --unpin");
+    const followed = await followFix(fix, project, env);
+    expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+    expect(existsSync(join(project, ".codex", "tools", "ran"))).toBe(false);
+    expect(existsSync(join(project, ".aidlc-version"))).toBe(false);
+  }, 120_000);
+
   test("the models view run from another project prints commands for the project it shows", async () => {
     const shown = fullCopyProject();
     const caller = fullCopyProject();

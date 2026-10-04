@@ -2210,8 +2210,11 @@ function sameFile(left: string, right: string): boolean {
 function configInvocationFor(projectDir = process.cwd()): string {
   const invocation = aidlcInvocation();
   if (invocation === "aidlc") return invocation;
-  const toolIn = (root: string) => join(root, runtimeHarnessDir(), "tools", "aidlc.ts");
   const ran = projectedDispatcher();
+  // A projection's relative invocation names the harness directory it was
+  // built for, whatever the environment says the harness is.
+  const harnessDir = ran === null ? runtimeHarnessDir() : basename(dirname(dirname(ran)));
+  const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
   if (ran === null || sameFile(ran, toolIn(projectDir))) {
     return ranFromProject(projectDir)
       ? invocation
