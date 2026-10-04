@@ -2213,10 +2213,14 @@ export function configureChannel(argv: readonly string[]): CommandResult {
       return usage(`--channel must be ${RELEASE_CHANNELS.join(" or ")}`);
     }
     const channel = writeMachineChannel(requested);
-    return success(
-      `release channel set to ${channel}; run aidlc update to install its newest release`,
-      { channel, source: "machine" },
-    );
+    // A plain update never installs an older release, so from a release of
+    // the other channel it waits for a newer one; asked by name it goes now.
+    const running = activeVersion();
+    const next = running && versionChannel(running) !== channel
+      ? `aidlc update moves to a ${channel} release once one is newer than ${running}; ` +
+        `to go to the newest ${channel} release now, run aidlc update --channel ${channel}`
+      : "run aidlc update to install its newest release";
+    return success(`release channel set to ${channel}; ${next}`, { channel, source: "machine" });
   } catch (error) {
     return lifecycleFailureResult(error, argv);
   }

@@ -274,7 +274,13 @@ describe("t331 preview release channel", () => {
 
     // Back to stable is a lower id. A plain update never installs a release
     // older than the one running: it changes nothing and names both ways on.
-    expect((await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env)).status).toBe(0);
+    const followStable = await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env);
+    expect(followStable.status).toBe(0);
+    // From a newer preview, config names the step that goes back now.
+    expect(followStable.stdout).toContain(
+      `release channel set to ${STABLE_CHANNEL}; aidlc update moves to a ${STABLE_CHANNEL} release once one is newer ` +
+        `than ${PREVIEW_2}; to go to the newest ${STABLE_CHANNEL} release now, run aidlc update --channel ${STABLE_CHANNEL}`,
+    );
     const plainBack = await run(LIFECYCLE, ["update", "--release-base-url", stable.baseUrl], project, env);
     expect(plainBack.status, plainBack.stdout + plainBack.stderr).toBe(0);
     expect(plainBack.stdout).toContain(
