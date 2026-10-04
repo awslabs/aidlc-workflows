@@ -434,6 +434,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // From a live Kiro CLI run: "from here on, build one unit at a time; I'll
+  // approve the design after" at a gate. The engine takes the agent's Approve
+  // whatever the wording, so the guidance is what keeps a request that holds no
+  // approval from answering the gate.
+  test("every shipped conductor SKILL and the protocol keep the gate open for a request with no approval in it", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (!/no approval in it[^.]*is not the gate's answer/i.test(body) || !body.includes("keep the gate open for their answer")) {
+        missing.push(`${rel}  missing: a request with no approval in it is not the gate's answer`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   // A misread at Plan Approval is fixed by recording the choice they meant, so
   // they never answer the question twice; "Review the plan" reopens it only
   // after a wrong approval.

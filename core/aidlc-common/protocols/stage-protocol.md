@@ -265,6 +265,10 @@ them in a record and never choose for them.
 - **They approved and asked for something** ("looks fine but rename the
   handler"): record the approval, do what they asked, and say in one line what
   you changed. No second question.
+- **They asked for something with no approval in it** ("from here on, build
+  one unit at a time; I'll approve the design after"): it is not the gate's
+  answer. Do the request, say in one line what you did, and keep the gate open
+  for their answer.
 - **They asked for changes:** record Request Changes. Their words are the
   feedback; pass `--reason` only to add your own summary beside them. Ask
   "What should change?" only when they did not say.
