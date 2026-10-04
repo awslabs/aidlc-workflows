@@ -20,6 +20,7 @@ import {
   manifestGrantsIdeAgentTools,
 } from "../harness/harness-matrix.ts";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
+import { ROUTES } from "../../core/tools/aidlc.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -731,12 +732,15 @@ describe("t148 dist/kiro file structure", () => {
     "x | Invoke-Expression",
   ];
   const MACHINE_VERBS = ["use 2.10.0", "update", "rollback", "uninstall --yes", "system"];
-  // The scripts behind every command that changes the machine's install.
+  // The scripts behind every command that can change the machine's install,
+  // from the dispatcher's route table, so a new one cannot slip under the
+  // conductor's aidlc-* allow.
   const MACHINE_SCRIPTS = [
-    "bun .kiro/tools/aidlc-lifecycle.ts use 2.10.0",
-    "bun .kiro/tools/aidlc-lifecycle.ts",
-    "bun .kiro/tools/aidlc-machine-config.ts global set offline on",
-  ];
+    ...new Set(
+      ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
+        .flatMap((route) => route.tool === undefined ? [] : [route.tool]),
+    ),
+  ].flatMap((tool) => [`bun .kiro/tools/${tool}`, `bun .kiro/tools/${tool} use 2.10.0`]);
 
   test("the Kiro IDE conductor runs AI-DLC's own engine commands as printed, in both channels", () => {
     // Every engine command goes through the dispatcher's engine namespace; a
