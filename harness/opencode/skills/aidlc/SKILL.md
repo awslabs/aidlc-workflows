@@ -46,12 +46,13 @@ the loop. If it reports no active workflow, enter the loop with bare `next`. If
 it reports an active workflow, carry on with it: enter the loop with
 `next --resume`, with no resume menu, and follow the recovery protocol's
 Session resume, including its one SAY line. When the person asks to redo, jump,
-or start fresh, report it with
+or start fresh (at an approval gate too, where it is that request and not the
+gate's answer), report it with
 `report --result resumed --choice <redo|jump|fresh>`
 (add `--target <stage slug>` for the stage they named), act on the returned
 `print`, then continue as directed. This probe applies only to the first call of a bare
 user invocation, never to an internal bare `next` later in the forwarding loop.
-When `$ARGUMENTS` contains `--resume`, skip this probe and menu: pass `--resume`
+When `$ARGUMENTS` contains `--resume`, skip this probe: pass `--resume`
 unchanged to the first `next`, which continues directly.
 
 ```

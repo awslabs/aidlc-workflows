@@ -1369,6 +1369,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /result resumed --user-input/,
         /choice <redo\|jump\|fresh> --user-input/,
         /--description "<the new work>"/,
+        /skip this probe and menu/i,
       ]) {
         if (old.test(text)) stale.push(`${rel}  ${old.source}`);
       }
@@ -1392,6 +1393,25 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(recovery).toContain("--choice <redo|jump|fresh>`");
     expect(recovery).toContain("at an approval gate too");
     expect(recovery).not.toContain("Offer to resume from the last incomplete stage");
+  });
+
+  test("opencode's bare re-entry carries on too, in the tree opencode users get", () => {
+    // opencode has no channel for the session-start hook's context, so its own
+    // skill carries the re-entry rule: a bare /aidlc on active work, at a waiting
+    // approval included, enters with next --resume and asks no menu question.
+    for (const rel of [
+      "harness/opencode/skills/aidlc/SKILL.md",
+      "dist/opencode/.aidlc/skills/aidlc/SKILL.md",
+    ]) {
+      const text = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const start = text.indexOf("**Bare session re-entry on opencode.**");
+      expect(start, rel).toBeGreaterThan(-1);
+      const rule = text.slice(start, text.indexOf("\n\n", start)).replace(/\s+/g, " ");
+      expect(rule, rel).toContain("If it reports an active workflow, carry on with it: enter the loop with `next --resume`, with no resume menu");
+      expect(rule, rel).toContain("including its one SAY line");
+      expect(rule, rel).toContain("(at an approval gate too, where it is that request and not the gate's answer)");
+      expect(rule, rel).not.toMatch(/menu and STOP|Start Fresh|--user-input/);
+    }
   });
 
   test("at an approval gate a redo, jump, or fresh request is that request, not the gate's answer", () => {
