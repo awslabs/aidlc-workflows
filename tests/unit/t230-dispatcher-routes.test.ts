@@ -1078,6 +1078,81 @@ describe("t230 dispatcher route parity", () => {
     );
   });
 
+  test("host hooks in a folder that holds the machine roots refuse and say why", () => {
+    const home = mkdtempSync(join(tmpdir(), "aidlc-t230-home-hooks-"));
+    tempProjects.add(home);
+    const bin = join(home, ".local", "bin");
+    const env = {
+      HOME: home,
+      AIDLC_INSTALL_ROOT: join(home, ".local", "share", "aidlc"),
+      AIDLC_BIN_DIR: bin,
+    };
+    const payload = JSON.stringify({
+      session_id: "t230-home-hooks",
+      cwd: home,
+      tool_name: "bash",
+      tool_input: { command: "echo hi" },
+    });
+    const why = `AI-DLC does not run in ${home}, which holds AI-DLC's own install (`;
+
+    // Copilot and Cursor deny a failed hook without its reason, so their tool
+    // guards refuse in the host's own deny form. The call is still denied.
+    for (const args of [
+      ["engine", "adapter", "copilot", "guard-tool-call"],
+      ["engine", "hook", "copilot-adapter", "guard-tool-call"],
+    ]) {
+      const result = viaDispatcher(args, home, env, payload);
+      expect(result.exitCode, args.join(" ")).toBe(0);
+      const decision = (JSON.parse(result.stdout.toString()) as {
+        hookSpecificOutput: Record<string, string>;
+      }).hookSpecificOutput;
+      expect(decision.hookEventName).toBe("PreToolUse");
+      expect(decision.permissionDecision).toBe("deny");
+      expect(decision.permissionDecisionReason).toContain(why);
+      expect(decision.permissionDecisionReason).toContain(
+        "Start the session from your project's folder.",
+      );
+    }
+    const cursor = viaDispatcher(["engine", "adapter", "cursor", "guards"], home, env, payload);
+    expect(cursor.exitCode).toBe(0);
+    const cursorDecision = JSON.parse(cursor.stdout.toString()) as Record<string, string>;
+    expect(cursorDecision.permission).toBe("deny");
+    expect(cursorDecision.agent_message).toContain(why);
+
+    // Every other host route keeps its exit code, and its first stderr line,
+    // the line hosts show, names the folder and what to do.
+    for (const args of [
+      ["engine", "hook", "plan-approval-guard"],
+      ["engine", "adapter", "copilot", "session-start"],
+      ["engine", "statusline"],
+    ]) {
+      const result = viaDispatcher(args, home, env, payload);
+      expect(result.exitCode, args.join(" ")).toBe(1);
+      expect(result.stdout.toString(), args.join(" ")).toBe("");
+      const firstLine = result.stderr.toString().split("\n")[0];
+      expect(firstLine, args.join(" ")).toContain(why);
+      expect(firstLine, args.join(" ")).toContain("start the session from your project's folder");
+    }
+    expect(existsSync(join(home, "aidlc"))).toBe(false);
+
+    // However a project comes to overlap the install, its tool guard denies.
+    const project = makeProject();
+    const named = viaDispatcher(
+      ["engine", "adapter", "copilot", "guard-tool-call"],
+      project,
+      { AIDLC_INSTALL_ROOT: project, AIDLC_BIN_DIR: bin },
+      payload,
+    );
+    expect(named.exitCode).toBe(0);
+    const namedDecision = (JSON.parse(named.stdout.toString()) as {
+      hookSpecificOutput: Record<string, string>;
+    }).hookSpecificOutput;
+    expect(namedDecision.permissionDecision).toBe("deny");
+    expect(namedDecision.permissionDecisionReason).toContain(
+      `AI-DLC does not run in ${project}, which is inside AI-DLC's own install (`,
+    );
+  });
+
   test("--project-dir is global and may be interleaved with workspace tokens", () => {
     const projectDir = makeProject();
     const routed = viaDispatcher(

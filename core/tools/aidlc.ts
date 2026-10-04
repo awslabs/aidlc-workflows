@@ -3075,6 +3075,43 @@ async function projectMachineOverlapError(
     : null;
 }
 
+// A host runs hooks, adapters, and the statusline on its own, so this refusal
+// reaches the person only through the host. Copilot's and Cursor's tool guards
+// answer on stdout and deny a failed hook without saying why, so they get their
+// own deny form; every other host route keeps its exit code and says why on the
+// first stderr line, the line hosts show. It stays a refusal: a guard that
+// cannot run never lets the call through.
+async function refuseHostRouteInMachineRoot(argv: readonly string[]): Promise<number> {
+  const projectDir = dispatcherProjectDirFrom(argv);
+  const { binRoot, installRoot, policyPathWithin } = await import("./aidlc-install-paths.ts");
+  const roots = [installRoot(), binRoot()];
+  const inside = roots.find((root) => policyPathWithin(projectDir, root));
+  const root = inside ?? roots.find((candidate) => policyPathWithin(candidate, projectDir)) ?? roots[0];
+  const why = `AI-DLC does not run in ${projectDir}, which ${inside ? "is inside" : "holds"} AI-DLC's own install (${root})`;
+  let action: Action | null = null;
+  try {
+    action = resolveAction([...argv]);
+  } catch {
+    action = null;
+  }
+  if (
+    action?.type === "adapter" &&
+    ((action.harness === "copilot" && action.target === "guard-tool-call") ||
+      (action.harness === "cursor" && action.target === "guards"))
+  ) {
+    // Take the payload the host is still writing, so the answer does not meet
+    // a closed pipe.
+    await readStdin();
+    const reason = `${why}, so it stopped this call. Start the session from your project's folder.`;
+    const decision = action.harness === "copilot"
+      ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
+      : { permission: "deny", agent_message: reason };
+    text(1, `${JSON.stringify(decision)}\n`);
+    return 0;
+  }
+  return renderDispatcherFailure(argv, 1, `${why}; start the session from your project's folder`);
+}
+
 function effectiveMutationScope(
   route: Route,
   argv: readonly string[],
@@ -3168,7 +3205,10 @@ export async function main(rawArgv: string[]): Promise<void> {
   if (route) {
     const overlapError = await projectMachineOverlapError(route, argv);
     if (overlapError) {
-      process.exitCode = renderDispatcherFailure(argv, 1, overlapError);
+      process.exitCode =
+        route.routeOnly === "hook" || route.routeOnly === "statusline" || route.routeOnly === "adapter"
+          ? await refuseHostRouteInMachineRoot(argv)
+          : renderDispatcherFailure(argv, 1, overlapError);
       return;
     }
   }
