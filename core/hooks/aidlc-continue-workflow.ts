@@ -2037,12 +2037,14 @@ const shouldBlock = copilotSession
   : decideBlock(projectDir, stateContent, directive, stopHookActive);
 if (!shouldBlock) {
   // The guard working as designed, not a failure: this is also how a person
-  // who pauses or interrupts the turn is let go.
-  recordHookTrace(
-    projectDir,
-    HOOK_NAME,
-    `recursion guard released the stop (no-progress block cap ${blockCap(stateContent)} reached; stop_hook_active=${stopHookActive})`,
-  );
+  // who pauses or interrupts the turn is let go. An autonomous run has no
+  // person to stop it, so there the release is a stall doctor reports.
+  const release = `recursion guard released the stop (no-progress block cap ${blockCap(stateContent)} reached; stop_hook_active=${stopHookActive})`;
+  if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+    recordHookDrop(projectDir, HOOK_NAME, release);
+  } else {
+    recordHookTrace(projectDir, HOOK_NAME, release);
+  }
   return allowStop();
 }
 

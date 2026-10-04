@@ -481,11 +481,11 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
   // =========================================================================
   // (6) RECURSION RELEASE against the REAL engine (light re-confirm; t121
   // owns the exhaustive matrix). Real PENDING engine + counter seeded AT the
-  // cap + stop_hook_active:true -> RELEASE with a drop record. A stuck loop
+  // cap + stop_hook_active:true -> RELEASE with a trace line. A stuck loop
   // never traps the session even when the directive is genuinely pending.
   // =========================================================================
   test(
-    "(real engine) the recursion guard releases a genuinely-pending stop at the cap: no block, exit 0, drop record written",
+    "(real engine) the recursion guard releases a genuinely-pending stop at the cap: no block, exit 0, trace line written",
     () => {
       const proj = setupIntegrationProject({
         withState: "state-final-stage.md",

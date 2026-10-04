@@ -3202,6 +3202,12 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       expect((JSON.parse(outs[i]) as { decision?: string }).decision).toBe("block");
     }
     expect(outs[7]).toBe(""); // released only at the autonomous cap of 8
+    // No person stops an unattended run, so its release is a stall doctor
+    // reports: a drop, not a trace line.
+    const healthDir = join(seededRecordDir(proj), ".aidlc-engine/hooks-health");
+    expect(readFileSync(join(healthDir, "continue-workflow.drops"), "utf-8")).toContain(
+      "recursion guard released the stop (no-progress block cap 8 reached; stop_hook_active=false)",
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================

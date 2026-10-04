@@ -3318,13 +3318,15 @@ export function firingHooksLastFired(projectDir: string, now = Date.now()): stri
 // A hook failure this recent is a doctor warning; an older one is history.
 const HOOK_FAILURE_RECENT_MS = 24 * 60 * 60 * 1000;
 
-// Before the Stop hook wrote its normal waits and its recursion-guard release
-// to continue-workflow.trace it wrote them to its .drops file, each carrying
-// one of these fixed fragments, which none of its failure reasons carries. A
-// record upgraded mid-workflow keeps those lines, so doctor skips them rather
-// than report them as failures.
+// Before the Stop hook wrote its normal waits and its interactive
+// recursion-guard release to continue-workflow.trace it wrote them to its
+// .drops file, each carrying one of these fixed fragments, which none of its
+// failure reasons carries. A record upgraded mid-workflow keeps those lines, so
+// doctor skips them rather than report them as failures. An interactive run
+// released at cap 2; an autonomous run's release (cap 8) is a stall and stays
+// a failure.
 const LEGACY_STOP_HOOK_TRACE_FRAGMENTS = [
-  "recursion guard released the stop (no-progress block cap",
+  "recursion guard released the stop (no-progress block cap 2 reached",
   "is waiting on the human; allowing the stop before the shared next probe",
   "at the exact post-create fresh-session handoff boundary",
   "at the exact intent handoff boundary (create or switch)",
