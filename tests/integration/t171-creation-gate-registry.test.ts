@@ -802,8 +802,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       // Work moving on in another chat is no change to the question's records,
       // so the choice stands. Separate new work acts on none of them, so even a
       // changed list of records changes nothing for it; continue and reshape
-      // keep the route and ask only which piece of work, from the work there is
-      // now.
+      // keep the route and offer only the listed work still there.
       const progressRecord = (record: string): void => {
         const statePath = join(intentsDir(proj), record, "aidlc-state.md");
         writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Revision Count**: 1\n`, "utf-8");
@@ -841,21 +840,30 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         });
       }
 
-      for (const text of ["1", "Part of existing work", "3", "Reshape existing work"]) {
-        test(`${JSON.stringify(text)} after the listed records changed keeps the route and asks only which piece of work`, () => {
+      for (const [text, field] of [
+        ["1", "select_commands"],
+        ["Part of existing work", "select_commands"],
+        ["3", "reshape_commands"],
+        ["Reshape existing work", "reshape_commands"],
+      ] as const) {
+        test(`${JSON.stringify(text)} after other work was added keeps the route and offers the listed work, each choice usable`, () => {
           seedTwoIntentsNoCursor();
-          routingAsk();
+          const ask = routingAsk();
           addRecordUnselected();
           const before = questionCount();
           const d = directive(text);
           expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
-          expect([...d.available_intents].sort()).toEqual([...recordDirs(proj)].sort());
-          expect(d.select_commands.map((row: { selector: string }) => row.selector)).toEqual(d.available_intents);
+          expect(d.available_intents).toEqual(ask.available_intents);
+          expect(d.select_commands).toEqual(ask[field]);
           expect(questionCount(), "no new question is asked").toBe(before);
+          for (const { command } of d.select_commands as Array<{ command: string }>) {
+            const chosen = emitted(command);
+            expect(chosen.kind, JSON.stringify(chosen).slice(0, 300)).toBe("print");
+          }
         });
       }
 
-      test("the continue option after the sole listed record was replaced asks which one, never selects it unasked", () => {
+      test("the continue option after the sole listed record was replaced asks again with the request kept, never selects it unasked", () => {
         const record = seedOneIntentNoCursor();
         const ask = routingAsk();
         const registryPath = join(intentsDir(proj), "intents.json");
@@ -864,9 +872,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(uuid).toBeDefined();
         writeFileSync(registryPath, registry.replaceAll(uuid!, "01a10000-0000-7000-8000-000000000000"), "utf-8");
         const d = directive("Part of existing work");
-        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
+        expect(d.new_work_description).toBe(DESCRIPTION);
         expect(d.available_intents).toEqual([record]);
-        expect(d.select_commands).toEqual(ask.select_commands);
+        expect(ask.select_commands).toHaveLength(1);
         expect(existsSync(cursorPath(proj)), "nothing is selected unasked").toBe(false);
       });
 

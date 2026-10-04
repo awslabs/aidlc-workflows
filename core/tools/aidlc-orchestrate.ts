@@ -1911,16 +1911,15 @@ function routingOptionReply(
 // The routing question a reply that only names one of its options answers: the
 // question stored most recently, about work that has not moved since: the one workflow it was asked about. Asked while none
 // was selected, separate new work acts on none of its records, so it answers
-// whatever happened to them; continue and reshape get the records there are
-// now, still unselected (`records`), and whether they are the same records
-// the question listed (`listed`). A bare number
+// whatever happened to them; continue and reshape get the records it listed
+// that are still there with the same identity, none selected (`records`). A bare number
 // also needs nothing asked after it: no question logged since, and no turn of
 // the person's besides this reply. Anything else is the person's own words,
 // asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
-): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null; listed: boolean } | null {
+): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null } | null {
   try {
     const question = latestQuestion(projectDir);
     const askedAbout = question?.askedAbout;
@@ -1937,11 +1936,10 @@ function routingQuestionAnswer(
     // none, the same.
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     let records: UnselectedRecords | null = null;
-    let listed = false;
     if (pick) {
-      const now = option.route === "separate" ? null : unselectedRecords(projectDir);
+      const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
+        askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
       records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
-      listed = records !== null && unselectedRecordsDigest(records.selectable) === question.stateSha256;
     } else {
       const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
       if (!target) return null;
@@ -1963,17 +1961,17 @@ function routingQuestionAnswer(
         return null;
       }
     }
-    return { question, route: option.route, records, listed };
+    return { question, route: option.route, records };
   } catch {
     return null;
   }
 }
 
-// "Part of existing work" or "Reshape existing work" said back while more than
-// one record is there to pick, or the records are not the ones the question
-// listed: the person chose the option, not yet which work. Ask only that,
-// as the typed record picker: each record there now a choice, and its command
-// the one the question would have run for it. Record names stay data in the
+// "Part of existing work" or "Reshape existing work" said back while the
+// question listed more than one record: the person chose the option, not yet
+// which work. Ask only that, as the typed record picker: each listed record
+// still there a choice, and its command the one the question would have run
+// for it. Record names stay data in the
 // choices and in the question's list, never in an instruction.
 function pickedRouteRecordAsk(
   question: StoredQuestion,
@@ -3481,9 +3479,12 @@ type UnselectedRecords = {
 
 // The work a person can pick in the selected space while none is selected:
 // the unfinished records, the ones present in this checkout, the ones a
-// session can select, and how the questions about them list them. Null when
-// nothing here is unfinished work or a cursor already resolves.
-function unselectedRecords(projectDir: string): UnselectedRecords | null {
+// session can select (and `keep`), and how the questions about them list them.
+// Null when nothing here is unfinished work or a cursor already resolves.
+function unselectedRecords(
+  projectDir: string,
+  keep: (record: UnselectedRecords["selectable"][number]) => boolean = () => true,
+): UnselectedRecords | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived intents are retired work: they never block creation and are never
@@ -3527,7 +3528,7 @@ function unselectedRecords(projectDir: string): UnselectedRecords | null {
     isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
-  );
+  ).filter(keep);
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
@@ -3574,9 +3575,9 @@ function unselectedRecords(projectDir: string): UnselectedRecords | null {
 }
 
 // Which records the routing question listed: each selectable record's name and
-// identity, never its progress, so work moving on in another chat changes
-// nothing here. A reply naming continue or reshape acts on the one record
-// listed, unasked, only while this is unchanged.
+// identity, never its progress. It marks a question asked while none was
+// selected as answerable by an option; the answer acts only on listed records
+// still there with the same name and uuid.
 function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): string {
   return createHash("sha256")
     .update(selectable.map(({ intent, selector }) => `${selector}\n${intent.uuid ?? ""}`).join("\n"), "utf-8")
@@ -5742,13 +5743,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
   // Asked while no work was selected, continue and reshape act on a record the
-  // person picks: with the one the question listed still the only one, that is
-  // the one; otherwise only which one is left to ask, from the work there is
-  // now. With work selected since, they run the question's own late answer
-  // below (`--continue` / `compose --request`), which acts on the listed work
-  // selected now.
+  // person picks from the ones the question listed that are still there: with
+  // one listed, that is the one; with more, only which one is left to ask.
+  // With none of them left, or work selected since, they run the question's
+  // own late answer below (`--continue` / `compose --request`), which acts on
+  // the listed work selected now or asks again, keeping the request.
   const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
-  if (routingAnswer && pickedRecords && (pickedRecords.selectable.length > 1 || !routingAnswer.listed)) {
+  if (
+    routingAnswer && pickedRecords &&
+    (routingAnswer.question.askedAbout?.targets.length ?? 0) > 1
+  ) {
     emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
     return;
   }
