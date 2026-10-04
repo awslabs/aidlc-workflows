@@ -3177,6 +3177,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const b2 = runHook(proj, '{"stop_hook_active":false}', "run-stage"); // count 2 >= cap 2 -> RELEASE
     expect((JSON.parse(b1.out) as { decision?: string }).decision).toBe("block");
     expect(b2.out).toBe(""); // released at the interactive cap of 2
+    // A release is the guard working, and how a person who pauses is let go:
+    // a trace line, never a failure for doctor to report.
+    const healthDir = join(seededRecordDir(proj), ".aidlc-engine/hooks-health");
+    expect(readFileSync(join(healthDir, "continue-workflow.trace"), "utf-8")).toContain(
+      "recursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=false)",
+    );
+    expect(existsSync(join(healthDir, "continue-workflow.drops"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(g) AUTONOMOUS default cap (8): the SAME sequence does NOT release at 2, keeps blocking through 7, releases only at 8", () => {

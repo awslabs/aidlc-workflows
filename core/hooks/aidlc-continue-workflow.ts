@@ -2036,7 +2036,9 @@ const shouldBlock = copilotSession
   ? markerCount?.shouldBlock ?? false
   : decideBlock(projectDir, stateContent, directive, stopHookActive);
 if (!shouldBlock) {
-  recordHookDrop(
+  // The guard working as designed, not a failure: this is also how a person
+  // who pauses or interrupts the turn is let go.
+  recordHookTrace(
     projectDir,
     HOOK_NAME,
     `recursion guard released the stop (no-progress block cap ${blockCap(stateContent)} reached; stop_hook_active=${stopHookActive})`,
