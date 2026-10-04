@@ -31,7 +31,8 @@
 // shown, and the Stop hook's own verdicts, NEVER the agent's prose:
 //   - before the reply: one picker, the turn was let through, and no answer
 //     was recorded (no answer, gate, or stage-finished row; still one piece
-//     of work; Feasibility still in progress); when the engine asked, its own
+//     of work; Feasibility still in progress; no stage handed to the agent);
+//     the picker offered separate new work; when the engine asked, its own
 //     record says the question was still open when the turn ended;
 //   - after the reply: the new work was created from the person's answer with
 //     no further picker.
@@ -64,8 +65,9 @@ const NEW_WORK =
 // The person's answer in their own message: the number of the option shown
 // for separate new work (the skill leads it with "Yes"), and its words.
 const SEPARATE = "it is a separate new piece of work";
-// The engine's routing question, as handed to the agent.
+// The engine's routing question, and a stage, as handed to the agent.
 const ENGINE_ROUTING_ASK = /"ask_type":\s*"new-work-routing"/;
+const RUN_STAGE = /"kind":\s*"run-stage"/;
 // Printed only when new work is created (aidlc-utility.ts handleIntentCreate).
 const CREATED = "State initialized:";
 
@@ -154,17 +156,21 @@ describe("t-journey-question-once (sdk): a question still open at the end of a t
         expect(shown, `pickers before the reply: ${JSON.stringify(shown)}; Stop hooks in turn 1: ${JSON.stringify(turn1Stops)}`)
           .toHaveLength(1);
         expect(turn1Stops.at(-1)?.blocked, "the end of turn 1 was never let through").toBe(false);
+        expect(atReply!.reply, `the picker shown offered no separate new work: ${JSON.stringify(firstMenu)}`).toMatch(/^\d+, /);
         // When the engine asked the question (it has in every run so far), its
         // own record says the question was still open when the turn ended.
-        const engineAsked = r.toolResults.slice(0, turn1!.toolResults)
-          .some((t) => t.toolName === "Bash" && ENGINE_ROUTING_ASK.test(t.resultText));
-        if (engineAsked) expect(atReply!.engineAskOpen, "the engine's question was not open when turn 1 ended").toBe(true);
+        const turn1Results = r.toolResults.slice(0, turn1!.toolResults).filter((t) => t.toolName === "Bash");
+        if (turn1Results.some((t) => ENGINE_ROUTING_ASK.test(t.resultText))) {
+          expect(atReply!.engineAskOpen, "the engine's question was not open when turn 1 ended").toBe(true);
+        }
 
         // Nothing was answered or moved on in the person's place.
         const recorded = ANSWER_ROWS.filter((row) => (atReply!.rows.get(row) ?? 0) > (seeded.get(row) ?? 0));
         expect(recorded, "rows recorded before the person answered").toEqual([]);
         expect(atReply!.intents).toBe(1);
         expect(atReply!.state).toMatch(FEASIBILITY_IN_PROGRESS);
+        expect(turn1Results.filter((t) => RUN_STAGE.test(t.resultText)), "a stage was handed to the agent before the person answered")
+          .toEqual([]);
 
         // Their answer was taken as given: the separate work was created, and
         // no picker came after the reply.
