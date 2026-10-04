@@ -42,7 +42,6 @@ import {
   setupCodexProject,
 } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
 import { codexExecDiagnostic, codexExecTimeout, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -155,12 +154,12 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
         // workspace signals are the state file and the scaffold tree.
         expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
         expect(existsSync(join(proj, "aidlc-docs", "ideation"))).toBe(false);
-        // The seeded trust is the trust Codex checks: the project's hooks ran,
-        // a matched one (PostToolUse on Bash) as well as SessionStart. With a
-        // seed Codex did not recognise, none of them ran and this run passed.
-        const health = hooksHealthReadDir(proj);
-        expect(existsSync(join(health, "session-start.last")), codexExecDiagnostic(r)).toBe(true);
-        expect(existsSync(join(health, "rebuild-stage-graph.last")), codexExecDiagnostic(r)).toBe(true);
+        // The seeded trust is the trust Codex checks: Codex reports running the
+        // project's hooks, SessionStart and a matched one (every PostToolUse
+        // group has a matcher; this run's tool calls are Bash). With a seed
+        // Codex did not recognise, it ran none of them and this run passed.
+        expect(r.out, codexExecDiagnostic(r)).toContain("hook: SessionStart Completed");
+        expect(r.out, codexExecDiagnostic(r)).toContain("hook: PostToolUse Completed");
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,
