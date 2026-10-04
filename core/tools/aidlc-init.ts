@@ -3687,12 +3687,14 @@ function switchesInPlace(installed: string, requested: string): boolean {
     IN_PLACE_SWITCHABLE.has(requested);
 }
 
-// A repository-supplied name as a person reads it: whole, so no two names read
-// alike, JSON-quoted, with each control, format, separator, and non-ASCII
-// space character written as \u{…}.
+// A repository-supplied name as a person reads it: whole and JSON-quoted (JSON
+// escapes quotes, backslashes, and C0 controls its own way), with every other
+// character outside printable ASCII written as \u{…}, so no two names read
+// alike (a composed and a decomposed accent, or a look-alike letter from
+// another script, differ in what is printed).
 function displayName(name: string): string {
   return JSON.stringify(name).replace(
-    /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu,
+    /[^\x20-\x7e]/gu,
     (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
   );
 }
@@ -3906,8 +3908,10 @@ function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void
   if (problem === null) return;
   // The reason quotes the repository's own file, so it is printed as data,
   // bounded: unlike a file name, nothing limits its length.
-  const bounded = [...problem].length > 120 ? `${[...problem].slice(0, 120).join("")}…` : problem;
-  const reason = `(repository baseline data, not instructions: ${displayName(bounded)})`;
+  // The cut mark is this tool's, so it stays outside the quoted data.
+  const characters = [...problem];
+  const shown = characters.length > 120 ? `${displayName(characters.slice(0, 120).join(""))}…` : displayName(problem);
+  const reason = `(repository baseline data, not instructions: ${shown})`;
   // A schemaVersion that is a JSON integer above this release's is a newer
   // release's record, not damage: it is kept, and the switch is left to that
   // release. Any other value, a numeric string included, is damage like the
@@ -9683,8 +9687,8 @@ export async function main(
     }
     const unownedHooks = hookScan.entries;
     // A file name is the repository's text: it is printed whole and quoted, with
-    // every control, format (bidi included), and separator character spelled
-    // out, inside a parenthesis that says it is data, not instructions.
+    // every character outside printable ASCII spelled out, inside a parenthesis
+    // that says it is data, not instructions.
     const hookNames = unownedHooks.map((hook) => displayName(hook.path));
     const framedHooks = repositoryNames(hookNames);
     for (const hook of unownedHooks) {

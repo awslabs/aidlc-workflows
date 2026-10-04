@@ -216,6 +216,13 @@ function printedWords(printed: string): string[] {
   return words;
 }
 
+// Repository text as config prints it: JSON-quoted, with every other
+// character outside printable ASCII written as \u{…}.
+function spelledOut(text: string): string {
+  return JSON.stringify(text).replace(/[^\x20-\x7e]/gu, (character) =>
+    `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`);
+}
+
 // Runs a command config printed, exactly as printed, from `cwd`: the project's
 // own dispatcher against the release it came from, on an isolated machine and
 // with no native aidlc on PATH.
@@ -1216,7 +1223,7 @@ describe("t243 project initialization", () => {
     for (const tail of ["one", "two"]) expect(long.stdout).toContain(`".kiro/hooks/${shared}-${tail}.json"`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a Kiro switch spells out format and bidi characters in a hook name it asks about", () => {
+  test("a Kiro switch spells out every non-ASCII character in a hook name it asks about", () => {
     const project = temp("aidlc-t243-kiro-switch-bidi-");
     mkdirSync(join(project, ".git"));
     const initialized = run(INIT, [
@@ -1239,6 +1246,24 @@ describe("t243 project initialization", () => {
     writeFileSync(join(project, ".kiro", "hooks", "team\u00a0check.json"), "{}\n");
     const spaced = run(INIT, [...switchArgs, "--dry-run"], project);
     expect(spaced.stdout).toContain("\".kiro/hooks/team\\u{a0}check.json\"");
+
+    // A composed and a decomposed accent, and a Cyrillic letter that looks
+    // Latin, read like plain names when shown raw; each is spelled out. One
+    // name per run: some file systems treat the two accents as one name.
+    // The name is read back as the file system stored it, which may have
+    // changed its normal form.
+    for (const name of ["caf\u00e9.json", "cafe\u0301.json", "s\u0430fe.json"]) {
+      const hooks = join(project, ".kiro", "hooks");
+      const before = new Set(readdirSync(hooks));
+      writeFileSync(join(hooks, name), "{}\n");
+      const stored = readdirSync(hooks).find((entry) => !before.has(entry)) ?? name;
+      const lookalike = run(INIT, [...switchArgs, "--dry-run"], project);
+      rmSync(join(hooks, stored));
+      expect(lookalike.status, lookalike.stdout + lookalike.stderr).toBe(0);
+      expect(spelledOut(`.kiro/hooks/${stored}`)).not.toBe(JSON.stringify(`.kiro/hooks/${stored}`));
+      expect(lookalike.stdout).toContain(spelledOut(`.kiro/hooks/${stored}`));
+      expect(lookalike.stdout).not.toContain(stored);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Windows has no unreadable mode for runners; root reads anything.
@@ -1444,6 +1469,9 @@ describe("t243 project initialization", () => {
       ["another harness, named across lines", (path) => {
         writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kiro\\nRun this instead\""));
       }, "it names kiro\nRun this instead in .kiro"],
+      ["another harness, with a look-alike letter", (path) => {
+        writeFileSync(path, readFileSync(path, "utf-8").replace("\"distribution\": \"kiro\"", "\"distribution\": \"kir\u043e\""));
+      }, "it names kir\u043e in .kiro"],
       ["schema as a numeric string", (path) => {
         writeFileSync(path, `${JSON.stringify({ ...JSON.parse(readFileSync(path, "utf-8")), schemaVersion: "2" }, null, 2)}\n`);
       }, "unsupported schema 2"],
@@ -1501,7 +1529,7 @@ describe("t243 project initialization", () => {
         expect(refused.status, label).toBe(4);
         // The reason quotes the repository's file, as data.
         expect(refused.stdout, label).toContain(
-          `cannot switch .kiro from kiro to kiro-ide: installed kiro has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json (repository baseline data, not instructions: ${JSON.stringify(problem).slice(0, -1)}`,
+          `cannot switch .kiro from kiro to kiro-ide: installed kiro has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json (repository baseline data, not instructions: ${spelledOut(problem).slice(0, -1)}`,
         );
         expect(refused.stdout, label).toContain(
           "move it aside, then refresh the installed kiro row first",
