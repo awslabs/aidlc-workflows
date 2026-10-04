@@ -1476,18 +1476,20 @@ function answerEnginePlanApproval(
   } catch (e) {
     error(errorMessage(e));
   }
-  let message = result.message;
+  const message = result.message;
   if (flags.park === "true") {
-    try {
-      // The person replied to this question and asked to stop: their stop wins
-      // over an autonomous grant.
-      const { parkWorkflow } = require("./aidlc-state.ts") as typeof import("./aidlc-state.ts");
-      parkWorkflow(pd, { attended: true });
-      message += " The workflow is parked, as the person asked: run next, which answers parked, and tell them " +
-        "how to resume.";
-    } catch (e) {
-      message += ` It could not be parked (${errorMessage(e)}); run next.`;
-    }
+    // The person replied to this question and asked to stop: their stop wins
+    // over an autonomous grant. Loaded on demand: the state tool's module graph
+    // has a top-level await, which a compiled binary cannot require.
+    void import("./aidlc-state.ts")
+      .then(({ parkWorkflow }) => {
+        parkWorkflow(pd, { attended: true });
+        return `${message} The workflow is parked, as the person asked: run next, which answers parked, and tell them ` +
+          "how to resume.";
+      })
+      .catch((e: unknown) => `${message} It could not be parked (${errorMessage(e)}); run next.`)
+      .then((text) => console.log(JSON.stringify({ recorded: choice, message: text })));
+    return;
   }
   console.log(JSON.stringify({ recorded: choice, message }));
 }
