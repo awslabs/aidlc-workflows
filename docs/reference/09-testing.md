@@ -529,7 +529,10 @@ own) and returns the message to send into the same session (or nothing, to end
 the drive). `chatAboutQuestionWhen` answers a picker the way Claude Code's
 "Chat about this" button does, so the question stays open; an `answerScript`
 spec `{ text }` types the person's own words into a picker; `captureStopHooks`
-records each Stop hook verdict with its turn.
+records each Stop hook verdict with its turn. `stopWhen` ends the drive once
+the tool results so far satisfy it, for a stop that needs more than one result
+(an engine line that can arrive before or after the step that creates the
+work).
 
 A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
 hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
