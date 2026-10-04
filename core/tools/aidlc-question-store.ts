@@ -9,7 +9,6 @@ import {
   removeRecordFileNoFollow,
   SPACE_NAME_REGEX,
   sessionsDir,
-  validSessionId,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 import { resolveAidlcSettings } from "./aidlc-settings.ts";
@@ -42,9 +41,7 @@ export interface StoredQuestion {
   /**
    * For a routing question: the items its continue and reshape routes may act
    * on. `pick` marks one asked while no work was selected, whose continue and
-   * reshape need the person to pick one of `targets`. `session` is the
-   * conversation it was asked in, when known: only a reply there that names
-   * one of its options answers it.
+   * reshape need the person to pick one of `targets`.
    */
   askedAbout?: QuestionAskedAbout;
   /** The person asked for new work (`next --new-intent`), so its answer starts it. */
@@ -77,7 +74,6 @@ export interface QuestionAskedAbout {
   space: string;
   targets: QuestionTarget[];
   pick?: true;
-  session?: string;
 }
 
 export interface QuestionSettings {
@@ -139,10 +135,7 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
       (typeof question.askedAbout?.space === "string" &&
         SPACE_NAME_REGEX.test(question.askedAbout.space) &&
         isTargetList(question.askedAbout.targets) &&
-        (question.askedAbout.pick === undefined || question.askedAbout.pick === true) &&
-        (question.askedAbout.session === undefined ||
-          (typeof question.askedAbout.session === "string" &&
-            validSessionId(question.askedAbout.session) === question.askedAbout.session)))) &&
+        (question.askedAbout.pick === undefined || question.askedAbout.pick === true))) &&
     (question.newWork === undefined || question.newWork === true) &&
     (question.stateSha256 === undefined ||
       (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256))) &&

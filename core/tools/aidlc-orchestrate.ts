@@ -294,7 +294,6 @@ import {
   unitMajorConstructionStageSlugs,
   validateLiveUnitScope,
   validScopes,
-  validSessionId,
   shellArg,
   authoritativeProjectDescription,
   harnessDir,
@@ -1910,24 +1909,22 @@ function routingOptionReply(
 }
 
 // The routing question a reply that only names one of its options answers: the
-// question stored most recently, asked in this conversation, about work that
-// has not moved since: the one workflow it was asked about. Asked while none
+// question stored most recently, about work that has not moved since: the one workflow it was asked about. Asked while none
 // was selected, separate new work acts on none of its records, so it answers
-// whatever happened to them; continue and reshape get `records` only while the
-// same records are still unselected and unchanged, and otherwise run the
-// question's own late answer, which asks again about the work there is now,
-// with the request kept. A bare number also needs nothing asked after it: no
-// question logged since, and no turn of the person's besides this reply.
-// Anything else is the person's own words, asked about as usual.
+// whatever happened to them; continue and reshape get the records there are
+// now, still unselected (`records`), and whether they are the same records
+// the question listed (`listed`). A bare number
+// also needs nothing asked after it: no question logged since, and no turn of
+// the person's besides this reply. Anything else is the person's own words,
+// asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
-): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null } | null {
+): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null; listed: boolean } | null {
   try {
     const question = latestQuestion(projectDir);
     const askedAbout = question?.askedAbout;
     if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
-    if ((askedAbout.session ?? null) !== validSessionId(engineSessionId)) return null;
     const pick = askedAbout.pick === true;
     const option = routingOptionReply(
       text,
@@ -1940,12 +1937,11 @@ function routingQuestionAnswer(
     // none, the same.
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     let records: UnselectedRecords | null = null;
+    let listed = false;
     if (pick) {
       const now = option.route === "separate" ? null : unselectedRecords(projectDir);
-      records = now !== null && now.space === askedAbout.space &&
-          unselectedRecordsDigest(now.selectable) === question.stateSha256
-        ? now
-        : null;
+      records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
+      listed = records !== null && unselectedRecordsDigest(records.selectable) === question.stateSha256;
     } else {
       const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
       if (!target) return null;
@@ -1967,17 +1963,18 @@ function routingQuestionAnswer(
         return null;
       }
     }
-    return { question, route: option.route, records };
+    return { question, route: option.route, records, listed };
   } catch {
     return null;
   }
 }
 
-// "Part of existing work" or "Reshape existing work" said back while the
-// question listed more than one record: the person chose the option, not yet
-// which work. Ask only that, as the typed record picker: each record a choice,
-// and its command the one the question would have run for it. Record names
-// stay data in the choices, never in an instruction.
+// "Part of existing work" or "Reshape existing work" said back while more than
+// one record is there to pick, or the records are not the ones the question
+// listed: the person chose the option, not yet which work. Ask only that,
+// as the typed record picker: each record there now a choice, and its command
+// the one the question would have run for it. Record names stay data in the
+// choices and in the question's list, never in an instruction.
 function pickedRouteRecordAsk(
   question: StoredQuestion,
   route: "continue" | "reshape",
@@ -2068,11 +2065,7 @@ function newWorkRoutingAskDirective(
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
   const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
-  const session = validSessionId(engineSessionId);
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", {
-    ...askedAbout,
-    ...(session ? { session } : {}),
-  }, false, undefined, stateSha256, {
+  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256, {
     newWork: tokens(`${carried.newWork}${carried.planChanges}`),
     existingWork: tokens(carried.existingWork),
   }, approvedRequest);
@@ -3580,15 +3573,13 @@ function unselectedRecords(projectDir: string): UnselectedRecords | null {
   return { space, intents, presentCount: present.length, selectable, list };
 }
 
-// What the routing question's records looked like when it was asked: each
-// selectable record, its identity, and its state. A reply naming continue or
-// reshape acts on the records listed only while this is unchanged.
+// Which records the routing question listed: each selectable record's name and
+// identity, never its progress, so work moving on in another chat changes
+// nothing here. A reply naming continue or reshape acts on the one record
+// listed, unasked, only while this is unchanged.
 function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): string {
   return createHash("sha256")
-    .update(
-      selectable.map(({ intent, selector, state }) => `${selector}\n${intent.uuid ?? ""}\n${stateDigest(state)}`).join("\n"),
-      "utf-8",
-    )
+    .update(selectable.map(({ intent, selector }) => `${selector}\n${intent.uuid ?? ""}`).join("\n"), "utf-8")
     .digest("hex");
 }
 
@@ -5751,12 +5742,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
   // Asked while no work was selected, continue and reshape act on a record the
-  // person picks: with one listed, that is the one; with more, only which one
-  // is left to ask. Once its records moved, they run the question's own late
-  // answer below (`--continue` / `compose --request`), which asks again about
-  // the work there is now.
+  // person picks: with the one the question listed still the only one, that is
+  // the one; otherwise only which one is left to ask, from the work there is
+  // now. With work selected since, they run the question's own late answer
+  // below (`--continue` / `compose --request`), which acts on the listed work
+  // selected now.
   const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
-  if (routingAnswer && pickedRecords && pickedRecords.selectable.length > 1) {
+  if (routingAnswer && pickedRecords && (pickedRecords.selectable.length > 1 || !routingAnswer.listed)) {
     emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
     return;
   }
