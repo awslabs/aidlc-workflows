@@ -523,9 +523,14 @@ export function success(message: string, data?: unknown): CommandResult {
 // indistinguishable from a cancelled prompt. This reader returns `""` for an
 // empty line and `null` only when the input is closed (EOF), so callers can
 // treat Enter as "accept the default" and EOF as "cancel". It reads one byte at
-// a time so nothing past the newline is consumed from the input.
-export function readTerminalLine(label: string, fd = 0): string | null {
-  process.stdout.write(`${label} `);
+// a time so nothing past the newline is consumed from the input. A command
+// whose stdout carries its JSON result asks on stderr.
+export function readTerminalLine(
+  label: string,
+  fd = 0,
+  out: { write(text: string): unknown } = process.stdout,
+): string | null {
+  out.write(`${label} `);
   const bytes: number[] = [];
   const byte = Buffer.alloc(1);
   let sawNewline = false;

@@ -214,17 +214,22 @@ it before anything else.
 during Code Generation. Use it only while a person is watching the session,
 and only to get past a refusal that is wrong.
 
-The quickest way needs no restart. Run this yourself in a terminal in the
-project folder, not through the agent:
+The quickest way needs no restart. Say it in the chat ("turn the plan approval
+check off for this project"): the agent runs the command below, and the check
+lets it through because you just asked. Or run it yourself in a terminal in the
+project folder:
 
 ```bash
 aidlc config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes
 ```
 
 It works while the workflow is running, and the check is off from the agent's
-next action, for every workflow in this project on this machine. As soon as
-the team is past the problem, run the same command with `--clear-bypass` in
-place of `--bypass` to turn the check back on.
+next action, for every workflow in this project on this machine. AI-DLC then
+says in the chat that the check is off, since when, and how to turn it back on,
+and repeats it at the start of every chat while it stays off (except on
+opencode, which shows no session-start context). As soon as the
+team is past the problem, say "turn it back on", or run the same command with
+`--clear-bypass` in place of `--bypass`.
 
 Or set `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` in the environment the harness
 starts with, for every workflow in a harness started with it. The hooks read

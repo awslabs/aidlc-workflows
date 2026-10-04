@@ -293,6 +293,13 @@ export interface RunStageDirective {
     human_required: boolean;
     errors: string[];
   };
+  // The person's answer to the artifact re-use question for this Unit's step,
+  // recorded by the engine when they chose Redo on the resume menu: the
+  // conductor redoes the step without asking it again (#1411).
+  artifact_reuse?: {
+    decision: "redo";
+    unit: string;
+  };
   memory_path: string;
   // consumes carries only the declared inputs that EXIST on disk at emit time;
   // declared inputs whose file is absent move to consumes_absent so the
@@ -763,6 +770,7 @@ const RUN_STAGE_FIELDS = [
   "construction_policy",
   "construction_checkpoint",
   "swarm_checkpoint",
+  "artifact_reuse",
   "memory_path",
   "consumes",
   "produces",
@@ -1392,6 +1400,12 @@ function checkRunStageShared(
           errors.push(`${kind}: construction_checkpoint.${field} must be a string array`);
         }
       }
+    }
+  }
+  if ("artifact_reuse" in o) {
+    const reuse = o.artifact_reuse;
+    if (!isObject(reuse) || o.phase !== "construction" || reuse.unit !== o.unit || reuse.decision !== "redo") {
+      errors.push(`${kind}: artifact_reuse must be the redo decision for this Construction Unit`);
     }
   }
   if ("swarm_checkpoint" in o) {

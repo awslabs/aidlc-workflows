@@ -1366,6 +1366,8 @@ describe("t244 management lifecycle", () => {
         join(project, "keep.txt"),
         join(outside, "keep.txt"),
         join(bin, "keep.txt"),
+        // A person's own Git Bash launcher in a bin outside the install.
+        ...(process.platform === "win32" ? [join(bin, "aidlc")] : []),
       ];
       for (const path of [...preserved, ...outsideSentinels]) {
         writeFileSync(path, `user-owned: ${path}\n`);

@@ -37,7 +37,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
-import { installRoot } from "./aidlc-install-paths.ts";
+import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
 import {
   configureColor,
   dim,
@@ -69,6 +69,7 @@ import {
   modelPolicyForHarness,
   resolveAidlcSettings,
 } from "./aidlc-settings.ts";
+import { switchesOffLines } from "./aidlc-recorded-switches.ts";
 
 function windowsRecoveryCheck(): DoctorCheck | null {
   if (process.platform !== "win32") return null;
@@ -124,6 +125,23 @@ async function windowsLauncherHelperCheck(): Promise<DoctorCheck | null> {
     : state.kind === "blocked"
     ? { pass: false, label: `${label}; AI-DLC cannot replace it because ${state.reason}`, fix: state.fix }
     : { pass: false, severity: "warn", label: `${label}; ${state.reason}`, fix: state.fix };
+}
+
+// Git Bash, where Claude Code runs its hooks on Windows, finds a bare `aidlc`
+// only through the extensionless launcher beside aidlc.cmd. Without it every
+// hook that calls `aidlc` fails there, while PowerShell and CMD still find the
+// command, so the rest of doctor would read healthy.
+function windowsGitBashLauncherCheck(): DoctorCheck | null {
+  const state = windowsGitBashLauncherState();
+  if (state === null) return null;
+  if (state.ok) return { pass: true, label: "Windows launcher (Git Bash): a bare `aidlc` runs in Git Bash" };
+  return {
+    pass: false,
+    label: state.foreign
+      ? `Windows launcher (Git Bash): ${state.launcher} is not AI-DLC's launcher, so a bare \`aidlc\` in Git Bash does not run AI-DLC`
+      : "Windows launcher (Git Bash): a bare `aidlc` does not run in Git Bash, so hooks that call it fail there",
+    fix: state.fix,
+  };
 }
 
 export async function doctorUpdateState(
@@ -561,12 +579,14 @@ export async function main(argv: string[]): Promise<void> {
   if (recovery) checks.push(recovery);
   const launcher = await windowsLauncherHelperCheck();
   if (launcher) checks.push(launcher);
+  const gitBashLauncher = windowsGitBashLauncherCheck();
+  if (gitBashLauncher) checks.push(gitBashLauncher);
   checks.push(updateCheck(update));
   checks.push(pluginCheck(projectDir, flags.verbose === "true"));
   checks.push(...settingsDoctorChecks(projectDir));
   checks.push(modelsPolicyCheck(projectDir, flags.verbose === "true"));
   checks.push(...await kiroSessionDoctorChecks(projectDir));
-  checks.push(flagsDoctorCheck(projectDir, harnessDir()));
+  checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir)));
   checks.push(providerDoctorCheck(projectDir, harnessDir()));
   checks.push(workspaceSiblingDoctorCheck(projectDir, harnessDir()));
   const requestCap = vscodeRequestCapDoctorCheck(projectDir, harnessDir());

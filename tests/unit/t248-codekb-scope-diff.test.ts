@@ -1,4 +1,4 @@
-// covers: function:parseReScope, function:codekbScopeFingerprint, function:scopePathCovered, subcommand:aidlc-utility:codekb-scope-diff
+// covers: function:parseReScope, function:codekbScopeFingerprint, function:scopePathCovered, function:codekbFingerprintExcludes, function:aidlcRootIntegrations, subcommand:aidlc-utility:codekb-scope-diff
 //
 // t248 — codekb scope guard (deterministic, no-LLM). Pins the reverse-
 // engineering rerun guard at two layers:
@@ -30,8 +30,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { appendFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -39,7 +39,10 @@ import {
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
 import {
+  aidlcRootIntegrations,
+  codekbFingerprintExcludes,
   codekbScopeFingerprint,
+  codekbStoreIsCurrent,
   parseReScope,
   scopePathCovered,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -651,5 +654,177 @@ describe("t248 codekb-scope-diff verb — mint mode", () => {
     const proj = freshProject();
     const res = runVerb(proj, "--mint");
     expect(res.status).not.toBe(0);
+  });
+});
+
+describe("t248 codekb-scope-diff verb: check mode", () => {
+  test("a first scan checks its staged block: VALID with a current fingerprint, then stale after an edit", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "app.ts"), "a\n");
+    const fingerprint = runVerb(proj, "--mint", "--paths", "./").stdout.trim();
+    // Staged where the stage writes it, inside the record, which the
+    // fingerprint leaves out.
+    const stagedDir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "260101-fix", ".aidlc-engine", "codekb-stage-app");
+    mkdirSync(stagedDir, { recursive: true });
+    const staged = join(stagedDir, "reverse-engineering-timestamp.md");
+    writeFileSync(staged, timestampBody({ kind: "full", fingerprint, analyzedPaths: ["./"], components: ["app"] }));
+
+    const human = runVerb(proj, "--check", staged);
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("VALID: kind full, 1 analyzed path(s), 1 component(s), 1 shallow path(s).");
+    expect(human.stdout).toContain("The fingerprint matches the source now.");
+    const parsed = JSON.parse(runVerb(proj, "--check", staged, "--json").stdout);
+    expect(parsed.verdict).toBe("VALID");
+    expect(parsed.fingerprint).toBe("current");
+    expect(parsed.analyzed_paths).toEqual(["./"]);
+    expect(parsed.shallow_paths).toEqual(["src/"]);
+
+    writeFileSync(join(proj, "src", "app.ts"), "changed\n");
+    expect(JSON.parse(runVerb(proj, "--check", staged, "--json").stdout).fingerprint).toBe("stale");
+    expect(runVerb(proj, "--check", staged).stdout).toContain("mint it again over analyzed.paths");
+
+    // The template's empty list form parses as an empty list.
+    writeFileSync(staged, timestampBody({ kind: "full", fingerprint, analyzedPaths: ["./"] }).replace("    - src/\n", "").replace("shallow:\n  paths:", "shallow:\n  paths: []"));
+    const empty = JSON.parse(runVerb(proj, "--check", staged, "--json").stdout);
+    expect(empty.verdict).toBe("VALID");
+    expect(empty.shallow_paths).toEqual([]);
+  });
+
+  test("a block that would not publish is INVALID with the parser's reason", () => {
+    const proj = freshProject();
+    gitInit(proj);
+    const staged = join(proj, "staged-timestamp.md");
+    writeFileSync(staged, timestampBody({ kind: "full", fingerprint: "abc", analyzedPaths: ["src/"] }));
+    const res = runVerb(proj, "--check", staged, "--json");
+    expect(res.status).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.verdict).toBe("INVALID");
+    expect(parsed.reason).toBe("malformed");
+    expect(runVerb(proj, "--check", staged).stdout).toContain("INVALID (malformed): kind: full requires repository-root coverage");
+  });
+
+  test("outside git the fingerprint is unknown; a missing file is a usage error", () => {
+    const proj = freshProject();
+    const staged = join(proj, "staged-timestamp.md");
+    writeFileSync(staged, timestampBody({ fingerprint: "unknown" }));
+    expect(JSON.parse(runVerb(proj, "--check", staged, "--json").stdout).fingerprint).toBe("unknown");
+    expect(runVerb(proj, "--check", join(proj, "missing.md")).status).not.toBe(0);
+    expect(runVerb(proj, "--check").status).not.toBe(0);
+  });
+});
+
+// ============================================================================
+// AI-DLC's own files. The scan never reads them, so changing them (an update,
+// a setting, a setup file it writes into) never makes the store out of date,
+// while the project's own files beside them still do.
+// ============================================================================
+describe("t248 codekb freshness: AI-DLC's own files", () => {
+  function installedProject(): string {
+    const proj = freshProject();
+    gitInit(proj);
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(proj, ".claude"), { recursive: true });
+    mkdirSync(join(proj, "src"), { recursive: true });
+    writeFileSync(join(proj, "src", "app.ts"), "a\n");
+    mkdirSync(join(proj, ".github", "workflows"), { recursive: true });
+    writeFileSync(join(proj, ".github", "workflows", "ci.yml"), "on: push\n");
+    writeFileSync(join(proj, "AGENTS.md"), "# Team notes\n");
+    return proj;
+  }
+  const write = (proj: string, path: string, body: string): void => {
+    mkdirSync(dirname(join(proj, path)), { recursive: true });
+    writeFileSync(join(proj, path), body);
+  };
+
+  test("an AI-DLC update, setting or setup file leaves a full-root store current; the project's own files do not", () => {
+    const proj = installedProject();
+    const mint = runVerb(proj, "--mint", "--paths", "./");
+    expect(mint.status).toBe(0);
+    const fingerprint = mint.stdout.trim();
+    expect(fingerprint).toMatch(/^[0-9a-f]{40,64}$/);
+    seedStore(proj, timestampBody({ kind: "full", fingerprint, analyzedPaths: ["./"] }));
+    const verdict = (): string => JSON.parse(runVerb(proj, "--json").stdout).verdict;
+    expect(verdict()).toBe("CURRENT");
+
+    appendFileSync(join(proj, ".claude", "tools", "aidlc-version.ts"), "// update\n");
+    write(proj, ".mcp.json", '{"mcpServers":{}}\n');
+    write(proj, ".gitignore", "node_modules/\n");
+    write(proj, "aidlc.settings.json", "{}\n");
+    write(proj, ".kiro/settings/cli.json", "{}\n");
+    write(proj, ".github/agents/aidlc-developer-agent.md", "agent\n");
+    write(proj, ".github/hooks/aidlc.json", "{}\n");
+    write(proj, ".github/skills/aidlc-bugfix/SKILL.md", "skill\n");
+    write(proj, ".github/skills/review-pro/SKILL.md", "---\nname: review-pro\ngenerated-by: aidlc-runner-gen\n---\nrunner\n");
+    write(proj, ".agents/skills/aidlc/SKILL.md", "skill\n");
+    expect(verdict()).toBe("CURRENT");
+    expect(codekbStoreIsCurrent(proj)).toBe(true);
+
+    // AGENTS.md is the project's own here: no installed harness writes into it.
+    for (const [path, edited, original] of [
+      [".github/workflows/ci.yml", "on: pull_request\n", "on: push\n"],
+      ["AGENTS.md", "# Team notes, changed\n", "# Team notes\n"],
+      ["src/app.ts", "changed\n", "a\n"],
+    ]) {
+      write(proj, path, edited);
+      expect(verdict(), path).toBe("STALE");
+      write(proj, path, original);
+      expect(verdict(), path).toBe("CURRENT");
+    }
+    write(proj, ".github/skills/team-release/SKILL.md", "---\nname: team-release\n---\nours\n");
+    expect(verdict()).toBe("STALE");
+    rmSync(join(proj, ".github", "skills", "team-release"), { recursive: true });
+    expect(verdict()).toBe("CURRENT");
+  });
+
+  test("a left-out path the project also ignores still gives a fingerprint", () => {
+    const proj = installedProject();
+    write(proj, ".gitignore", ".claude/\naidlc.settings.local.json\n.vscode/*\n");
+    write(proj, "aidlc.settings.local.json", "{}\n");
+    write(proj, ".vscode/settings.json", "{}\n");
+    const fingerprint = runVerb(proj, "--mint", "--paths", "./").stdout.trim();
+    expect(fingerprint).toMatch(/^[0-9a-f]{40,64}$/);
+    seedStore(proj, timestampBody({ kind: "full", fingerprint, analyzedPaths: ["./"] }));
+    expect(JSON.parse(runVerb(proj, "--json").stdout).verdict).toBe("CURRENT");
+    write(proj, "src/app.ts", "changed\n");
+    expect(JSON.parse(runVerb(proj, "--json").stdout).verdict).toBe("STALE");
+  });
+
+  test("the pre-scan snapshot keeps its source fingerprint across an AI-DLC update", () => {
+    const proj = installedProject();
+    const snapshot = (): string => {
+      const res = spawnSync(
+        BUN,
+        [UTILITY, "codekb-snapshot", "--paths", "./", "--json", "--project-dir", proj],
+        { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: childEnv() },
+      );
+      expect(res.status, res.stderr).toBe(0);
+      return JSON.parse(res.stdout).source_fingerprint;
+    };
+    const before = snapshot();
+    appendFileSync(join(proj, ".claude", "tools", "aidlc-version.ts"), "// update\n");
+    write(proj, ".mcp.json", '{"mcpServers":{}}\n');
+    expect(snapshot()).toBe(before);
+    write(proj, "src/app.ts", "changed\n");
+    expect(snapshot()).not.toBe(before);
+  });
+
+  test("the left-out paths come from the installed harness; a sibling repo leaves nothing out", () => {
+    const proj = installedProject();
+    expect(aidlcRootIntegrations(proj).map((integration) => integration.path).sort()).toEqual([".gitignore", ".mcp.json"]);
+    const excluded = codekbFingerprintExcludes(proj, proj);
+    for (const path of ["aidlc", ".claude", ".kiro", ".opencode", ".gitignore", ".mcp.json", "aidlc.settings.json"]) {
+      expect(excluded).toContain(path);
+    }
+    expect(excluded).not.toContain("AGENTS.md");
+    expect(excluded).not.toContain(".github");
+    expect(codekbFingerprintExcludes(proj, join(proj, "payments"))).toEqual([]);
+  });
+
+  test("the stage's completion summary leaves the freshness check out", () => {
+    const stage = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "stages", "inception", "reverse-engineering.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    const step5 = stage.slice(stage.indexOf("### Step 5:"), stage.indexOf("## Sensors"));
+    expect(step5).toContain("Leave the knowledge base's freshness check out of the summary");
   });
 });
