@@ -29,7 +29,8 @@ export type RootIntegration = {
 // list and refuses a policy it does not know, so `aidlc update` from 2.10.0
 // would fail. A release writes a policy added since then in `extendedPolicy`,
 // with "whole-file", which 2.10.0 accepts, in `policy`; reading a projection
-// puts the real policy back. Only the release's own binary ever applies it.
+// puts the real policy back when this release knows it, and otherwise keeps
+// "whole-file", so this release can install a later one in turn.
 const EXTENDED_POLICIES: readonly string[] = ["jsonc-settings"];
 
 export function writtenRootIntegration<T extends { policy: string }>(
@@ -45,6 +46,7 @@ export function readRootIntegrations(value: unknown): unknown {
   return value.map((item: unknown) => {
     if (!item || typeof item !== "object" || !("extendedPolicy" in item)) return item;
     const { extendedPolicy, ...integration } = item as Record<string, unknown>;
+    if (typeof extendedPolicy !== "string" || !EXTENDED_POLICIES.includes(extendedPolicy)) return integration;
     return { ...integration, policy: extendedPolicy };
   });
 }

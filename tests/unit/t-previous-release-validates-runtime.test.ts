@@ -9,7 +9,8 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectionFiles, readRootIntegrations } from "../../core/tools/aidlc-distribution.ts";
 import { projectionFiles as projectionFiles2100 } from "../fixtures/distribution-2.10.0/aidlc-distribution.ts";
@@ -61,6 +62,27 @@ describe("a 2.10.0 install accepts every runtime tree this release ships", () =>
       policy: "jsonc-settings",
       optional: true,
     });
+  });
+
+  // The same holds one release on: this release must install a later one
+  // that adds a policy it does not know.
+  test("a policy this release does not know keeps the value it was written over", () => {
+    const later = { path: ".vscode/settings.json", policy: "whole-file", extendedPolicy: "a-later-policy", optional: true };
+    expect(readRootIntegrations([later])).toEqual([{ path: ".vscode/settings.json", policy: "whole-file", optional: true }]);
+    const tree = mkdtempSync(join(tmpdir(), "aidlc-later-policy-"));
+    try {
+      cpSync(join(RELEASE_ROOT, "copilot"), tree, { recursive: true });
+      const path = join(tree, ".aidlc", "tools", "data", "aidlc-projection.json");
+      const descriptor = JSON.parse(readFileSync(path, "utf-8")) as { rootIntegrations: Array<Record<string, unknown>> };
+      for (const integration of descriptor.rootIntegrations) {
+        if (integration.extendedPolicy) integration.extendedPolicy = "a-later-policy";
+      }
+      writeFileSync(path, `${JSON.stringify(descriptor, null, 2)}\n`);
+      const read = projectionFiles(tree).descriptor.rootIntegrations;
+      expect(read.find((item) => item.path === ".vscode/settings.json")?.policy).toBe("whole-file");
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
   });
 
   test("a retained preview that wrote the new policy directly still reads", () => {
