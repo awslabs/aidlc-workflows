@@ -41,7 +41,6 @@
     "t-own-words-gates.test.ts": 12.2,
     "t-plan-approval-ask.test.ts": 1094.6,
     "t-plan-approval-recovery-paths.test.ts": 82.7,
-    "t-plan-approval-reply-reader.test.ts": 0.1,
     "t-plan-approval-stock-parts.test.ts": 57.5,
     "t-plan-approval-switch.test.ts": 214.1,
     "t-recorded-bypass-parity.test.ts": 19.3,
