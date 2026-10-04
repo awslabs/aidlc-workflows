@@ -479,13 +479,13 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-audit.ts append ERROR_LOGGED --field Details=x",
           "bun .kiro/tools/aidlc-audit.ts append PRACTICES_SECTION_EMPTY --field Details=x",
           "bun .kiro/tools/aidlc-audit.ts append-raw Note body",
-          "bun .kiro/tools/aidlc-worktree.ts restore --slug u1",
         ],
         // The guard does not refuse these, and only pipeline-deploy is admitted them.
         roleOnly: [
           "bun .kiro/tools/aidlc-worktree.ts create --slug u1 --base main",
           "bun .kiro/tools/aidlc-worktree.ts merge --slug u1 --target main --strategy squash",
           "bun .kiro/tools/aidlc-worktree.ts discard --slug u1",
+          "bun .kiro/tools/aidlc-worktree.ts restore --slug u1 --parked 20261004T000000Z",
         ],
         foreign: "bun .kiro/tools/aidlc-log.ts answers --stage x && rm -rf docs",
         hostOnly: ["bun .kiro/tools/aidlc-sensor-linter.ts --stage code-generation"],
@@ -559,12 +559,12 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine scope detect",
           "aidlc engine audit append ERROR_LOGGED --field Details=x",
           "aidlc engine audit append PRACTICES_SECTION_EMPTY --field Details=x",
-          "aidlc engine worktree restore --slug u1",
         ],
         roleOnly: [
           "aidlc engine worktree create --slug u1 --base main",
           "aidlc engine worktree merge --slug u1 --target main --strategy squash",
           "aidlc engine worktree discard --slug u1",
+          "aidlc engine worktree restore --slug u1 --parked 20261004T000000Z",
         ],
         foreign: "aidlc engine log answers --stage x && rm -rf docs",
         hostOnly: [

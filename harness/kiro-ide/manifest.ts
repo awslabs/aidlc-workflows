@@ -48,7 +48,9 @@ const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
 // Each persona's shell deny admits what the guard admits that persona.
-const copyShellDeny = (agent: string): string[] => shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent));
+const copyShellDeny = new Map<string, string[]>(
+  DELEGATION_AGENTS.map((agent) => [agent, shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent))]),
+);
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
@@ -72,7 +74,7 @@ function personaFrontmatter(agent: string): string[] {
     // A read-only version check the personas run before a project's tests;
     // the tests themselves keep asking.
     `        - "bun --version"`,
-    ...copyShellDeny(agent),
+    ...(copyShellDeny.get(agent) ?? []),
     "    - capability: fs_read",
     "      effect: allow",
     "      match:",
@@ -281,10 +283,8 @@ const manifest: HarnessManifest = {
   // The native release keys the persona shell deny on the `aidlc engine`
   // routes its conductor allow covers (delegate-shell-deny.ts), one rule per
   // distinct persona deny.
-  nativeReplacements: [...new Map(DELEGATION_AGENTS.map((agent) => [
-    copyShellDeny(agent).join("\n"),
-    shellDenyLines(nativeDelegateShellDeny(agent)).join("\n"),
-  ])).entries()].map(([from, to]) => ({ from, to })),
+  nativeReplacements: [...new Map([...copyShellDeny].map(([agent, lines]) => [lines.join("\n"), agent])).entries()]
+    .map(([from, agent]) => ({ from, to: shellDenyLines(nativeDelegateShellDeny(agent)).join("\n") })),
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 

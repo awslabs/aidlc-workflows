@@ -92,7 +92,8 @@ const DELEGATED_RUNTIME_VERBS = ["fragment-fork", "fragment-merge"];
 // The Code Generation boundary and the plan-approval fingerprint.
 const DELEGATED_TESTING_POSTURE_VERBS = ["begin", "fingerprint"];
 // Purging a Bolt's parked work deletes its only retained copy; the other
-// worktree verbs are pipeline-deploy's dispatches or reads.
+// worktree verbs are reads or pipeline-deploy's work
+// (DELEGATE_ROLE_ADMITTED_VERBS).
 const DELEGATED_WORKTREE_VERBS = ["purge"];
 // The audit counterpart of state fork and merge: Bolt start and completion
 // run them, and the referee's merge-back owns the AUDIT_MERGED receipt.
@@ -128,9 +129,8 @@ export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
 // DELEGATE_ROLE_ADMITTED_VERBS adds what only one persona is dispatched to do.
 // The kiro-ide row, whose calls carry no agent
 // identity, excludes only these from each persona's deny, and only where the
-// refusals above do not refuse them; a verb not listed here (a new one, a
-// writer no persona is given, such as knowledge sync or runtime compile, or
-// worktree restore, which the main session runs on the person's request)
+// refusals above do not refuse them; a verb not listed here (a new one, or a
+// writer no persona is given, such as knowledge sync or runtime compile)
 // stays denied there. `select-plugins` is admitted as its bare query only.
 // The refusals above stay what the guard enforces where a call names its agent.
 export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>> = {
@@ -162,13 +162,14 @@ export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>
 };
 
 // The work only one persona is dispatched to do, by persona: the Bolt worktree
-// create, merge and discard belong to pipeline-deploy
-// (agents/aidlc-pipeline-deploy-agent.md, Worktree Branch Lifecycle). The
-// kiro-ide row excludes these from that persona's deny only.
+// create, merge and discard, and restore on the person's request, belong to
+// pipeline-deploy (agents/aidlc-pipeline-deploy-agent.md, Worktree Branch
+// Lifecycle; its branching-strategies.md). The kiro-ide row excludes these
+// from that persona's deny only; the refusals above do not read this table.
 export const DELEGATE_ROLE_ADMITTED_VERBS: Readonly<
   Record<string, Readonly<Record<string, readonly string[]>>>
 > = {
-  "aidlc-pipeline-deploy-agent": { "aidlc-worktree.ts": ["create", "merge", "discard"] },
+  "aidlc-pipeline-deploy-agent": { "aidlc-worktree.ts": ["create", "merge", "discard", "restore"] },
 };
 
 // The verbs one persona is admitted: everyone's, then its own.
@@ -176,7 +177,7 @@ export function delegateAdmittedVerbs(agent: string): Readonly<Record<string, re
   const own = DELEGATE_ROLE_ADMITTED_VERBS[agent] ?? {};
   const files = [...new Set([...Object.keys(DELEGATE_ADMITTED_VERBS), ...Object.keys(own)])];
   return Object.fromEntries(
-    files.map((file) => [file, [...(DELEGATE_ADMITTED_VERBS[file] ?? []), ...(own[file] ?? [])]]),
+    files.map((file) => [file, [...new Set([...(DELEGATE_ADMITTED_VERBS[file] ?? []), ...(own[file] ?? [])])]]),
   );
 }
 

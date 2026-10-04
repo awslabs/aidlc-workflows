@@ -1414,8 +1414,9 @@ Kiro IDE and Kiro CLI v3 supply no such identity, so the kiro-ide row gives each
 delegated persona its own shell deny instead
 (`harness/kiro-ide/delegate-shell-deny.ts`): it denies the conductor's command
 allow and excludes only the script verbs the guard admits a delegate
-(`delegateAdmittedVerbs`: reads and the work a persona is dispatched to do, the
-Bolt worktree create, merge and discard for pipeline-deploy only)
+(`delegateAdmittedVerbs`: reads and the work a persona is dispatched to do; the
+Bolt worktree create, merge, discard and restore for pipeline-deploy only, a
+role limit the guard itself does not apply where a call names its agent)
 and the workspace query forms the workspace parser recognises, each where the
 guard does not refuse it, so a verb no one classified stays denied there. That rule does not follow the fence switch.
 
