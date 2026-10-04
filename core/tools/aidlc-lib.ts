@@ -17685,9 +17685,13 @@ export function worktreeReviewAttemptProjection(
       if (crossShardTied(i)) continue;
       const binding = reviewRequestBindingFromBlock(event.block);
       if (binding === null) continue;
+      // A retry or replacement of the recovery request is still the recovery
+      // request, as in freshReviewReceipts.
+      const previous = pendingRequests.get(requestKey);
       pendingRequests.set(requestKey, {
         binding,
         recovery:
+          previous?.recovery === true ||
           auditBlockField(event.block, "Recovery") === "stale-receipt",
         timestamp: event.timestamp,
         shard: event.shard,

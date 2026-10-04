@@ -1731,6 +1731,39 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(projection.terminal).toBeNull();
   });
 
+  test("a retried recovery review stays the recovery, so its NOT-READY is terminal below the ceiling", () => {
+    const request = {
+      Stage: "functional-design",
+      Reviewer: "reviewer",
+      Unit: "alpha",
+      Iteration: "2",
+      "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+    };
+    const projection = worktreeReviewAttemptProjection(
+      "",
+      [
+        event("BOLT_STARTED", "2026-08-28T00:00:00Z", { "Bolt slug": "alpha", "Bolt names": "alpha" }),
+        event("REVIEW_REQUESTED", "2026-08-28T00:00:01Z", {
+          ...request, Recovery: "stale-receipt", "Recovery Cause": "artifact",
+        }, "main.md", 0, 1),
+        // The reviewer is cut off; the same request is retried with the same bytes.
+        event("REVIEW_REQUESTED", "2026-08-28T00:00:02Z", {
+          ...request, Retry: "pending-request", "Recovery Cause": "artifact",
+        }, "main.md", 0, 2),
+        event("REVIEW_COMPLETED", "2026-08-28T00:00:03Z", { ...request, Verdict: "NOT-READY" }, "main.md", 0, 3),
+      ],
+      {
+        boltSlug: "alpha",
+        unit: "alpha",
+        stage: "functional-design",
+        reviewer: "reviewer",
+        reviewClass: "adversarial",
+        maxIterations: 3,
+      },
+    );
+    expect(projection.terminal?.event.event).toBe("REVIEW_COMPLETED");
+  });
+
   test("team tie flooring permits a fresh later review attempt", () => {
     const rows = [
       event(
