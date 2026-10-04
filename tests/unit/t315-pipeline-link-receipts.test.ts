@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -820,6 +820,41 @@ describe("t315 pipeline link receipts", () => {
     const wrong = runLog(third, LEAD, "another-repo");
     expect(wrong.rc).not.toBe(0);
     expect(wrong.out).toContain("omit --repo");
+  });
+
+  // A project folder that holds a folder of its own name (a Python package
+  // named after its project) is still one repo: its knowledge base describes
+  // the whole project root, so a change outside that folder makes it stale.
+  test("with no registered repo, the store describes the project root even beside a same-named folder", () => {
+    const proj = pipelineProject();
+    const current = writeCurrentCodekbStore(proj);
+    const child = join(proj, current.repo, "src");
+    mkdirSync(child, { recursive: true });
+    writeFileSync(join(child, "app.ts"), "export const current = true;\n", "utf-8");
+    expect(codekbStoreIsCurrent(proj, current.repo)).toBe(true);
+    writeFileSync(current.source, "export const current = false;\n", "utf-8");
+    expect(codekbStoreIsCurrent(proj, current.repo)).toBe(false);
+    expect(codekbStoreIsCurrent(proj)).toBe(false);
+
+    expect(runOrchestrateNext(
+      ORCH,
+      proj,
+      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      { env: childEnv() },
+    ).directive?.kind).toBe("run-stage");
+    const reused = state(proj, [
+      "reuse-artifact",
+      RE_STAGE,
+      "--decision",
+      "keep",
+      "--artifacts",
+      current.store,
+      "--repo",
+      current.repo,
+      "--single",
+    ]);
+    expect(reused.rc).not.toBe(0);
+    expect(reused.out).toContain("not CURRENT");
   });
 
   test("multi-repo intents enforce one ordered chain per repo", () => {

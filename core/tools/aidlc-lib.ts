@@ -3388,6 +3388,22 @@ export function codekbStoreGeneration(storeDir: string): string {
   return `sha256:${generation}`;
 }
 
+// The folder a repo's knowledge base describes. A registered repo is its
+// sibling folder under the workspace; with none registered the project root is
+// the one repo, even when it holds a folder of the same name (a Python package
+// named after its project, for one).
+export function codekbSourceRoot(projectDir: string, repo: string, space?: string): string {
+  let registered: string[];
+  try {
+    registered = intentRepos(projectDir, undefined, space);
+  } catch {
+    registered = [];
+  }
+  if (registered.length === 0) return projectDir;
+  const sibling = repoDir(projectDir, repo);
+  return existsSync(sibling) && statSync(sibling).isDirectory() ? sibling : projectDir;
+}
+
 // True only when the durable CodeKB store for `repo` carries a valid scope
 // block whose recorded fingerprint still matches the current source tree.
 // This is the programmatic form of `codekb-scope-diff`'s CURRENT verdict, used
@@ -3412,11 +3428,7 @@ export function codekbStoreIsCurrent(
     return false;
   }
   if (!parsed.ok || parsed.scope.fingerprint === null) return false;
-  const sibling = repoDir(projectDir, repo);
-  const sourceRoot =
-    existsSync(sibling) && statSync(sibling).isDirectory()
-      ? sibling
-      : projectDir;
+  const sourceRoot = codekbSourceRoot(projectDir, repo, sp);
   const current = codekbScopeFingerprint(
     sourceRoot,
     parsed.scope.analyzedPaths,
