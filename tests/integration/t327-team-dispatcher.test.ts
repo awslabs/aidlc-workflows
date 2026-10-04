@@ -886,6 +886,14 @@ describe("t327 team construction dispatcher", () => {
     expect(soloQuestion).toContain("2 pieces of work in progress");
     expect(soloQuestion).not.toContain("team construction");
     expect(soloQuestion).not.toContain("parked at");
+    // Stage by stage, Current Stage is where the work is, so it is named.
+    for (const record of ["team-work-11111111", "parked-work-22222222"]) {
+      const statePath = join(solo, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md");
+      writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major"));
+    }
+    const stageMajor = nextDirective(solo, {}, ["--scope", "feature"]).question as string;
+    expect(stageMajor).not.toContain("(in Construction)");
+    expect(stageMajor.match(/\(at [A-Z][^)]*\)/g) ?? []).toHaveLength(2);
 
     const single = pickerFixture(true, 1);
     const singleDirective = nextDirective(single);

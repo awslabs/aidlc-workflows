@@ -3664,13 +3664,14 @@ function unselectedRecords(
   if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  // Where each piece of work stands, in the stage names the person sees. A
-  // Unit-by-Unit stage is named by its phase: Current Stage stays on the first
-  // of them while each Unit works through the later ones.
+  // Where each piece of work stands, in the stage names the person sees. Work
+  // going Unit by Unit is named by its phase: Current Stage stays on the first
+  // per-Unit stage while each Unit works through the later ones.
   const standing = (state: string): string => {
     const stage = nodeForSlug((getField(state, "Current Stage") ?? "").trim());
     if (!stage) return "";
-    return isPerUnitStage(stage) ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
+    const unitByUnit = isPerUnitStage(stage) && getField(state, CONSTRUCTION_ITERATION_FIELD)?.trim() === "unit-major";
+    return unitByUnit ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
   };
   const present = intentStates.filter(({ intent }) => intent.dirName);
   const selectable = present.flatMap(({ intent, state }) =>
