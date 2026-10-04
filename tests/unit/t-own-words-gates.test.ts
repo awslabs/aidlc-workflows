@@ -258,6 +258,30 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "Person Reply")).toBe(words);
   });
 
+  // From a live Claude Code run: a request the person made at the gate got the
+  // approval question back with no answer. Answering it is the agent's; the
+  // engine keeps the turn and the words, decides nothing, and asks nothing.
+  test("a request at the gate is kept as their words; nothing is decided and nothing is asked", () => {
+    const words = "also read brief.pdf again and tell me the out-of-scope list";
+    const turns = events(proj, "HUMAN_TURN").length;
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: words }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toMatch(/approv|request changes/i);
+    expect(events(proj, "HUMAN_TURN")).toHaveLength(turns + 1);
+    expect(auditBlockField(events(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Reply")).toBeNull();
+    const kept = readFileSync(join(seededRecordDir(proj), ".aidlc-engine", "gate-words", `${SESSION}.json`), "utf-8");
+    expect(kept).toContain(words);
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [?] ${slug}`);
+  });
+
   // Kiro IDE's prompt hook carries no text: that turn is still a reply.
   test("a turn with no text is a reply, as before", () => {
     says(proj, "");
