@@ -24572,20 +24572,38 @@ export function isReadOnlyEngineProbe(): boolean {
 // fails closed on the read side, and the unlink succeeds in the root-owned case
 // because the containing directory stays user-writable. If even the unlink
 // fails there is nothing further to do; the block cap remains the backstop.
-function touchTurnMarker(path: string): void {
+// The marker lives in the record's engine folder and is reached through no
+// symlink, the leaf included, so a link in the record never sends the write or
+// the clean-up anywhere else.
+function touchTurnMarker(projectDir: string, name: string, intent?: string, space?: string): void {
+  const recordRoot = docsRoot(projectDir, intent, space);
+  const relative = join(ENGINE_DIR, name);
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${isoTimestamp()}\n`, "utf-8");
+    const anchor = realpathSync(recordRoot);
+    const target = assertNoSymlinkInChainOrThrow(anchor, relative);
+    mkdirSync(dirname(target), { recursive: true });
+    assertNoSymlinkInChainOrThrow(anchor, relative);
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollow, 0o644);
+    try {
+      writeSync(fd, `${isoTimestamp()}\n`);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     // Degrade to "no evidence" rather than leaving a stale mtime that would
     // silently relax the carve-out from here on. `recursive` so a directory
     // squatting on the path (an unlikely but possible way for the write to fail
     // while the path survives) is cleared too, not just a stale file.
-    try {
-      rmSync(path, { force: true, recursive: true });
-    } catch {
-      /* nothing left to try - the cap-bounded block is the backstop */
-    }
+    clearTurnMarker(recordRoot, relative);
+  }
+}
+
+function clearTurnMarker(recordRoot: string, relative: string): void {
+  try {
+    rmSync(recordFileTargetOrThrow(recordRoot, relative), { force: true, recursive: true });
+  } catch {
+    /* nothing left to try - the cap-bounded block is the backstop */
   }
 }
 
@@ -24610,7 +24628,7 @@ function workflowIsCreated(projectDir: string, intent?: string, space?: string):
 // adapter; direct execution of the authority-bearing hook file is inert.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
   if (!workflowIsCreated(projectDir, intent, space)) return;
-  touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
+  touchTurnMarker(projectDir, "human-turn", intent, space);
 }
 
 // Record what the engine handed out last: a step that ends the turn sets the
@@ -24618,16 +24636,12 @@ export function markHumanTurn(projectDir: string, intent?: string, space?: strin
 export function markTurnEnd(projectDir: string, endsTurn: boolean, intent?: string, space?: string): void {
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
-  const path = turnEndMarkerPath(projectDir, intent, space);
   if (endsTurn) {
-    touchTurnMarker(path);
+    touchTurnMarker(projectDir, "turn-end", intent, space);
     return;
   }
-  try {
-    rmSync(path, { force: true, recursive: true });
-  } catch {
-    /* a stale marker only lets one turn end at a step that is no longer the last */
-  }
+  // A stale marker only lets one turn end at a step that is no longer the last.
+  clearTurnMarker(docsRoot(projectDir, intent, space), join(ENGINE_DIR, "turn-end"));
 }
 
 // True when the engine's last word ended the turn and the person has not
@@ -24636,8 +24650,8 @@ export function markTurnEnd(projectDir: string, endsTurn: boolean, intent?: stri
 // evidence, and the caller falls through to its usual checks.
 export function turnEndIsOpen(projectDir: string, intent?: string, space?: string): boolean {
   try {
-    const endStat = statSync(turnEndMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
-    const humanStat = statSync(humanTurnMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
+    const endStat = lstatSync(turnEndMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
+    const humanStat = lstatSync(humanTurnMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
     if (!endStat?.isFile() || !humanStat?.isFile()) return false;
     return endStat.mtimeMs > humanStat.mtimeMs;
   } catch {
@@ -24671,7 +24685,7 @@ export function turnEndIsOpen(projectDir: string, intent?: string, space?: strin
 export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
-  touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
+  touchTurnMarker(projectDir, "engine-touch", intent, space);
 }
 
 // The transcript-free reading of "the ending turn was conversational": the last
@@ -24697,8 +24711,8 @@ export function turnMarkersShowConversational(
     // dangling symlink) would otherwise contribute a meaningless mtime to the
     // comparison, and on the engine side a meaningless-but-old mtime reads as
     // "chat" and releases the stop.
-    const humanStat = statSync(humanPath, { throwIfNoEntry: false });
-    const engineStat = statSync(enginePath, { throwIfNoEntry: false });
+    const humanStat = lstatSync(humanPath, { throwIfNoEntry: false });
+    const engineStat = lstatSync(enginePath, { throwIfNoEntry: false });
     if (!humanStat?.isFile() || !engineStat?.isFile()) return false;
     return humanStat.mtimeMs > engineStat.mtimeMs;
   } catch {

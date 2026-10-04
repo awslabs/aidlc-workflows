@@ -22,8 +22,10 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -215,6 +217,36 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     const path = humanTurnMarkerPath(proj);
     mkdirSync(path, { recursive: true }); // writeFileSync will fail EISDIR
     expect(() => markHumanTurn(proj)).not.toThrow();
+  });
+
+  test.skipIf(process.platform === "win32")("a link in the record never sends a marker write or clean-up outside it", () => {
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-t259-outside-"));
+    tempDirs.push(outside);
+    const canary = join(outside, "canary");
+    // The marker leaf is a link to a file outside the record.
+    const proj = makeCreatedProject();
+    writeFileSync(canary, "keep\n", "utf-8");
+    mkdirSync(join(engineTouchMarkerPath(proj), ".."), { recursive: true });
+    symlinkSync(canary, turnEndMarkerPath(proj));
+    symlinkSync(canary, humanTurnMarkerPath(proj));
+    symlinkSync(canary, engineTouchMarkerPath(proj));
+    markTurnEnd(proj, true);
+    markHumanTurn(proj);
+    markEngineTouch(proj);
+    expect(readFileSync(canary, "utf-8")).toBe("keep\n");
+    expect(turnEndIsOpen(proj)).toBe(false);
+    // The engine folder itself is a link to a folder outside the record.
+    const other = makeCreatedProject();
+    const engine = join(engineTouchMarkerPath(other), "..");
+    rmSync(engine, { recursive: true, force: true });
+    writeFileSync(join(outside, "turn-end"), "keep\n", "utf-8");
+    symlinkSync(outside, engine);
+    markTurnEnd(other, true);
+    markTurnEnd(other, false);
+    markHumanTurn(other);
+    expect(readFileSync(join(outside, "turn-end"), "utf-8")).toBe("keep\n");
+    expect(readFileSync(canary, "utf-8")).toBe("keep\n");
+    expect(existsSync(join(outside, "human-turn"))).toBe(false);
   });
 });
 
