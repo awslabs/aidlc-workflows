@@ -1796,6 +1796,30 @@ describe("t271 review iteration ceiling", () => {
     expect(read()).toBeUndefined();
   });
 
+  test("a source walk that cannot be read never turns an interrupted review into a new request", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "code-generation", "reviewed implementation plan\n", "unit-alpha");
+    const base = [
+      "--stage", "code-generation",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+    ];
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    // The reviewer is cut off and the plan changes before its verdict.
+    writeReviewedArtifact(proj, "code-generation", "changed implementation plan\n", "unit-alpha");
+    const stage = resolveStage("code-generation");
+    if (!stage) throw new Error("code-generation missing from stage graph");
+    const read = (options: { sourceState?: null } = {}) =>
+      freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage, {
+        reviewClass: "adversarial",
+        ...options,
+      }).unitPending.get("unit-alpha");
+    expect(read()).toMatchObject({ state: "outstanding", iteration: 1 });
+    // Without a readable source walk nothing proves the source changed, so the
+    // request keeps waiting instead of being replaced.
+    expect(read({ sourceState: null })).toMatchObject({ state: "retry-required", iteration: 1 });
+  });
+
   test("replacing the recovery review keeps it the attempt's one recovery", () => {
     const proj = seedProject("feature");
     writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");

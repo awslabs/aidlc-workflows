@@ -17489,6 +17489,9 @@ export function pendingRequestCurrency(
       : workspaceSourceState(projectDir)
     : null;
   if (stage.workspace_requires) {
+    // A source walk that cannot be read proves no change, so the request is
+    // not one to replace; restoring the walk can make it current again.
+    if (sourceState === null) readable = false;
     const currentSource =
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
     if (
