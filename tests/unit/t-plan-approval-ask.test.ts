@@ -530,6 +530,9 @@ describe("the engine asks for Plan Approval", () => {
     // some other question, whichever option the person picked there.
     pick("Rename the module first?", ["Request Changes", "Something else"], "Something else");
     pick("Shall I build this plan?", ["Approve Plan", "Show me the plan first"], "Approve Plan");
+    // Nor is a picker offering only its approve choice, or a label twice.
+    pick("Shall I build this plan?", ["Approve Plan"], "Approve Plan");
+    pick("Shall I build this plan?", ["Approve Plan", "Approve Plan", "Request Changes"], "Approve Plan");
     expect(answer(proj, "Approve Plan").message).toContain("has not replied to the plan question");
     pick("Shall I build this plan for slugify?", ["Approve Plan (Recommended)", "Request Changes", "I'll edit the files"],
       "Approve Plan (Recommended)");
@@ -717,6 +720,26 @@ describe("the engine asks for Plan Approval", () => {
   // was taken as Request Changes, and the approval that followed was lost.
   const BEFORE_DECIDING = "before I decide, run the AI-DLC doctor and the version check and show me what they say";
   const APPROVE_AND_STOP = "approve the plan, but let's stop there for today";
+
+  // Agents may leave out the optional third choice: the pick still counts.
+  test("a picker offering Approve Plan and Request Changes, without \"I'll edit the files\", answers the plan question", () => {
+    const proj = project();
+    askFor(proj);
+    const question = "Build this plan?";
+    const asked = [{ question, header: "Plan", multiSelect: false, options: [{ label: "Approve Plan" }, { label: "Request Changes" }] }];
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", session_id: SESSION, tool_name: "AskUserQuestion",
+        tool_input: { questions: asked }, tool_response: { questions: asked, answers: { [question]: "Approve Plan" } },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
 
   // A reply that starts with a path is the person's own words, not a command.
   test("a reply that starts with a slash path is a reply: the agent's Approve Plan records it", () => {

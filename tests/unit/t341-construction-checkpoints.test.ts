@@ -1633,6 +1633,9 @@ describe("t341 protected question interleaving", () => {
     // whichever option the person picked there.
     pick(["Approve", "Rename it"], "Rename it");
     pick(["Approve", "Rename it"], "Approve");
+    // Nor is a picker offering only one of its choices, or one twice.
+    pick(["Approve"], "Approve");
+    pick(["Approve", "Approve", "Request Changes"], "Approve");
     // Under the exact recorded question too, a picker offering another option
     // is some other question.
     pick(["Approve", "Rename it"], "Rename it", false, prompt);

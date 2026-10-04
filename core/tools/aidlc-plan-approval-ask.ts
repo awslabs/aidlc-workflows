@@ -73,7 +73,7 @@ import {
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
-import { exactOptionPick, isNonAnswer, pickerOffersOnly } from "./aidlc-reply-reader.ts";
+import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
@@ -1131,14 +1131,13 @@ function requestChangesFor(
 const ASK_REPLIES_MAX = 8;
 const ASK_REPLY_MAX_CHARS = 8000;
 
-// A picker answers this question when it offers only the question's own
-// choices ("(Recommended)" stripped), however the agent worded the question;
-// several picks, or a picker offering any other option, answer some other
-// question. A picker that names no options is matched by its question.
+// A picker answers this question when it offers the question's own choices
+// (pickerOffersChoices), however the agent worded the question; several
+// picks, or a picker offering anything else, answer some other question. A picker that names no options is matched by its question.
 function pickerAsksThisQuestion(picker: PlanApprovalPickerQuestion, record: PlanApprovalAskRecord): boolean {
   if (picker.severalPicks) return false;
   if (!picker.options?.length) return picker.question?.trim() === record.question;
-  return pickerOffersOnly(picker.options, record.choices);
+  return pickerOffersChoices(picker.options, record.choices);
 }
 
 /**

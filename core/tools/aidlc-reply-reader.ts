@@ -82,11 +82,22 @@ export function exactOptionPick(text: string | undefined | null, labels: readonl
 
 export const APPROVAL_GATE_CHOICES = ["Approve", "Request Changes"] as const;
 
-// A picker offers only these choices ("(Recommended)" stripped, any case): its
-// reply is then the person's pick of one of them, or words they typed in.
-export function pickerOffersOnly(options: readonly string[], choices: readonly string[]): boolean {
+// A picker asks this question when it offers only its choices, each once, and
+// both its approve and its change choice (the first two; "(Recommended)"
+// stripped, any case, any order). Leaving out a further choice ("I'll edit the
+// files") still asks it; a lone "Approve" or a label shown twice does not.
+export function pickerOffersChoices(options: readonly string[], choices: readonly string[]): boolean {
+  const offered = options.map((option) => stripRecommendedDecorator(option).trim().toLowerCase());
   const own = choices.map((choice) => choice.toLowerCase());
-  return options.length > 0 && options.every((option) => own.includes(stripRecommendedDecorator(option).trim().toLowerCase()));
+  return new Set(offered).size === offered.length &&
+    offered.every((label) => own.includes(label)) &&
+    own.slice(0, 2).every((label) => offered.includes(label));
+}
+
+// A picked label is one of these choices ("(Recommended)" stripped, any case).
+export function isOneOfChoices(label: string, choices: readonly string[]): boolean {
+  const picked = stripRecommendedDecorator(label).trim().toLowerCase();
+  return choices.some((choice) => choice.toLowerCase() === picked);
 }
 
 // A prompt that is a command to AIDLC: its slash or Codex entry
