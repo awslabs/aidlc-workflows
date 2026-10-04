@@ -2215,7 +2215,14 @@ export function configureChannel(argv: readonly string[]): CommandResult {
     const channel = writeMachineChannel(requested);
     // A plain update never installs an older release, so from a release of
     // the other channel it waits for a newer one; asked by name it goes now.
-    const running = activeVersion();
+    // The channel is saved by now, so a damaged version pointer (doctor
+    // reports it) only leaves out that hint.
+    let running: string | null = null;
+    try {
+      running = activeVersion();
+    } catch {
+      running = null;
+    }
     const next = running && versionChannel(running) !== channel
       ? `aidlc update moves to a ${channel} release once one is newer than ${running}; ` +
         `to go to the newest ${channel} release now, run aidlc update --channel ${channel}`

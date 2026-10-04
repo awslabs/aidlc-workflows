@@ -164,6 +164,16 @@ describe("t331 preview release channel", () => {
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(readFileSync(join(machine, "channel"), "utf-8")).toBe(`${STABLE_CHANNEL}\n`);
 
+    // A damaged version pointer is doctor's to report: the channel is saved,
+    // and config says so.
+    mkdirSync(join(machine, "active-version"));
+    const damaged = await run(DISPATCHER, ["config", "--channel", PREVIEW_CHANNEL], project, env);
+    expect(damaged.status, damaged.stdout + damaged.stderr).toBe(0);
+    expect(damaged.stdout).toContain(`release channel set to ${PREVIEW_CHANNEL}`);
+    expect(readFileSync(join(machine, "channel"), "utf-8")).toBe(`${PREVIEW_CHANNEL}\n`);
+    rmSync(join(machine, "active-version"), { recursive: true, force: true });
+    writeFileSync(join(machine, "channel"), `${STABLE_CHANNEL}\n`);
+
     writeFileSync(join(machine, "channel"), "beta\n");
     const malformed = await run(LIFECYCLE, ["update", "--check", "--json"], project, env);
     expect(malformed.status).toBe(4);
