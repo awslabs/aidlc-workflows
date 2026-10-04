@@ -1942,13 +1942,15 @@ function routingOptionReply(
 }
 
 // The routing question a reply that only names one of its options answers: the
-// question stored most recently, about work that has not moved since: the one workflow it was asked about. Asked while none
-// was selected, separate new work acts on none of its records, so it answers
-// whatever happened to them; continue and reshape get the records it listed
-// that are still there with the same identity, none selected (`records`). A bare number
-// also needs nothing asked after it: no question logged since, and no turn of
-// the person's besides this reply. Anything else is the person's own words,
-// asked about as usual.
+// question stored most recently. Separate new work acts on none of the work it
+// listed, so it answers whatever happened to that work. Asked about an active
+// workflow, continue and reshape run the question's own late answer, which acts
+// only while that workflow (same folder and uuid) is the one selected, however
+// far it has moved on, and asks again otherwise. Asked while none was selected,
+// they get the records it listed that are still there with the same identity,
+// none selected (`records`). A bare number also needs nothing asked after it:
+// no question logged since, and no turn of the person's besides this reply.
+// Anything else is the person's own words, asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
@@ -1956,6 +1958,8 @@ function routingQuestionAnswer(
   try {
     const question = latestQuestion(projectDir);
     const askedAbout = question?.askedAbout;
+    // A digest marks a question asked with options to answer; the words an open
+    // stage question hands on are stored without one.
     if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
     const pick = askedAbout.pick === true;
     const option = routingOptionReply(
@@ -1973,16 +1977,6 @@ function routingQuestionAnswer(
       const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
         askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
       records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
-    } else {
-      const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
-      if (!target) return null;
-      const statePath = stateFilePathForSelection(projectDir, {
-        space: askedAbout.space,
-        intent: target.intent || null,
-        sessionId: null,
-        binding: null,
-      });
-      if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
     }
     if (option.numeric) {
       const asked = Date.parse(question.createdAt);

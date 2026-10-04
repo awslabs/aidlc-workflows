@@ -49,10 +49,11 @@ export interface StoredQuestion {
   /** For a request described when a composition was approved: that `compose` entry's id. */
   composedFrom?: string;
   /**
-   * For a routing question shown about an active workflow: that workflow's
-   * state digest when it was asked; asked while none was selected, the digest
-   * of the records it offered. A reply that only names one of its options
-   * answers it while that work has not moved.
+   * For a routing question shown with options: the asked workflow's state
+   * digest when it was asked, or asked while none was selected, the digest of
+   * the records it offered. It marks a question a reply naming one of its
+   * options can answer; that answer finds its work by folder and uuid, however
+   * far the work has moved on since.
    */
   stateSha256?: string;
   /**
