@@ -52,6 +52,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { ROUTES } from "../../core/tools/aidlc.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS_PATH = join(AIDLC_SRC, "settings.json");
@@ -147,6 +148,8 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "bun .claude/tools/aidlc-lifecycle.ts use 2.10.0",
       "bun .claude/tools/aidlc-lifecycle.ts",
       "bun .claude/tools/aidlc-machine-config.ts set offline true",
+      "bun .claude/tools/aidlc-init.ts --pin 2.10.0",
+      "bun .claude/tools/aidlc-doctor.ts",
       // A config flag that reaches the whole machine, wherever it sits.
       "bun .claude/tools/aidlc.ts config --pin 2.10.0",
       "bun .claude/tools/aidlc.ts config --unpin",
@@ -156,6 +159,20 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "bun .claude/tools/aidlc.ts config models --global",
     ]) {
       expect(claudeBashEffect(command), command).not.toBe("allow");
+    }
+  });
+
+  // Every script behind a route that can change the machine asks, so a new
+  // one cannot slip under the aidlc-* entry.
+  test("the scripts behind every machine-changing command ask", () => {
+    const machine = new Set(
+      ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
+        .map((route) => route.tool)
+        .filter((tool): tool is string => tool !== undefined),
+    );
+    expect(machine.size).toBeGreaterThan(0);
+    for (const tool of machine) {
+      expect(claudeBashEffect(`bun .claude/tools/${tool} x`), tool).toBe("ask");
     }
   });
 

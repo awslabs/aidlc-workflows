@@ -1808,7 +1808,7 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 
-Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`): the copy channel's `permissions.ask` names the two scripts behind them, `aidlc-lifecycle.ts` and `aidlc-machine-config.ts`, which the `aidlc-*` entry would otherwise cover.
+Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`) and a `config` command holding `--pin`, `--unpin`, `--channel`, `--download` or `--global`: the copy channel's `permissions.ask` names those config flags and the scripts behind a machine-changing command (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`), which the `aidlc-*` entry would otherwise cover.
 
 `AskUserQuestion` is always permitted by default and does not require explicit approval.
 

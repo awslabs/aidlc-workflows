@@ -14,6 +14,8 @@
       "WebSearch"
     ],
     "ask": [
+      "Bash(bun .claude/tools/aidlc-doctor.ts*)",
+      "Bash(bun .claude/tools/aidlc-init.ts*)",
       "Bash(bun .claude/tools/aidlc-lifecycle.ts*)",
       "Bash(bun .claude/tools/aidlc-machine-config.ts*)",
       "Bash(bun .claude/tools/aidlc.ts config *--pin*)",

@@ -569,13 +569,16 @@ The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code
     "Task", "WebSearch"
   ],
   "ask": [
-    "Bash(bun .claude/tools/aidlc-lifecycle.ts*)",
-    "Bash(bun .claude/tools/aidlc-machine-config.ts*)"
+    "Bash(bun .claude/tools/aidlc-doctor.ts*)", "Bash(bun .claude/tools/aidlc-init.ts*)",
+    "Bash(bun .claude/tools/aidlc-lifecycle.ts*)", "Bash(bun .claude/tools/aidlc-machine-config.ts*)",
+    "Bash(bun .claude/tools/aidlc.ts config *--pin*)", "Bash(bun .claude/tools/aidlc.ts config *--unpin*)",
+    "Bash(bun .claude/tools/aidlc.ts config *--channel*)", "Bash(bun .claude/tools/aidlc.ts config *--download*)",
+    "Bash(bun .claude/tools/aidlc.ts config *--global*)"
   ]
 }
 ```
 
-`Edit(/**)` covers creating and changing files anywhere in the project: in project settings Claude Code anchors a leading `/` at the project root. Writes outside the project ask, as they do in Claude Code by default. Reading and searching inside the project needs no entry. The copy channel pre-approves AI-DLC's own workflow commands (the dispatcher's `engine` and `config` commands, `--doctor`, and the `aidlc-*` tools); the native release rewrites them to `Bash(aidlc engine *)`. A command that changes the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`) asks first on both, so you approve it in Claude Code's own prompt. `Bash(date -u *)` covers the timestamps the protocol asks the conductor to take. There is no bare `Bash`: Claude Code matches every subcommand of a compound command on its own and strips only a fixed set of known-safe environment variables, so an engine command stays pre-approved only when it runs bare. A `cd ... &&` prefix, an absolute `$CLAUDE_PROJECT_DIR` path, a `VAR=1` prefix, a pipe into `jq`, or a `$(...)` capture all prompt. A project's own build and test commands sit outside the list and prompt once; answering "Yes, and don't ask again" saves a rule for them in `.claude/settings.local.json`.
+`Edit(/**)` covers creating and changing files anywhere in the project: in project settings Claude Code anchors a leading `/` at the project root. Writes outside the project ask, as they do in Claude Code by default. Reading and searching inside the project needs no entry. The copy channel pre-approves AI-DLC's own workflow commands (the dispatcher's `engine` and `config` commands, `--doctor`, and the `aidlc-*` tools); the native release rewrites them to `Bash(aidlc engine *)`. A command that changes the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`, or a `config` command holding `--pin`, `--unpin`, `--channel`, `--download` or `--global`) asks first on both, so you approve it in Claude Code's own prompt. `Bash(date -u *)` covers the timestamps the protocol asks the conductor to take. There is no bare `Bash`: Claude Code matches every subcommand of a compound command on its own and strips only a fixed set of known-safe environment variables, so an engine command stays pre-approved only when it runs bare. A `cd ... &&` prefix, an absolute `$CLAUDE_PROJECT_DIR` path, a `VAR=1` prefix, a pipe into `jq`, or a `$(...)` capture all prompt. A project's own build and test commands sit outside the list and prompt once; answering "Yes, and don't ask again" saves a rule for them in `.claude/settings.local.json`.
 
 ### How permissions work
 
