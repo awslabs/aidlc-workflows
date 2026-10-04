@@ -1782,9 +1782,17 @@ To get started:
   const phase = getField(content, "Lifecycle Phase") || "Unknown";
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
-  const activeAgent = getField(content, "Active Agent") || "None";
-  const lastCompleted = getField(content, "Last Completed Stage") || "None";
-  const nextStage = getField(content, "Next Stage") || "None";
+  // Who is on it and what was done or comes next, in the names the person
+  // sees elsewhere; a setup step or an empty value says nothing.
+  const agentSlug = (getField(content, "Active Agent") ?? "").trim();
+  const agentName = agentSlug === "" || agentSlug === "None" || agentSlug === "orchestrator"
+    ? null
+    : loadAgents().find((agent) => agent.slug === agentSlug)?.display_name ?? agentSlug;
+  const lastStage = findStageBySlug((getField(content, "Last Completed Stage") ?? "").trim());
+  const nextNode = findStageBySlug((getField(content, "Next Stage") ?? "").trim());
+  const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
+  const lastLine = lastStage === undefined || lastStage.phase === "initialization" ? "" : `Last Completed: ${lastStage.name}\n`;
+  const nextLine = nextNode === undefined ? "" : `Next Stage:     ${nextNode.name}\n`;
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
   let guardPolicyDisplay: string;
@@ -1965,9 +1973,15 @@ To get started:
       `${projectType === "Brownfield" ? codeScannedClause(projectDir, selection.intent ?? undefined, selection.space) : ""}\n`;
   const depth = getField(content, "Depth");
   const testStrategy = getField(content, "Test Strategy");
+  // Where the depth came from, as the other settings say: the scope's own, or
+  // set for this piece of work.
+  const scopeDepth = loadScopeMapping()[scope]?.depth;
+  const depthSource = scopeDepth !== undefined && scopeDepth.toLowerCase() === (depth ?? "").toLowerCase()
+    ? `from scope ${scope}`
+    : "set for this piece of work";
   const depthDisplay = depth === null
     ? ""
-    : `Depth:          ${depth}${testStrategy && testStrategy !== depth ? ` (tests: ${testStrategy})` : ""}\n`;
+    : `Depth:          ${depth} (${depthSource})${testStrategy && testStrategy !== depth ? `, tests: ${testStrategy}` : ""}\n`;
   // Solo unit-major Construction keeps Current Stage on the first per-unit
   // stage while each Unit works through the later ones, so the active Unit's
   // own step is named too, once its recorded values check out (#1411).
@@ -1996,16 +2010,13 @@ ${plan ? `Plan:           ${plan} (this piece of work only)` : `Scope:          
 ${projectTypeDisplay}${depthDisplay}Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
-Active Agent:   ${activeAgent}
-Guard Policy:   ${guardPolicyDisplay}
+${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}Last Completed: ${lastCompleted}
-Next Stage:     ${nextStage}
-${alsoOpen}`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),

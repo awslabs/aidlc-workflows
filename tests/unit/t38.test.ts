@@ -413,13 +413,13 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.out).not.toContain("Fences:");
     expect(r.out).toContain("Scope:          feature\n");
     expect(r.out).toContain("Project Type:   new project\n");
-    expect(r.out).toContain("Depth:          Standard\n");
+    expect(r.out).toContain("Depth:          Standard (from scope feature)\n");
     // Said by the person, and a plan composed for this work, read as such.
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield\n- **Project Type Source**: you");
     sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Minimal\n- **Plan**: custom, based on feature");
     const again = status(p).out;
     expect(again).toContain("Project Type:   existing code (you said so)\n");
-    expect(again).toContain("Depth:          Standard (tests: Minimal)\n");
+    expect(again).toContain("Depth:          Standard (from scope feature), tests: Minimal\n");
     expect(again).toContain("Plan:           custom, based on feature (this piece of work only)\n");
     expect(again).not.toContain("Scope:");
     // Before workspace detection decides, the type is not shown as a guess.
@@ -443,6 +443,23 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.status).toBe(0);
     expect(r.out).toMatch(/^Changed since approved: Practices Discovery[^\n]*\. To redo it, type `\/aidlc --stage practices-discovery`\.$/m);
     expect(r.out).not.toContain("advisory; routing continues");
+  });
+
+  test("9: --status names who is on it and what was done in plain words, and where the depth came from", () => {
+    const p = seededProj();
+    const out = status(p).out;
+    expect(out).toContain("Active Agent:   Architect Agent\n");
+    expect(out).toContain("Last Completed: Market Research\n");
+    expect(out).toContain("Next Stage:     Scope Definition\n");
+    expect(out).not.toContain("aidlc-architect-agent");
+    sedState(p, /^- \*\*Depth\*\*: .*$/m, "- **Depth**: Comprehensive");
+    expect(status(p).out).toContain("Depth:          Comprehensive (set for this piece of work)\n");
+    // A setup step, or no one on it, is not news to the person.
+    sedState(p, /^- \*\*Last Completed Stage\*\*: .*$/m, "- **Last Completed Stage**: state-init");
+    sedState(p, /^- \*\*Active Agent\*\*: .*$/m, "- **Active Agent**: None");
+    const setup = status(p).out;
+    expect(setup).not.toContain("Last Completed:");
+    expect(setup).not.toContain("Active Agent:");
   });
 
   test("8: --status says when the existing code was scanned, also after Reverse Engineering ran on its own", () => {

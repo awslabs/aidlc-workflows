@@ -258,7 +258,7 @@ describe("t339 upgrading an in-flight classic intent", () => {
     expect(run(STATE, project, ["lookup", "next-stage", "build-and-test", "classic"]).trim()).toBe("deployment-pipeline");
     const status = run(UTILITY, project, ["status"]);
     expect(status).toMatch(/^\s*OPERATION\s+\S+\s+0\/7$/m);
-    expect(status).toContain("Next Stage:     deployment-pipeline\n");
+    expect(status).toContain("Next Stage:     Deployment Pipeline\n");
     expect(readFileSync(path, "utf-8")).toBe(content);
   });
 
