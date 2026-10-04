@@ -123,11 +123,26 @@ async function enterJob(name: string): Promise<void> {
   if (failures.length) throw new AggregateError(failures, "e2e job admission failed");
 }
 
+export interface GroupProbe {
+  /** kill(-group, 0). */
+  signal(group: number): void;
+  /** The text of /proc/<pid>/stat. */
+  stat(pid: string): string;
+}
+const SYSTEM_PROBE: GroupProbe = {
+  signal: (group) => { process.kill(-group, 0); },
+  stat: (pid) => readFileSync(`/proc/${pid}/stat`, "utf8"),
+};
+
 /** Read-only group observation. Zombies cannot run or keep output pipes open. */
-function groupRetired(group: number): boolean {
-  try { process.kill(-group, 0); }
+export function groupRetired(group: number, probe: GroupProbe = SYSTEM_PROBE): boolean {
+  try { probe.signal(group); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return true;
+    // Members remain that cannot take the probe: Darwin answers this way for
+    // a group of unreaped zombies. Keep waiting; the deadline still fails closed.
+    if (code === "EPERM") return false;
     throw error;
   }
   if (process.platform !== "linux") return false;
@@ -135,9 +150,10 @@ function groupRetired(group: number): boolean {
   for (const entry of readdirSync("/proc")) {
     if (!/^\d+$/.test(entry)) continue;
     let raw: string;
-    try { raw = readFileSync(`/proc/${entry}/stat`, "utf8"); }
+    try { raw = probe.stat(entry); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      // ESRCH: the process was reaped between opening its stat file and reading it.
+      if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
       throw error;
     }
     const fields = raw.slice(raw.lastIndexOf(")") + 1).trim().split(/\s+/);
@@ -282,7 +298,8 @@ export async function startIsolatedProcess(options: {
         options.signal.removeEventListener("abort", stop);
         child.stdin.destroy();
         try { job?.close(); } catch (error) { failures.push(error); }
-        if (failures.length) throw new AggregateError(failures, "e2e process cleanup failed");
+        // The runner reports String(error), which drops the inner errors.
+        if (failures.length) throw new AggregateError(failures, `e2e process cleanup failed: ${failures.map(text).join("; ")}`);
         return Object.freeze({
           platform: process.platform, job: config.job, configPath, configText,
         });
