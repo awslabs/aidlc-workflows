@@ -31,7 +31,7 @@ The guards are the person's switches, never the agent's. When someone asks in pl
 
 ## Models and effort
 
-When someone asks in plain words to change an agent's model or effort ("make the developer agent think harder"), run `{{INVOKE}} config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`: use `--local` instead of `--project` when it is only for them, and add `--model <id>` for a model. Print its output and stop. Never edit the `aidlc-*-agent` files for this.
+When someone asks in plain words to change an agent's model or effort ("make the developer agent think harder"), run `{{INVOKE}} config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. For a model, use `--model <id>` in place of `--effort`, or both when they ask for both. Use `--local` instead of `--project` when it is only for them. If it asks for `--harness`, run it again naming this tool's harness. Print its output and stop. Never edit the `aidlc-*-agent` files for this.
 
 {{SLOT:structure_extra}}
 

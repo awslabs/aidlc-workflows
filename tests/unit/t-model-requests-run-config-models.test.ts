@@ -15,6 +15,9 @@ import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const COMMAND = "config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes";
 const NO_HAND_EDIT = "Never edit the `aidlc-*-agent` files for this.";
+// A model alone takes no effort, and a project with two harnesses asks which.
+const MODEL_ONLY = "`--model <id>` in place of `--effort`";
+const NAMED_HARNESS = "run it again naming this tool's harness";
 
 function releasePath(path: string): string {
   return path.replace(join(REPO_ROOT, "dist"), join(REPO_ROOT, "dist-release"));
@@ -33,6 +36,8 @@ describe("a model or effort request runs config models", () => {
         expect(onboarding, path).toContain("## Models and effort");
         expect(onboarding, path).toContain(`\`${invoke} ${COMMAND}\``);
         expect(onboarding, path).toContain(NO_HAND_EDIT);
+        expect(onboarding, path).toContain(MODEL_ONLY);
+        expect(onboarding, path).toContain(NAMED_HARNESS);
       }
     }
   });
@@ -43,6 +48,8 @@ describe("a model or effort request runs config models", () => {
       expect(skill, harness.name).toContain("**Model and effort requests.**");
       expect(skill, harness.name).toContain(`${harness.manifest.harnessDir}/tools/aidlc.ts ${COMMAND}`);
       expect(skill, harness.name).toContain(NO_HAND_EDIT);
+      expect(skill, harness.name).toContain(MODEL_ONLY);
+      expect(skill, harness.name).toContain(NAMED_HARNESS);
     }
   });
 
@@ -51,6 +58,7 @@ describe("a model or effort request runs config models", () => {
       "core/templates/onboarding.md",
       "core/templates/onboarding-harness.md",
       "docs/guide/13-customization.md",
+      "docs/guide/18-install-and-lifecycle.md",
       "docs/reference/05-agent-system.md",
       ...HARNESS_MATRIX.map((harness) => `harness/${harness.name}/skills/aidlc/SKILL.md`),
     ];
@@ -60,6 +68,7 @@ describe("a model or effort request runs config models", () => {
       expect(text, rel).not.toContain("add a `\"model\"` field to the agent's");
     }
     const guide = readFileSync(join(REPO_ROOT, "docs/guide/13-customization.md"), "utf-8");
-    expect(guide).toContain("To change ONE agent's model or effort, run `aidlc config models --agent <name>");
+    expect(guide).toContain("To change ONE agent's effort, run `aidlc config models --agent <name> --effort");
+    expect(guide).toContain("To pin its model, use `--model <id>`");
   });
 });

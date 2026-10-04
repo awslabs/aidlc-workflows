@@ -774,8 +774,8 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   if (argv.includes("--save-as") && !argv.includes("--from")) {
     return "--save-as requires --from <preset|profile>";
   }
-  if (argv.includes("--agent") && !argv.includes("--effort")) {
-    return "--agent requires --effort <value>";
+  if (argv.includes("--agent") && !argv.includes("--effort") && !argv.includes("--model")) {
+    return "--agent requires --effort <value> or --model <raw-id>";
   }
   if (
     !argv.includes("--agent") &&
@@ -914,7 +914,7 @@ function modelPolicyHelp(): string {
     "  --deciding-effort <low|medium|high|xhigh|max>",
     "  --reviewing-effort <low|medium|high|xhigh|max>",
     "  --writing-up-effort <low|medium|high|xhigh|max>",
-    "  --agent <name> --effort <value> [--model <raw-id>]",
+    "  --agent <name> [--effort <value>] [--model <raw-id>]  (one or both)",
     "  --reset",
     "",
     heading("WRITE TARGET", out),
@@ -1185,16 +1185,18 @@ function applyModelsFlags(
       `unknown agent ${JSON.stringify(agent)}; use one of ${Object.keys(tiers).sort().join(", ")}`,
     );
   }
-  if (agent && !effort) throw new Error("--agent requires --effort <value>");
+  if (agent && !effort && !model) throw new Error("--agent requires --effort <value> or --model <raw-id>");
   if (!agent && (effort || model)) throw new Error("--effort and --model require --agent <name>");
   if (effort && !isModelEffort(effort)) {
     throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}`);
   }
-  if (agent && effort) {
+  // A model alone leaves the agent's effort where it was, and an effort alone
+  // its model.
+  if (agent && (effort || model)) {
     next.agents ??= {};
     next.agents[agent] = {
       ...(next.agents[agent] ?? {}),
-      effort: effort as ModelEffort,
+      ...(effort ? { effort: effort as ModelEffort } : {}),
       ...(model ? { model } : {}),
     };
   }
@@ -8108,17 +8110,19 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
     }
     for (const [harness, model] of Object.entries(policy.model ?? {})) {
       if (!model) continue;
-      // --agent always takes --effort, so the model comes back with the
-      // agent's effort, and only when one is recorded.
+      // The model comes back with the agent's effort when one is recorded,
+      // and on its own when none is.
       const shown = SHOWN_MODEL_ID.test(model);
       leaves.set(`models.agents.${agent}.model.${harness}`, {
         section: "models",
         label: `${agent} model (${harness})`,
         value: model,
         shown: shown ? model : "(a model ID that is not shown)",
-        args: policy.effort && shown
+        args: !shown
+          ? []
+          : policy.effort
           ? ["--agent", agent, "--effort", policy.effort, "--model", model, "--harness", harness]
-          : [],
+          : ["--agent", agent, "--model", model, "--harness", harness],
       });
     }
   }
