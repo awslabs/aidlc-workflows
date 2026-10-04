@@ -46,6 +46,7 @@ import {
   jsoncSettingValue,
   type ProjectionDescriptor,
   projectionFiles,
+  readRootIntegrations,
   removeJsoncSetting,
   replaceJsoncSetting,
   sha256Bytes,
@@ -3653,7 +3654,9 @@ function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, 
     if (!regularFile(path)) return null;
     const value: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (!isRecord(value) || !Array.isArray(value.rootIntegrations)) return null;
-    return value as Pick<ProjectionDescriptor, "rootIntegrations">;
+    return {
+      rootIntegrations: readRootIntegrations(value.rootIntegrations) as ProjectionDescriptor["rootIntegrations"],
+    };
   } catch {
     return null;
   }
@@ -5863,6 +5866,7 @@ function copiedProjectSource(
   const descriptor = JSON.parse(
     readFileSync(descriptorPath, "utf-8"),
   ) as ReturnType<typeof projectionFiles>["descriptor"];
+  descriptor.rootIntegrations = readRootIntegrations(descriptor.rootIntegrations) as ProjectionDescriptor["rootIntegrations"];
   if (
     stamp.schemaVersion !== 1 ||
     descriptor.schemaVersion !== 1 ||

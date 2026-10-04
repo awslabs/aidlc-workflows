@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-runtime:compile, subcommand:aidlc-learnings:surface
+// covers: subcommand:aidlc-runtime:compile, subcommand:aidlc-learnings:surface, subcommand:aidlc-log:decision
 //
 // t199 - the per-intent memory path is recorded (write side) and read (read
 // side) across the workspace layout.
@@ -72,6 +72,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const BUN = process.execPath; // the bun running this test
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
+const LOG_TS = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 // The active intent's RELATIVE record prefix a seeded workspace project resolves
 // (createTestProject seeds the active-intent cursor at DEFAULT_RECORD_DIR).
@@ -417,5 +418,58 @@ describe("t199 per-intent memory path (write + read)", () => {
       }).status,
     ).toBe(0);
     expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(true);
+  }, TIMEOUT);
+
+  // The ritual's two commands, run the way an agent got them wrong live: the
+  // refusal names the value to pass, so the next attempt is the right one.
+  test("a wrong --slug or a learnings --checkpoint is refused with the way to run it", () => {
+    const pd = mkWorkspaceProject();
+    const recordName = seededRecordDir(pd).split("/").pop() as string;
+    const surfaced = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", recordName, "--project-dir", pd],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(surfaced.status).toBe(1);
+    expect(surfaced.stderr).toContain(`slug mismatch: requested "${recordName}" but Current Stage is "user-stories"`);
+    expect(surfaced.stderr).toContain("Run it again with --slug user-stories.");
+
+    // Another stage's slug, or a Current Stage that is no stage, gets the
+    // plain refusal: neither names a value to retry with.
+    const surface = (slug: string) => spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", slug, "--project-dir", pd],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    const otherStage = surface("code-generation");
+    expect(otherStage.status).toBe(1);
+    expect(otherStage.stderr).toContain('slug mismatch: requested "code-generation" but Current Stage is "user-stories"');
+    expect(otherStage.stderr).not.toContain("Run it again");
+    writeFileSync(
+      seededStateFile(pd),
+      "# AI-DLC State Tracking\n- **Current Stage**: user-stories; touch x\n- **Scope**: feature\n",
+    );
+    const notAStage = surface(recordName);
+    expect(notAStage.status).toBe(1);
+    expect(notAStage.stderr).toContain("slug mismatch");
+    expect(notAStage.stderr).not.toContain("Run it again");
+    writeFileSync(
+      seededStateFile(pd),
+      "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n",
+    );
+
+    const logged = spawnSync(
+      BUN,
+      [
+        LOG_TS, "decision", "--stage", "user-stories", "--checkpoint", "learnings",
+        "--decision", "Anything to add for next time?", "--options", "Nothing to add,Add a note",
+        "--project-dir", pd,
+      ],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(logged.status).not.toBe(0);
+    expect(`${logged.stdout}${logged.stderr}`).toContain(
+      "The learnings question takes no --checkpoint: run the same command without it.",
+    );
   }, TIMEOUT);
 });

@@ -2031,6 +2031,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         ["plugin list --json", "engine plugin list --json"],
         ["plugin validate", "engine plugin validate"],
         ["knowledge list --json", "engine knowledge list --json"],
+        ["knowledge help", "engine knowledge help"],
         ["--doctor --export", "doctor --export"],
         ["--version", "version"],
         ["help", "engine orchestrate help"],

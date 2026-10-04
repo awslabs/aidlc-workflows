@@ -323,9 +323,9 @@ runs only while the plugin is enabled. It receives `AIDLC_PROJECT_DIR`,
 without other stdout:
 
 Doctor discovery derives installed plugin identities from owned stage and scope
-metadata. A plugin must therefore own at least one stage or scope for its doctor
-script to be discoverable; a tools-, sensors-, or knowledge-only plugin is not
-enough on its own.
+metadata and from the composition sidecars under `tools/data/`. A plugin whose
+compose merged contributions (sensors, produces, overlays) is discoverable even
+when it owns no stage or scope.
 
 ```typescript
 import { existsSync } from "node:fs";

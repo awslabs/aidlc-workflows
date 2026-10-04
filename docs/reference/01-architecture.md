@@ -368,7 +368,14 @@ under `tools/data/`:
   with one typed merge policy (`managed-block`, `json-map`, `json-array`,
   `whole-file`, or `jsonc-settings`, which edits an editor's JSONC settings
   file key by key: it adds a shipped key only when absent, keeps every other
-  key and comment, and is left out of the copy runtime). Optional
+  key and comment, and is left out of the copy runtime). A 2.10.0 install
+  refuses a release whose descriptor names a policy it does not know, so a
+  policy added since (`jsonc-settings`) is written as `whole-file` with the real
+  one in `extendedPolicy`, and every reader puts it back
+  (`writtenRootIntegration` and `readRootIntegrations` in
+  `core/tools/aidlc-distribution.ts`;
+  `tests/unit/t-previous-release-validates-runtime.test.ts` runs 2.10.0's own
+  check against every runtime tree). Optional
   integrations and exact legacy hashes are declared
   here; an unclassified top-level entry makes packaging or loading fail.
 

@@ -81,6 +81,7 @@ interface GraphStage {
   enabled?: false;
   produces?: string[];
   sensors?: string[];
+  plugin?: string;
 }
 function graph(project: string): GraphStage[] {
   return JSON.parse(readFileSync(graphPath(project), "utf-8"));
@@ -330,6 +331,40 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(result.stderr).toContain("Unknown plugin name");
     expect(result.stderr).toContain("aidlc");
     expect(result.stderr).toContain("test-pro");
+  });
+
+  test("a composed plugin that owns no stage or scope can be selected, and disabling it strips its sensors (#1590)", () => {
+    const proj = join(tmp, "contribution-only");
+    composePluginFixture({ plugin: PLUGIN, harness: "claude", projectDir: proj, pluginBuilt });
+    const claude = join(proj, ".claude");
+    for (const phase of readdirSync(join(claude, "aidlc-common", "stages"))) {
+      for (const file of readdirSync(join(claude, "aidlc-common", "stages", phase))) {
+        if (file.startsWith(`${PLUGIN}-`)) rmSync(join(claude, "aidlc-common", "stages", phase, file));
+      }
+    }
+    for (const file of readdirSync(join(claude, "scopes"))) {
+      if (file.startsWith(`${PLUGIN}-`)) rmSync(join(claude, "scopes", file));
+    }
+    const compile = spawnSync(BUN, [join(claude, "tools", "aidlc-graph.ts"), "compile"], {
+      cwd: proj,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compile.status, compile.stderr).toBe(0);
+    const buildSensors = () => graph(proj).find((s) => s.slug === "build-and-test")?.sensors ?? [];
+    expect(graph(proj).some((s) => s.plugin === PLUGIN)).toBe(false);
+    expect(buildSensors()).toContain("coverage-threshold");
+
+    const both = runUtility(proj, ["select-plugins", `aidlc,${PLUGIN}`]);
+    expect(both.status, both.stderr).toBe(0);
+    expect(buildSensors()).toContain("coverage-threshold");
+
+    const core = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(core.status, core.stderr).toBe(0);
+    expect(core.stdout).toContain(`Stripped merged contributions of disabled plugin(s): ${PLUGIN}`);
+    expect(buildSensors()).not.toContain("coverage-threshold");
+    expect(buildSensors()).not.toContain("requirement-coverage");
   });
 
   // Disabling a plugin an ACTIVE workflow depends on would strand it: the

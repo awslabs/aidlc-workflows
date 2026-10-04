@@ -96,6 +96,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
+import { readRootIntegrations } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -3307,7 +3308,7 @@ export function aidlcRootIntegrations(dir: string): Array<{ path: string; policy
       const descriptor = JSON.parse(
         readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8"),
       ) as { rootIntegrations?: unknown } | null;
-      integrations = descriptor?.rootIntegrations;
+      integrations = readRootIntegrations(descriptor?.rootIntegrations);
     } catch {
       continue;
     }
