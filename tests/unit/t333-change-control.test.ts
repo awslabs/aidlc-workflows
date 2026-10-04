@@ -4,7 +4,7 @@
 // function:governedGuardPolicy, function:guardPolicyStateField,
 // function:setGuardPolicyLine, function:guardPolicyMemoryStrictRefusal,
 // function:noteGuardPolicyRename, function:fencesLoweredByPolicy,
-// function:resolveFences, function:formatFence, function:parseGuardsOffLine,
+// function:resolveFences, function:formatFence, function:fenceSourceLabel, function:parseGuardsOffLine,
 // function:formatGuardsOffLine, function:setGuardsOffLine,
 // function:recordSessionPresenceBypass, function:sessionPresenceBypassRecorded,
 // function:fenceKeyBypassed,

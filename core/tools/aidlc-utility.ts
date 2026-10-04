@@ -1923,7 +1923,8 @@ To get started:
   }
 
   const plan = getField(content, PLAN_FIELD);
-  const projectType = getField(content, "Project Type");
+  // Said only once it is known: workspace detection writes a placeholder first.
+  const projectType = declaredProjectType(getField(content, "Project Type") ?? "");
   const projectTypeDisplay = projectType === null
     ? ""
     : `Project Type:   ${projectType === "Brownfield" ? "existing code" : "new project"}` +

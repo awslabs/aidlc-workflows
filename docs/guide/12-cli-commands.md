@@ -1339,8 +1339,8 @@ writes `GUARD_RESTORED`. Setting `on` raises a policy-lowered fence, records it 
 same fields. Repeating a setting already in force is a no-op that says so;
 setting `on` for a policy-lowered fence is not a no-op. Neither state line accepts
 human presence, and a persisted human-presence entry is ignored.
-`/aidlc --status` prints a `Fences:` line with all five and where each setting
-came from, so nothing is lowered invisibly. Precedence is the environment kill
+`/aidlc --status` prints a `Checks off:` line naming each one that is off and
+where that setting came from, so nothing is lowered invisibly. Precedence is the environment kill
 switch, then per-work off unless memory holds strict, then per-work on, then the Guard Policy word, then on
 by default. Four of the five have a kill switch; `state-transition` has none,
 so the policy word and this switch are its only controls.

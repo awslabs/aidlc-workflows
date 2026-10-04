@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:status, function:fenceSourceLabel
+// covers: subcommand:aidlc-utility:status
 //
 // CLI-contract port of tests/unit/t38-utility-status-gate-awareness.sh
 // (TAP plan 5), mechanism = cli. Equal-or-stronger migration: every .sh
@@ -422,6 +422,9 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(again).toContain("Depth:          Standard (tests: Minimal)\n");
     expect(again).toContain("Plan:           custom, based on feature (this piece of work only)\n");
     expect(again).not.toContain("Scope:");
+    // Before workspace detection decides, the type is not shown as a guess.
+    sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: \u2014");
+    expect(status(p).out).not.toContain("Project Type:");
   });
 
   test("7: --status names a stage changed since its approval, and the redo", () => {

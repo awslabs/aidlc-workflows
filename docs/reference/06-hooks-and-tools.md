@@ -556,10 +556,11 @@ For the three switchable fences, `config-change --guard.<fence> off|on` writes
 the `Guards Off` or `Guards On` line in canonical order as
 `<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
 `GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
-that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` renders all
-five through `formatFence` on its `Fences:` line: `on (default)`,
-`on (set by you)`, `off (set by you)`, `off (env <VAR>)`, or
-`off (guard policy off (from scope classic))`, as appropriate.
+that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` names each fence
+that is off on its `Checks off:` line, grouped by where the setting came from
+and worded by `fenceSourceLabel` as `formatFence` words it: `set by you`,
+`env <VAR>`, or `guard policy off (from scope classic)`; with every fence on
+there is no line.
 
 The human-turn hook applies explicit fence and policy lowering from the person's
 typed prompt through the shared settings transaction.

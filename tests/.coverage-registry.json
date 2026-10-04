@@ -3787,7 +3787,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t38.test.ts",
+          "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
         }
       ],
