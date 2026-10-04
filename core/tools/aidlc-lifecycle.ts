@@ -1053,7 +1053,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   const target = installedExecutablePath(version);
   const windows = process.platform === "win32";
   const shim = windows ? windowsShim() : unixShim();
-  const shimHelper = windows ? windowsShimHelper() : null;
+  const shimHelper = windows ? windowsShimHelperFor(version) : null;
   // The Git Bash launcher guard runs first among the Windows integrity checks,
   // so a foreign or directory bin/aidlc is named as itself.
   const posixCommand = windows ? windowsPosixCommandPath() : null;
@@ -1093,7 +1093,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   if (
     windows &&
     existsSync(windowsShimPath()) &&
-    ![shimHelper, ...previousWindowsShimHelpers()].includes(
+    ![windowsShimHelper(), ...previousWindowsShimHelpers()].includes(
       readFileSync(windowsShimPath(), "utf-8"),
     )
   ) {
@@ -1406,6 +1406,24 @@ function windowsShimHelper(): string {
   ].join("\r\n");
 }
 
+// A release from before FIRST_RELEASE_WITH_CURRENT_HELPER (2.10.0 among them)
+// accepts only the helpers it wrote itself, so while it is the active version
+// it keeps its own helper; with the current one it could never switch to
+// another version again.
+const FIRST_RELEASE_WITH_CURRENT_HELPER = "2.10.1-preview.20261003.1";
+
+function predatesCurrentHelper(version: string): boolean {
+  try {
+    return compareVersions(version, FIRST_RELEASE_WITH_CURRENT_HELPER) < 0;
+  } catch {
+    return false;
+  }
+}
+
+function windowsShimHelperFor(version: string): string {
+  return predatesCurrentHelper(version) ? renderSilentWindowsShimHelper(VERSION_ID_PATTERN) : windowsShimHelper();
+}
+
 // The helper every installer wrote before refusals carried a reason.
 function renderSilentWindowsShimHelper(versionPattern: string): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
@@ -1547,6 +1565,8 @@ export function previousWindowsShimHelperState(): PreviousShimHelperState {
   } catch {
     return null;
   }
+  // That release's own helper is the right one for it.
+  if (predatesCurrentHelper(target)) return null;
   if (!runningActiveExecutable(active)) {
     return {
       kind: "blocked",

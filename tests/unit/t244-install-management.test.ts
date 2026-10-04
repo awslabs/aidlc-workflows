@@ -36,7 +36,12 @@ import {
 } from "../../core/tools/aidlc-install-paths.ts";
 import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
-import { activate, previousWindowsShimHelpers } from "../../core/tools/aidlc-lifecycle.ts";
+import {
+  activate,
+  previousWindowsShimHelpers,
+  previousWindowsShimHelperState,
+  replacePreviousWindowsShimHelper,
+} from "../../core/tools/aidlc-lifecycle.ts";
 import {
   channelPath,
   readMachineChannel,
@@ -1619,6 +1624,53 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     );
     expect(active()).toBe(AIDLC_VERSION);
   });
+
+  // 2.10.0 accepts only the Windows helpers it wrote itself. Switched back to
+  // it, a machine keeps 2.10.0's own helper, or 2.10.0 could never switch to
+  // another version again.
+  test.skipIf(process.platform !== "win32")(
+    "switching back to 2.10.0 leaves the helper 2.10.0 knows, and switching forward the current one",
+    () => {
+      const older = "2.10.0";
+      const newer = patchVersion(1);
+      const machine = temp("aidlc-t244-older-helper-");
+      const project = temp("aidlc-t244-older-helper-project-");
+      mkdirSync(join(project, ".git"));
+      const env = envFor(machine);
+      for (const version of [older, newer]) {
+        const installed = run(LIFECYCLE, [
+          "update", "--version", version, "--from", fixture(version, { binary: "executable" }),
+        ], project, env);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      }
+      const helper = () => readFileSync(join(machine, "aidlc-shim.ps1"), "utf-8");
+      const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const [olderHelper] = previousWindowsShimHelpers();
+        expect(helper()).not.toBe(olderHelper);
+
+        const back = run(LIFECYCLE, ["use", older], project, env);
+        expect(back.status, back.stdout + back.stderr).toBe(0);
+        expect(helper()).toBe(olderHelper);
+        // A newer release's binary, as a pinned project runs it, leaves it too.
+        expect(previousWindowsShimHelperState()).toBeNull();
+        replacePreviousWindowsShimHelper();
+        expect(helper()).toBe(olderHelper);
+
+        const forward = run(LIFECYCLE, ["use", newer], project, env);
+        expect(forward.status, forward.stdout + forward.stderr).toBe(0);
+        expect(helper()).not.toBe(olderHelper);
+        expect(helper()).toContain("Stop-Launcher");
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+  );
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
