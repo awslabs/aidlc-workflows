@@ -94,17 +94,26 @@ export function readUpdateCache(): UpdateCache | null {
   return validateCache(JSON.parse(readFileSync(path, "utf-8")));
 }
 
-// The machine is "behind" when the channel's newest release is newer than the
-// running binary, or when the binary belongs to the other channel: a stable
-// binary on the preview channel (or the reverse) converges through `update`
-// even when the target id sorts lower, and that is a channel switch, not a
-// downgrade.
+// The two ways on from a release newer than the newest one the machine
+// follows: back to that channel's newest (only when the person asks, since a
+// plain update never installs an older release), or, from a release of the
+// other channel, follow that channel instead.
+export function channelWays(follows: ReleaseChannel, running: ReleaseChannel, latest?: string): string {
+  const back = `To go back to ${follows}${latest ? ` ${latest}` : ""}: aidlc update --channel ${follows}.`;
+  if (running === follows) return back;
+  const kept = running === PREVIEW_CHANNEL ? "previews" : `${running} releases`;
+  return `${back} To keep getting ${kept}: aidlc config --channel ${running}.`;
+}
+
+// The machine is "behind" only when the channel's newest release is newer than
+// the running binary: a plain `update` never installs an older one. A binary of
+// the other channel that is newer says so, with both ways on.
 function cacheState(cache: UpdateCache, now = Date.now()): UpdateState {
   const channel = cache.channel ?? STABLE_CHANNEL;
   const binaryChannel = versionChannel(AIDLC_VERSION);
   const stale = now - Date.parse(cache.checkedAt) >= CACHE_TTL_MS;
   const switching = binaryChannel !== channel;
-  const behind = switching || compareVersions(AIDLC_VERSION, cache.latestVersion) < 0;
+  const behind = compareVersions(AIDLC_VERSION, cache.latestVersion) < 0;
   // Stable messages keep their pre-channel wording; preview names its channel.
   const channelWord = channel === STABLE_CHANNEL ? "" : `${channel} `;
   return {
@@ -114,8 +123,11 @@ function cacheState(cache: UpdateCache, now = Date.now()): UpdateState {
     latestVersion: cache.latestVersion,
     checkedAt: cache.checkedAt,
     stale,
-    message: switching
+    message: switching && behind
       ? `binary ${AIDLC_VERSION} (${binaryChannel}), ${channel} channel newest ${cache.latestVersion}; update switches channels`
+      : switching
+      ? `You're on ${AIDLC_VERSION}, newer than the latest ${channel} ${cache.latestVersion}. ` +
+        channelWays(channel, binaryChannel, cache.latestVersion)
       : behind
       ? `binary ${AIDLC_VERSION}, latest ${channelWord}${cache.latestVersion}`
       : stale

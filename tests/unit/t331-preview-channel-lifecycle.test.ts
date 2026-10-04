@@ -27,6 +27,8 @@ import { fileURLToPath } from "node:url";
 import { PREVIEW_CHANNEL, STABLE_CHANNEL } from "../../core/tools/aidlc-channel.ts";
 import { resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
 import { updateCheck } from "../../core/tools/aidlc-doctor.ts";
+import { channelPath, updateCachePath } from "../../core/tools/aidlc-machine-config.ts";
+import { cachedUpdateState } from "../../core/tools/aidlc-update.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import {
   type FixtureRelease,
@@ -270,9 +272,21 @@ describe("t331 preview release channel", () => {
     expect(noop.status, noop.stdout + noop.stderr).toBe(0);
     expect(noop.stdout).toContain(`You're on the latest ${PREVIEW_CHANNEL} version of aidlc (${PREVIEW_2}).`);
 
-    // Back to stable: a lower id, reported as a channel switch.
+    // Back to stable is a lower id. A plain update never installs a release
+    // older than the one running: it changes nothing and names both ways on.
     expect((await run(DISPATCHER, ["config", "--channel", STABLE_CHANNEL], project, env)).status).toBe(0);
-    const switched = await run(LIFECYCLE, ["update", "--release-base-url", stable.baseUrl], project, env);
+    const plainBack = await run(LIFECYCLE, ["update", "--release-base-url", stable.baseUrl], project, env);
+    expect(plainBack.status, plainBack.stdout + plainBack.stderr).toBe(0);
+    expect(plainBack.stdout).toContain(
+      `You're on ${PREVIEW_2}, newer than the latest ${STABLE_CHANNEL} ${AIDLC_VERSION}, so there's nothing to update. ` +
+        `To go back to ${STABLE_CHANNEL} ${AIDLC_VERSION}: aidlc update --channel ${STABLE_CHANNEL}. ` +
+        `To keep getting previews: aidlc config --channel ${PREVIEW_CHANNEL}.`,
+    );
+    expect(readFileSync(join(machine, "active-version"), "utf-8").trim()).toBe(PREVIEW_2);
+    // Asked by name, it goes back, reported as a channel switch.
+    const switched = await run(LIFECYCLE, [
+      "update", "--channel", STABLE_CHANNEL, "--release-base-url", stable.baseUrl,
+    ], project, env);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(switched.stdout).toContain(`Checking for releases ... ${PREVIEW_2} -> ${AIDLC_VERSION}`);
     expect(switched.stdout).toContain(
@@ -299,7 +313,7 @@ describe("t331 preview release channel", () => {
       `updated ${AIDLC_VERSION} -> ${PREVIEW_2} (switched channel ${STABLE_CHANNEL} -> ${PREVIEW_CHANNEL})`,
     );
     // `--channel` lasts one run: the machine still follows stable, and the
-    // update says so and how to follow previews instead.
+    // update says so, with both ways on.
     expect(JSON.parse(json.stdout).data.follows).toBe(STABLE_CHANNEL);
     expect((await run(LIFECYCLE, ["use", AIDLC_VERSION], project, env)).status).toBe(0);
     const oneRun = await run(LIFECYCLE, [
@@ -308,8 +322,8 @@ describe("t331 preview release channel", () => {
     ], project, env);
     expect(oneRun.status, oneRun.stdout + oneRun.stderr).toBe(0);
     expect(oneRun.stdout).toContain(
-      `This machine still follows ${STABLE_CHANNEL} releases, so \`aidlc update\` goes back to the newest one. ` +
-        `To follow ${PREVIEW_CHANNEL} releases, run \`aidlc config --channel ${PREVIEW_CHANNEL}\`.`,
+      `This machine follows ${STABLE_CHANNEL} releases. To go back to ${STABLE_CHANNEL}: aidlc update --channel ` +
+        `${STABLE_CHANNEL}. To keep getting previews: aidlc config --channel ${PREVIEW_CHANNEL}.`,
     );
     expect(oneRun.stdout).not.toContain("Switched release channel");
     const followed = await run(DISPATCHER, ["config", "--channel"], project, env);
@@ -336,6 +350,37 @@ describe("t331 preview release channel", () => {
       message: "",
     });
     expect(same.fix).toMatch(/^run `.*update`$/);
+  });
+
+  // A plain update never installs an older release, so a binary newer than the
+  // newest release the machine follows is current: doctor passes it and names
+  // both ways on instead of telling the person to update.
+  test("a binary newer than the newest release of the channel the machine follows is current, with both ways on", () => {
+    const { machine } = machineEnv();
+    const saved = process.env.AIDLC_INSTALL_ROOT;
+    process.env.AIDLC_INSTALL_ROOT = machine;
+    try {
+      const older = "2.9.1-preview.20260920.1";
+      writeFileSync(channelPath(), `${PREVIEW_CHANNEL}\n`);
+      writeFileSync(updateCachePath(), `${JSON.stringify({
+        schemaVersion: 1,
+        checkedAt: new Date().toISOString(),
+        latestVersion: older,
+        releaseDate: "2026-09-20",
+        channel: PREVIEW_CHANNEL,
+      })}\n`);
+      const state = cachedUpdateState();
+      expect(state.state).toBe("current");
+      expect(state.message).toBe(
+        `You're on ${AIDLC_VERSION}, newer than the latest ${PREVIEW_CHANNEL} ${older}. ` +
+          `To go back to ${PREVIEW_CHANNEL} ${older}: aidlc update --channel ${PREVIEW_CHANNEL}. ` +
+          `To keep getting ${STABLE_CHANNEL} releases: aidlc config --channel ${STABLE_CHANNEL}.`,
+      );
+      expect(updateCheck(state).pass).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+      else process.env.AIDLC_INSTALL_ROOT = saved;
+    }
   });
 
   test("previews keep the newest two on top of the active, rollback, in-use, and pinned protection", async () => {
