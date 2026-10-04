@@ -484,9 +484,9 @@ const INTENT_CREATE_VALUE_FLAGS = [
 ] as const;
 const INTENT_CREATE_DESCRIPTIVE_FLAGS = ["scope", "arguments", "label"] as const;
 const NO_STATE_FILE_MESSAGE =
-  "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
+  `No state file found. Start a workflow first by describing what to build (${entrySkillInvocation()} "build the auth service").`;
 const INIT_TRANSITION_MESSAGE =
-  "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
+  `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: ${entrySkillInvocation()} "build the auth service".`;
 const UPGRADE_UNAVAILABLE_MESSAGE =
   "upgrade is not available in this install; it arrives with the packaged binary distribution.";
 
@@ -605,7 +605,7 @@ function appendAuditEvent(
 
 const HELP_TEXT_HEAD = `AI-DLC - AI-Driven Development Life Cycle
 
-Usage: /aidlc [command]
+Usage: ${entrySkillInvocation()} [command]
 
 Scopes (set depth, test strategy, and stage count):
 `;
@@ -671,21 +671,21 @@ Other:
   (no arguments)    Resume existing workflow, or start fresh if none exists
 
 Examples:
-  /aidlc feature                                Start a feature workflow
-  /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
-  /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  /aidlc config list                         Show every workflow setting and fence
-  /aidlc plugin list                         Show installed plugin selection
-  /aidlc plugin validate                     Validate the plugin in the current directory
-  /aidlc plugin build claude                 Build its Claude projection
-  /aidlc                                        Resume or begin
-  /aidlc --stage code-generation                Jump to code-generation stage
-  /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
-  /aidlc --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
-  /aidlc --depth minimal                       Change depth of active workflow
-  /aidlc --depth standard --test-strategy minimal  Full artifacts, minimal tests
-  /aidlc --review advisory                     Single-pass reviews, findings at the gate
-  /aidlc --project-type brownfield             The folder holds the existing code: scan it and reverse-engineer it
+  ${entrySkillInvocation()} feature                                Start a feature workflow
+  ${entrySkillInvocation()} Fix the login timeout bug              Auto-detected as bugfix scope
+  ${entrySkillInvocation()} compose "harden the deploy pipeline"   Composer proposes a tailored plan
+  ${entrySkillInvocation()} config list                         Show every workflow setting and fence
+  ${entrySkillInvocation()} plugin list                         Show installed plugin selection
+  ${entrySkillInvocation()} plugin validate                     Validate the plugin in the current directory
+  ${entrySkillInvocation()} plugin build claude                 Build its Claude projection
+  ${entrySkillInvocation()}                                        Resume or begin
+  ${entrySkillInvocation()} --stage code-generation                Jump to code-generation stage
+  ${entrySkillInvocation()} --phase construction --scope bugfix    Jump to construction with bugfix scope
+  ${entrySkillInvocation()} --scope bugfix --depth comprehensive  Bugfix with comprehensive depth
+  ${entrySkillInvocation()} --depth minimal                       Change depth of active workflow
+  ${entrySkillInvocation()} --depth standard --test-strategy minimal  Full artifacts, minimal tests
+  ${entrySkillInvocation()} --review advisory                     Single-pass reviews, findings at the gate
+  ${entrySkillInvocation()} --project-type brownfield             The folder holds the existing code: scan it and reverse-engineer it
   ${entrySkillInvocation()} --guard-policy relaxed                Record and announce input changes after approval instead of re-approving
   ${entrySkillInvocation()} config set plan-approval off          Build each code plan without asking for approval (logged; also guard.plan-approval)`;
 
@@ -1743,9 +1743,9 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
       `No active AI-DLC workflow found.
 
 To get started:
-  /aidlc "build the auth service"   Describe what to build (creates the workflow record automatically)
-  /aidlc <scope>      Start a workflow by scope (e.g., /aidlc feature)
-  /aidlc --help       Show all commands and scopes
+  ${entrySkillInvocation()} "build the auth service"   Describe what to build (creates the workflow record automatically)
+  ${entrySkillInvocation()} <scope>      Start a workflow by scope (e.g., ${entrySkillInvocation()} feature)
+  ${entrySkillInvocation()} --help       Show all commands and scopes
 `
     );
     return;
@@ -4541,7 +4541,7 @@ export async function collectDoctorReport(
         ? "Composed plugin surface: all enabled plugin stages and recorded contributions are present"
         : `Composed plugin surface: ${missingComposition.length} missing composition item(s)`,
       fix: missingComposition.length > 0
-        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run \`/aidlc plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set). Hook-carrying hosts retry sync on the next session start.`
+        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run \`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set). Hook-carrying hosts retry sync on the next session start.`
         : undefined,
     });
 
@@ -5053,7 +5053,7 @@ export async function collectDoctorReport(
           label: `Leaked ${subject} on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) - ${outcome}`,
           fix: manual
             ? `stop all AI-DLC processes, inspect ${leak.lockDir}, then remove or restore it under quiescence`
-            : "the stale lock was cleared automatically; re-run your /aidlc command",
+            : `the stale lock was cleared automatically; re-run your ${entrySkillInvocation()} command`,
         });
       }
     }
@@ -5162,8 +5162,8 @@ export async function collectDoctorReport(
               pass: true,
               label:
                 `Approval gate pending: ${displayName} (~${duration}); ` +
-                "waiting for a human, not stuck. Run /aidlc --status to review the current gate.",
-              fix: "run `/aidlc --status` to review and resolve the pending approval",
+                `waiting for a human, not stuck. Run ${entrySkillInvocation()} --status to review the current gate.`,
+              fix: `run \`${entrySkillInvocation()} --status\` to review and resolve the pending approval`,
             });
           }
         }
@@ -5314,7 +5314,7 @@ export async function collectDoctorReport(
         results.push({
           pass: true,
           label:
-            `Unit claim activity baseline missing (advisory): ${missingObservation.join(", ")} - run /aidlc --status after the next explicit fetch to establish a local observed-ref timestamp`,
+            `Unit claim activity baseline missing (advisory): ${missingObservation.join(", ")} - run ${entrySkillInvocation()} --status after the next explicit fetch to establish a local observed-ref timestamp`,
         });
       }
       const staleActivity = observedClaims
@@ -6025,7 +6025,7 @@ export async function collectDoctorReport(
       }
     }
     const uncompiledHint = uncompiledPluginStages.length > 0
-      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`/aidlc plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
+      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
       : ` - run \`${aidlcToolInvocation("graph")} compile\` to include them`;
     results.push({
       pass: true,
@@ -7404,9 +7404,9 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(
       "intent-create refused: no --scope, --arguments, or --label given. Creation " +
         "is a mutation and a bare invocation mints a garbage default-scope " +
-        "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
+        `intent. Start work via \`${entrySkillInvocation()} "<what to build>"\` (the engine names ` +
         "the create move for you; the person can also type " +
-        "`/aidlc-init [--scope <name>] <description>`); " +
+        `\`${entrySkillInvocation()}-init [--scope <name>] <description>\`); ` +
         "to invoke this tool directly, pass at least `--scope <name>` (and " +
         "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
     );
@@ -7469,7 +7469,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       die(
         `Unknown space "${flags.space}". Existing: ${spaces.map((s) => s.name).join(", ")}. ` +
           "intent-create only creates in an existing space; create the space first " +
-          "(/aidlc space create <name>, or legacy /aidlc space-create <name>).",
+          `(${entrySkillInvocation()} space create <name>, or legacy ${entrySkillInvocation()} space-create <name>).`,
       );
     }
   }
@@ -7958,7 +7958,7 @@ function handleIntentCreateStateBuild(
         process.stderr.write(
           `Note: scope "${scope}" usually targets existing code, but the workspace scanned as Greenfield ` +
             `so Reverse Engineering will be skipped. If this project has a codebase the scanner missed, ` +
-            `say so (or run /aidlc --project-type brownfield) and I'll scan again and reverse-engineer it.\n`,
+            `say so (or run ${entrySkillInvocation()} --project-type brownfield) and I'll scan again and reverse-engineer it.\n`,
         );
       }
     } else if (composedPlan && scopeDef.stages["reverse-engineering"] === "EXECUTE") {
@@ -8216,7 +8216,7 @@ function handleInitTransition(): void {
 
 function handleStateInit(_projectDir: string, _flags: Record<string, string>): void {
   die(
-    "state-init is merged into intent-create. Just describe what you want to build (/aidlc \"build the auth service\") and the workflow record is created for you."
+    `state-init is merged into intent-create. Just describe what you want to build (${entrySkillInvocation()} "build the auth service") and the workflow record is created for you.`
   );
 }
 
@@ -8264,7 +8264,7 @@ function printIntentListing(
   }
   if (intents.length === 0) {
     process.stdout.write(
-      `No intents in space "${space}" yet. Start one by describing what to build: /aidlc "build the auth service"\n`
+      `No intents in space "${space}" yet. Start one by describing what to build: ${entrySkillInvocation()} "build the auth service"\n`
     );
     return;
   }
@@ -8272,7 +8272,7 @@ function printIntentListing(
   const hidden = intents.length - visible.length;
   if (visible.length === 0) {
     process.stdout.write(
-      `No in-flight intents in space "${space}" (${hidden} archived; /aidlc intent list --all shows them). Start one by describing what to build: /aidlc "build the auth service"\n`
+      `No in-flight intents in space "${space}" (${hidden} archived; ${entrySkillInvocation()} intent list --all shows them). Start one by describing what to build: ${entrySkillInvocation()} "build the auth service"\n`
     );
     return;
   }
@@ -8283,10 +8283,10 @@ function printIntentListing(
     out += `${marker} ${i.dirName ?? i.slug}  [${i.status}]\n`;
   }
   if (hidden > 0) {
-    out += `\n(${hidden} archived intent${hidden === 1 ? "" : "s"} hidden - /aidlc intent list --all shows them)\n`;
+    out += `\n(${hidden} archived intent${hidden === 1 ? "" : "s"} hidden - ${entrySkillInvocation()} intent list --all shows them)\n`;
   }
   if (!visibleActive) {
-    out += `\n(no active intent - switch with /aidlc intent <name>)\n`;
+    out += `\n(no active intent - switch with ${entrySkillInvocation()} intent <name>)\n`;
   }
   process.stdout.write(out);
 }
@@ -8337,7 +8337,7 @@ function resolveIntentByName(
   const match = bySlug[0];
   if (!match?.dirName) {
     die(
-      `Unknown intent "${target}" in space "${space}". This command only acts on existing intents - run /aidlc intent list --all to see them. Do not start a new workflow to recover from this error.`
+      `Unknown intent "${target}" in space "${space}". This command only acts on existing intents - run ${entrySkillInvocation()} intent list --all to see them. Do not start a new workflow to recover from this error.`
     );
   }
   return { ...match, dirName: match.dirName };
@@ -8589,8 +8589,8 @@ function handleIntentLifecycle(
   });
   if (verb === "unarchive") {
     const back = completed
-      ? "it is complete again and back in the default /aidlc intent list."
-      : `it is in-flight again at "${stage}". Switch to it with /aidlc intent ${dirName}.`;
+      ? `it is complete again and back in the default ${entrySkillInvocation()} intent list.`
+      : `it is in-flight again at "${stage}". Switch to it with ${entrySkillInvocation()} intent ${dirName}.`;
     process.stdout.write(
       `Unarchived intent → ${dirName} (space: ${space}); ${back}\n` +
         (reasonGiven ? "The --reason was not recorded: only intent archive records a reason.\n" : ""),
@@ -8612,12 +8612,12 @@ function handleIntentLifecycle(
     clearSessionIntentUuid(projectDir, sid);
   }
   process.stdout.write(
-    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; /aidlc intent list --all shows it and /aidlc intent unarchive ${dirName} brings it back.\n` +
+    `Archived intent → ${dirName} (space: ${space}). Its record and audit trail stay on disk; ${entrySkillInvocation()} intent list --all shows it and ${entrySkillInvocation()} intent unarchive ${dirName} brings it back.\n` +
       (completed
-        ? "It was complete, so it now leaves the default /aidlc intent list; unarchive brings it back as complete.\n"
+        ? `It was complete, so it now leaves the default ${entrySkillInvocation()} intent list; unarchive brings it back as complete.\n`
         : "") +
       (boltRefs.length > 0
-        ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); /aidlc intent unarchive ${dirName} brings that work back.\n`
+        ? `Its Bolt worktree(s) stay on disk as they are (${boltRefs.join(", ")}); ${entrySkillInvocation()} intent unarchive ${dirName} brings that work back.\n`
         : ""),
   );
 }
@@ -8664,7 +8664,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const spaces = listSpaces(projectDir);
   if (!spaces.some((s) => s.name === target)) {
     die(
-      `Unknown space "${target}". Existing: ${spaces.map((s) => s.name).join(", ")}. This command only switches between existing spaces. Do not create a space to recover from this error - creating one is a separate, deliberate move (/aidlc space create <name>, or legacy /aidlc space-create <name>).`
+      `Unknown space "${target}". Existing: ${spaces.map((s) => s.name).join(", ")}. This command only switches between existing spaces. Do not create a space to recover from this error - creating one is a separate, deliberate move (${entrySkillInvocation()} space create <name>, or legacy ${entrySkillInvocation()} space-create <name>).`
     );
   }
   const selection = resolveWorkflowSelection(projectDir);
@@ -10353,7 +10353,7 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   // slugify("-h") is "h", which is not a reserved name, so the guard below
   // would let it through and a junk space would be created.
   if (raw === "-h" || raw === "help") {
-    die("Did you mean /aidlc --help? To create a space, pass a name: /aidlc space-create <name>.");
+    die(`Did you mean ${entrySkillInvocation()} --help? To create a space, pass a name: ${entrySkillInvocation()} space-create <name>.`);
   }
   const name = slugify(raw);
   // "help" is grammar (`space help` prints help), so a space with that slug
@@ -10408,7 +10408,7 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   if (!existsSync(knowledgeFloor)) writeFileSync(knowledgeFloor, "", "utf-8");
 
   process.stdout.write(
-    `Space created: ${name}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/\nSwitch to it with /aidlc space ${name}.\n`
+    `Space created: ${name}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/\nSwitch to it with ${entrySkillInvocation()} space ${name}.\n`
   );
 }
 

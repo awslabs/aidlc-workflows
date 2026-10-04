@@ -2560,7 +2560,7 @@ export function renderTeamConstructionBoard(
   ]);
   for (const unit of [...reclaimable].sort(compareBoardKeys)) {
     nextActions.push(
-      `- Claim or reclaim \`${unit}\` when eligible with \`/aidlc --claim ${unit}\`.`,
+      `- Claim or reclaim \`${unit}\` when eligible with \`${entrySkillInvocation()} --claim ${unit}\`.`,
     );
   }
   for (const row of board.awaitingMerge) {
@@ -2652,7 +2652,7 @@ function staleStateVersionError(stateContent: string): string | null {
 function parkedDirective(
   reason: string,
   stage: string,
-  narration = "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+  narration = `Pausing here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
 ): ParkedDirective {
   return {
     kind: "parked",
@@ -2676,11 +2676,11 @@ function workflowParkedDirective(
   const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, parkedAt) : null;
   return beat
     ? parkedDirective(
-        `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with /aidlc --resume.`,
+        `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with ${entrySkillInvocation()} --resume.`,
         beat.stage.slug,
       )
     : parkedDirective(
-        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
+        `Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`,
         parkedAt,
       );
 }
@@ -2696,14 +2696,14 @@ function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
   } catch { /* the workflow park result carries no Unit */ }
   if (parkedUnit !== undefined) {
     return parkedDirective(
-      `Unit "${parkedUnit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      `Unit "${parkedUnit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
       (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
     );
   }
   const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
   return stateContent
     ? workflowParkedDirective(pd, stateContent, parkedAt)
-    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`, parkedAt);
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt);
 }
 
 // "Approve, but let's stop there for today": the approval is recorded, then
@@ -2724,7 +2724,7 @@ function parkAfterApproval(pd: string, slug: string, attended: boolean, unit?: s
   return parkedDirective(
     `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
     parked.stage,
-    "Approved, and paused here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+    `Approved, and paused here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
   );
 }
 
@@ -2899,7 +2899,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
   const verb = leadingOrchestratorVerb(args);
   if (verb === "park") return { orchestratorVerb: "park" };
   if (args.length === 1 && args[0] === "unpark") {
-    return { parseError: "unpark is not a command: a parked workflow resumes with /aidlc --resume." };
+    return { parseError: `unpark is not a command: a parked workflow resumes with ${entrySkillInvocation()} --resume.` };
   }
   if (verb === "team-board") {
     // The verb is set even on a refused form so the engine-marker exclusion
@@ -2913,7 +2913,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
   // text drew the new-work offer over an active intent. The engine executes
   // the config route; the setter itself decides what a setting does.
   if (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")) {
-    const usage = "Usage: /aidlc config set <key> <value> [--key value ...] | config get <key> | config list [--json].";
+    const usage = `Usage: ${entrySkillInvocation()} config set <key> <value> [--key value ...] | config get <key> | config list [--json].`;
     const tail = args.slice(2);
     const malformed =
       (args[1] === "set" && (tail.length < 2 || tail[0].startsWith("--") || tail[1].startsWith("--"))) ||
@@ -2936,7 +2936,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
       return {
         config: true,
         parseError:
-          "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
+          `Usage: ${entrySkillInvocation()} --config [models|runtime|providers|trust|flags|project].`,
       };
     }
     return {
@@ -3270,7 +3270,7 @@ function freshWorkOfferDirective(
   return composeOfferAskDirective(
     `None of the ready-made plans is an obvious fit for: "${requestPreview(intentText)}".${documentSplitSentence(intentText)} ` +
       "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
-      `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+      `or you can pick one directly (e.g. ${examples}; see ${entrySkillInvocation()} --help for the full list).`,
     intentText,
     pd,
     carriedCreationFlags(flags),
@@ -3759,7 +3759,7 @@ function intentPickPromptIfRecordsExist(
     );
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
-  const entry = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+  const entry = entrySkillInvocation();
   return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
@@ -5969,7 +5969,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     )
   ) {
     emit(errorDirective(
-      "Cannot combine --review with read-only, workspace, compose, single-stage, jump, or resume modes. Apply /aidlc --review <class> first, then run the other command.",
+      `Cannot combine --review with read-only, workspace, compose, single-stage, jump, or resume modes. Apply ${entrySkillInvocation()} --review <class> first, then run the other command.`,
     ));
     return;
   }
@@ -6012,7 +6012,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       : "";
     emit(printDirective(
       `Run \`${aidlcInvocation()} --${verb} ${shellArg(unit)}${teamArg}${rhythmArg}\`, ` +
-        "print its output verbatim, then stop. Re-run /aidlc after the claim registry changes.",
+        `print its output verbatim, then stop. Re-run ${entrySkillInvocation()} after the claim registry changes.`,
     ));
     return;
   }
@@ -6390,8 +6390,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       kind: "done",
       reason:
         `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
-        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
-        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+        `Bring it back with \`${entrySkillInvocation()} intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`${entrySkillInvocation()} intent <name>\` (\`${entrySkillInvocation()} intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
     });
     return;
   }
@@ -6449,7 +6449,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     existsSync(unitParkedPath(pd))
   ) {
     emit(parkedDirective(
-      `Unit "${unitScope.unit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      `Unit "${unitScope.unit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
       getField(stateContent!, "Current Stage") ?? "functional-design",
     ));
     return;
@@ -6980,8 +6980,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     emit(errorDirective(
       "No workflow state found (no active intent). " +
-        "Start one by describing what to build (/aidlc \"build the auth service\") " +
-        "or by naming a scope (/aidlc --scope <scope>).",
+        `Start one by describing what to build (${entrySkillInvocation()} "build the auth service") ` +
+        `or by naming a scope (${entrySkillInvocation()} --scope <scope>).`,
     ));
     return;
   }
@@ -8310,7 +8310,7 @@ function activePerUnitWave(
             },
           );
         } catch {
-          guidance = `Restart this stage with /aidlc --stage ${node.slug}.`;
+          guidance = `Restart this stage with ${entrySkillInvocation()} --stage ${node.slug}.`;
         }
         const snapshot = guardAttemptState(projectDir, stateContent ?? "", node, {
           unit,
@@ -10152,7 +10152,7 @@ function emitForSlug(
 // `single:true` marker gives the conductor a typed branch before ordinary gate
 // handling; isolated runs have no main-workflow approval lifecycle.
 const SINGLE_INIT_ERROR =
-  "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
+  `Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 
 // Call only after confirming an open attempt. Match its boundary ordering and
 // never borrow ceremony policy from the main workflow; legacy rows return null.
@@ -10214,7 +10214,7 @@ function emitSingleRunStage(
   const node = nodeForSlug(slug);
   if (!node) {
     emit(errorDirective(
-      `Unknown stage "${slug}". Run /aidlc --help for the full list.`,
+      `Unknown stage "${slug}". Run ${entrySkillInvocation()} --help for the full list.`,
     ));
     return;
   }
@@ -10375,7 +10375,7 @@ function skippedJumpDirective(target: string, direction: string, current: string
 // (`aidlc-jump.ts resolve` treats init stages as valid targets, returning
 // valid:true), so the engine enforces it here rather than relaying a tool error.
 const INIT_JUMP_ERROR =
-  "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
+  `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 
 // Why a jump cannot reopen its target for the unit the person named, said
 // before anything changes. The person gets one line that speaks to them; the
@@ -10515,7 +10515,7 @@ function emitJumpDirective(
   const node = nodeForSlug(stageSlug);
   if (!node) {
     emit(errorDirective(
-      `Unknown stage "${stageSlug}". Run /aidlc --help for the full list.`,
+      `Unknown stage "${stageSlug}". Run ${entrySkillInvocation()} --help for the full list.`,
     ));
     return;
   }
@@ -11535,7 +11535,7 @@ function handleSingleReport(
   const node = nodeForSlug(flags.stage);
   if (!node) {
     emit(errorDirective(
-      `Unknown stage "${flags.stage}". Run /aidlc --help for the full list.`,
+      `Unknown stage "${flags.stage}". Run ${entrySkillInvocation()} --help for the full list.`,
     ));
     return;
   }
@@ -11857,7 +11857,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
         emit(errorDirective(
           `Intent "${archivedIntent}" is archived, so report cannot mutate its workflow state. ` +
-            `Bring it back with /aidlc intent unarchive ${archivedIntent}.`,
+            `Bring it back with ${entrySkillInvocation()} intent unarchive ${archivedIntent}.`,
         ));
         return;
       }

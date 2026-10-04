@@ -1272,6 +1272,36 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(util(["intent"]).stdout).toContain(`${a}  [complete]`);
   });
 
+  test("archive and unarchive name the command the person types on this harness", () => {
+    const { a, b } = createTwo();
+    // Codex's entry is $aidlc; the tree a tool runs from names it.
+    const codexUtil = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts");
+    const codex = (args: string[]): Run => {
+      const env = { ...process.env };
+      delete env.AWS_AIDLC_DEFAULT_SCOPE;
+      delete env.AIDLC_HARNESS_DIR;
+      const r = Bun.spawnSync({ cmd: [BUN, codexUtil, ...args, "--project-dir", proj], stdout: "pipe", stderr: "pipe", env });
+      const stdout = r.stdout.toString();
+      return { status: r.exitCode, stdout, out: `${stdout}${r.stderr.toString()}` };
+    };
+    const archived = codex(["intent", "archive", a]);
+    expect(archived.status, archived.out).toBe(0);
+    expect(archived.stdout).toContain(`$aidlc intent list --all shows it and $aidlc intent unarchive ${a} brings it back.`);
+    expect(codex(["intent"]).stdout).toContain("archived intent hidden - $aidlc intent list --all shows them");
+    const back = codex(["intent", "unarchive", a]);
+    expect(back.status, back.out).toBe(0);
+    expect(back.stdout).toContain(`Switch to it with $aidlc intent ${a}.`);
+    expect(codex(["intent", "nope"]).out).toContain("run $aidlc intent list --all to see them");
+    for (const r of [archived, back]) expect(r.out).not.toContain("/aidlc ");
+    // Help and the space replies name it too.
+    const help = codex(["help"]).stdout;
+    expect(help).toContain("Usage: $aidlc [command]");
+    expect(help).not.toMatch(/^\s*\/aidlc /m);
+    expect(codex(["space-create", "help"]).out).toContain("Did you mean $aidlc --help?");
+    // The Claude tree still names /aidlc.
+    expect(util(["intent", "archive", b]).stdout).toContain(`/aidlc intent unarchive ${b} brings it back.`);
+  });
+
   test("archiving an intent with Bolt worktrees keeps them on disk, names them, and unarchive brings them back", () => {
     const { b } = createTwo();
     const statePath = join(recordPath(b), "aidlc-state.md");
