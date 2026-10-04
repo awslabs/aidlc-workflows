@@ -7107,6 +7107,10 @@ describe("t243 projection channel", () => {
     descriptor.rootIntegrations.find((item) => item.path === ".mcp.json")!.marker = "../settings.local.json";
     writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
     expect(() => projectionFiles(source)).toThrow(".mcp.json has a marker, which only a managed block takes");
+    // The same with both the file and its copy absent.
+    rmSync(join(source, ".mcp.json"), { force: true });
+    rmSync(join(source, ".claude", "tools", "data", "root-blocks", ".mcp.json"), { force: true });
+    expect(() => projectionFiles(source)).toThrow(".mcp.json has a marker, which only a managed block takes");
   });
 
   test("projection descriptors reject malformed or policy-mismatched legacy signatures", async () => {

@@ -1244,27 +1244,34 @@ function writeClaudeProvider(
   settings.env = env;
   writeJson(settingsPath, settings);
 
-  // The root file, and the copy a copy runtime keeps in the harness folder,
-  // so servers turned on later use the same region.
-  for (const mcpPath of [
-    join(projectionRoot, ".mcp.json"),
-    join(projectionRoot, harnessDir, "tools", "data", "root-blocks", ".mcp.json"),
-  ]) {
-    if (!existsSync(mcpPath)) continue;
-    const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
-    const servers = isRecord(mcp.mcpServers) ? mcp.mcpServers : {};
-    const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
-    if (!aws || !Array.isArray(aws.args)) continue;
-    aws.args = aws.args.map((arg) => {
-      if (typeof arg !== "string") return arg;
-      if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
-        return `https://aws-mcp.${record.region}.api.aws/mcp`;
-      }
-      if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${record.region}`;
-      return arg;
-    });
-    writeJson(mcpPath, mcp);
-  }
+  const mcpPath = join(projectionRoot, ".mcp.json");
+  if (!existsSync(mcpPath)) return;
+  const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
+  if (applyMcpRegion(mcp, record.region as string)) writeJson(mcpPath, mcp);
+}
+
+// The shipped aws-mcp server's region arguments, set to `region`. False when
+// the list has no such server.
+function applyMcpRegion(mcp: Record<string, unknown>, region: string): boolean {
+  const servers = isRecord(mcp.mcpServers) ? mcp.mcpServers : {};
+  const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
+  if (!aws || !Array.isArray(aws.args)) return false;
+  aws.args = aws.args.map((arg) => {
+    if (typeof arg !== "string") return arg;
+    if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
+      return `https://aws-mcp.${region}.api.aws/mcp`;
+    }
+    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${region}`;
+    return arg;
+  });
+  return true;
+}
+
+// The shipped server list a copy keeps in its harness folder carries no
+// provider choice; the one recorded now is applied when its servers are added.
+export function withRecordedMcpRegion(mcp: Record<string, unknown>, record: ProvidersRecord | null): void {
+  if (!record?.region || record.provider === "current" || record.provider === "other") return;
+  applyMcpRegion(mcp, record.region);
 }
 
 const CLAUDE_BEDROCK_MODEL_KEYS = [

@@ -575,6 +575,29 @@ describe("t304 copied projection configuration", () => {
     const aws = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers["aws-mcp"] as { args: string[] };
     expect(aws.args).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
     expect(aws.args).toContain("AWS_REGION=eu-west-1");
+    // The copy in the harness folder keeps no provider choice of its own.
+    expect(readFileSync(join(project, ".claude", "tools", "data", "root-blocks", ".mcp.json"), "utf-8")).not.toContain("eu-west-1");
+  }, 120_000);
+
+  // After the person goes back to their session's own provider, servers turned
+  // on again use the shipped region, not the one they cleared.
+  test("servers turned on after a provider reset use the shipped region", () => {
+    const project = readmeCopyProject();
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")).mcpServers["aws-mcp"];
+    const steps = [
+      ["config", "project", "--completions", "zsh", "--yes"],
+      ["config", "providers", "--provider", "amazon-bedrock", "--region", "eu-west-1", "--yes"],
+      ["config", "providers", "--provider", "current", "--yes"],
+    ];
+    for (const step of steps) {
+      const result = runCopied(project, step);
+      expect(result.status, `${step.join(" ")}: ${result.stdout}${result.stderr}`).toBe(0);
+    }
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers["aws-mcp"]).toEqual(shipped);
   }, 120_000);
 
   // A project copied before copies left .mcp.json out already has the shipped

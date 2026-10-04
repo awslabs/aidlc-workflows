@@ -253,6 +253,10 @@ export function validateProjectionDescriptor(
     }
     declare(safe);
     assertProjectionPathHasNoSymlinks(root, safe);
+    // Checked even when the file and its copy are absent: the marker names the copy.
+    if (integration.policy !== "managed-block" && integration.marker !== undefined) {
+      throw new Error(`${root}: ${safe} has a marker, which only a managed block takes`);
+    }
     const path = shippedRootIntegrationPath(root, descriptor.harnessDir, integration);
     if (
       !existsSync(path) &&
@@ -271,9 +275,6 @@ export function validateProjectionDescriptor(
     }
     if (integration.policy === "managed-block" && !managedBlockIsSafe(integration)) {
       throw new Error(`${root}: ${safe} has an invalid managed-block marker`);
-    }
-    if (integration.policy !== "managed-block" && integration.marker !== undefined) {
-      throw new Error(`${root}: ${safe} has a marker, which only a managed block takes`);
     }
     if (
       (integration.policy === "json-map" || integration.policy === "json-array") &&

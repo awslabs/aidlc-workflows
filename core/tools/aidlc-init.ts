@@ -181,6 +181,7 @@ import {
   insideGitRepository,
   managedBlockMarkers,
   normalizeProvidersRecord,
+  withRecordedMcpRegion,
   normalizeProjectChoicesRecord,
   normalizeRuntimeRecord,
   normalizeTrustRecord,
@@ -3660,6 +3661,16 @@ function readBaseline(path: string): Baseline | null {
 function siblingBaseline(sibling: ProjectHarness): Baseline | null {
   try {
     return readBaseline(join(sibling.root, "tools", "data", "aidlc-manifest.json"));
+  } catch {
+    return null;
+  }
+}
+
+// The provider choice recorded in a projection's harness data.
+function recordedProviders(root: string, harnessDir: string): ProvidersRecord | null {
+  try {
+    const data = JSON.parse(readFileSync(join(root, harnessDir, "tools", "data", "harness.json"), "utf-8")) as Record<string, unknown>;
+    return normalizeProvidersRecord(data.providers);
   } catch {
     return null;
   }
@@ -7228,6 +7239,13 @@ function planRootIntegrations(
       try {
         targetValue = current ? JSON.parse(current) : {};
         sourceValue = JSON.parse(readFileSync(sourcePath, "utf-8"));
+        // Claude's copy in the harness folder takes the recorded region here.
+        if (
+          descriptor.distribution === "claude" && sourcePath !== join(sourceRoot, integration.path) &&
+          isRecord(sourceValue)
+        ) {
+          withRecordedMcpRegion(sourceValue, recordedProviders(sourceRoot, descriptor.harnessDir));
+        }
       } catch {
         actions.push({ path: integration.path, action: "conflict", detail: "malformed JSON" });
         continue;
