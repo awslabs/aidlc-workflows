@@ -231,7 +231,19 @@ function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undef
 // module from project code must not expose a callable function that accepts a
 // fabricated UserPromptSubmit payload. Harnesses and the dispatcher execute it
 // as a separate process through the host hook registration.
+//
+// What the agent should hear from this turn is printed once, as one context
+// line: Claude Code reads a single hook response, and two lines make it drop both.
 async function run(input: string): Promise<number> {
+  const notes: string[] = [];
+  try {
+    return await respond(input, notes);
+  } finally {
+    if (notes.length > 0) process.stdout.write(hookContextLine("UserPromptSubmit", notes.join("\n")));
+  }
+}
+
+async function respond(input: string, notes: string[]): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
@@ -307,11 +319,10 @@ try {
   if (hookStandsOutside(workflow)) {
     // The record name is repository text, so the notice does not repeat it.
     if (typedPrompt && isTypedGuardSwitchPrompt(typedPrompt) && workflow.selection?.intent) {
-      process.stdout.write(hookContextLine(
-        "UserPromptSubmit",
+      notes.push(
         "AIDLC Guard Policy: the typed switch was not applied because this conversation has not joined the selected workflow; " +
           "select its intent with the intent command first.",
-      ));
+      );
     }
     return 0;
   }
@@ -322,11 +333,10 @@ try {
     try {
       const migration = normalizeRetiredGuardPolicyField(projectDir, sessionId);
       if (migration.normalized) {
-        process.stdout.write(hookContextLine(
-          "UserPromptSubmit",
+        notes.push(
           `AIDLC Guard Policy migration: kept ${migration.value} and renamed ` +
             "the active intent's retired Change Control field to Guard Policy.",
-        ));
+        );
       }
     } catch {
       // An unchanged retired field retains the normal migration notice.
@@ -334,10 +344,9 @@ try {
   }
   const mintAllowed = humanTurnMintAllowed();
   if (!mintAllowed && typedPrompt && isTypedGuardSwitchPrompt(typedPrompt)) {
-    process.stdout.write(hookContextLine(
-      "UserPromptSubmit",
+    notes.push(
       "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
-    ));
+    );
   }
   // Apply before the state-file gate so a first-use switch reports that the
   // person must create the piece of work, then type the switch again.
@@ -345,7 +354,7 @@ try {
     try {
       const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
       if (outcome !== null) {
-        process.stdout.write(hookContextLine("UserPromptSubmit", `AIDLC Guard Policy: ${outcome.lines.join(" ")}`));
+        notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
       }
     } catch {
       // A switch failure must never block the human's turn.
@@ -451,9 +460,11 @@ try {
           : " The person also asked to stop the workflow there for now, but it could not be parked; run next.");
       }
       if (replyNotice) {
-        process.stdout.write(pickerQuestion
-          ? `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: replyNotice } })}\n`
-          : hookContextLine("UserPromptSubmit", replyNotice));
+        if (pickerQuestion) {
+          process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: replyNotice } })}\n`);
+        } else {
+          notes.push(replyNotice);
+        }
       }
       try {
         // A reply the engine's guard-recovery ask took as its answer is that

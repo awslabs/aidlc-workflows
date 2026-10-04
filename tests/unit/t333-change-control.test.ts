@@ -2183,8 +2183,12 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "- **Change Control**: relaxed (from scope classic)",
     );
     writeFileSync(state, retired);
-    const contexts = recordHumanPrompt(proj, "/aidlc --guard-policy off")
-      .trim().split("\n").map((line) => JSON.parse(line).additionalContext);
+    // One response line: Claude Code drops both when a hook prints two.
+    const lines = recordHumanPrompt(proj, "/aidlc --guard-policy off").trim().split("\n");
+    expect(lines).toHaveLength(1);
+    const context = JSON.parse(lines[0]);
+    expect(context.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", additionalContext: context.additionalContext });
+    const contexts = (context.additionalContext as string).split("\n");
     expect(contexts[0]).toContain("AIDLC Guard Policy migration: kept relaxed");
     expect(contexts[1]).toContain("off (set by you)");
     const updated = readFileSync(state, "utf-8");
