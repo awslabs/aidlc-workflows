@@ -12092,6 +12092,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-journey-question-once.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t121-stop-hook-enforce.test.ts",
           "mechanism": "cli"
         },
