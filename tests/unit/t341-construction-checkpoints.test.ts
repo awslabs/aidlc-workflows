@@ -52,6 +52,7 @@ import {
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
+  writeSessionPidEntry,
   readUnitSourceManifest,
   reviewArtifactFingerprint,
   setField,
@@ -1625,5 +1626,19 @@ describe("t341 a checkpoint finds the session it runs in", () => {
     expect(asked.out).toContain("Could not tell which session this is.");
     expect(readAuditShardEvents(pd).filter((row) => row.event === "DECISION_RECORDED" &&
       auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval")).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("two sessions claiming the process get the resolver's own way out, and nothing is asked", () => {
+    const pd = project();
+    pass(pd);
+    writeSessionPidEntry(pd, process.pid, "t341-owner");
+    const { AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...rest } = process.env;
+    const asked = cli(pd, "bolt", route("ask"), { ...rest, AIDLC_SESSION_OVERRIDE: "t341-other" });
+    expect(asked.code).not.toBe(0);
+    expect(asked.out).toContain("conflicts with the owning conversation");
+    expect(asked.out).toContain("t341-owner");
+    expect(asked.out).not.toContain("Could not tell which session this is.");
+    expect(readProtectedQuestion(pd, "t341-other")).toBeNull();
+    expect(readProtectedQuestion(pd, "t341-owner")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

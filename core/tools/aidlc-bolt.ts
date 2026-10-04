@@ -1289,18 +1289,10 @@ function handleSetAutonomy(args: string[]): void {
 
 // The session a checkpoint question and its answer belong to. The tool finds
 // the session it runs in, the same way the engine does; `--session` is only an
-// override, so an agent never has to look its own session up.
+// override, so an agent never has to look its own session up. When two
+// sessions claim this process, the resolver's own refusal names the way out.
 function checkpointSession(pd: string, flagged: string | undefined, required: boolean): string {
-  let resolved: string | null = null;
-  if (!flagged?.trim()) {
-    try {
-      resolved = resolveInvokingSessionId(pd);
-    } catch {
-      // Two sessions claim this process: not one the tool can pick for the person.
-      resolved = null;
-    }
-  }
-  const session = flagged?.trim() || resolved || "";
+  const session = flagged?.trim() || resolveInvokingSessionId(pd) || "";
   if (required && !session) {
     error(
       "Could not tell which session this is. Run the command again with " +
