@@ -105,11 +105,14 @@ function readReceipt(path: string): InstallReceipt | null {
   return { schemaVersion: 1, managedFiles };
 }
 
-function activeSpaceFor(targetRoot: string): string {
+// The same active space the engine reads, by the rule it ships with.
+async function activeSpaceFor(targetRoot: string): Promise<string> {
   const pointer = join(targetRoot, "aidlc", "active-space");
   if (!existsSync(pointer)) return "default";
-  const space = readFileSync(pointer, "utf-8").trim();
-  return /^[a-z0-9][a-z0-9._-]*$/.test(space) ? space : "default";
+  const module = await import(pathToFileURL(join(DIST_ROOT, ".cursor", "tools", "aidlc-runtime-paths.ts")).href) as {
+    knownActiveSpace: (workspaceRootDir: string, cursorText: string) => string;
+  };
+  return module.knownActiveSpace(join(targetRoot, "aidlc"), readFileSync(pointer, "utf-8"));
 }
 
 function parseBufferObject(content: Buffer, label: string): JsonObject {
@@ -1048,7 +1051,7 @@ export async function install(targetDir: string): Promise<void> {
   const sharedJson = new Set([".cursor/hooks.json", ".cursor/cli.json"]);
   const receiptTarget = join(targetRoot, RECEIPT_REL);
   const priorReceipt = readReceipt(receiptTarget);
-  const activeSpace = activeSpaceFor(targetRoot);
+  const activeSpace = await activeSpaceFor(targetRoot);
   const selectedPlugins = activePluginSelection(targetRoot);
   const pluginRuntime = pluginRuntimeState(targetRoot);
   const managedFiles: Record<string, string> = {};

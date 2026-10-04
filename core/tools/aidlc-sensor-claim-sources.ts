@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { headingKey } from "./aidlc-artifact-vocabulary.ts";
 import {
 	authoritativeProjectDescription,
@@ -161,7 +161,16 @@ function projectRootFor(recordRoot: string, stateBody: string): string {
 	return configured ? resolve(configured) : "";
 }
 
+// A record under aidlc/spaces/<space>/ is checked against its own space's
+// method; only a record outside that tree falls back to the active space.
 function activeSpaceFor(projectRoot: string, recordRoot: string): string {
+	const spacesRoot = join(projectRoot, "aidlc", "spaces");
+	const rel = relative(spacesRoot, recordRoot);
+	if (!rel.startsWith("..") && !isAbsolute(rel)) {
+		const first = rel.split(sep)[0];
+		if (first && first !== ".") return first;
+	}
+
 	const cursorPath = join(projectRoot, "aidlc", "active-space");
 	if (existsSync(cursorPath)) {
 		try {
@@ -169,13 +178,6 @@ function activeSpaceFor(projectRoot: string, recordRoot: string): string {
 		} catch {
 			return "";
 		}
-	}
-
-	const spacesRoot = join(projectRoot, "aidlc", "spaces");
-	const rel = relative(spacesRoot, recordRoot);
-	if (!rel.startsWith("..") && !rel.startsWith(sep)) {
-		const first = rel.split(sep)[0];
-		if (first && first !== ".") return first;
 	}
 	return "";
 }

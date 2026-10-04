@@ -56,7 +56,7 @@ import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { engineDirFor, promptMovesSelection, takeSessionSelectionNotice } from "../tools/aidlc-lib.ts";
-import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -374,11 +374,11 @@ export async function run(
       return activeReviewerDispatchCache;
     }
     try {
+      // The same active space the engine reads.
       const spacePointer = join(projectDir, "aidlc", "active-space");
-      const rawSpace = existsSync(spacePointer)
-        ? readFileSync(spacePointer, "utf-8").trim()
+      const space = existsSync(spacePointer)
+        ? knownActiveSpace(join(projectDir, "aidlc"), readFileSync(spacePointer, "utf-8"))
         : "default";
-      const space = /^[a-z0-9][a-z0-9._-]*$/.test(rawSpace) ? rawSpace : "default";
       const intentsDir = join(projectDir, "aidlc", "spaces", space, "intents");
       const activePointer = join(intentsDir, "active-intent");
       const activeIntent = readFileSync(activePointer, "utf-8").trim();

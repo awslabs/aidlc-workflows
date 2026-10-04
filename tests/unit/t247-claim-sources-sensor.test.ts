@@ -111,6 +111,29 @@ function replaceInFile(
 }
 
 describe("t247 claim-sources sensor", () => {
+  test("a record in another space is checked against that space's method, whatever the pointer says", () => {
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-t247-space-"));
+    tempDirs.push(dir);
+    const record = join(dir, "aidlc", "spaces", "team-b", "intents", "260101-echo");
+    cpSync(FIXTURE, record, { recursive: true });
+    const memoryDir = join(dir, "aidlc", "spaces", "team-b", "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, "project.md"), "# Project-Level Rules\n\n## Forbidden\n\n- Do not add network access.\n");
+    writeFileSync(join(dir, "aidlc", "active-space"), "ghost\n");
+    writeFileSync(
+      join(record, "aidlc-state.md"),
+      `# AI-DLC State Tracking\n\n## Project Information\n- **Project**: Build a local CLI that echoes supplied text.\n- **Scope**: poc\n\n## Workspace State\n- **Project Root**: ${dir}\n`,
+    );
+    const questions = join(record, "intent-capture-questions.md");
+    writeFileSync(
+      questions,
+      readFileSync(questions, "utf-8").replace("aidlc/spaces/default/memory/", "aidlc/spaces/team-b/memory/"),
+    );
+    const result = run(record);
+    expect(result.findings).toEqual([]);
+    expect(result.pass).toBe(true);
+  });
+
   test("marked TUI fixture authority reaches the public query and rejects a stale source register", () => {
     const description = "Build a simple React todo app";
     const root = setupTuiProject({
