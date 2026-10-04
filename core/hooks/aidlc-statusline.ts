@@ -9,6 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -89,11 +90,10 @@ function workspaceRoot(projectDir: string): string {
 
 function activeSpace(projectDir: string): string {
   try {
-    const value = readFileSync(
-      join(workspaceRoot(projectDir), "active-space"),
-      "utf-8",
-    ).trim();
-    if (value) return value;
+    return knownActiveSpace(
+      workspaceRoot(projectDir),
+      readFileSync(join(workspaceRoot(projectDir), "active-space"), "utf-8"),
+    );
   } catch {
     // The default space is valid on a fresh shell.
   }

@@ -1594,6 +1594,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:addPendingPersonLines",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:advanceContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
@@ -2731,6 +2738,18 @@
         },
         {
           "file": "tests/unit/t304-codekb-cumulative-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbSourceRoot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7037,6 +7056,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:pendingPersonLines",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:pendingReviewRequestStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -10008,18 +10034,6 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-source-exclusion-upgrade.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:SPACE_NAME_REGEX",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t286-read-write-boundary.test.ts",
           "mechanism": "none"
         }
       ],

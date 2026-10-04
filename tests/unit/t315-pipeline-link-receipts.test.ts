@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
+// covers: subcommand:aidlc-log:link, audit:PIPELINE_LINK_COMPLETED, function:codekbStoreIsCurrent, function:codekbSourceRoot, function:latestPipelineLinkArtifactMtime, function:pipelineLinkEvidence, function:currentPipelineLinkReceipts, function:pipelineLinks, function:singleStageAttemptIsOpen, function:checkPipelineLinkEvidence
 //
 // Pipeline links are durable, ordered completion evidence. The log tool owns
 // each receipt; the engine and direct state transitions require the complete
@@ -37,6 +37,7 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  codekbRepoName,
   codekbStoreIsCurrent,
   codekbScopeFingerprint,
   currentPipelineLinkReceipts,
@@ -52,6 +53,7 @@ const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const NATIVE_ORCH = join(
   import.meta.dir,
   "../../dist-release/claude/.claude/tools/aidlc-orchestrate.ts",
@@ -761,6 +763,98 @@ describe("t315 pipeline link receipts", () => {
       links: [LEAD, FINAL],
       completed: [LEAD],
     });
+  });
+
+  // A live run on a one-folder project passed the folder's own name as --repo
+  // to every Reverse Engineering command, the name codekb-path gives its store.
+  // The codekb commands took it, the receipt refused it, and the agent renamed
+  // the developer's handoff to recover. The root's name now means the root.
+  test("the project root's own name works as --repo, and its handoff may carry that name", () => {
+    const proj = pipelineProject();
+    const root = codekbRepoName(proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    for (const args of [
+      ["codekb-scope-diff", "--repo", root],
+      ["codekb-snapshot", "--repo", root, "--paths", "./", "--json"],
+    ]) {
+      const run = spawnSync(BUN, [UTILITY, ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: childEnv(),
+      });
+      expect(run.status, `${args[0]}: ${run.stdout}${run.stderr}`).toBe(0);
+    }
+    const lead = runLog(proj, LEAD, root);
+    expect(lead.rc, lead.out).toBe(0);
+    expect(lead.out).not.toContain('"repo"');
+    const final = runLog(proj, FINAL, root);
+    expect(final.rc, final.out).toBe(0);
+    const audit = readAllAuditShards(proj);
+    expect(audit).toContain(`developer-scan-${root}.md`);
+    expect(audit).not.toContain("**Repo**:");
+    expect(pipelineLinkEvidence(proj, {
+      slug: RE_STAGE,
+      lead_agent: LEAD,
+      support_agents: [FINAL],
+    }).completed).toEqual([LEAD, FINAL]);
+
+    // The same handoff name with --repo left off, as the agent tried next.
+    const other = pipelineProject();
+    const otherRoot = codekbRepoName(other);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, other);
+    writeDeveloperHandoff(other, otherRoot);
+    const bare = spawnSync(BUN, [
+      LOG, "link", "--stage", RE_STAGE, "--link", LEAD,
+      "--artifact", relative(other, developerHandoffPath(other, otherRoot)),
+      "--project-dir", other,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: childEnv(),
+    });
+    expect(bare.status, `${bare.stdout}${bare.stderr}`).toBe(0);
+
+    // Any other name is still not this project's repo.
+    const third = pipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, third);
+    const wrong = runLog(third, LEAD, "another-repo");
+    expect(wrong.rc).not.toBe(0);
+    expect(wrong.out).toContain("omit --repo");
+  });
+
+  // A project folder that holds a folder of its own name (a Python package
+  // named after its project) is still one repo: its knowledge base describes
+  // the whole project root, so a change outside that folder makes it stale.
+  test("with no registered repo, the store describes the project root even beside a same-named folder", () => {
+    const proj = pipelineProject();
+    const current = writeCurrentCodekbStore(proj);
+    const child = join(proj, current.repo, "src");
+    mkdirSync(child, { recursive: true });
+    writeFileSync(join(child, "app.ts"), "export const current = true;\n", "utf-8");
+    expect(codekbStoreIsCurrent(proj, current.repo)).toBe(true);
+    writeFileSync(current.source, "export const current = false;\n", "utf-8");
+    expect(codekbStoreIsCurrent(proj, current.repo)).toBe(false);
+    expect(codekbStoreIsCurrent(proj)).toBe(false);
+
+    expect(runOrchestrateNext(
+      ORCH,
+      proj,
+      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      { env: childEnv() },
+    ).directive?.kind).toBe("run-stage");
+    const reused = state(proj, [
+      "reuse-artifact",
+      RE_STAGE,
+      "--decision",
+      "keep",
+      "--artifacts",
+      current.store,
+      "--repo",
+      current.repo,
+      "--single",
+    ]);
+    expect(reused.rc).not.toBe(0);
+    expect(reused.out).toContain("not CURRENT");
   });
 
   test("multi-repo intents enforce one ordered chain per repo", () => {

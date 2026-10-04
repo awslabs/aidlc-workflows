@@ -164,8 +164,8 @@ verbatim only when the human chooses to resume, then re-run `next`; otherwise
 take no engine action and wait for their direction. For `project-type`
 (`response_route: "command"`), execute `existing_code_command` verbatim when
 the person says the folder holds existing code to work on, or
-`new_project_command` when they say it is a new project, print its output,
-then re-run `next`; when the reply says neither, ask again. `claim` follows the Unit
+`new_project_command` when they say it is a new project, and act on the
+directive it returns; when the reply says neither, ask again. `claim` follows the Unit
 claim contract and
 `execute-remedy` follows only the human-selected executable guard remedy's
 command or action; empty remedies remain terminal. These routes do not fall

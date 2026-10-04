@@ -316,6 +316,8 @@ import {
   steeringReceiptMatches,
   steeringTokenKeyPathFor,
   takeSessionSelectionNotice,
+  addPendingPersonLines,
+  pendingPersonLines,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -434,6 +436,8 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
+  // Clears the person lines this step carries, once it is written.
+  personLinesSaid?: () => void;
   marker?: {
     kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
     units?: string[];
@@ -466,6 +470,10 @@ let activeHookHealthNotice: string | null | undefined;
 let activeSwitchOffNotices: string[] | null = null;
 let engineProjectDir: string | undefined;
 
+function stageValidityUnchecked(): string {
+  return `I could not check whether every finished stage is still up to date; ${entrySkillInvocation()} --status shows what was checked.`;
+}
+
 // A check a recorded switch turned off is said once, on whatever the engine
 // says next (see writePrepared for when it counts as said).
 function switchOffNoticesOnce(projectDir: string): string[] {
@@ -490,10 +498,14 @@ function projectStageValidityAdvisory(
       .map((issue) => issue.stage);
     const earliest = direct[0] ?? validity.issues[0]?.stage ?? null;
     const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
+    // What the person hears, for any kind of change: which finished stage is
+    // behind and what to say to redo it. The details stay in the fields.
+    const name = earliest ? nodeForSlug(earliest)?.name ?? earliest : null;
     const warning = state === "drifted"
-      ? `Completed stage results have drifted; routing is continuing in advisory mode` +
-        (earliest ? `. Suggested redo: /aidlc --stage ${earliest}.` : ".")
-      : `Stage-validity inspection is partly unavailable; routing is continuing in advisory mode. ${validity.warnings.join(" ")}`;
+      ? name
+        ? `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`
+        : `Some finished stages may be out of date; ${entrySkillInvocation()} --status shows which.`
+      : stageValidityUnchecked();
     return {
       state,
       directly_stale: direct,
@@ -502,16 +514,14 @@ function projectStageValidityAdvisory(
       earliest_affected_stage: earliest,
       warning,
     };
-  } catch (error) {
+  } catch {
     return {
       state: "unavailable",
       directly_stale: [],
       needs_revalidation: [],
       untracked: [],
       earliest_affected_stage: null,
-      warning:
-        `Stage-validity inspection failed; routing is continuing in advisory mode: ` +
-        errorMessage(error),
+      warning: stageValidityUnchecked(),
     };
   }
 }
@@ -576,7 +586,55 @@ function hookHealthNotice(): string | null {
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
+// Steps whose narration the agent passes through without speaking, so it rides
+// the next step it speaks from (the print that creates the work).
+const carriesNarration = new WeakSet<Directive>();
+// Steps the agent speaks right after, with no line of their own (the print
+// that opens a stage's gate, before the gate is shown).
+const leadsToSpeech = new WeakSet<Directive>();
+
+// A step the agent speaks from: one that ends its turn, or one with its own
+// line. A rules part never is; its run-stage is.
+function speaksToPerson(directive: Directive): boolean {
+  if (directive.kind === "load-steering") return false;
+  if (directive.kind === "done") return directive.workflow_continues !== true;
+  if (
+    directive.kind === "ask" || directive.kind === "present-gate" ||
+    directive.kind === "parked" || directive.kind === "error"
+  ) return true;
+  return typeof directive.narration === "string" && directive.narration.length > 0;
+}
+
+// Person lines kept from steps the agent passed through this turn are said,
+// in order and once, with the step it speaks from. One that would push the
+// step over its size limit waits for the next one. They count as said only
+// once that step is written (the returned callback), so a step replaced by an
+// error leaves them for the error, or for the next step.
+function sayPendingPersonLines(requested: Directive, transported: Directive): (() => void) | undefined {
+  const projectDir = engineProjectDir;
+  const sessionId = engineSessionId;
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return undefined;
+  if (carriesNarration.has(requested)) {
+    if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
+      delete transported.narration;
+    }
+    return undefined;
+  }
+  if (!leadsToSpeech.has(requested) && !speaksToPerson(transported)) return undefined;
+  const pending = pendingPersonLines(projectDir, sessionId);
+  if (pending.lines.length === 0) return undefined;
+  const own = transported.narration;
+  transported.narration = [...pending.lines, ...(own ? [own] : [])].join(" ");
+  if (Buffer.byteLength(JSON.stringify(transported), "utf-8") > directiveMaxBytes()) {
+    if (own) transported.narration = own;
+    else delete transported.narration;
+    return undefined;
+  }
+  return pending.said;
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
+  const requested = directive;
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false
@@ -666,6 +724,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       transported = withChangeNotices(transported, [selectionNotice, ...(transported.change_notices ?? [])]);
     }
   }
+  const personLinesSaid = sayPendingPersonLines(requested, transported);
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -806,6 +865,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
           ? { projectDir: engineProjectDir }
         : {}),
     ...(marker ? { marker } : {}),
+    ...(personLinesSaid ? { personLinesSaid } : {}),
   };
 }
 
@@ -883,6 +943,7 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
+  prepared.personLinesSaid?.();
   // Stage work handed to the session, by any path (a fresh publication, the
   // same work handed over again, or a `continue` to the next part), ends a
   // switch's one-shot stop, so the loop holds it like any other work (#1263).
@@ -1942,13 +2003,15 @@ function routingOptionReply(
 }
 
 // The routing question a reply that only names one of its options answers: the
-// question stored most recently, about work that has not moved since: the one workflow it was asked about. Asked while none
-// was selected, separate new work acts on none of its records, so it answers
-// whatever happened to them; continue and reshape get the records it listed
-// that are still there with the same identity, none selected (`records`). A bare number
-// also needs nothing asked after it: no question logged since, and no turn of
-// the person's besides this reply. Anything else is the person's own words,
-// asked about as usual.
+// question stored most recently. Separate new work acts on none of the work it
+// listed, so it answers whatever happened to that work. Asked about an active
+// workflow, continue and reshape run the question's own late answer, which acts
+// only while that workflow (same folder and uuid) is the one selected, however
+// far it has moved on, and asks again otherwise. Asked while none was selected,
+// they get the records it listed that are still there with the same identity,
+// none selected (`records`). A bare number also needs nothing asked after it:
+// no question logged since, and no turn of the person's besides this reply.
+// Anything else is the person's own words, asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
@@ -1956,6 +2019,8 @@ function routingQuestionAnswer(
   try {
     const question = latestQuestion(projectDir);
     const askedAbout = question?.askedAbout;
+    // A digest marks a question asked with options to answer; the words an open
+    // stage question hands on are stored without one.
     if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
     const pick = askedAbout.pick === true;
     const option = routingOptionReply(
@@ -1973,16 +2038,6 @@ function routingQuestionAnswer(
       const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
         askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
       records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
-    } else {
-      const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
-      if (!target) return null;
-      const statePath = stateFilePathForSelection(projectDir, {
-        space: askedAbout.space,
-        intent: target.intent || null,
-        sessionId: null,
-        binding: null,
-      });
-      if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
     }
     if (option.numeric) {
       const asked = Date.parse(question.createdAt);
@@ -3316,6 +3371,9 @@ function createPrintDirective(
   directive.narration = clause
     ? `Setting up a ${scope} workflow for this: ${clause}.`
     : `Setting up a ${scope} workflow for this.`;
+  // A request typed with its scope was never shown on an ask, so the line on
+  // how a pasted document was split is said here.
+  if (description && !flags.request) directive.narration += documentSplitSentence(description);
   // Say it while the person can still correct it: an empty folder starts as a
   // new project, which drops Reverse Engineering from the plan.
   if (!flags.projectType && newProjectDropsReverseEngineering(scope, projectDir, flags.planChanges)) {
@@ -3323,6 +3381,10 @@ function createPrintDirective(
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
+  // The agent runs the creation and goes on, so the line rides the first step
+  // it speaks from. A new, unrelated piece of work stops here instead (the
+  // person starts a fresh chat for it), so the agent speaks from this step.
+  if (!flags.newIntent) carriesNarration.add(directive);
   return directive;
 }
 
@@ -6333,11 +6395,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (stateContent && flags.projectType && !flags.newIntent && !newWorkOverFinished) {
     const alone = projectTypeIsWholeRequest(flags);
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
+      // Said with more of a request, the reclassify directive says to run
+      // the same `next` again so the rest of the request is carried on.
       emit(printDirective(
-        `Run \`${reclassifyCommand(pd, flags.projectType)}\` and print its output verbatim, then ` +
-          (alone
-            ? "re-run `next` to continue."
-            : "run the same `next` command again to carry on with the rest of the request."),
+        `Run \`${reclassifyCommand(pd, flags.projectType)}${alone ? "" : " --then-rerun"}\` ` +
+          "and act on the directive it returns.",
       ));
       return;
     }
@@ -6560,7 +6622,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     // Only a front composition continues into creation, which needs the
     // request by id; an in-flight reshape carries its text in the dispatch.
+    // A request typed straight to compose passed no question, so how its
+    // pasted document was split is said here.
+    let splitSaid = "";
     if (flags.intent && !flags.request && !inFlight) {
+      splitSaid = documentSplitSentence(flags.intent);
       flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,
@@ -6568,7 +6634,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
-    emit(composeDispatchDirective(flags, inFlight));
+    const dispatch = composeDispatchDirective(flags, inFlight);
+    if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
+    emit(dispatch);
     return;
   }
 
@@ -12396,26 +12464,28 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emit(
-      withChangeNotices(
-        printDirective(
-          revalidatingOpenGate
-            ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
-            : completionOpensGate
-            ? completionOpensGateMessage(`"${slug}"`)
-            : flags.result === "rejected" && node.mode === "pipeline"
-            ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
-              `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
-              `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
-              `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
-              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
-              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
-            : `Recorded ${flags.result} for "${slug}".` +
-              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
-        ),
-        changeNoticesFromToolOutput(res.stdout),
+    const gateReply = withChangeNotices(
+      printDirective(
+        revalidatingOpenGate
+          ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+          : completionOpensGate
+          ? completionOpensGateMessage(`"${slug}"`)
+          : flags.result === "rejected" && node.mode === "pipeline"
+          ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
+            `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
+            `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
+            `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
+            `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
+          : `Recorded ${flags.result} for "${slug}".` +
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
       ),
+      changeNoticesFromToolOutput(res.stdout),
     );
+    // The agent shows the gate next, so lines held from inside the stage are
+    // said with it.
+    if (flags.result === "awaiting-approval" || flags.result === "revised") leadsToSpeech.add(gateReply);
+    emit(gateReply);
     return;
   }
 

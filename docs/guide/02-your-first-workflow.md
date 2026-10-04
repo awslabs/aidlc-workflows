@@ -42,7 +42,7 @@ For a direct text or Markdown read, name the file in your initial request, for
 example `/aidlc Read ./vision.md and build what it describes`. Relative paths
 resolve from the project root. When nothing is at that path, the workflow looks
 for project files with that name: with one match it reads it and tells you which
-file, with several it offers a numbered pick, and with none it asks for the
+file (at the latest when it asks you to approve the stage), with several it offers a numbered pick, and with none it asks for the
 path. It finds only document files (Markdown, text, PDF, Word, and similar),
 outside hidden folders such as `.docker` or `.aws` and outside any nested
 repository. It never lists git-ignored files, symlinks, or files that look like
@@ -80,7 +80,8 @@ the plan question that follows says so.
 A PDF or Word file works the same way: name it, for example
 `/aidlc Build what ./brief.pdf describes`. The workflow copies it into
 `aidlc/spaces/<space>/knowledge/documents/`, adds it to the
-[knowledge base](08-knowledge.md), tells you its document id in one line, and
+[knowledge base](08-knowledge.md), tells you in one line where it copied it and
+its document id (at the latest when it asks you to approve the stage), and
 reads its text. You never run a command or type the id, and it never replaces a
 file already in that folder. When the file is git-ignored (or git cannot
 say), it asks first, because the copy would be committed: say "use it anyway" to copy it. When no

@@ -171,7 +171,8 @@ describe("t161 keying invariants", () => {
   test("release stays bound when active-space changes after acquisition", () => {
     const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t161-space-shift-"));
     const intent = "auth-aaaaaaaa";
-    mkdirSync(join(projectDir, "aidlc"), { recursive: true });
+    mkdirSync(join(projectDir, "aidlc", "spaces", "space-one"), { recursive: true });
+    mkdirSync(join(projectDir, "aidlc", "spaces", "space-two"), { recursive: true });
     writeFileSync(join(projectDir, "aidlc", "active-space"), "space-one\n");
     const acquiredLock = auditLockDir(projectDir, intent, "space-one");
     try {

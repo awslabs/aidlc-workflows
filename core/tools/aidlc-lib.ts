@@ -17,12 +17,14 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   type KiroLayout,
+  knownActiveSpace,
   kiroTreeLayout,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
+  SPACE_NAME_REGEX,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
@@ -2561,14 +2563,14 @@ function canonicalPathKey(path: string): string {
   }
 }
 
-// The active space for this project. Reads the `aidlc/active-space` cursor;
-// defaults to "default". NEVER throws — the default space is always valid even
-// when nothing is on disk yet (the resolver tolerates an absent space dir).
+// The active space for this project. Reads the `aidlc/active-space` cursor; a
+// missing cursor, or one that does not name a space this project has, is
+// "default". NEVER throws: the default space is always valid even when
+// nothing is on disk yet (the resolver tolerates an absent space dir).
 export function activeSpace(projectDir: string): string {
   const ptr = join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER);
   try {
-    const raw = readFileSync(ptr, "utf-8").trim();
-    if (raw.length > 0) return raw;
+    return knownActiveSpace(workspaceRoot(projectDir), readFileSync(ptr, "utf-8"));
   } catch {
     // no cursor → default
   }
@@ -2604,8 +2606,8 @@ export function knowledgeDir(projectDir: string, space?: string): string {
 // produced. A separate constant from BOLT_SLUG_REGEX despite the identical
 // pattern today, following the convention that comment states: Bolt slugs,
 // stage/artifact slugs, and space names are distinct domains that must be free
-// to tighten independently.
-export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+// to tighten independently. It lives with knownActiveSpace in
+// aidlc-runtime-paths.ts, which the status line reads without this module.
 // A record dir (`<YYMMDD>-<slug>`), slug, or uuid: one path-safe segment, so a
 // selector can never escape `aidlc/spaces/<space>/intents/` through a join.
 export const INTENT_SELECTOR_REGEX = /^[a-z0-9][a-z0-9-]*$/i;
@@ -3388,6 +3390,22 @@ export function codekbStoreGeneration(storeDir: string): string {
   return `sha256:${generation}`;
 }
 
+// The folder a repo's knowledge base describes. A registered repo is its
+// sibling folder under the workspace; with none registered the project root is
+// the one repo, even when it holds a folder of the same name (a Python package
+// named after its project, for one).
+export function codekbSourceRoot(projectDir: string, repo: string, space?: string): string {
+  let registered: string[];
+  try {
+    registered = intentRepos(projectDir, undefined, space);
+  } catch {
+    registered = [];
+  }
+  if (registered.length === 0) return projectDir;
+  const sibling = repoDir(projectDir, repo);
+  return existsSync(sibling) && statSync(sibling).isDirectory() ? sibling : projectDir;
+}
+
 // True only when the durable CodeKB store for `repo` carries a valid scope
 // block whose recorded fingerprint still matches the current source tree.
 // This is the programmatic form of `codekb-scope-diff`'s CURRENT verdict, used
@@ -3412,11 +3430,7 @@ export function codekbStoreIsCurrent(
     return false;
   }
   if (!parsed.ok || parsed.scope.fingerprint === null) return false;
-  const sibling = repoDir(projectDir, repo);
-  const sourceRoot =
-    existsSync(sibling) && statSync(sibling).isDirectory()
-      ? sibling
-      : projectDir;
+  const sourceRoot = codekbSourceRoot(projectDir, repo, sp);
   const current = codekbScopeFingerprint(
     sourceRoot,
     parsed.scope.analyzedPaths,
@@ -5519,6 +5533,138 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
   } catch {
     return null;
   }
+}
+
+// Lines the person must hear that the engine puts on a step the agent passes
+// through without speaking (the print that creates the work, the reply to
+// "new project or existing code"). They are kept for this chat and said, in
+// order, with the next step the agent speaks from, then cleared. They belong to
+// the person's current turn: a newer prompt on the selected work, or an age
+// past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
+// a line never surfaces in a later turn or another chat. A line a tool gives
+// inside a stage (which file it read, a file it copied into the project) is
+// held across the person's turns instead, until the next step the agent speaks
+// from on the same work (at the latest, the stage's gate), and is said once per
+// work.
+const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
+const HELD_PERSON_LINES_SAID_MAX = 20;
+
+interface PendingPersonLine {
+  line: string;
+  at: number;
+  // The turn a turn-scoped line belongs to, or the work a held line belongs to.
+  turn?: string;
+  work?: string;
+}
+
+interface PendingPersonLines {
+  lines: PendingPersonLine[];
+  // Held lines already said on this work.
+  said: string[];
+}
+
+function pendingPersonLinesPath(projectDir: string, sessionId: string): string {
+  const recordPath = sessionRecordPath(projectDir, sessionId);
+  return recordPath ? `${recordPath}.person-lines` : "";
+}
+
+// The selected work, and the person's current turn on it as the prompt hook
+// marks it.
+function personTurnAndWork(projectDir: string): { turn: string; work: string } {
+  try {
+    const selection = resolveWorkflowSelection(projectDir);
+    if (!selection.intent) return { turn: "none", work: "none" };
+    const work = `${selection.space}/${selection.intent}`;
+    try {
+      return { turn: String(statSync(humanTurnMarkerPath(projectDir, selection.intent, selection.space)).mtimeMs), work };
+    } catch {
+      return { turn: "none", work };
+    }
+  } catch {
+    return { turn: "none", work: "none" };
+  }
+}
+
+function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const now = Date.now();
+    const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
+      if (!entry || typeof entry !== "object") return false;
+      const { line, at, turn: lineTurn, work: lineWork } = entry as Partial<PendingPersonLine>;
+      if (typeof line !== "string" || typeof at !== "number") return false;
+      return lineWork !== undefined
+        ? lineWork === work
+        : lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+    });
+    const said = saved.work === work && Array.isArray(saved.said)
+      ? saved.said.filter((line): line is string => typeof line === "string")
+      : [];
+    return { lines, said };
+  } catch {
+    return { lines: [], said: [] };
+  }
+}
+
+function writePendingPersonLines(projectDir: string, path: string, work: string, saved: PendingPersonLines): void {
+  if (saved.lines.length === 0 && saved.said.length === 0) {
+    rmSync(path, { force: true });
+    return;
+  }
+  mkdirSync(sessionsDir(projectDir), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ work, ...saved })}\n`, "utf-8");
+}
+
+// Keep the lines for the next step the agent speaks from; `held` keeps them
+// across the person's turns on the same work. False when they could not be
+// kept, so the caller says them on its own step instead.
+export function addPendingPersonLines(
+  projectDir: string,
+  sessionId: string,
+  lines: readonly string[],
+  held = false,
+): boolean {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  const added = lines.filter((line) => line.trim().length > 0);
+  if (!path || added.length === 0) return false;
+  const { turn, work } = personTurnAndWork(projectDir);
+  if (held && work === "none") return false;
+  try {
+    const saved = readPendingPersonLines(path, turn, work);
+    const at = Date.now();
+    for (const line of added) {
+      if (held && (saved.said.includes(line) || saved.lines.some((entry) => entry.line === line))) continue;
+      saved.lines.push(held ? { line, at, work } : { line, at, turn });
+    }
+    writePendingPersonLines(projectDir, path, work, saved);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The lines waiting for the next step the agent speaks from. `said()` clears
+// them once the step carries them; until then they stay waiting.
+export function pendingPersonLines(projectDir: string, sessionId: string): { lines: string[]; said(): void } {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  const none = { lines: [], said: () => {} };
+  if (!path || !existsSync(path)) return none;
+  const { turn, work } = personTurnAndWork(projectDir);
+  const saved = readPendingPersonLines(path, turn, work);
+  return {
+    lines: saved.lines.map((entry) => entry.line),
+    said: () => {
+      const heldSaid = saved.lines.filter((entry) => entry.work !== undefined).map((entry) => entry.line);
+      try {
+        writePendingPersonLines(projectDir, path, work, {
+          lines: [],
+          said: [...saved.said, ...heldSaid].slice(-HELD_PERSON_LINES_SAID_MAX),
+        });
+      } catch {
+        /* the next step says them again rather than never */
+      }
+    },
+  };
 }
 
 interface SessionPidEntry {

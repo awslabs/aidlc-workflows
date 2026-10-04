@@ -1319,14 +1319,41 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     });
   }
 
-  test("an option is asked about once the work it asked about has moved", () => {
-    proj = createOrchestrationTestProject();
-    seedStateFile(proj, MID_IDEATION);
-    routingAsk();
-    const statePath = seededStateFile(proj);
-    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace("- **Revision Count**: 0", "- **Revision Count**: 1"), "utf-8");
-    expect(directive(["2"]).ask_type).toBe("new-work-routing");
-  });
+  // The workflow the question asked about moves on before the person answers:
+  // a revision, or a stage finished in this chat or another.
+  const moveOn: Array<[string, (state: string) => string]> = [
+    ["a revision", (state) => state.replace("- **Revision Count**: 0", "- **Revision Count**: 1")],
+    [
+      "the next stage",
+      (state) =>
+        state
+          .replace("- [-] feasibility — EXECUTE", "- [x] feasibility — EXECUTE")
+          .replace("- [ ] scope-definition — EXECUTE", "- [-] scope-definition — EXECUTE")
+          .replace("- **In Progress**: feasibility", "- **In Progress**: scope-definition")
+          .replace("- **Current Stage**: feasibility", "- **Current Stage**: scope-definition"),
+    ],
+  ];
+  for (const [moved, move] of moveOn) {
+    for (const [reply, route] of [
+      ["2", "new_intent_command"],
+      ["Separate new piece of work", "new_intent_command"],
+      ["1", "continue_command"],
+      ["3", "compose_command"],
+    ] as const) {
+      test(`an option (${JSON.stringify(reply)}) still answers after the workflow moved on to ${moved}`, () => {
+        proj = createOrchestrationTestProject();
+        seedStateFile(proj, MID_IDEATION);
+        const ask = routingAsk();
+        const statePath = seededStateFile(proj);
+        const before = readFileSync(statePath, "utf-8");
+        writeFileSync(statePath, move(before), "utf-8");
+        expect(readFileSync(statePath, "utf-8")).not.toBe(before);
+        const d = directive([reply]);
+        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).not.toBe("new-work-routing");
+        expect(d).toEqual(runCommand(ask[route]!));
+      });
+    }
+  }
 
   test("a bare number after another turn or a later question is not the routing answer; its label still is", () => {
     proj = createOrchestrationTestProject();
