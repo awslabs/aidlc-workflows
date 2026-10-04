@@ -5473,6 +5473,28 @@ function selectSource(
   );
 }
 
+// A link (or other special file) among a copied project's own files stops
+// config, since a rule read through one would be left out of the plan. The
+// failure names the project path, so the person can put the file itself there.
+class ProjectLinkError extends Error {
+  constructor(readonly path: string, link: boolean) {
+    super(`${shownValue(path)} is ${link ? "a link" : "not a regular file"}`);
+  }
+}
+
+function assertNoProjectLinks(projectDir: string, directory: string): void {
+  const visit = (rel: string): void => {
+    for (const entry of readdirSync(join(projectDir, rel)).sort()) {
+      const child = `${rel}/${entry}`;
+      if (hostToolPath(child)) continue;
+      const stat = lstatSync(join(projectDir, child));
+      if (stat.isDirectory()) visit(child);
+      else if (!stat.isFile()) throw new ProjectLinkError(child, stat.isSymbolicLink());
+    }
+  };
+  visit(directory);
+}
+
 function copiedProjectSource(
   projectDir: string,
   requested?: string,
@@ -5526,20 +5548,23 @@ function copiedProjectSource(
   validateProjectionDescriptor(projectDir, stamp, descriptor, {
     allowMissingRootIntegrations: true,
   });
-  const cleanup = mkdtempSync(join(tmpdir(), "aidlc-config-copy-source-"));
-  const root = join(cleanup, "projection");
-  mkdirSync(root, { recursive: true });
   for (const directory of descriptor.managedDirectories) {
     assertProjectionPathHasNoSymlinks(projectDir, directory);
     const source = join(projectDir, directory);
     if (!existsSync(source) || !lstatSync(source).isDirectory()) {
-      rmSync(cleanup, { recursive: true, force: true });
       throw new Error(`copied projection is missing managed directory ${directory}`);
     }
+    assertNoProjectLinks(projectDir, directory);
+  }
+  const cleanup = mkdtempSync(join(tmpdir(), "aidlc-config-copy-source-"));
+  try {
+  const root = join(cleanup, "projection");
+  mkdirSync(root, { recursive: true });
+  for (const directory of descriptor.managedDirectories) {
+    const source = join(projectDir, directory);
     // What a host tool installed for itself (links in its node_modules
     // included) is never release content, so it stays where it is and out of
-    // the source. Any other link still stops here: a rule read through one
-    // would be left out of the compiled plan.
+    // the source. Any other link was refused above.
     cpSync(source, join(root, directory), {
       recursive: true,
       preserveTimestamps: true,
@@ -5566,6 +5591,10 @@ function copiedProjectSource(
     descriptor,
     projectProjection: true,
   };
+  } catch (error) {
+    rmSync(cleanup, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 type FirstRunDetection = {
@@ -9745,6 +9774,17 @@ export async function main(
     // harness, so the fix names the storage.
     if (error instanceof TransactionFilesystemError) {
       emitResult(failure(rawMessage, EXIT.integrity, error.remediation), options);
+      return;
+    }
+    if (error instanceof ProjectLinkError) {
+      const rerun = configRerunWith(input, projectDir, []);
+      emitResult(failure(
+        rawMessage,
+        EXIT.integrity,
+        `put the file itself at ${shownValue(error.path)}, then run ${
+          rerun ? `\`${rerun}\`` : "the same command"
+        } again`,
+      ), options);
       return;
     }
     if (error instanceof ReleaseVerificationError) {

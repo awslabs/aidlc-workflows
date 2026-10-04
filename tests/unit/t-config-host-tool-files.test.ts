@@ -13,6 +13,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   lstatSync,
   mkdirSync,
@@ -82,10 +83,10 @@ function startedOpencodeProject(): { project: string; machine: string } {
   return { project, machine: temp("aidlc-host-tool-machine-") };
 }
 
-function config(project: string, machine: string, args: string[]) {
+function config(project: string, machine: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}) {
   const result = spawnSync(BUN, [join(project, ".aidlc", "tools", "aidlc.ts"), "config", ...args], {
     cwd: project,
-    env: cleanEnv(machine),
+    env: { ...cleanEnv(machine), ...extraEnv },
     encoding: "utf-8",
   });
   return { status: result.status, output: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "" };
@@ -135,16 +136,45 @@ describe("config leaves what a host tool installed for itself alone", () => {
     expect(owned(project).filter(hostToolPath)).toEqual([]);
   });
 
-  test.skipIf(!LINKS)("a linked rule file still stops config rather than leaving the rule out of the plan", () => {
+  test.skipIf(!LINKS)("a linked rule file still stops config, names the step, and leaves no copy behind", () => {
     const { project, machine } = startedOpencodeProject();
     const team = join(project, "aidlc", "spaces", "default", "memory", "team.md");
     const shared = join(temp("aidlc-host-tool-shared-"), "team.md");
     writeFileSync(shared, readFileSync(team, "utf-8"));
     rmSync(team);
     symlinkSync(shared, team);
-    const result = config(project, machine, ["models", "--agent", "developer", "--effort", "high", "--project", "--yes"]);
+    const scratch = temp("aidlc-host-tool-tmp-");
+    const args = ["models", "--agent", "developer", "--effort", "high", "--project", "--yes"];
+    const result = config(project, machine, args, { TMPDIR: scratch });
     expect(result.status).not.toBe(0);
-    expect(result.output).toContain("memory/team.md: links and special files are not valid projection content");
+    expect(result.output).toContain("error: aidlc/spaces/default/memory/team.md is a link");
+    expect(result.output).toContain(
+      "fix: put the file itself at aidlc/spaces/default/memory/team.md, then run " +
+        "`bun .aidlc/tools/aidlc.ts config models --agent developer --effort high --project --yes` again",
+    );
+    expect(result.output).not.toContain(scratch);
+    expect(readdirSync(scratch).filter((name) => name.startsWith("aidlc-config-copy-source-"))).toEqual([]);
+    // The person puts the file itself there, and the same command is done.
+    rmSync(team);
+    writeFileSync(team, readFileSync(shared, "utf-8"));
+    expect(config(project, machine, args, { TMPDIR: scratch }).status).toBe(0);
+  });
+
+  test.skipIf(!LINKS || process.getuid?.() === 0)("a copy that fails partway leaves no copy behind", () => {
+    const { project, machine } = startedOpencodeProject();
+    // A file config reads only while it copies the project's own files.
+    const unreadable = join(project, ".aidlc", "knowledge", "aidlc-architect-agent", "adr-template.md");
+    chmodSync(unreadable, 0o000);
+    try {
+      const scratch = temp("aidlc-host-tool-tmp-");
+      const result = config(project, machine, ["models", "--agent", "developer", "--effort", "high", "--project", "--yes"], {
+        TMPDIR: scratch,
+      });
+      expect(result.status).not.toBe(0);
+      expect(readdirSync(scratch).filter((name) => name.startsWith("aidlc-config-copy-source-"))).toEqual([]);
+    } finally {
+      chmodSync(unreadable, 0o644);
+    }
   });
 
   test("no release ships a file the host-tool rule leaves out", () => {
