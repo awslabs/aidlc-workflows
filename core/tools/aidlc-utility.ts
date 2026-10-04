@@ -100,6 +100,7 @@ import {
 } from "./aidlc-inline-context.ts";
 import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
+  composedPluginNames,
   copilotCliTrust,
   insideGitRepository,
   instructionFileDoctorCheck,
@@ -759,6 +760,9 @@ function knownPluginNames(): string[] {
   }
   for (const meta of Object.values(loadScopeMetadataAll())) {
     names.add(meta.plugin ?? "aidlc");
+  }
+  for (const name of composedPluginNames(resolveHarnessPath(["tools", "data"]))) {
+    names.add(name);
   }
   return [...names].sort();
 }
@@ -2409,11 +2413,13 @@ function appendPluginDoctorChecks(
     const startedAt = Date.now();
     // SIGKILL hard-bounds the direct script process. Detached grandchildren can
     // still outlive that process; plugins must not create them.
-    const run = spawnSync(process.execPath, [realScriptPath], {
+    const executable = compiledExecutable();
+    const run = spawnSync(executable ?? process.execPath, [realScriptPath], {
       cwd: projectDir,
       encoding: "utf-8",
       env: {
         ...process.env,
+        ...(executable ? { BUN_BE_BUN: "1" } : {}),
         AIDLC_PROJECT_DIR: projectDir,
         AIDLC_HARNESS_DIR: harness,
         AIDLC_PLUGIN_NAME: plugin,

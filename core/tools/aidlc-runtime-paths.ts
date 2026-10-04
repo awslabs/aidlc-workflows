@@ -184,6 +184,13 @@ export function aidlcInvocation(): string {
   return `bun ${runtimeHarnessDir()}/tools/aidlc.ts`;
 }
 
+// The Bun dispatcher of the projected tree this module runs from: the tool a
+// copy-channel command ran. Null in the source tree, where the project's own
+// tree stands in for a projection.
+export function projectedDispatcher(): string | null {
+  return PROJECTED_INVOKE.startsWith("{{") ? null : join(MODULE_TOOLS_DIR, "aidlc.ts");
+}
+
 export function entrySkillInvocation(): string {
   return runtimeHarnessDir() === ".codex" ? "$aidlc" : "/aidlc";
 }

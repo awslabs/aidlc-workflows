@@ -351,7 +351,12 @@ function assertActiveStage(stateContent: string, slug: string): void {
     fail("state file has no Current Stage field", 1);
   }
   if (current !== slug) {
-    fail(`slug mismatch: requested "${slug}" but Current Stage is "${current}"`, 1);
+    // --slug takes a stage's slug. When the value is no stage at all (an
+    // intent's record name is the usual one), name the active stage to pass.
+    const retry = !findStageBySlug(slug) && findStageBySlug(current)
+      ? `. Run it again with --slug ${current}.`
+      : "";
+    fail(`slug mismatch: requested "${slug}" but Current Stage is "${current}"${retry}`, 1);
   }
 }
 
