@@ -259,6 +259,10 @@ describe("t304 cumulative CodeKB stage contract", () => {
     expect(STAGE.replace(/\s+/g, " ")).toContain(
       "{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <record>/.aidlc-engine/codekb-stage-<repo>/reverse-engineering-timestamp.md",
     );
+    // Outside git the fingerprint stays unknown, so the check is not a loop.
+    expect(STAGE.replace(/\s+/g, " ")).toContain(
+      "an unknown fingerprint (outside git) is left for publication to check",
+    );
     expect(facts).not.toContain("output of the mint command in stage Step 3");
   });
 });
