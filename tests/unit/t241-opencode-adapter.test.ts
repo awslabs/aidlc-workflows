@@ -426,7 +426,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         "aidlc engine orchestrate next \"a\\\" ; touch x ; \\\"\"",
         ...(shell === "cmd" ? ["aidlc engine orchestrate next \"%PATH%\""] : []),
       ].entries()) {
-        await expect(invoke(`${shell}-${i}`, command)).rejects.toThrow(/one direct invocation|reads its arguments again/);
+        await expect(invoke(`${shell}-${i}`, command)).rejects.toThrow(/one direct invocation|cannot reach AI-DLC through the aidlc launcher/);
       }
     }
     // A shell it cannot learn, or a setting it cannot read, passes no AIDLC
@@ -507,16 +507,18 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       await expect(pwsh(`ps-no-${i}`, command)).rejects.toThrow("one direct invocation");
     }
     // The aidlc launcher hands its arguments to cmd.exe on Windows, and
-    // PowerShell passes a word with no space on bare: the refusal names cmd.exe
-    // as the shell that keeps these.
-    for (const [i, command] of [
-      "aidlc engine orchestrate next 'R&D'",
-      "aidlc engine orchestrate next 'Book rooms\nfor R and D'",
-      "aidlc engine orchestrate next '%APPDATA% and %TEMP%'",
-      "aidlc engine orchestrate next '50%' 'of %TEMP'",
-      "aidlc engine orchestrate next 'say !T241_VALUE! now'",
+    // PowerShell passes a word with no space on bare. Each refusal names a step
+    // that works: cmd.exe keeps & | < > ^ inside double quotes; nothing on
+    // Windows keeps a line break or a %NAME% or !NAME! pair, so the person says
+    // how to write it.
+    for (const [i, [command, step]] of [
+      ["aidlc engine orchestrate next 'R&D'", "Set \"shell\" in opencode's settings to cmd.exe"],
+      ["aidlc engine orchestrate next 'Book rooms\nfor R and D'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next '%APPDATA% and %TEMP%'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next '50%' 'of %TEMP'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next 'say !T241_VALUE! now'", "Ask the person how to write the text"],
     ].entries()) {
-      await expect(pwsh(`ps-launcher-${i}`, command)).rejects.toThrow("Set \"shell\" in opencode's settings to cmd.exe");
+      await expect(pwsh(`ps-launcher-${i}`, command)).rejects.toThrow(step);
     }
     // cmd.exe reads a single quote as a plain character, replaces %NAME% even
     // inside quotes, and a program reads \" as a quote inside a word.
@@ -536,10 +538,10 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       await expect(pwsh7(`ps7-ok-${i}`, command)).resolves.toBeUndefined();
     }
     for (const [i, [command, refusal]] of [
-      ["aidlc engine orchestrate next 'Rename \"Tasks\"'", "hands it one command line"],
-      ["aidlc engine orchestrate next ''", "hands it one command line"],
-      ["aidlc engine orchestrate next 'C:\\dir\\'", "hands it one command line"],
-      ["aidlc engine orchestrate next 'R&D'", "reads its arguments again"],
+      ["aidlc engine orchestrate next 'Rename \"Tasks\"'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next 'C:\\dir\\'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next ''", "Leave it out and run the command again"],
+      ["aidlc engine orchestrate next 'R&D'", "Set \"shell\" in opencode's settings to cmd.exe"],
       ['bun .aidlc/tools/aidlc.ts engine orchestrate next "fix \u201d; New-Item x; \u201c"', "one direct invocation"],
     ].entries()) {
       await expect(pwsh7(`ps7-no-${i}`, command)).rejects.toThrow(refusal);
