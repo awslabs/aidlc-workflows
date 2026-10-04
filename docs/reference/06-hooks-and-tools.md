@@ -1774,16 +1774,15 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 
 The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Code tools to avoid per-invocation permission prompts:
 
-| Claude Code Tool | AI-DLC Usage |
-|------------------|-------------|
-| `Read` | Reading stage files, knowledge files, state files, project source code |
-| `Edit` | Modifying existing artifacts, updating state files |
-| `Write` | Creating new artifacts, scaffolding directories (never the `audit/` shards, which the guards refuse) |
-| `Bash` | Running build tools, test commands, timestamps, package managers |
-| `Glob` | Finding files by pattern during workspace detection and reverse engineering |
-| `Grep` | Searching codebases for patterns, dependencies, and API endpoints |
+| Allow entry | AI-DLC Usage |
+|-------------|-------------|
+| `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
+| `Bash(bun .claude/tools/*)` | AI-DLC's own commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(date -u *)` | Timestamps |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
+
+Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does.
 
 `AskUserQuestion` is always permitted by default and does not require explicit approval.
 

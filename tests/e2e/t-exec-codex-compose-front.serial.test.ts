@@ -29,6 +29,11 @@
 //            a stock scope with a `Plan: custom, based on <scope>` line, and
 //            `.codex/scopes/` keeps its stock files.
 //
+// The task is the one the sibling compose-front journeys use (t192, t-tui,
+// t-acp-kiro): no stock grid fits it and it asks for a custom plan, so a stock
+// match is a live failure signal. A task a stock scope fits lets the composer
+// match it, which is correct and leaves no Plan line to assert.
+//
 // Under workspace-write codex carves the project-root `.codex/` out of the
 // writable root (same read-only-by-design treatment as `.git/`), which is why
 // the old composed-scope write needed a grant. Approve no longer writes there;
@@ -85,6 +90,9 @@ const STOCK_SCOPES = new Set([
   "workshop",
   "express",
 ]);
+
+const TASK =
+  "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
@@ -237,7 +245,7 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         const b1 = codexTurn(
           proj,
           home,
-          'Use the $aidlc skill to run: /aidlc compose "add a rate limiter middleware to an existing Express API"',
+          `Use the $aidlc skill to run: /aidlc compose "${TASK}"`,
         );
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
         const b1Session = b1.sessionId;

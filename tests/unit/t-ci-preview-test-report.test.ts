@@ -219,6 +219,18 @@ describe("t-ci-preview-test-report", () => {
     expect(report([], { legs: { plan: "success" } })).toContain("Failed legs: none recorded.");
   });
 
+  test("a leg the suite skips by design is not listed as failed; a required leg that skipped is", () => {
+    // The nightly release-purpose suite omits these two legs, as its result file says.
+    const nightly = { plan: "success", deterministic: "skipped", production_guards: "skipped", live_windows: "failure" };
+    const omittedLegs = ["deterministic", "production_guards"];
+    expect(report([], { legs: nightly, omittedLegs })).toContain("Failed legs: `live_windows` (failure).");
+    expect(report([], { legs: { ...nightly, live_macos: "skipped" }, omittedLegs }))
+      .toContain("Failed legs: `live_windows` (failure), `live_macos` (skipped).");
+    // A result file without the omission list reports every leg that did not pass.
+    expect(report([], { legs: nightly })).toContain(
+      "Failed legs: `deterministic` (skipped), `production_guards` (skipped), `live_windows` (failure).");
+  });
+
   test("names stay inert markup and long reports stay within their budget", () => {
     const hostile = report([parseFailures("unit-1-Linux", [
       "FAIL: t1 (1 failed assertions)",
@@ -306,7 +318,10 @@ describe("t-ci-preview-test-report", () => {
   test("the command renders the workflow's report from downloaded evidence", () => {
     const root = fixture();
     const evidence = join(root, "evidence");
-    put(evidence, "full-suite-result/full-suite-result.json", JSON.stringify({ legs: { deterministic: "failure" } }));
+    // The result file names the legs its purpose omits; the report reads them from it.
+    put(evidence, "full-suite-result/full-suite-result.json", JSON.stringify({
+      legs: { deterministic: "failure", production_guards: "skipped" }, omittedLegs: ["production_guards"],
+    }));
     put(evidence, "full-suite-deterministic-unit-7-Windows/tests/logs/2026-09-24T21-52-16Z-p7036/failures.txt", OUTER);
     put(root, "jobs.json", JSON.stringify([{ jobs: [{ name: "full_suite / result", conclusion: "failure", html_url: "https://x/1" }] }]));
     const env = {
@@ -323,7 +338,8 @@ describe("t-ci-preview-test-report", () => {
     const rendered = Bun.spawnSync([process.execPath, cli, evidence, join(root, "jobs.json"), output], { env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(rendered.exitCode, rendered.stderr.toString()).toBe(0);
     expect(fs.readFileSync(output, "utf8")).toBe(report([parseFailures("deterministic-unit-7-Windows", OUTER)], {
-      legs: { deterministic: "failure" },
+      legs: { deterministic: "failure", production_guards: "skipped" },
+      omittedLegs: ["production_guards"],
       jobs: [{ name: "result", url: "https://x/1" }],
     }));
 
