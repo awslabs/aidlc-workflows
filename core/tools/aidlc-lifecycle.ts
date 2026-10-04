@@ -2159,10 +2159,13 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   // channel. So a move onto the other channel is the machine's switch only
   // when the machine already follows it.
   let follows: ReleaseChannel | undefined;
+  let followsUnknown = false;
   try {
     follows = channelSwitch ? readMachineChannel() : undefined;
   } catch {
-    // The update is done; an unreadable marker is doctor's to report.
+    // The update is done; an unreadable marker is doctor's to report, and the
+    // update says nothing about which channel the machine follows.
+    followsUnknown = true;
   }
   const switched = channelSwitch
     ? ` (switched channel ${channelSwitch.from} -> ${channelSwitch.to})`
@@ -2187,6 +2190,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
       channel,
       ...(channelSwitch ? { channelSwitch } : {}),
       ...(follows !== undefined && follows !== channelSwitch?.to ? { follows } : {}),
+      ...(followsUnknown ? { followsUnknown } : {}),
       pruned,
       ...(pruneWarning ? { pruneWarning } : {}),
     },
@@ -2608,7 +2612,7 @@ function installProfileCommand(argv: string[]): CommandResult {
   return success(`updated ${profile} with an owned AI-DLC PATH block`, { profile, bin });
 }
 
-function humanLifecycleNarration(
+export function humanLifecycleNarration(
   command: string | undefined,
   argv: readonly string[],
   before: string | null,
@@ -2621,6 +2625,7 @@ function humanLifecycleNarration(
       channel?: ReleaseChannel;
       channelSwitch?: { from: ReleaseChannel; to: ReleaseChannel };
       follows?: ReleaseChannel;
+      followsUnknown?: boolean;
       newerThan?: { channel: ReleaseChannel; version: string };
       pruned?: string[];
       pruneWarning?: string;
@@ -2641,7 +2646,7 @@ function humanLifecycleNarration(
       : data?.pruneWarning
       ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
-    const switchLine = !data?.channelSwitch
+    const switchLine = !data?.channelSwitch || data.followsUnknown
       ? null
       : data.follows !== undefined
       ? `This machine follows ${data.follows} releases. ${channelWays(data.follows, data.channelSwitch.to)}`

@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PREVIEW_CHANNEL, STABLE_CHANNEL } from "../../core/tools/aidlc-channel.ts";
-import { resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
+import { humanLifecycleNarration, resolvePinnedDispatch } from "../../core/tools/aidlc-lifecycle.ts";
 import { updateCheck } from "../../core/tools/aidlc-doctor.ts";
 import { channelPath, updateCachePath } from "../../core/tools/aidlc-machine-config.ts";
 import { cachedUpdateState } from "../../core/tools/aidlc-update.ts";
@@ -329,6 +329,26 @@ describe("t331 preview release channel", () => {
     const followed = await run(DISPATCHER, ["config", "--channel"], project, env);
     expect(followed.stdout).toContain(`release channel: ${STABLE_CHANNEL}`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // With the machine's channel marker unreadable, the update cannot say which
+  // channel the machine follows, so it says nothing about a switch.
+  test("an update that cannot read the machine's channel claims no channel switch", () => {
+    const narrated = humanLifecycleNarration("update", ["update", "--channel", PREVIEW_CHANNEL], AIDLC_VERSION, {
+      ok: true,
+      code: 0,
+      status: "ok",
+      message: "",
+      data: {
+        version: PREVIEW_2,
+        channel: PREVIEW_CHANNEL,
+        channelSwitch: { from: STABLE_CHANNEL, to: PREVIEW_CHANNEL },
+        followsUnknown: true,
+      },
+    } as never) ?? "";
+    expect(narrated).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(narrated).not.toContain("Switched release channel");
+    expect(narrated).not.toContain("This machine follows");
+  });
 
   // An update goes to the channel the machine follows, which can be older
   // than a preview it runs, so doctor names both ways and lets the person pick.
