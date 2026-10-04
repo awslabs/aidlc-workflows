@@ -3873,9 +3873,9 @@ export function listIntents(
 }
 
 // The workflows still running in a project: every space's intents that neither
-// the registry nor the state file marks completed or archived. config refuses
-// to refresh a harness tree while any runs, doctor names the same list, and
-// status names the others in its space.
+// the registry nor the state file marks completed or archived. config names
+// them when it changes something while work is open, doctor names the same
+// list, and status names the others in its space.
 export function runningWorkflows(projectDir: string): Array<{ space: string; dirName: string; slug: string }> {
   const running: Array<{ space: string; dirName: string; slug: string }> = [];
   for (const space of listSpaces(projectDir)) {
