@@ -40,7 +40,7 @@ import {
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
 import { _installedSourcesForTests } from "../../core/tools/aidlc-init.ts";
-import { compiledExecutable } from "../../core/tools/aidlc-runtime-paths.ts";
+import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   insertJsoncSetting,
   jsoncSettingValue,
@@ -2492,6 +2492,11 @@ describe("t243 project initialization", () => {
     for (const target of [created, recreated, added, project]) {
       const refreshed = configCopilot(target, retired);
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+      // Only a removed file is listed; a team's file that only lost a setting is not.
+      expect(
+        refreshed.stdout.includes(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  .vscode/settings.json\n`),
+        target,
+      ).toBe(target === created || target === recreated);
     }
     expect(existsSync(join(created, VSCODE_SETTINGS))).toBe(false);
     expect(existsSync(join(recreated, VSCODE_SETTINGS))).toBe(false);
@@ -3178,9 +3183,107 @@ describe("t243 project initialization", () => {
       manifest.files[retiredRel] = sha256Bytes(retiredBody);
       writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
 
+      const listed = `1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${retiredRel}\n`;
+      const dry = refresh(project, ["--dry-run"]);
+      expect(dry.stdout).toContain(`Will remove ${listed}`);
+      expect(existsSync(join(project, retiredRel))).toBe(true);
       const refreshed = refresh(project);
       expect(existsSync(join(project, retiredRel)), refreshed.stdout).toBe(false);
       expect(manifestOf(project).files).not.toHaveProperty(retiredRel);
+      expect(refreshed.stdout).toContain(`Removed ${listed}`);
+      // Not a git repository, so no way back is named.
+      expect(dry.stdout + refreshed.stdout).not.toContain("git restore");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test("a refresh lists what it removes, by folder, and names git restore when git tracks them", () => {
+      const project = temp("aidlc-t243-retired-git-");
+      const git = (...args: string[]) => {
+        const result = spawnSync("git", [
+          "-C", project, "-c", "user.email=t243@example.com", "-c", "user.name=t243",
+          "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...args,
+        ], { encoding: "utf-8" });
+        expect(result.status, result.stderr).toBe(0);
+      };
+      git("init", "-q");
+      const installed = run(INIT, [
+        "config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude",
+      ], project);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      const retire = (rels: string[]) => {
+        const manifest = manifestOf(project);
+        for (const rel of rels) {
+          put(project, rel, `Shipped by an earlier release: ${rel}\n`);
+          manifest.files[rel] = sha256Bytes(`Shipped by an earlier release: ${rel}\n`);
+        }
+        writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
+        git("add", "-A");
+        git("commit", "-q", "-m", "retire");
+      };
+      const knowledge = [1, 2, 3].map((n) => `.claude/knowledge/aidlc-retired/k${n}.md`);
+      const skills = Array.from(
+        { length: 12 },
+        (_, n) => `.claude/skills/aidlc-retired-${String(n + 1).padStart(2, "0")}/SKILL.md`,
+      );
+      retire([...knowledge, ...skills]);
+
+      const json = refresh(project, ["--dry-run", "--json"]);
+      expect((JSON.parse(json.stdout) as {
+        data: { actions: Array<{ path: string; action: string; detail?: string }> };
+      }).data.actions.find((action) => action.path === skills[0])).toEqual({
+        path: skills[0],
+        action: "remove",
+        detail: "no longer shipped",
+      });
+      const listed = [
+        `15 files that are no longer part of AI-DLC ${AIDLC_VERSION}:`,
+        "  .claude/knowledge/aidlc-retired/ (3 files)",
+        ...skills.slice(0, 8).map((rel) => `  ${rel}`),
+        "  and 4 more files",
+        "To get one back, run `git restore <path>`.",
+        "",
+      ].join("\n");
+      expect(refresh(project, ["--dry-run"]).stdout).toContain(`Will remove ${listed}`);
+      const refreshed = refresh(project);
+      expect(refreshed.stdout).toContain(`Removed ${listed}`);
+      for (const rel of [...knowledge, ...skills]) expect(existsSync(join(project, rel)), rel).toBe(false);
+
+      // The named way back works, and the next refresh keeps what came back.
+      git("restore", skills[0]);
+      const kept = refresh(project);
+      expect(readFileSync(join(project, skills[0]), "utf-8")).toBe(`Shipped by an earlier release: ${skills[0]}\n`);
+      expect(kept.stdout).not.toContain("no longer part of");
+
+      // The tracked-files check never runs the repository's fsmonitor program.
+      const solo = ".claude/hooks/aidlc-retired-hook.ts";
+      retire([solo]);
+      const monitor = join(temp("aidlc-t243-fsmonitor-"), "fsmonitor.sh");
+      const ran = `${monitor}.ran`;
+      writeFileSync(monitor, `#!/bin/sh\necho ran >> '${ran}'\n`, { mode: 0o755 });
+      git("config", "core.fsmonitor", monitor);
+      const monitored = refresh(project);
+      git("config", "--unset", "core.fsmonitor");
+      expect(existsSync(ran)).toBe(false);
+      expect(monitored.stdout).toContain(
+        `Removed 1 file that is no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${solo}\nTo get it back, run \`git restore ${solo}\`.\n`,
+      );
+
+      // Run from elsewhere, the command names the project.
+      const away = ".claude/hooks/aidlc-retired-away.ts";
+      retire([away]);
+      const elsewhere = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE], dirname(project));
+      expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
+      const undo = elsewhere.stdout.split("\n").find((line) => line.startsWith("To get it back"));
+      expect(undo).toMatch(new RegExp(`^To get it back, run \`git -C .+ restore ${away.replaceAll(".", "\\.")}\`\\.$`));
+      expect(undo).toContain(basename(project));
+
+      // A recorded name the shell or git would read is shown quoted, and no
+      // command is printed that could mean something else.
+      const crafted = ".claude/hooks/aidlc retired $(touch pwned) [12].ts";
+      retire([crafted]);
+      const quoted = refresh(project);
+      expect(existsSync(join(project, crafted))).toBe(false);
+      expect(quoted.stdout).toContain(`no longer part of AI-DLC ${AIDLC_VERSION}:\n  ${quoteCommandArgument(crafted)}\n`);
+      expect(quoted.stdout).not.toContain("git restore");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("project files an older refresh recorded are kept and dropped from the record", () => {
@@ -3195,7 +3298,8 @@ describe("t243 project initialization", () => {
       writeFileSync(join(project, manifestRel), `${JSON.stringify(manifest, null, 2)}\n`);
 
       for (let pass = 1; pass <= 2; pass++) {
-        refresh(project);
+        // Kept files are never reported as removed.
+        expect(refresh(project).stdout, `refresh ${pass}`).not.toContain("no longer part of");
         expect(readFileSync(join(project, skillRel), "utf-8"), `refresh ${pass}`).toBe(skillBody);
         expect(readFileSync(join(project, notesRel), "utf-8"), `refresh ${pass}`)
           .toBe("Team notes, edited after the older refresh.\n");
@@ -5591,6 +5695,16 @@ describe("t243 release lifecycle", () => {
         message: `this project requires ${AIDLC_VERSION}, which is not installed completely`,
         remediation: `aidlc config --pin ${AIDLC_VERSION}`,
       }));
+      // The release a dispatcher launched trusts the check that dispatcher made.
+      const dispatched = process.env.AIDLC_PIN_DISPATCHED;
+      process.env.AIDLC_PIN_DISPATCHED = AIDLC_VERSION;
+      try {
+        expect(resolvePinnedDispatch(["engine", "status", "--project-dir", project]))
+          .toEqual({ kind: "none" });
+      } finally {
+        if (dispatched === undefined) delete process.env.AIDLC_PIN_DISPATCHED;
+        else process.env.AIDLC_PIN_DISPATCHED = dispatched;
+      }
 
       writeFileSync(filePath, originalContent);
       expect(inspectInstalledVersion(AIDLC_VERSION).complete).toBe(true);
@@ -6371,6 +6485,76 @@ describe("t243 release lifecycle", () => {
       holder.kill();
       await holder.exited;
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a pinned hook checks its release once, after the lock wait or before running unreserved", async () => {
+    const release = fixtureRelease();
+    const pinnedRelease = fixtureRelease(NEXT_VERSION);
+    const machine = temp("aidlc-t243-reservation-check-machine-");
+    const project = temp("aidlc-t243-reservation-check-project-");
+    mkdirSync(join(project, ".git"));
+    const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+    expect(run(LIFECYCLE, [
+      "update", "--version", AIDLC_VERSION, "--from", release,
+    ], project, env).status).toBe(0);
+    const pinned = run(INIT, [
+      "config", "--pin", NEXT_VERSION, "--from", pinnedRelease, "--project-dir", project,
+    ], project, env);
+    expect(pinned.status, pinned.stdout + pinned.stderr).toBe(0);
+    const runtime = join(machine, "versions", NEXT_VERSION, "runtime");
+    const filePath = join(
+      runtime,
+      walkFiles(runtime).find((path) => !path.endsWith("aidlc-stamp.json")) as string,
+    );
+    const original = readFileSync(filePath);
+    const tampered = Buffer.concat([original, Buffer.from("\ntampered\n")]);
+    const hookEnv = { ...env, AIDLC_PROJECT_DIR: project };
+    const refusal = `this project requires ${NEXT_VERSION}, which is not installed completely`;
+    const note = "without waiting for it to finish";
+
+    const holder = Bun.spawn([BUN, "-e", "setInterval(() => {}, 1000)"], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const lockPath = join(machine, ".aidlc-transaction.lock");
+    try {
+      writeFileSync(lockPath, `${JSON.stringify({ pid: holder.pid, staging: ".aidlc-txn-held" })}\n`);
+      writeFileSync(filePath, tampered);
+      // Running unreserved after a busy lock still checks the release first.
+      const unreserved = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, {
+        ...hookEnv,
+        AIDLC_PIN_RESERVATION_TIMEOUT_MS: "200",
+      });
+      expect(unreserved.status, unreserved.stdout + unreserved.stderr).toBe(1);
+      expect(unreserved.stderr).toContain(refusal);
+      expect(unreserved.stderr).not.toContain(note);
+
+      // Damage repaired while the hook waits for the lock is never seen: the one
+      // check runs under the lock, as the reservation lands.
+      const waiting = runAsync(DISPATCHER, ["engine", "hook", "fold-usage"], project, {
+        ...hookEnv,
+        AIDLC_PIN_RESERVATION_TIMEOUT_MS: "60000",
+      });
+      await Bun.sleep(3_000);
+      writeFileSync(filePath, original);
+      rmSync(lockPath, { force: true });
+      const reserved = await waiting;
+      expect(reserved.status, reserved.stdout + reserved.stderr).toBe(0);
+      expect(reserved.stderr).not.toContain(refusal);
+      expect(reserved.stderr).not.toContain(note);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
+
+    // With the lock free, damage found under the lock gives the same refusal
+    // and leaves no reservation behind.
+    writeFileSync(filePath, tampered);
+    const refused = run(DISPATCHER, ["engine", "hook", "fold-usage"], project, hookEnv);
+    expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+    expect(refused.stderr).toContain(refusal);
+    expect(refused.stderr).toContain(`aidlc config --pin ${NEXT_VERSION}`);
+    expect(readdirSync(join(machine, "reservations"))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -7196,6 +7380,7 @@ describe("t243 projection channel", () => {
           "sha256:a25a15052889fe6b5900f0fef5262cc50cb00bb436e52f1eb1abe62db35b2f50",
           "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
           "sha256:1095316799b8630bcb498539cb82b9b0907fa7aa69cdfb3ee6a9b489c8ed42e3",
+          "sha256:d35dbc2ff6a2cad09144e8a625144bfbce4c0e91212a2da39d45da11198474f4",
         ],
       },
     };

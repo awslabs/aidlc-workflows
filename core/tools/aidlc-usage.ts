@@ -75,10 +75,11 @@ export type PriceRow = {
 // 1.25x (5m) / 2x (1h) input on every row, but cache reads are 0.1x input on
 // most rows and 0.05x on opus-5-5, 0.025x on fable-5-1.
 //
-// GENERATION-DISCRETE keys (a row per model GENERATION, NOT one per family):
-// verified real sessions mix generations, and a family-collapse silently
+// VERSION-DISCRETE keys (a row per model VERSION, NOT one per family): a point
+// release such as `opus-5-5` has its own row, never its major's (`opus-5`).
+// Verified real sessions mix versions, and a family-collapse silently
 // misprices them onto whatever the "current" row happens to be. Key off the
-// generation token, not the account/region variant.
+// version token, not the account/region variant.
 //
 // To OVERRIDE: set AIDLC_MODEL_RATES to a rates file (same shape as
 // tools/data/model-rates.json), or edit the shipped model-rates.json in your
@@ -194,11 +195,11 @@ export function _resetRatesCacheForTest(): void {
   _rates = null;
 }
 
-// Bare family aliases with NO generation token. Matched only on an EXACT
+// Bare family aliases with NO version token. Matched only on an EXACT
 // residual equality (never as a substring), so `opus` resolves but `opus-6`
-// (a would-be new generation) does NOT match and stays null. These are a
+// (a would-be new version) does NOT match and stays null. These are a
 // defensive convenience for hand-typed / test inputs; the wire form always
-// carries a generation token. `opus`/`sonnet`/`haiku` map to the generation
+// carries a version token. `opus`/`sonnet`/`haiku` map to the version
 // this harness ships as its default model set.
 const BARE_ALIASES: Record<string, string> = {
   opus: "opus-4-8",
@@ -216,15 +217,15 @@ const BARE_ALIASES: Record<string, string> = {
 //   converse/au.anthropic.claude-haiku-4-5-20251001-v1:0
 //   global.anthropic.claude-opus-4-8[1m]    (this harness's settings alias)
 //
-// UNKNOWN-GENERATION POLICY: a Claude model whose GENERATION is not in the rate
+// UNKNOWN-VERSION POLICY: a Claude model whose VERSION is not in the rate
 // table (e.g. a future `opus-6`, an `opus-4-9` we haven't priced, or an
 // unpriced point release such as `opus-5-7` of a priced `opus-5`) returns
 // `null` => the caller records the tokens but withholds cost. An honest
 // "unknown" (made visible by the audit's `Cost USD: null`) beats a
-// confidently-wrong number from an old generation's rate. `<synthetic>`, empty,
-// malformed provider/model shapes, and non-Claude models => null too. Generation
+// confidently-wrong number from another version's rate. `<synthetic>`, empty,
+// malformed provider/model shapes, and non-Claude models => null too. Version
 // keys come from the EFFECTIVE rate table, so an AIDLC_MODEL_RATES override can
-// add a new generation without a source-code matcher change.
+// add a new version without a source-code matcher change.
 export function normalizeModel(modelId: string): string | null {
   if (!modelId || typeof modelId !== "string") return null;
   let s = modelId.trim().toLowerCase();

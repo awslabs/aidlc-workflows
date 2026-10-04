@@ -193,4 +193,28 @@ describe("t326 pinned team Unit merge", () => {
     expect(stalePin.out).toContain("no published live candidate");
   });
 
+  // Git starts `git maintenance run --auto` after a command that writes, in the
+  // background from 2.47 and repacking from 2.54, which raced these suites'
+  // next object write ("unable to create temporary file"). The shared fixture
+  // switches it off for the commands and the remote they use.
+  test("the suites' commit and push start no automatic Git maintenance", () => {
+    const { seed } = makeSeed();
+    const traceDir = mkdtempSync(join(tmpdir(), "aidlc-inc3-maintenance-trace-"));
+    tempDirs.push(traceDir);
+    const trace = join(traceDir, "events.ndjson");
+    writeFileSync(join(seed, "maintenance-probe.txt"), "probe\n");
+    for (const args of [["add", "maintenance-probe.txt"], ["commit", "-m", "probe"], ["push", "origin", "main"]]) {
+      const result = spawnSync("git", args, {
+        cwd: seed, encoding: "utf-8", env: { ...process.env, GIT_TRACE2_EVENT: trace },
+      });
+      expect(result.status, `git ${args.join(" ")}: ${result.stderr}`).toBe(0);
+    }
+    const children = readFileSync(trace, "utf-8").split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line) as { event?: string; argv?: string[] })
+      .filter((event) => event.event === "child_start")
+      .map((event) => (event.argv ?? []).join(" "));
+    expect(children.some((argv) => argv.includes("receive-pack")), children.join("\n")).toBe(true);
+    expect(children.filter((argv) => / (maintenance|gc)( |$)/.test(argv))).toEqual([]);
+  });
+
 });

@@ -119,7 +119,9 @@ structured artifacts and writes them. These artifacts provide the technical
 foundation that all subsequent Inception and Construction stages build upon.
 
 **Rerun guard:** Reverse Engineering checks each repository's recorded scope
-and working-tree fingerprint before scanning. The human may reuse a
+and working-tree fingerprint before scanning. The fingerprint leaves out
+AI-DLC's own install, settings, and the root files it writes into, so an AI-DLC
+update or setting change does not make a store stale. The human may reuse a
 verified-current store whose coverage fits the intent; stale, unverified,
 legacy, or mismatched stores require a full or focused rescan. Full rescans
 replace the store; focused rescans merge newly analyzed areas into it while

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { headingKey } from "./aidlc-artifact-vocabulary.ts";
 import {
 	authoritativeProjectDescription,
 	errorMessage,
@@ -101,12 +102,6 @@ function h2Heading(line: string): string | null {
 	const match = /^ {0,3}##(?:[ \t]+|$)(.*)$/.exec(line);
 	if (!match) return null;
 	return match[1].replace(/[ \t]+#+[ \t]*$/, "").trim();
-}
-
-const LEADING_EMOJI_DECORATION = /^\p{RGI_Emoji}(?:\u200D?\p{RGI_Emoji})*[ \t]+/v;
-
-function headingKey(heading: string): string {
-	return heading.replace(LEADING_EMOJI_DECORATION, "").trim();
 }
 
 function sectionsNamed(

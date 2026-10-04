@@ -1582,6 +1582,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeWorkflowDescriptions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-doctor-harness-tree-versions.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:advanceContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
@@ -1623,6 +1635,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:aidlcRootIntegrations",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2655,6 +2679,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbFingerprintExcludes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4594,12 +4630,31 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hasRunnerGenMarker",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hasUnsafeSingleLineCharacter",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:headingKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -7158,6 +7213,30 @@
       "coveredBy": [
         {
           "file": "tests/integration/t224-plugin-selection.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processStartedAtMs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10323,6 +10402,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t341-markdown-blocks.test.ts",
           "mechanism": "none"
         },
@@ -11397,6 +11480,10 @@
         },
         {
           "file": "tests/unit/t400-byproduct-files-excluded-from-source-fingerprint.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t401-vs-cache-excluded-from-source-fingerprint.test.ts",
           "mechanism": "none"
         }
       ],

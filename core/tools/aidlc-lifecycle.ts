@@ -351,7 +351,7 @@ function machineLockBusy(error: unknown): boolean {
 
 function reserveVersion(
   version: string,
-  options: { requireComplete?: boolean; waitMs?: number } = {},
+  options: { validateLocked?: () => void; waitMs?: number } = {},
 ): () => void {
   const root = machineTransactionRoot();
   const path = join(
@@ -368,23 +368,10 @@ function reserveVersion(
       0o600,
     )],
   };
-  const validateLocked = options.requireComplete
-    ? () => {
-        const inspection = inspectInstalledVersion(version);
-        if (!inspection.complete) {
-          commandError(
-            `cannot reserve incomplete retained version ${version}: ${
-              inspection.reason ?? "integrity validation failed"
-            }`,
-            EXIT.integrity,
-          );
-        }
-      }
-    : undefined;
   const deadline = Date.now() + (options.waitMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS);
   for (;;) {
     try {
-      executePlan(plan, { validateLocked });
+      executePlan(plan, { validateLocked: options.validateLocked });
       break;
     } catch (error) {
       if (!machineLockBusy(error) || Date.now() >= deadline) throw error;
@@ -398,20 +385,42 @@ function reserveVersion(
   };
 }
 
-// Null means the machine lock stayed busy, so the caller runs unreserved: the
-// reservation is bookkeeping, and prune already keeps every registered pin.
-export function reserveDispatchedVersion(version: string): (() => void) | null {
+class IncompleteVersionError extends LifecycleCommandError {
+  constructor(version: string, reason: string | undefined) {
+    super(
+      `cannot reserve incomplete retained version ${version}: ${
+        reason ?? "integrity validation failed"
+      }`,
+      EXIT.integrity,
+    );
+  }
+}
+
+// The dispatcher's one integrity check of the release it runs: under the
+// machine lock as the reservation lands, so a concurrent uninstall or update
+// cannot slip between them. Null means the machine lock stayed busy, so the
+// release was checked unlocked and the caller runs unreserved: the reservation
+// is bookkeeping, and prune already keeps every registered pin.
+export function reserveDispatchedVersion(
+  version: string,
+  distribution: string | null = null,
+): (() => void) | null {
   const raw = process.env.AIDLC_PIN_RESERVATION_TIMEOUT_MS;
   const configured = raw?.trim() ? Number(raw) : NaN;
   const waitMs = Number.isSafeInteger(configured) && configured >= 0
     ? configured
     : DISPATCH_RESERVATION_WAIT_MS;
+  const check = () => {
+    const inspection = inspectPinnedVersion(version, distribution);
+    if (!inspection.complete) throw new IncompleteVersionError(version, inspection.reason);
+  };
   try {
-    return reserveVersion(version, { requireComplete: true, waitMs });
+    return reserveVersion(version, { validateLocked: check, waitMs });
   } catch (error) {
-    if (machineLockBusy(error)) return null;
-    throw error;
+    if (!machineLockBusy(error)) throw error;
   }
+  check();
+  return null;
 }
 
 function pathEntryExists(path: string): boolean {
@@ -692,26 +701,43 @@ export type PinnedDispatchResult =
       message: string;
       remediation: string;
     }
-  | { kind: "execute"; executable: string; version: string };
+  | {
+      kind: "execute";
+      executable: string;
+      version: string;
+      // Set with `reserve`: lets the reservation go, or null when the machine
+      // lock stayed busy and the command runs unreserved.
+      release?: (() => void) | null;
+    };
+
+// An inspection that throws counts as incomplete.
+function inspectPinnedVersion(
+  version: string,
+  distribution: string | null,
+): { complete: boolean; reason?: string } {
+  try {
+    return inspectInstalledVersion(version, distribution);
+  } catch (error) {
+    return { complete: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 function completePinnedVersion(
   version: string,
   distribution: string | null,
 ): boolean {
-  try {
-    return inspectInstalledVersion(version, distribution).complete;
-  } catch {
-    return false;
-  }
+  return inspectPinnedVersion(version, distribution).complete;
 }
 
 // The dispatcher resolves the project once (explicit flag before `--`, then the
 // project environment, then cwd) and passes it here, so the pinned binary is
 // always selected for the directory the route policy inspected. The argv
-// overload only remains for direct callers and tests.
+// overload only remains for direct callers and tests. With `reserve`, a release
+// to run is checked once, as it is reserved (reserveDispatchedVersion).
 export function resolvePinnedDispatch(
   argv: string[],
   projectDir: string = projectDirFrom(argv),
+  options: { reserve?: boolean } = {},
 ): PinnedDispatchResult {
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return { kind: "none" };
@@ -767,21 +793,31 @@ export function resolvePinnedDispatch(
     };
   }
   const distribution = projectDistribution(projectDir);
-  if (!completePinnedVersion(version, distribution)) {
-    return {
-      kind: "failure",
-      code: EXIT.failure,
-      message: `this project requires ${version}, which is not installed completely`,
-      remediation,
-    };
-  }
-  if (process.env.AIDLC_PIN_DISPATCHED === version) return { kind: "none" };
-  if (version === AIDLC_VERSION) return { kind: "none" };
-  return {
-    kind: "execute",
-    executable: target.target,
-    version,
+  const incomplete: PinnedDispatchResult = {
+    kind: "failure",
+    code: EXIT.failure,
+    message: `this project requires ${version}, which is not installed completely`,
+    remediation,
   };
+  const dispatched = process.env.AIDLC_PIN_DISPATCHED === version;
+  // The release a dispatcher launched was checked by it just before.
+  if (dispatched && version === AIDLC_VERSION) return { kind: "none" };
+  const runsHere = dispatched || version === AIDLC_VERSION;
+  if (runsHere || !options.reserve) {
+    if (!completePinnedVersion(version, distribution)) return incomplete;
+    return runsHere ? { kind: "none" } : { kind: "execute", executable: target.target, version };
+  }
+  try {
+    return {
+      kind: "execute",
+      executable: target.target,
+      version,
+      release: reserveDispatchedVersion(version, distribution),
+    };
+  } catch (error) {
+    if (error instanceof IncompleteVersionError) return incomplete;
+    throw error;
+  }
 }
 
 function lifecycleFailureResult(error: unknown, argv: readonly string[]): CommandResult {

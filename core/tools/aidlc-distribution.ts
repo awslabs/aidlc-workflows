@@ -280,16 +280,28 @@ export function validateProjectionDescriptor(
   }
 }
 
+// The default space's memory files the team writes: Practices Discovery
+// affirms practices into team.md, and practices and learnings land in
+// project.md. The engine creates them from its bundled memory seed when they
+// are missing (ensureWorkspaceDirs), so a copy runtime need not ship them.
+export const TEAM_MEMORY_FILES = ["team.md", "project.md"] as const;
+
 // The copy channel copies runtime/<harness>/ over the project, with no config
-// step to merge anything, so its archive leaves out each file a team's editor
-// owns (a jsonc-settings integration such as .vscode/settings.json): a copy
-// would replace the team's own file.
+// step to merge anything, so its archive leaves out each file a copy would
+// replace with the shipped one: a file a team's editor owns (a jsonc-settings
+// integration such as .vscode/settings.json), the team's memory files, and
+// the person's chosen space (aidlc/active-space; a missing one reads as
+// "default").
 export function copyChannelOmits(
   descriptor: Pick<ProjectionDescriptor, "rootIntegrations">,
 ): Set<string> {
-  return new Set(descriptor.rootIntegrations
-    .filter((integration) => integration.policy === "jsonc-settings")
-    .map((integration) => integration.path));
+  return new Set([
+    ...descriptor.rootIntegrations
+      .filter((integration) => integration.policy === "jsonc-settings")
+      .map((integration) => integration.path),
+    ...TEAM_MEMORY_FILES.map((name) => `aidlc/spaces/default/memory/${name}`),
+    "aidlc/active-space",
+  ]);
 }
 
 export function projectionFiles(root: string): {

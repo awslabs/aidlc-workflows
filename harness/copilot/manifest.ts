@@ -131,6 +131,9 @@ const manifest: HarnessManifest = {
           // The variant whose folder-trust bullet said both Copilot surfaces
           // read trustedFolders (VS Code never does).
           "sha256:2f43e54233a3feefa17e8dd3c6fd65f0ef50268d7fe46b3adb93c1d6bcf15a89",
+          // The variant shipped before runners became typed-only (it had no
+          // line on reading a runner typed in a headless run).
+          "sha256:1095316799b8630bcb498539cb82b9b0907fa7aa69cdfb3ee6a9b489c8ed42e3",
         ],
       },
     },
@@ -165,6 +168,12 @@ const manifest: HarnessManifest = {
 
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,
+
+  // Runners are typed-only on both surfaces: a typed `/aidlc-<runner>` still
+  // runs, the agent never starts one itself, and their descriptions stay out of
+  // Copilot's skill list. A headless `copilot -p` run hands the typed line to
+  // the agent as text, so the root AGENTS.md tells it to read the runner file.
+  runnerFrontmatterAdditions: ["disable-model-invocation: true"],
 
   // VS Code's run_in_terminal tool keeps a result whole only up to 20,000
   // characters (MAX_OUTPUT_LENGTH in microsoft/vscode src/vs/workbench/contrib/

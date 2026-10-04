@@ -390,4 +390,37 @@ describe("t248 dist/copilot packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test("9: generated runners are typed-only; the orchestrator and session skills are not", () => {
+    const runners: string[] = [];
+    for (const name of readdirSync(join(SHELL, "skills")).sort()) {
+      const path = join(SHELL, "skills", name, "SKILL.md");
+      if (!existsSync(path)) continue;
+      const fm = readFileSync(path, "utf-8").match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+      const typedOnly = /^disable-model-invocation: true$/m.test(fm);
+      if (/^generated-by: aidlc-runner-gen$/m.test(fm)) {
+        runners.push(name);
+        expect(typedOnly, name).toBe(true);
+        expect(fm, name).toMatch(/^user-invocable: true$/m);
+      } else {
+        expect(typedOnly, name).toBe(false);
+      }
+    }
+    expect(runners).toContain("aidlc-bugfix");
+    expect(runners).toContain("aidlc-code-generation");
+    expect(runners).toContain("aidlc-init");
+    for (const name of ["aidlc", "aidlc-knowledge", "aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+      expect(existsSync(join(SHELL, "skills", name, "SKILL.md")), name).toBe(true);
+      expect(runners, name).not.toContain(name);
+    }
+    // Runners regenerated in an install (plugin sync) read the flag from here.
+    const harnessData = JSON.parse(
+      readFileSync(join(ENGINE, "tools", "data", "harness.json"), "utf-8"),
+    ) as { runnerFrontmatterAdditions?: string[] };
+    expect(harnessData.runnerFrontmatterAdditions).toEqual(["disable-model-invocation: true"]);
+    // A headless `copilot -p` run hands a typed runner line to the agent as text.
+    expect(readFileSync(join(COPILOT_ROOT, "AGENTS.md"), "utf-8")).toContain(
+      "when a message starts with `/<name>` and `.github/skills/<name>/SKILL.md` exists, the person typed that skill",
+    );
+  });
 });
