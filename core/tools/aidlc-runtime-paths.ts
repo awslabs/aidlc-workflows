@@ -505,24 +505,28 @@ export function linkOnTheWay(projectDir: string, target: string): string | null 
   return null;
 }
 
+// A name the repository chose is shown only when it is plain (letters,
+// digits, dot, dash and underscore, and short); otherwise the line names the
+// nearest plain folder above it, so no other text reaches the reader.
+const PLAIN_PATH_PART = /^[A-Za-z0-9._-]{1,64}$/;
+
 export class LinkedFolderError extends Error {
-  constructor(readonly folder: string, projectDir?: string) {
-    let kind = "folder";
-    try {
-      if (projectDir !== undefined && !statSync(join(projectDir, folder)).isDirectory()) kind = "file";
-    } catch {
-      // A link to nothing is replaced by a folder like any other.
-    }
+  constructor(readonly folder: string) {
+    const parts = folder.split(/[\\/]/);
+    const plain = parts.findIndex((part) => !PLAIN_PATH_PART.test(part));
     super(
-      `${folder} is a link, so AI-DLC changed nothing there. ` +
-        `Replace it with a real ${kind}, then run this again.`,
+      plain === -1
+        ? `${folder} is a link, so AI-DLC changed nothing there. ` +
+          "Replace the link with a real folder or file, then run this again."
+        : `${plain === 0 ? "This project" : parts.slice(0, plain).join(sep)} holds a link, so AI-DLC changed nothing there. ` +
+          "Replace the link with a real folder or file, then run this again.",
     );
   }
 }
 
 export function refuseLinkOnTheWay(projectDir: string, target: string): void {
   const link = linkOnTheWay(projectDir, target);
-  if (link !== null) throw new LinkedFolderError(link, projectDir);
+  if (link !== null) throw new LinkedFolderError(link);
 }
 
 export function resolveHarnessRoot(location: HarnessLocation = {}): string {

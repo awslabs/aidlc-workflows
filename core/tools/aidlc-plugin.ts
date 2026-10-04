@@ -942,7 +942,7 @@ function refuseLinkedOwnFolders(projectDir: string, harnessDir: string): void {
   const refuse = (folder: string, own?: (name: string) => boolean): void => {
     refuseLinkOnTheWay(projectDir, folder);
     const inside = firstLinkInside(folder, own);
-    if (inside !== null) throw new LinkedFolderError(relative(projectDir, inside), projectDir);
+    if (inside !== null) throw new LinkedFolderError(relative(projectDir, inside));
   };
   for (const name of ["tools", "aidlc-common", "scopes", "sensors"]) {
     refuse(resolveHarnessPath([name], location));
