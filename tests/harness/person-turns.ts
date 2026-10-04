@@ -113,12 +113,16 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       const pending = open.get(stage);
       const closes = DECISION_CLOSING_EVENTS.has(row.event);
       const gate = row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED";
+      // The engine's own rows: an autonomous checkpoint approval, and the gate
+      // rows an approval backfills (Recovered). Neither is recorded as the person's.
+      const synthetic = auditBlockField(row.block, "Autonomous") === "true" ||
+        auditBlockField(row.block, "Recovered") === "true";
       let since: number | undefined;
       let reply = true;
       if (closes) {
         since = pending?.index ?? answered.get(stage) ?? -1;
         answered.set(stage, index);
-      } else if (gate) {
+      } else if (gate && !synthetic) {
         reply = row.event === "GATE_APPROVED";
         if (pending && decisionAnsweredBy(pending.block, row.event, row.block)) {
           since = pending.index;
@@ -132,7 +136,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         since = workspace;
         reply = false;
       }
-      if (since !== undefined && index >= first) {
+      if (since !== undefined && index >= first && !synthetic) {
         const after = Math.max(since + 1, first);
         const needsReply = reply;
         const backed = turns.some((turn) => {
@@ -146,7 +150,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         if (next === null) open.delete(stage);
         else if (row.event === "DECISION_RECORDED") open.set(stage, { block: row.block, index });
       }
-      if (row.event === "STAGE_AWAITING_APPROVAL") gates.set(gateItem(row), index);
+      if (row.event === "STAGE_AWAITING_APPROVAL" && !synthetic) gates.set(gateItem(row), index);
       if (row.event === "WORKSPACE_INITIALISED" || row.event === "WORKSPACE_RECLASSIFIED") workspace = index;
     }
   }

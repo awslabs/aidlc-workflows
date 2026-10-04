@@ -183,6 +183,22 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toHaveLength(1);
   });
 
+  test("rows the engine backfills or approves on its own are not the person's", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });
+    drive.sent('{"Approve the user stories?":"Approve"}');
+    // The approval backfills a revision the agent never reported, then approves.
+    row(dir, "GATE_REJECTED", { Stage: "user-stories", Recovered: "true" });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories", Recovered: "true" });
+    row(dir, "GATE_APPROVED", { Stage: "user-stories", "User Input": "Approve" });
+    // An autonomous Unit checkpoint is approved by the engine, with no question to the person.
+    row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "alpha", Kind: "unit" });
+    row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "alpha", Autonomous: "true" });
+    expect(drive.unbacked()).toEqual([]);
+  });
+
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {
     const dir = project();
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });
