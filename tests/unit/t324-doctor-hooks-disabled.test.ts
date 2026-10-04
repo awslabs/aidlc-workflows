@@ -106,8 +106,10 @@ describe("t324 doctor disableAllHooks gate", () => {
     const { status, out } = runDoctor(proj);
     expect(out).toMatch(/Hooks DISABLED/);
     expect(out).toMatch(/\.claude\/settings\.json/);
-    // The remedy explains the engine is hook-driven, not a cosmetic warning.
-    expect(out).toMatch(/hook-driven/);
+    // The remedy is the person's one step, which works in the same chat.
+    expect(out).toContain(
+      'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in the same chat.',
+    );
     expect(status).not.toBe(0);
   });
 
@@ -175,9 +177,9 @@ describe("t324 doctor disableAllHooks gate", () => {
     expect(out).toMatch(/enterprise managed settings/);
     expect(status).not.toBe(0);
     // The remedy must NOT tell the user to override a managed policy from a
-    // local layer — managed settings is the highest-precedence layer.
-    expect(out).not.toMatch(/set it to false in a higher-precedence layer/);
-    expect(out).toMatch(/IT policy must remove it/);
+    // local layer: managed settings is the highest-precedence layer.
+    expect(out).not.toMatch(/settings\.local\.json; it works in the same chat/);
+    expect(out).toMatch(/Ask your Claude Code administrator to allow project hooks/);
   });
 
   test("managed settings is highest precedence: managed:false SUPPRESSES a project settings.json:true", () => {

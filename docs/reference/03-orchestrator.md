@@ -153,6 +153,10 @@ Under solo unit-major Construction, Current Stage stays on the first per-unit st
 
 Explicit `/aidlc --resume` is different: the dispatcher calls `next --resume`, which skips the menu and falls through to the same continuation route as bare `next`. A parked workflow still emits the unpark instruction first; with no selected state, unfinished work in the space is put to the person to pick and only an empty space errors; and `/aidlc --resume --stage <slug>` takes the explicit jump route.
 
+### When the hooks have never run
+
+`next` checks one thing before it does any work, right after it resolves the conversation's workflow: on a harness whose `harness.json` declares `hookActivation.agentStep`, a conversation that has joined a workflow with a stage or gate event but no hook heartbeat in that record (`hookLiveness(...).neverFired`, read for the engine's own selection) gets one `print` directive and nothing else. Its message tells the agent not to run AI-DLC's hook scripts itself, not to offer to switch a check off, not to look for another cause, and, while it fixes this, not to take on other doctor problems or change anything outside the project's folder; then it gives the harness's own step: what the agent does itself (for example set `chat.useHooks` in `.vscode/settings.json` on Copilot, or `disableAllHooks` in `.claude/settings.local.json` on Claude Code) and the exact line it then shows the person. There is no stop for an unattended run (`AIDLC_UNATTENDED=1`), when the human-presence check is off (the environment variable or the recorded switch; Copilot's `notRunInWorkflow` notice still appears), for a conversation that has not joined, in a delegated worktree, or when a link on the way to the record's hooks-health directory keeps any heartbeat from being written. A harness declares `agentStep` only when a hook on the agent's own shell command writes its heartbeat before the engine runs, even with its own check switched off; Kiro IDE and Cursor do not.
+
 ---
 
 ## Session Management

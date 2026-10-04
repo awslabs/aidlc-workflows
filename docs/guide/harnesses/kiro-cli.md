@@ -218,7 +218,10 @@ refused. No write events are recorded either, so reviews are refused.
 After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
 never executed". Before that, doctor reports the heartbeats as not yet fired
 and passes, so it cannot tell you whether the hooks run. Restarting on the v3
-engine does not fix it. Start `kiro-cli chat --agent-engine v2 --agent aidlc`
+engine does not fix it. With another agent picked, type `/agent` and pick
+`aidlc`, then carry on in the same chat. On the 3.0 engine (Kiro prints
+`agent "aidlc" needs upgrading for this agent engine` under its replies), quit
+and start `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder
 instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
 CLI on its v3 engine, use the
 [Kiro IDE](kiro-ide.md) distribution instead; in an existing project,

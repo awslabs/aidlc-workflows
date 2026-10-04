@@ -4030,6 +4030,12 @@ export async function collectDoctorReport(
         process.env,
       );
       const home = process.env.HOME || process.env.USERPROFILE || "";
+      // Claude Code reads its user settings from CLAUDE_CONFIG_DIR when set.
+      const userSettings: [string, string] | null = process.env.CLAUDE_CONFIG_DIR
+        ? [join(process.env.CLAUDE_CONFIG_DIR, "settings.json"), "$CLAUDE_CONFIG_DIR/settings.json"]
+        : home
+          ? [join(home, ".claude", "settings.json"), "~/.claude/settings.json"]
+          : null;
       const MANAGED_LABEL = "enterprise managed settings";
       const hookDisableLayers: Array<[string, string]> = [
         [
@@ -4037,14 +4043,7 @@ export async function collectDoctorReport(
           ".claude/settings.local.json",
         ],
         [join(projectDir, harness, "settings.json"), ".claude/settings.json"],
-        ...(home
-          ? [
-              [
-                join(home, ".claude", "settings.json"),
-                "~/.claude/settings.json",
-              ] as [string, string],
-            ]
-          : []),
+        ...(userSettings ? [userSettings] : []),
       ];
       let hooksDisabledBy: string | null =
         managedDisableAllHooks === true ? MANAGED_LABEL : null;
@@ -4079,8 +4078,8 @@ export async function collectDoctorReport(
           hooksDisabledBy === null
             ? undefined
             : disabledByManaged
-              ? `"disableAllHooks": true is enforced by enterprise managed settings — the highest-precedence layer, which a project or user setting cannot override. IT policy must remove it (or set it to false) for AI-DLC to run. If policy mandates disabled hooks, AI-DLC v2 is not compatible with this environment — its workflow engine is hook-driven.`
-              : `remove "disableAllHooks": true from ${hooksDisabledBy} (or set it to false in a higher-precedence layer such as .claude/settings.local.json) and restart the Claude Code session — AI-DLC's workflow engine is hook-driven and cannot advance while hooks are disabled.`,
+              ? "Your organization's Claude Code settings switch hooks off. Ask your Claude Code administrator to allow project hooks."
+              : 'Set "disableAllHooks": false in this project\'s .claude/settings.local.json; it works in the same chat.',
       });
 
       if (
@@ -4093,7 +4092,7 @@ export async function collectDoctorReport(
         results.push({
           pass: false,
           label: "Claude managed hook policy: allowManagedHooksOnly=true",
-          fix: "hooks from .claude/settings.json are blocked by organization policy (allowManagedHooksOnly); only the Claude Code administrator can lift it in managed-settings.json. Until then, the workflow's human-presence and summary-confirmation receipts cannot be minted; attended sessions can set AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1 in the environment that launches the CLI as a temporary bypass",
+          fix: "Your organization's Claude Code settings block this project's hooks. Ask your Claude Code administrator to allow project hooks.",
         });
       }
     }
@@ -4735,7 +4734,7 @@ export async function collectDoctorReport(
   );
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
-  const hookExecutionRecovery = gitBashLauncherRecovery() ?? hookExecutionRecoveryText(harnessName);
+  const hookExecutionRecovery = gitBashLauncherRecovery() ?? hookExecutionRecoveryText(projectDir);
   const hooksNotRunYet = hookActivation()?.notRunYet;
 
   // 6. Hook heartbeats

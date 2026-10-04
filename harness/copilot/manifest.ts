@@ -44,38 +44,47 @@ const manifest: HarnessManifest = {
   configNextStep: "start Copilot CLI or VS Code agent mode, then run `/aidlc --doctor`",
   // VS Code runs repo hooks only in a trusted workspace with Chat: Use Hooks
   // on, which an organization policy can switch off, and skips them without a
-  // word in the chat; the CLI runs them only in a folder it trusts. AIDLC can
-  // see neither switch, so it tells the person what it can see: no hook has
-  // run. The adapter leaves a heartbeat at a chat's SessionStart before the
-  // first workflow, and the PreToolUse guards leave one in the record before
-  // each engine command the agent runs, so a working install never sees
-  // notRunYet after a chat or notRunInWorkflow at all.
+  // word in the chat; the CLI runs them only in a folder it trusts. The adapter
+  // leaves a heartbeat at a chat's SessionStart before the first workflow, and
+  // the PreToolUse guards leave one in the record before each engine command
+  // the agent runs, so a working install never sees notRunYet after a chat or
+  // the agent step at all. Measured live: the agent's own edit of the folder
+  // setting works for the person's next message in the same chat, with no
+  // reload; an untrusted folder needs no line, since VS Code asks on the first
+  // message. The agent step reads any "fix it" as this setting, because a
+  // person asked "can you fix it?" near the old notice and the agent changed
+  // their project instead.
   hookActivation: {
     recovery:
-      "In VS Code, AI-DLC's hooks run only in a trusted folder with the Chat: Use Hooks " +
-      "setting on, and your organization can switch that setting off: check Workspace Trust " +
-      "for this folder and that setting, then start a new chat in this folder. In the Copilot " +
-      "CLI, trust this folder when it asks (it is then listed under trustedFolders in its " +
-      "config.json), and give headless `copilot -p` runs " +
-      "GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
-    // Says what happened and what lets the next chat record replies; it adds no
-    // step to the refusal it joins.
-    missedReply:
-      "If the person already replied, Copilot is not running AI-DLC's hooks here, so that " +
-      "reply was not recorded. Tell them that, and that trusting this folder and turning " +
-      "Chat: Use Hooks on in VS Code (in the Copilot CLI, trusting this folder) lets the next " +
-      "chat record their replies.",
+      'In VS Code, turn on Chat: Use Hooks for this folder ("chat.useHooks": true in ' +
+      ".vscode/settings.json), then send your next message in the same chat. If your " +
+      "organization has switched it off, ask your administrator to turn it on. In the Copilot " +
+      "CLI, start it again in this folder and trust the folder when it asks. Headless " +
+      "`copilot -p` runs need GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1.",
     notRunYet:
       "This is expected before your first Copilot chat in this folder. If you already started " +
-      "one, Copilot is not running AI-DLC's hooks here. In VS Code, check that this folder is " +
-      "trusted and that the Chat: Use Hooks setting is on (your organization can switch it " +
-      "off). In the Copilot CLI, trust this folder when it asks. Then start a new chat in this " +
-      "folder and run doctor again.",
+      'one, turn on Chat: Use Hooks in VS Code for this folder ("chat.useHooks": true in ' +
+      ".vscode/settings.json; if your organization has switched it off, ask your administrator " +
+      "to turn it on), or in the Copilot CLI trust this folder when it asks, then send a " +
+      "message and run doctor again.",
     notRunInWorkflow:
-      "AI-DLC's hooks have not run in this project, so it cannot record your replies and " +
-      "approvals or run its checks. In VS Code, check that this folder is trusted and that the " +
-      "Chat: Use Hooks setting is on (your organization can switch it off). In the Copilot " +
-      "CLI, trust this folder when it asks. Then start a new chat in this folder and carry on.",
+      "Turn on Chat: Use Hooks in VS Code for this folder (in the Copilot CLI, trust this folder " +
+      "when it asks), then carry on.",
+    agentStep:
+      "Copilot is not running AI-DLC's hooks in this folder. In VS Code: open " +
+      "`.vscode/settings.json` by its path (VS Code's file search skips it, so do not search), " +
+      'set `"chat.useHooks": true`, keep every other key as it is, and create the file if it ' +
+      'does not exist. Then show the person this line: "Fixed. Send your next message here to ' +
+      'carry on." If a question was waiting for their answer, show this line instead, then that ' +
+      'question: "Fixed. Answer the question below to carry on." If the file already said ' +
+      '`true`, show this line instead: "Your organization has switched off Chat: Use Hooks in ' +
+      'VS Code. Ask your administrator to turn it on." In the Copilot CLI, change no file and ' +
+      'show this line instead: "Quit Copilot, start it again in this folder and trust the folder ' +
+      'when it asks, then type <entry> to carry on." In a headless `copilot -p` run, show this ' +
+      'line instead: "Set GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1 for headless copilot -p runs, ' +
+      'then run it again." Until the person has done their step, do not touch the project\'s ' +
+      'files or the workflow, and read any "fix it" as this setting. End your turn right after ' +
+      "the line: your own next command in this turn would still run without the change.",
   },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".github/skills/aidlc/SKILL.md",
@@ -103,8 +112,10 @@ const manifest: HarnessManifest = {
       // VS Code pauses agent mode after `chat.agent.maxRequests` requests in
       // one turn (default 50) to ask "Continue to iterate?", and the chat sits
       // silent until someone answers; one Construction stage passes that
-      // (#1411). Config adds 200 when the project does not set it, and never
-      // changes a value the team set, other keys, or comments. Optional: the
+      // (#1411). VS Code runs repo hooks only with `chat.useHooks` on, and a
+      // folder's value beats a user setting that is off (measured live). Config
+      // adds each when the project does not set it, and never changes a value
+      // the team set, other keys, or comments. Optional: the
       // copy runtime leaves the file out (copyChannelOmits), since copying it
       // would replace the team's own.
       path: ".vscode/settings.json",

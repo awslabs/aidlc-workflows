@@ -38,27 +38,27 @@ const manifest: HarnessManifest = {
   // format whose hooks v3 does run and v2 still runs (measured on kiro-cli
   // 2.23.1), so the text says v3 does not run the file as shipped; the v2
   // advice holds either way, because v2 runs both formats.
+  // Measured live: with another agent picked, `/agent` and aidlc bring the
+  // hooks back in the same chat; on the 3.0 engine only a start on v2 does,
+  // and Kiro then prints its own `agent "aidlc" needs upgrading for this agent
+  // engine` line under every reply, which tells the two apart. Its
+  // execute_bash hooks (review-freeze, plan-approval-guard) beat in the record
+  // before each engine command, ahead of their own off switches.
   // No notRunYet: nothing here pins that a prompt before the first workflow
   // leaves a heartbeat, so doctor keeps the fresh-install advisory until then.
   hookActivation: {
     recovery:
-      "Kiro CLI runs this project's AIDLC hooks on its v2 engine with the aidlc agent " +
-      "active: they are registered in .kiro/agents/aidlc.json, which the v3 engine does not " +
-      "run as shipped, so restarting on the v3 engine changes nothing. Exit and start " +
-      "`kiro-cli chat --agent-engine v2 --agent aidlc` again in this folder; from an ACP " +
-      "client, start `kiro-cli acp --agent-engine v2`. If hooks still do not fire on v2, check " +
-      "that .kiro/agents/aidlc.json still has its hooks block and that `aidlc` resolves from " +
-      "a non-interactive shell (`aidlc config runtime --check`). To run Kiro CLI on v3, use " +
-      "the kiro-ide distribution instead.",
-    // Says what happened and what lets the next chat record replies; it adds no
-    // step to the refusal it joins.
-    missedReply:
-      "If the person already replied, that reply was not recorded: Kiro CLI may not be " +
-      "running AI-DLC's hooks in this session. They run on its v2 engine with the aidlc " +
-      "agent active, and a session on the v3 engine does not run them as shipped. Tell them " +
-      "that, and that starting `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder " +
-      "(an ACP client starts `kiro-cli acp --agent-engine v2`) should let the next chat record " +
-      "their replies; if it still does not, `/aidlc --doctor` shows why.",
+      "In Kiro CLI, type /agent and pick aidlc, then carry on. If Kiro says agent \"aidlc\" " +
+      "needs upgrading for this agent engine, quit Kiro and start it again in this folder with: " +
+      "kiro-cli chat --agent-engine v2 --agent aidlc (from an ACP client, start " +
+      "`kiro-cli acp --agent-engine v2`).",
+    agentStep:
+      "Kiro is not running this project's aidlc agent in this session. You cannot change that " +
+      "from inside it: do not approve, retry, or ask the person to answer again. If Kiro's own " +
+      'line under your replies says `agent "aidlc" needs upgrading for this agent engine, using ' +
+      '"default"`, show the person this line: "Quit Kiro and start it again in this folder ' +
+      'with: kiro-cli chat --agent-engine v2 --agent aidlc". Otherwise show this line: "Type ' +
+      '/agent and pick aidlc, then carry on." Then end your turn.',
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",

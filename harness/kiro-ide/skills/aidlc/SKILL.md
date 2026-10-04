@@ -49,6 +49,8 @@ The person is in charge of their work, and AIDLC enforces their will. Read what 
 
 This is the orchestrator's whole control structure. Run it from the moment `/aidlc` is invoked.
 
+**When a command comes back with no output and exit code -1**, Kiro has not been allowed to run commands in this folder yet. Do not retry, and do not suggest reloading, reinstalling or starting Kiro another way. Give the person this line and end your turn: "Choose Trust Folder & Continue when Kiro asks whether you trust this folder, then say carry on." When they say carry on, run your command again.
+
 ```
 Loop:
   1. directive = the JSON printed by running `{{INVOKE}} engine orchestrate next $ARGUMENTS` bare (no shell capture, no pipe). `--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help, not the AI-DLC help the person asked for

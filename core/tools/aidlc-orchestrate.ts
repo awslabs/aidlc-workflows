@@ -306,6 +306,9 @@ import {
   harnessDir,
   hookActivation,
   hookLiveness,
+  hooksOffAgentStep,
+  hookStatusPathLinked,
+  humanTurnMintAllowed,
   type WorkspaceCommand,
   type WorkflowSelection,
   writeActiveDirectiveMarker,
@@ -600,13 +603,44 @@ function hookHealthNotice(): string | null {
   const projectDir = engineProjectDir;
   if (!notice || projectDir === undefined || engineUnjoined) return null;
   try {
-    if (delegatedWorktreeIntent(projectDir) === null && hookLiveness(projectDir).neverFired) {
+    if (delegatedWorktreeIntent(projectDir) === null && hookLiveness(projectDir, undefined, engineWorkflow(projectDir)).neverFired) {
       activeHookHealthNotice = notice;
     }
   } catch {
     // Advisory: an unreadable record says nothing about the hooks.
   }
   return activeHookHealthNotice;
+}
+
+// The workflow this command resolved, for reads that must agree with it.
+function engineWorkflow(projectDir: string): { intent?: string; space: string } {
+  const selection = engineSelection(projectDir);
+  return { intent: selection.intent ?? undefined, space: selection.space };
+}
+
+// `next` does no work while the engine KNOWS this harness's hooks have never
+// run in the joined workflow: the harness declares the agent's step for that
+// only when a hook on the agent's own shell command leaves a heartbeat in the
+// record before the engine runs, and the workflow has a stage or gate event
+// but no heartbeat at all. Weaker signals stay warnings. There is no stop for
+// an unattended run, for a person who switched the presence check off (the
+// notice above still says it), in a delegated worktree, whose hooks beat in
+// the parent checkout, or where a link on the way to the status files keeps
+// any heartbeat from being written.
+function hooksOffStop(projectDir: string, selection: WorkflowSelection): string | null {
+  if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled()) return null;
+  const step = hooksOffAgentStep(projectDir);
+  if (step === null) return null;
+  try {
+    if (delegatedWorktreeIntent(projectDir) !== null) return null;
+    const workflow = { intent: selection.intent, space: selection.space };
+    if (!hookLiveness(projectDir, undefined, workflow).neverFired) return null;
+    if (hookStatusPathLinked(projectDir, workflow.intent, workflow.space)) return null;
+  } catch {
+    // An unreadable record proves nothing about the hooks.
+    return null;
+  }
+  return step;
 }
 
 // Print exactly one directive as JSON to stdout, after validating it against
@@ -13458,6 +13492,15 @@ export function main(argv: string[]): void {
       return;
     }
     engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
+  }
+  if (commandKind === "next" && !unjoined) {
+    const stop = hooksOffStop(resolvedProjectDir, resolvedSelection);
+    if (stop !== null) {
+      // The stop carries the step; the notice is not added on top.
+      activeHookHealthNotice = null;
+      emit(printDirective(stop));
+      return;
+    }
   }
   if (commandKind) engineInvocation = {
     commandKind,

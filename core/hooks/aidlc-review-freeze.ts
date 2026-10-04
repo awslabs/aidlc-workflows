@@ -210,9 +210,6 @@ export function blockReason(
 // --- Main ---------------------------------------------------------------------
 
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let payloadSession: unknown;
   try {
@@ -224,6 +221,15 @@ export async function run(input: string): Promise<number> {
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
     if (hookOutsideGate(workflow)) return 0;
+    // The heartbeat says the host ran this hook, so it comes before the off
+    // switch: the freeze switched off never looks like a host running no hooks.
+    try {
+      writeHookStatusFile(hooksHealthDir(projectDir), `${HOOK_NAME}.last`, isoTimestamp());
+    } catch {
+      // Heartbeat failure is non-fatal - never let it affect the decision.
+    }
+    // Deterministic off-switch: enforcement disabled entirely.
+    if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
   } finally {
     workflow.restore();
@@ -231,13 +237,6 @@ export async function run(input: string): Promise<number> {
 }
 
 async function checkFreeze(input: string, projectDir: string): Promise<number> {
-  try {
-    const healthDir = hooksHealthDir(projectDir);
-    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
-  } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
-  }
-
   let parsed: ClaudeCodeHookInput;
   try {
     const raw: unknown = JSON.parse(input);

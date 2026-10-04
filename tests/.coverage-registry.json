@@ -3938,6 +3938,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:fillHookActivationText",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:filteredRawIndexEntries",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4802,13 +4814,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:HOOK_EXECUTION_RECOVERY_CLAUDE",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:HOOK_EXECUTION_RECOVERY_OTHER",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4890,6 +4895,10 @@
         {
           "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4922,11 +4931,35 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hooksOffAgentStep",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hookStandsOutside",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/integration/t351-fresh-clone-participation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookStatusPathLinked",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10957,6 +10990,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
         }
@@ -14590,6 +14627,10 @@
         },
         {
           "file": "tests/unit/t-directive-out-of-date.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
           "mechanism": "cli"
         },
         {

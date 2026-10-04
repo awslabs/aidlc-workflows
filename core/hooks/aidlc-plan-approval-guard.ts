@@ -1875,6 +1875,17 @@ async function evaluate(
     return 2;
   }
 
+  const projectDir = resolveProjectDirFromHook(import.meta.url);
+
+  // The heartbeat says the host ran this hook, so it comes before the off
+  // switch: a fence switched off never looks like a host running no hooks.
+  try {
+    const healthDir = hooksHealthDir(projectDir);
+    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
+  } catch {
+    // Heartbeat failure is non-fatal - never let it affect the decision.
+  }
+
   // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
@@ -1883,15 +1894,6 @@ async function evaluate(
       // Fail-open: disabled fence bookkeeping does not refuse the call.
     }
     return 0;
-  }
-
-  const projectDir = resolveProjectDirFromHook(import.meta.url);
-
-  try {
-    const healthDir = hooksHealthDir(projectDir);
-    writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
-  } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
   // A TTY means no harness JSON is coming (test / debug contexts) - allow.

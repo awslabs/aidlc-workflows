@@ -123,23 +123,6 @@ function personaFrontmatter(agent: string): string[] {
   ];
 }
 
-// `kiro-cli acp` does not read the "chat.agentEngine": "v3" pin in
-// .kiro/settings/cli.json, and on v3 it runs `.kiro/hooks/*.json` only for a
-// client that declares hook support when it initializes. Measured on kiro-cli
-// 2.21.1 for #1487: no flag: default engine, no hook; `--agent-engine v3` with
-// no declaration, `{ v2: true }` alone or `{ enabled: true }` alone: no hook;
-// `{ enabled: true, v2: true }`: every hook fires and a HUMAN_TURN is recorded.
-// Kiro's own `kiro-cli chat --no-interactive` client declares neither, so it
-// runs no hooks on v3 either (kiro-cli 2.23.1 and 2.26.1). The text describes
-// what the person's client needs rather than a command: it reaches the model
-// inside a session, which must not start an ACP server itself, so the refusal
-// has it passed on to the person.
-const KIRO_CLI_ACP_HOOKS =
-  "runs these hooks only when it starts `kiro-cli acp --agent-engine v3` " +
-  "(`kiro-cli acp` ignores the engine pin in .kiro/settings/cli.json) and declares " +
-  "`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }` when it " +
-  "initializes; `kiro-cli chat --no-interactive` does neither, so it runs no hooks on v3.";
-
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
@@ -168,34 +151,30 @@ const manifest: HarnessManifest = {
   // only loses the default choice. KIRO_* variables are not a signal: that
   // terminal sets none, and Kiro CLI users set them in any shell.
   editorTerminalApp: "kiro",
+  // Measured live: the only cause seen of Kiro IDE running no hooks is a
+  // folder it has not been allowed to run commands in. Then every agent
+  // command comes back with no output and exit code -1, so no AI-DLC message
+  // can run; the agent's step sits in what it reads first (its orchestrator
+  // skill). Another agent in the picker did not stop the hooks. What an ACP
+  // client must send to run hooks is in the Kiro IDE guide.
   hookActivation: {
     recovery:
-      "In Kiro IDE, trust the folder if the Restricted Mode banner shows at the top of the " +
-      'window (select Manage, then Trust), run "Developer: Reload Window" from the Command ' +
-      "Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and choose the aidlc agent in the chat " +
-      "panel's agent picker, then send a message. In Kiro CLI, exit and start `kiro-cli` " +
-      `again in this folder. An ACP client ${KIRO_CLI_ACP_HOOKS}`,
-    // Says what happened and what lets their next message be recorded; it adds
-    // no step to the refusal it joins.
+      "In Kiro IDE, choose Trust Folder & Continue when Kiro asks whether you trust this " +
+      "folder, then say carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this " +
+      "folder. If you use an ACP client, the Kiro IDE guide says what it must send for AI-DLC's " +
+      "hooks to run.",
+    // Says what happened and asks for nothing again; it adds no step to the
+    // refusal it joins.
     missedReply:
-      "If the person already replied, that reply was not recorded: Kiro may not be running " +
-      "AI-DLC's hooks in this window. Tell them that, and that trusting the folder if the " +
-      "Restricted Mode banner shows at the top of the window (select Manage, then Trust), " +
-      'running "Developer: Reload Window" from the Command Palette (Ctrl+Shift+P, or ' +
-      "Cmd+Shift+P on macOS), and choosing the aidlc agent in the chat panel's agent picker " +
-      "should let their next message be recorded; if it still is not, `/aidlc --doctor` shows " +
-      "why. In Kiro CLI, starting `kiro-cli` again in this folder does the same. If they use " +
-      "an ACP client, tell them their client " +
-      KIRO_CLI_ACP_HOOKS,
+      "If the person already replied, that reply was not recorded. Do not ask them to answer " +
+      "again. Tell them that, and that `/aidlc --doctor` shows whether AI-DLC's hooks run in " +
+      "this window.",
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:
-      "This is expected before your first chat message here. If you already sent one, Kiro " +
-      "IDE is not running AIDLC hooks in this window: trust the folder if the Restricted Mode " +
-      "banner shows at the top of the window (select Manage, then Trust), run \"Developer: " +
-      'Reload Window" from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and ' +
-      "choose the aidlc agent in the chat panel's agent picker, then send a message. In Kiro " +
-      `CLI, exit and start \`kiro-cli\` again in this folder. An ACP client ${KIRO_CLI_ACP_HOOKS}`,
+      "This is expected before your first chat message here. If you already sent one, choose " +
+      "Trust Folder & Continue when Kiro asks whether you trust this folder, then send a message " +
+      "and run doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",

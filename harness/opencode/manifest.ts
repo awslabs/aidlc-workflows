@@ -33,6 +33,18 @@ const manifest: HarnessManifest = {
   name: "opencode",
   productName: "opencode",
   configNextStep: "run `opencode`, then `/aidlc --doctor`",
+  // Its tool.execute.before hooks for bash beat in the record before each
+  // engine command, review-freeze and plan-approval-guard before their own off
+  // switches. Measured live: the plugin does not load under `--pure` or from a
+  // start in a subfolder, and a plain `opencode` in the project folder loads it.
+  hookActivation: {
+    recovery:
+      "Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on.",
+    agentStep:
+      "AI-DLC's opencode plugin is not loaded in this session. Do not retry and do not ask the " +
+      "person to answer again. Show the person this line and end your turn: " +
+      '"Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on."',
+  },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",

@@ -68,7 +68,6 @@ import {
   guardAttemptState,
   guardRefusalOutput,
   humanAuthorityState,
-  harnessDir,
   hookExecutionRecoveryText,
   hookLiveness,
   holdsAuditLock,
@@ -193,7 +192,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { entrySkillInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -810,7 +809,7 @@ function handleDecision(args: string[]): void {
           `${liveness.newestHeartbeat?.timestampRaw}, but the workflow last advanced ` +
           `${liveness.newestStageOrGateEvent?.timestampRaw}. No Plan Approval challenge was ` +
           "minted because the human's answer is recorded by the hooks. " +
-          hookExecutionRecoveryText(runtimeHarnessName(pd, harnessDir())),
+          hookExecutionRecoveryText(pd),
       );
     }
   }

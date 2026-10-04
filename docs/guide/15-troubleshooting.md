@@ -24,7 +24,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
-| Kiro IDE: your reply to an approval question is not seen, or no `aidlc` agent | If the Restricted Mode banner shows, select **Manage** on it, then **Trust**; run **Developer: Reload Window**, choose the **aidlc** agent; your next message should then be recorded, and if it is not, `/aidlc --doctor` shows why. In Kiro CLI, exit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
+| Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's v2 engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
@@ -199,24 +199,21 @@ sufficient.
 
 ### Kiro IDE hooks not running
 
-Kiro IDE runs a folder's hooks and loads its `aidlc` agent only after you trust
-the folder and reload the window. Until then AI-DLC cannot see your replies:
-an approval question keeps saying no human reply has arrived, and doctor warns
-"AIDLC hooks have not run in this project yet". That warning is expected before
-your first chat message in the project.
+Kiro IDE runs a folder's hooks only after you allow it to run commands in that
+folder. Until then every command the agent runs comes back with no output and
+exit code -1, so no AI-DLC message can show; the agent gives you the step
+itself. Before your first chat message in the project, doctor warns "AIDLC
+hooks have not run in this project yet"; that is expected.
 
 Trust only a folder whose contents you know (your own project, or one you have
 checked), because trusting lets the folder's `.kiro` hooks run commands on your
 machine (see [First run](harnesses/kiro-ide.md#first-run)).
 
-1. If the Restricted Mode banner shows at the top of the window (the status bar
-   also reads "Restricted Mode"), select **Manage** on it, then **Trust** on the
-   Workspace Trust page that opens.
-2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
-   **Developer: Reload Window**.
-3. Choose the **aidlc** agent in the chat panel's agent picker.
-4. Send your next message in that chat; it should be recorded now. If it is
-   not, `/aidlc --doctor` shows why.
+1. Choose **Trust Folder & Continue** when Kiro asks whether you trust this
+   folder. If the Restricted Mode banner shows at the top of the window
+   instead, select **Manage** on it, then **Trust**.
+2. Say carry on in the same chat. If your next message is still not recorded,
+   `/aidlc --doctor` shows why.
 
 ### Kiro CLI hooks not running
 
@@ -229,7 +226,10 @@ changes nothing.
 
 - **`kiro` distribution** (`.kiro/agents/aidlc.json`): hooks run on Kiro CLI's
   v2 engine, with the `aidlc` agent active; v3 does not run the file as AI-DLC
-  ships it. Start
+  ships it. With another agent picked, type `/agent` and pick `aidlc`, then
+  carry on in the same chat. If Kiro prints `agent "aidlc" needs upgrading for
+  this agent engine` under its replies, the session is on the 3.0 engine: quit
+  Kiro and start it again in this folder with
   `kiro-cli chat --agent-engine v2 --agent aidlc`. From an ACP client, start
   `kiro-cli acp --agent-engine v2`.
 - **`kiro-ide` distribution** (`.kiro/hooks/aidlc-*.json`): hooks run only on
@@ -248,27 +248,43 @@ workflow stage; before that it reports the heartbeats as not yet fired.
 
 VS Code runs a project's hooks only in a trusted workspace with the **Chat: Use
 Hooks** setting (`chat.useHooks`) on, and your organization can switch that
-setting off. The Copilot CLI runs them only in a folder it trusts. Neither says
-anything in the chat when it skips them, so AI-DLC does: once a stage has
-started with no hook run, the agent tells you once, and approvals cannot be
-recorded until the hooks run. Before your first Copilot chat in the folder,
-doctor warns "AIDLC hooks have not run in this project yet"; that is expected
-until a chat has started.
+setting off. `aidlc config` turns it on in the folder's `.vscode/settings.json`
+when the project does not set it, and a folder's value beats a user setting
+that is off. The Copilot CLI runs hooks only in a folder it trusts. Neither
+says anything in the chat when it skips them, so AI-DLC does: once a stage has
+started with no hook run, the agent turns the folder setting on itself and
+shows one line. Send your next message in the same chat; no new chat or reload
+is needed. Before your first Copilot chat in the folder, doctor warns "AIDLC
+hooks have not run in this project yet"; that is expected until a chat has
+started.
 
-1. In VS Code, trust the folder (Workspace Trust) and check that Chat: Use Hooks
-   is on. If your organization's policy has switched it off, only your
-   administrator can turn it back on.
+1. In VS Code, VS Code asks the first time whether you trust the folder's
+   authors; trust it. If your organization has switched Chat: Use Hooks off,
+   only your administrator can turn it back on.
 2. In the Copilot CLI, trust the folder when it asks. A headless `copilot -p`
    run also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` in its environment.
-3. Start a new chat in the folder and carry on.
 
 See [GitHub Copilot](harnesses/copilot.md) for the folder trust details.
+
+### Codex CLI hooks not trusted
+
+Codex runs a project's hooks only once you trust them in its `/hooks` screen,
+and it asks again when the hooks change. In Codex, type `/hooks`, press `t` to
+trust all, then press Esc, and carry on in the same chat. Nothing outside Codex
+can do this for you.
+
+### opencode plugin not loaded
+
+opencode loads AI-DLC's plugin only when it starts plainly in the project
+folder: not under `--pure`, and not from a subfolder. Quit opencode and start
+it again with just `opencode` in the project folder, then type `/aidlc` to
+carry on.
 
 ### Claude managed policy blocks project hooks
 
 If `/hooks` reports that hooks are restricted by policy and shows zero configured hooks, run `/aidlc --doctor`. On Claude Code, doctor reads `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/managed-settings.json` on Linux/WSL, or `%ProgramFiles%\ClaudeCode\managed-settings.json` followed by the legacy `%PROGRAMDATA%\ClaudeCode\` location on Windows. Each candidate also includes alphabetical JSON fragments under its sibling `managed-settings.d/` directory. An effective top-level `allowManagedHooksOnly: true` blocks every project hook declared in `.claude/settings.json`. Set `AIDLC_MANAGED_SETTINGS_PATH` when the managed file lives elsewhere; its sibling fragment directory is included automatically.
 
-Only the Claude Code administrator can lift this managed setting. After hooks are approved, fully restart the CLI session. Until the policy changes, an attended recovery session can set `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1` in the environment that launches the CLI; these are temporary bypasses for the receipts that blocked hooks cannot mint.
+Only your Claude Code administrator can lift this managed setting: ask them to allow project hooks.
 
 ### Cursor project outside a git repository
 
@@ -317,10 +333,10 @@ does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
 
-Claude Code honours `"disableAllHooks": true` in any settings layer — enterprise managed settings, `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json`. When set, **every** hook is silently skipped even though the files are present and correctly wired, so the workflow blocks on the first stage (no audit, no state sync, no sensors, no stage-graph rebuild). This is common in regulated environments where IT policy disables hooks via managed settings. `/aidlc --doctor` detects this and fails a **Hooks enabled** row naming the offending layer, following Claude Code's layer precedence so a higher-precedence `false` suppresses a lower `true`.
+Claude Code honours `"disableAllHooks": true` in any settings layer: enterprise managed settings, `.claude/settings.local.json`, `.claude/settings.json`, or `~/.claude/settings.json` (or `settings.json` under `CLAUDE_CONFIG_DIR` when that is set). When set, **every** hook is silently skipped even though the files are present and correctly wired, so the workflow cannot record your replies. `/aidlc --doctor` detects this and fails a **Hooks enabled** row naming the offending layer, following Claude Code's layer precedence so a higher-precedence `false` suppresses a lower `true`. Once a stage has started with no hook run, the agent makes the change below itself, and Claude Code asks you first.
 
-- If the offending layer is a **project or user file**, remove `"disableAllHooks": true` (or set it to `false` in a higher-precedence layer such as `.claude/settings.local.json`) and restart the session.
-- If it is **enterprise managed settings** — the highest-precedence layer — a project or user file cannot override it; IT policy must change it. If policy mandates disabled hooks, AI-DLC v2 is not compatible with that environment: its engine is hook-driven.
+- If the offending layer is a **project or user file**, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`. That file outranks the project and user files, so it covers a switch-off in any of them without changing your user settings, and it works in the same chat: no restart and no `/hooks`.
+- If it is **enterprise managed settings**, the highest-precedence layer, a project or user file cannot override it: ask your Claude Code administrator to allow project hooks.
 
 The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed-settings.json` on Linux, `/Library/Application Support/ClaudeCode/managed-settings.json` on macOS, `%ProgramFiles%\ClaudeCode\managed-settings.json` on current Windows — `%PROGRAMDATA%\ClaudeCode\` is a legacy secondary) plus alphabetical JSON files in the sibling `managed-settings.d/` directory. It does **not** inspect other managed channels Claude Code supports (MDM, Windows registry, or a remote/server-managed source), so a passing row means the resolved value is not `true` in any settings file the check could read, not a guarantee those channels are clean. If your managed file lives at a non-standard path, point the check at it with `AIDLC_MANAGED_SETTINGS_PATH=/path/to/managed-settings.json`; fragments beside that file are included.
 
@@ -856,9 +872,7 @@ force-adding individual records. This warning does not change doctor's exit
 code. The row is absent when the records are visible, outside a Git repository,
 or when Git is unavailable.
 
-On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only the Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, run `/hooks` to inspect approval and policy status, then fully restart the CLI session after hooks are approved.
-
-Until an administrator changes the managed policy, an attended recovery session can launch the CLI with both `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` and `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1`. These are temporary bypasses: they allow human-presence and consolidated-summary checkpoints to proceed without receipts that blocked hooks cannot mint, so use them only while a human is actively supervising the session.
+On Claude Code, doctor also reads the machine-managed `managed-settings.json` and alphabetical `managed-settings.d/` fragments. If the effective `allowManagedHooksOnly` value is `true`, organization policy blocks every hook declared by the project's `.claude/settings.json`; only your Claude Code administrator can lift that policy. If heartbeats are still absent after workflow progress, set `"disableAllHooks": false` in this project's `.claude/settings.local.json`; it works in the same chat.
 When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing structured findings (unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes) — the same analysis `--doctor --export` writes to its report.
 
 See [CLI Commands](12-cli-commands.md#aidlc-doctor-health-check) for full details on what each check validates and how to fix failures.

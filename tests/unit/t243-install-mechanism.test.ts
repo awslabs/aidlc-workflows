@@ -2571,9 +2571,12 @@ describe("t243 project initialization", () => {
 
   // VS Code pauses agent mode after chat.agent.maxRequests requests in one turn
   // (default 50) to ask "Continue to iterate?", and the chat sits silent until
-  // someone answers. A Copilot config adds 200 when the project does not set it
-  // and never changes the team's value, other keys, or comments (#1411).
+  // someone answers; it runs repo hooks only with chat.useHooks on. A Copilot
+  // config adds each when the project does not set it and never changes the
+  // team's value, other keys, or comments (#1411).
   const VSCODE_SETTINGS = join(".vscode", "settings.json");
+  const SHIPPED_SETTINGS = '{\n  "chat.agent.maxRequests": 200,\n  "chat.useHooks": true\n}\n';
+  const BOTH_KEYS = ["chat.agent.maxRequests", "chat.useHooks"];
   const configCopilot = (project: string, from = COPILOT_RELEASE) => run(INIT, [
     "config", "--project-dir", project, "--from", from, "--harness", "copilot", "--mcp", "none", "--yes",
   ], project);
@@ -2586,17 +2589,17 @@ describe("t243 project initialization", () => {
     mkdirSync(join(project, ".git"));
     const configured = configCopilot(project);
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
-    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(SHIPPED_SETTINGS);
     expect(settingsContribution(project)).toEqual({
       policy: "jsonc-settings",
-      entries: { "chat.agent.maxRequests": sha256Bytes("200") },
-      added: ["chat.agent.maxRequests"],
+      entries: { "chat.agent.maxRequests": sha256Bytes("200"), "chat.useHooks": sha256Bytes("true") },
+      added: BOTH_KEYS,
       created: true,
     });
     // A refresh leaves it alone, and a project from before this release gets it.
     const refreshed = configCopilot(project);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(SHIPPED_SETTINGS);
     const baselinePath = join(project, ".aidlc", "tools", "data", "aidlc-manifest.json");
     const baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
     delete baseline.rootContributions[".vscode/settings.json"];
@@ -2605,14 +2608,16 @@ describe("t243 project initialization", () => {
     const upgraded = configCopilot(project);
     expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
     expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"))
-      .toBe('{\n  "editor.tabSize": 2,\n  "chat.agent.maxRequests": 200\n}\n');
+      .toBe('{\n  "editor.tabSize": 2,\n  "chat.agent.maxRequests": 200,\n  "chat.useHooks": true\n}\n');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("copilot config keeps the team's request cap, other keys, and comments", () => {
     const teamValue = temp("aidlc-t243-vscode-team-");
     mkdirSync(join(teamValue, ".git"));
     mkdirSync(join(teamValue, ".vscode"));
-    const teamFile = '// team settings\n{\n  "chat.agent.maxRequests": 75, // we chose this\n  "editor.tabSize": 4\n}\n';
+    // The team's own values, an explicit switch-off of the hooks included.
+    const teamFile =
+      '// team settings\n{\n  "chat.agent.maxRequests": 75, // we chose this\n  "chat.useHooks": false,\n  "editor.tabSize": 4\n}\n';
     writeFileSync(join(teamValue, VSCODE_SETTINGS), teamFile);
     for (let pass = 0; pass < 2; pass++) {
       const configured = configCopilot(teamValue);
@@ -2630,7 +2635,7 @@ describe("t243 project initialization", () => {
     const configured = configCopilot(commented);
     expect(configured.status, configured.stdout + configured.stderr).toBe(0);
     expect(readFileSync(join(commented, VSCODE_SETTINGS), "utf-8")).toBe(
-      '{\r\n\t// formatting\r\n\t"editor.formatOnSave": true, /* keep */\r\n\t"files.eol": "\\n",\r\n\t"chat.agent.maxRequests": 200\r\n}\r\n',
+      '{\r\n\t// formatting\r\n\t"editor.formatOnSave": true, /* keep */\r\n\t"files.eol": "\\n",\r\n\t"chat.agent.maxRequests": 200,\r\n\t"chat.useHooks": true\r\n}\r\n',
     );
 
     // A settings file config cannot read is the team's to fix: config carries on.
@@ -2652,7 +2657,7 @@ describe("t243 project initialization", () => {
     // A later release that ships a different value updates AI-DLC's own value...
     const bumped = temp("aidlc-t243-vscode-release-");
     cpSync(COPILOT_RELEASE, bumped, { recursive: true });
-    writeFileSync(join(bumped, VSCODE_SETTINGS), '{\n  "chat.agent.maxRequests": 300\n}\n');
+    writeFileSync(join(bumped, VSCODE_SETTINGS), '{\n  "chat.agent.maxRequests": 300,\n  "chat.useHooks": true\n}\n');
     expect(configCopilot(project, bumped).status).toBe(0);
     expect(jsoncSettingValue(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"), "chat.agent.maxRequests")).toBe(300);
     // ...but once the team changes it, the value is theirs.
@@ -2660,7 +2665,11 @@ describe("t243 project initialization", () => {
     writeFileSync(join(project, VSCODE_SETTINGS), teamEdited);
     expect(configCopilot(project, COPILOT_RELEASE).status).toBe(0);
     expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
-    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] });
+    expect(settingsContribution(project)).toEqual({
+      policy: "jsonc-settings",
+      entries: { "chat.useHooks": sha256Bytes("true") },
+      added: BOTH_KEYS,
+    });
 
     // A release that no longer ships the setting removes it only where AI-DLC
     // added it and nobody changed it: the file AI-DLC created goes, the team's stays.
@@ -2700,7 +2709,9 @@ describe("t243 project initialization", () => {
     expect(existsSync(join(created, VSCODE_SETTINGS))).toBe(false);
     expect(existsSync(join(recreated, VSCODE_SETTINGS))).toBe(false);
     expect(readFileSync(join(added, VSCODE_SETTINGS), "utf-8")).toBe('{\n  // ours\n  "editor.tabSize": 2\n}\n');
-    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamEdited);
+    // The team's request cap stays; the hook setting AI-DLC added, unchanged, goes.
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8"))
+      .toBe('{\n  "editor.tabSize": 2,\n  "chat.agent.maxRequests": 150\n}\n');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("copilot config does not add the request cap back after the team took it out", () => {
@@ -2718,7 +2729,7 @@ describe("t243 project initialization", () => {
       expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
       expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(teamFile);
     }
-    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: ["chat.agent.maxRequests"] });
+    expect(settingsContribution(project)).toEqual({ policy: "jsonc-settings", entries: {}, added: BOTH_KEYS });
     // An emptied file is still the team's choice.
     writeFileSync(join(project, VSCODE_SETTINGS), "{}\n");
     expect(configCopilot(project).status).toBe(0);
@@ -2727,7 +2738,7 @@ describe("t243 project initialization", () => {
     // .vscode/ out of git) gets the value on its own config.
     rmSync(join(project, ".vscode"), { recursive: true, force: true });
     expect(configCopilot(project).status).toBe(0);
-    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(readFileSync(join(project, VSCODE_SETTINGS), "utf-8")).toBe(SHIPPED_SETTINGS);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a copied project's refresh leaves .vscode/settings.json alone when its runtime ships none", () => {
@@ -2755,7 +2766,7 @@ describe("t243 project initialization", () => {
     const before = settingsContribution(owned);
     const refreshed = configCopilot(owned, copyRuntime);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
-    expect(readFileSync(join(owned, VSCODE_SETTINGS), "utf-8")).toBe('{\n  "chat.agent.maxRequests": 200\n}\n');
+    expect(readFileSync(join(owned, VSCODE_SETTINGS), "utf-8")).toBe(SHIPPED_SETTINGS);
     expect(settingsContribution(owned)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

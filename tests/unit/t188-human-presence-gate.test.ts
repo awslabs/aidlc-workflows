@@ -272,51 +272,40 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  // A Kiro IDE window that is not running the hooks never records the reply,
-  // so Kiro IDE's tools (its shipped hookActivation) add the steps that turn
-  // the hooks on; Claude's tools do not.
-  test("A2: on Kiro IDE the refusal names the trust, reload, and agent steps", () => {
+  // A refusal for a reply that was not recorded never asks the person to answer
+  // again. Claude's tools (its shipped hookActivation) give the agent's own
+  // step and the one line to show; Kiro IDE's, whose only measured cause runs
+  // no command at all, point to doctor.
+  test("A2: Claude's refusal gives its own step, Kiro IDE's points to doctor, and neither asks again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
     const claude = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(claude.rc).not.toBe(0);
-    // Claude declares no hook steps, so the refusal says what happened to a
-    // reply already sent and names doctor; it never asks for the reply again.
-    expect(claude.out).toContain("If the person already replied, that reply was not recorded for this question.");
-    expect(claude.out).toContain("--doctor shows whether AI-DLC's hooks run here.");
+    expect(claude.out).toContain("do not ask them to answer again");
+    expect(claude.out).toContain(
+      "Choose Yes when Claude Code asks to change this project's settings, then answer the question below.",
+    );
     expect(claude.out).not.toContain("reply again");
-    expect(claude.out).not.toContain("Kiro may not be running AI-DLC's hooks");
     expect(claude.out).not.toContain("Reload Window");
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, KIRO_IDE_STATE);
     expect(r.rc).not.toBe(0);
     const refusal = JSON.parse(r.out).error as string;
     expect(refusal).toContain(
-      "If the person already replied, that reply was not recorded: Kiro may not be running AI-DLC's hooks in this window.",
+      "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
     );
-    expect(refusal).toContain(
-      "trusting the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
-    );
-    expect(refusal).toContain('running "Developer: Reload Window" from the Command Palette');
-    expect(refusal).toContain(
-      "choosing the aidlc agent in the chat panel's agent picker should let their next message be recorded; if it still is not, `/aidlc --doctor` shows why.",
-    );
-    expect(refusal).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
-    expect(refusal).not.toContain("reply again");
-    // #1487: an ACP client gets neither the v3 pin nor hooks unless it asks.
-    // The model passes that on rather than starting an ACP server itself.
-    expect(refusal).toContain(
-      "If they use an ACP client, tell them their client runs these hooks only when it starts `kiro-cli acp --agent-engine v3`",
-    );
-    expect(refusal).toContain("`clientCapabilities._meta.kiro.hooks` as `{ enabled: true, v2: true }`");
+    expect(refusal).toContain("`/aidlc --doctor` shows whether AI-DLC's hooks run in this window.");
+    expect(refusal).not.toContain("Reload Window");
+    expect(refusal).not.toContain("agent picker");
+    expect(refusal).not.toContain("clientCapabilities");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  // #1487: the kiro tree's hooks run only on Kiro CLI's v2 engine, so a
-  // session on v3 never records the reply. Its tools name v2 itself (a Kiro CLI
-  // that defaults to v3 would restart on v3 again), not a bare restart.
-  test("A3: on Kiro CLI the refusal names the v2 engine and the ACP flag", () => {
+  // The kiro tree's hooks run only with its aidlc agent on Kiro CLI's v2
+  // engine. The agent tells the two causes apart by Kiro's own line under its
+  // replies, and shows the one step for the person.
+  test("A3: on Kiro CLI the refusal gives the agent and engine lines, and asks for nothing again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
@@ -324,16 +313,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(r.rc).not.toBe(0);
     const refusal = JSON.parse(r.out).error as string;
     expect(refusal).toContain("no new human reply");
+    expect(refusal).toContain("do not ask them to answer again");
+    expect(refusal).toContain('agent "aidlc" needs upgrading for this agent engine, using "default"');
+    expect(refusal).toContain('"Type /agent and pick aidlc, then carry on."');
     expect(refusal).toContain(
-      "If the person already replied, that reply was not recorded: Kiro CLI may not be running AI-DLC's hooks in this session",
+      '"Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc"',
     );
-    expect(refusal).toContain("a session on the v3 engine does not run them as shipped");
-    expect(refusal).toContain(
-      "starting `kiro-cli chat --agent-engine v2 --agent aidlc` in this folder",
-    );
-    expect(refusal).toContain("should let the next chat record their replies; if it still does not, `/aidlc --doctor` shows why.");
     expect(refusal).not.toContain("reply again");
-    expect(refusal).toContain("an ACP client starts `kiro-cli acp --agent-engine v2`");
+    expect(refusal).not.toContain("ACP");
     expect(refusal).not.toContain("Reload Window");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     expect(field(proj, "Current Stage")).toBe(slug);
@@ -342,8 +329,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record: an earlier turn was spent, the prompt hook stamped its
   // marker (it does so even when the mint fails), and another hook left a
-  // heartbeat seconds ago. The refusal still carries the restart steps.
-  test("A4: fresh hook activity does not take the restart steps out of the refusal", () => {
+  // heartbeat seconds ago. The refusal still carries the step to take.
+  test("A4: fresh hook activity does not take the step to take out of the refusal", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
     recordHumanTurn(proj);
@@ -355,8 +342,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     stampPrompt(proj, Date.now());
     writeHeartbeat(proj, Date.now());
     for (const [state, steps] of [
-      [KIRO_CLI_STATE, "If the person already replied, that reply was not recorded: Kiro CLI may not be running AI-DLC's hooks"],
-      [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded: Kiro may not be running AI-DLC's hooks"],
+      [KIRO_CLI_STATE, '"Type /agent and pick aidlc, then carry on."'],
+      [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded. Do not ask them to answer again."],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
       expect(r.rc).not.toBe(0);
@@ -568,7 +555,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const r = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
     expect(r.rc, r.out).not.toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-    expect(r.out).toContain("If the person already replied, that reply was not recorded for this question.");
+    expect(r.out).toContain("If the person already replied, that reply was not recorded");
+    expect(r.out).toContain("do not ask them to answer again");
     expect(r.out).not.toContain("guard.human-presence");
     expect(r.out).not.toContain("Continuing past the human-presence check");
     expect(eventCount(proj, "GUARD_STOOD_ASIDE")).toBe(rowsBefore);

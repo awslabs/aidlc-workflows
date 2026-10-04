@@ -143,10 +143,16 @@ export type HarnessManifest = {
    * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
-    /** Doctor's fix when the hooks are not running. */
+    /**
+     * Doctor's fix when the hooks are not running: only the person's own
+     * step, in the tool's words. `<entry>` and `<folder>` are filled in.
+     */
     recovery: string;
-    /** Sentence added to the engine's attended "no new human reply" refusals. */
-    missedReply: string;
+    /**
+     * Sentence added to the engine's attended "no new human reply" refusals,
+     * for a harness without `agentStep` (which gives that sentence instead).
+     */
+    missedReply?: string;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
      * harness's hooks leave a heartbeat on the first chat message; doctor then
@@ -160,6 +166,17 @@ export type HarnessManifest = {
      * before the engine runs, so an install whose hooks run never sees it.
      */
     notRunInWorkflow?: string;
+    /**
+     * What the agent does itself, then the one line it shows the person, when
+     * this harness's hooks are not running (the person's lines quoted
+     * exactly). `next` stops with it before any work, and the refusal for a
+     * reply that was not recorded carries it. Set only when a hook on the
+     * agent's own shell command leaves a heartbeat in the record before the
+     * engine runs, even with its own check switched off, so a record with
+     * stage progress and no heartbeat at all proves the hooks did not run.
+     * `<entry>`, `<folder>` and `<next>` are filled in.
+     */
+    agentStep?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;

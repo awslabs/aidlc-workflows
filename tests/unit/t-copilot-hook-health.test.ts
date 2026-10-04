@@ -48,7 +48,7 @@ const SESSION = "11111111-2222-4333-8444-555555555555";
 
 const NOTICE = (
   JSON.parse(readFileSync(join(COPILOT_ROOT, ".aidlc", "tools", "data", "harness.json"), "utf-8")) as {
-    hookActivation?: { notRunInWorkflow?: string; recovery?: string; notRunYet?: string; missedReply?: string };
+    hookActivation?: { notRunInWorkflow?: string; recovery?: string; notRunYet?: string; agentStep?: string };
   }
 ).hookActivation;
 
@@ -148,7 +148,7 @@ function engine(proj: string, harnessDir: string, args: string[]): Printed {
 }
 
 function hookNotices(directive: Printed): string[] {
-  return (directive.change_notices ?? []).filter((notice) => notice.includes("hooks have not run"));
+  return (directive.change_notices ?? []).filter((notice) => notice === NOTICE?.notRunInWorkflow);
 }
 
 function doctor(proj: string): string {
@@ -174,10 +174,10 @@ describe("Copilot: hooks that never ran are visible", () => {
     expect(typeof NOTICE?.notRunInWorkflow).toBe("string");
     expect(typeof NOTICE?.notRunYet).toBe("string");
     expect(NOTICE?.recovery).toContain("Chat: Use Hooks");
-    // The sentence joins a refusal the person did not cause: it says what
-    // happened and asks for nothing again.
-    expect(NOTICE?.missedReply).toContain("so that reply was not recorded");
-    expect(NOTICE?.missedReply).not.toMatch(/reply again|again\./);
+    // The agent fixes the folder setting itself, then shows one line that
+    // asks for nothing again.
+    expect(NOTICE?.agentStep).toContain('"Fixed. Send your next message here to carry on."');
+    expect(NOTICE?.agentStep).not.toMatch(/reply again|answer again/);
   });
 
   test("with no hook run, the first stage tells the person once per directive, on every part", () => {
