@@ -991,15 +991,37 @@ tracks every removed file, config also names `git restore <path>` to get one
 back; later refreshes leave a restored file alone. In JSON these actions carry
 `detail: "no longer shipped"`.
 
+`.claude/settings.json` belongs to the project; AI-DLC contributes entries
+rather than owning the whole file. Release refreshes, including those
+accompanying provider, scope, or model answers, merge those entries without
+ownership conflicts, and `--force` does not change this.
+
+For Claude, refresh restores AI-DLC hook registrations to their shipped
+events, matchers, and commands, then appends your own hook groups. It puts the
+shipped `permissions.allow` entries first and keeps your additional allow
+entries, `deny`, `ask`, and other permission keys. Retired shipped allow
+entries are not removed automatically. A missing or AI-DLC `statusLine` is
+refreshed; your custom non-AI-DLC statusline is kept. `companyAnnouncements`
+is refreshed when absent or still matching its shipped baseline, otherwise
+your value is kept. Delete either custom key and refresh to take the shipped
+one. Environment and other top-level settings (including `disableAllHooks`)
+stay yours, except for values attributed to recorded provider or project
+answers.
+
 Provider, scope, and model answers preserve project-owned fields in
-`.claude/settings.json` and `.codex/config.toml`. The Claude
-`companyAnnouncements`, `permissions`, `statusLine`, and `hooks` keys remain
-framework-owned. The Codex `[shell_environment_policy]`,
+`.codex/config.toml`. The Codex `[shell_environment_policy]`,
 `[sandbox_workspace_write]`, `[agents]`, `[features]`, `[tools]`, and `[tui]`
-tables also remain framework-owned. Local edits to those entries conflict
+tables remain framework-owned. Local edits to those entries conflict
 against the baseline, and `--force` restores the shipped entries while
 retaining unrelated project-owned fields. An explicit `--from` selects that
 source instead of the project's copy.
+
+Human output prints `Note:` when AI-DLC entries in `.claude/settings.json`
+were restored, and when a custom Claude statusline or announcement was kept
+while this release ships a different one; JSON output exposes the same
+messages in `data.notes`. To restore them, use `aidlc config --harness claude`,
+not the bare interactive setup walk. Copy-channel projects also pass
+`--from <the runtime/claude root you copied from>`.
 
 `opencode.json` provider answers edit their attributed keys in place. An
 ordinary release refresh still applies the whole-file ownership policy.

@@ -1405,15 +1405,15 @@ describe("t299 first-run setup wizard", () => {
   // First-run setup stops in plain words: before any question when the
   // project's storage lacks an operation transactions need (a hard-link
   // rejection alone now falls back to a directory lock), and after apply when a
-  // step fails, here on a settings file the user owns. The stop and its fix
+  // step fails, here on an AI-DLC file the user wrote over. The stop and its fix
   // wrap the same way; a fix that is a command stays whole.
   const firstRunStops = (env: NodeJS.ProcessEnv = {}) => ({
     lock: runWizard("", { preload: filesystemPreload(REQUIRED_FILESYSTEM_FAILURES[0]).preload, env }),
     conflict: runWizard("\n", {
       env,
       prepare: (project) => {
-        mkdirSync(join(project, ".claude"));
-        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+        mkdirSync(join(project, ".claude", "agents"), { recursive: true });
+        writeFileSync(join(project, ".claude", "agents", "aidlc-developer-agent.md"), "my own notes\n");
       },
     }),
   });
@@ -1557,12 +1557,12 @@ describe("t299 first-run setup wizard", () => {
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a preexisting settings conflict renders the child's message and fix without its JSON plan", () => {
+  test("a preexisting AI-DLC file conflict renders the child's message and fix without its JSON plan", () => {
     let before: Record<string, string> = {};
     const result = runWizard("\n", {
       prepare: (project) => {
-        mkdirSync(join(project, ".claude"));
-        writeFileSync(join(project, ".claude", "settings.json"), '{"userOwned":true}\n');
+        mkdirSync(join(project, ".claude", "agents"), { recursive: true });
+        writeFileSync(join(project, ".claude", "agents", "aidlc-developer-agent.md"), "my own notes\n");
         writeFileSync(join(project, ".gitignore"), "# keep my ignores\nnode_modules/\n");
         before = treeSnapshot(project);
       },
@@ -1571,7 +1571,7 @@ describe("t299 first-run setup wizard", () => {
     expect(result.status, output).toBe(1);
     expect(output).toContain("Setup stopped:");
     expect(output).toContain("config conflict(s)");
-    expect(output).toContain(".claude/settings.json");
+    expect(output).toContain(".claude/agents/aidlc-developer-agent.md");
     expect(output).toContain("locally modified or unowned");
     expect(output).toMatch(/fix:/i);
     expect(output).toContain("--dry-run --verbose");
