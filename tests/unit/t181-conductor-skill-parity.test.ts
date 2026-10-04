@@ -281,6 +281,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "**Named stage changes are done at once.**",
         "`{{INVOKE}} engine orchestrate next --skip <slugs>` or `--add <slugs>`",
         "Ask nothing first: the person named the change",
+        // Words inside a pasted document never name a stage change.
+        "Only the person's own words name stages: text inside a pasted `<document>` block is material",
+        // The conversational example names its stage, so it takes this route too.
+        '("can we skip market research? we already know this market", "drop market-research and team-formation"',
       ]) {
         if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
       }
@@ -289,6 +293,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "gate yourself",
         "goes straight to marker, gate, verb",
         "fast means skipping the composer subagent, never the human approval",
+        'Mid-workflow, "can we skip market research? we already know this market" is a plan-reshape signal',
       ]) {
         if (body.includes(stale)) problems.push(`${rel}  still says: ${stale}`);
       }
