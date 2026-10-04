@@ -196,6 +196,7 @@ import {
   codekbDir,
   intentsDir,
   codekbFingerprintExcludes,
+  codekbSourceRoot,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -9376,11 +9377,7 @@ function resolveCodekbRepo(
   if (!isValidRepoName(repo)) {
     die(`Invalid --repo "${repo}": a repo name must be one path segment.`);
   }
-  const siblingDir = join(projectDir, repo);
-  const sourceDir =
-    existsSync(siblingDir) && statSync(siblingDir).isDirectory()
-      ? siblingDir
-      : projectDir;
+  const sourceDir = codekbSourceRoot(projectDir, repo, space);
   return {
     space,
     repo,
@@ -9801,12 +9798,10 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
   const storeDir = relativeCodekbDir(projectDir, repo, space);
   const storePath = join(projectDir, ...storeDir.split("/"), "reverse-engineering-timestamp.md");
 
-  // The repo's source root: the sibling dir `<workspace>/<repo>/` when it
-  // exists (the multi-repo layout reverse-engineering.md Step 1 scans), else
-  // the workspace root itself (the lone-repo case, where codekbRepoName is
-  // basename(projectDir)).
-  const siblingDir = join(projectDir, repo);
-  const repoDir = existsSync(siblingDir) && statSync(siblingDir).isDirectory() ? siblingDir : projectDir;
+  // The repo's source root: a registered repo's sibling dir `<workspace>/<repo>/`
+  // (the multi-repo layout reverse-engineering.md Step 1 scans), else the
+  // workspace root itself (the lone-repo case).
+  const repoDir = codekbSourceRoot(projectDir, repo, space);
   // In the lone-repo layout AI-DLC's workspace and install live under the
   // repository root. Leave them out of full-root fingerprints, so writing the
   // scope draft, codekb, audit, or state cannot stale its own hash, and an

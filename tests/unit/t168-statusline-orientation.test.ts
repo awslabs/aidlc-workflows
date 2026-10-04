@@ -120,11 +120,11 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
     // active intent and point both cursors at it. Now listSpaces().length === 2,
     // so the space token appears.
     seedIntent(proj, "checkout-flow", "default");
-    seedIntent(proj, "export-bug", "teamB");
-    setActiveSpaceCursor(proj, "teamB"); // active space → teamB
+    seedIntent(proj, "export-bug", "team-b");
+    setActiveSpaceCursor(proj, "team-b"); // active space → team-b
     const out = runStatusline(proj);
-    // teamB's active intent is export-bug → "teamB · export-bug · CONSTRUCTION".
-    expect(out).toContain("teamB · export-bug · CONSTRUCTION");
+    // team-b's active intent is export-bug → "team-b · export-bug · CONSTRUCTION".
+    expect(out).toContain("team-b · export-bug · CONSTRUCTION");
   });
 
   test("empty state (no record) paints the bare `[AIDLC] ready` — no prefix leak", () => {

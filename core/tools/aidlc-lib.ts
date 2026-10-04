@@ -17,12 +17,14 @@ import {
   discoverProjectHarnesses,
   isCompiledExecutable,
   type KiroLayout,
+  knownActiveSpace,
   kiroTreeLayout,
   resolveHarnessPath,
   runtimeHarnessDir,
   runtimeHarnessName,
+  SPACE_NAME_REGEX,
 } from "./aidlc-runtime-paths.ts";
-export { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
@@ -2561,14 +2563,14 @@ function canonicalPathKey(path: string): string {
   }
 }
 
-// The active space for this project. Reads the `aidlc/active-space` cursor;
-// defaults to "default". NEVER throws — the default space is always valid even
-// when nothing is on disk yet (the resolver tolerates an absent space dir).
+// The active space for this project. Reads the `aidlc/active-space` cursor; a
+// missing cursor, or one that does not name a space this project has, is
+// "default". NEVER throws: the default space is always valid even when
+// nothing is on disk yet (the resolver tolerates an absent space dir).
 export function activeSpace(projectDir: string): string {
   const ptr = join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER);
   try {
-    const raw = readFileSync(ptr, "utf-8").trim();
-    if (raw.length > 0) return raw;
+    return knownActiveSpace(workspaceRoot(projectDir), readFileSync(ptr, "utf-8"));
   } catch {
     // no cursor → default
   }
@@ -2604,8 +2606,8 @@ export function knowledgeDir(projectDir: string, space?: string): string {
 // produced. A separate constant from BOLT_SLUG_REGEX despite the identical
 // pattern today, following the convention that comment states: Bolt slugs,
 // stage/artifact slugs, and space names are distinct domains that must be free
-// to tighten independently.
-export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+// to tighten independently. It lives with knownActiveSpace in
+// aidlc-runtime-paths.ts, which the status line reads without this module.
 // A record dir (`<YYMMDD>-<slug>`), slug, or uuid: one path-safe segment, so a
 // selector can never escape `aidlc/spaces/<space>/intents/` through a join.
 export const INTENT_SELECTOR_REGEX = /^[a-z0-9][a-z0-9-]*$/i;
@@ -3388,6 +3390,22 @@ export function codekbStoreGeneration(storeDir: string): string {
   return `sha256:${generation}`;
 }
 
+// The folder a repo's knowledge base describes. A registered repo is its
+// sibling folder under the workspace; with none registered the project root is
+// the one repo, even when it holds a folder of the same name (a Python package
+// named after its project, for one).
+export function codekbSourceRoot(projectDir: string, repo: string, space?: string): string {
+  let registered: string[];
+  try {
+    registered = intentRepos(projectDir, undefined, space);
+  } catch {
+    registered = [];
+  }
+  if (registered.length === 0) return projectDir;
+  const sibling = repoDir(projectDir, repo);
+  return existsSync(sibling) && statSync(sibling).isDirectory() ? sibling : projectDir;
+}
+
 // True only when the durable CodeKB store for `repo` carries a valid scope
 // block whose recorded fingerprint still matches the current source tree.
 // This is the programmatic form of `codekb-scope-diff`'s CURRENT verdict, used
@@ -3412,11 +3430,7 @@ export function codekbStoreIsCurrent(
     return false;
   }
   if (!parsed.ok || parsed.scope.fingerprint === null) return false;
-  const sibling = repoDir(projectDir, repo);
-  const sourceRoot =
-    existsSync(sibling) && statSync(sibling).isDirectory()
-      ? sibling
-      : projectDir;
+  const sourceRoot = codekbSourceRoot(projectDir, repo, sp);
   const current = codekbScopeFingerprint(
     sourceRoot,
     parsed.scope.analyzedPaths,

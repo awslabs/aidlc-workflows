@@ -12,6 +12,7 @@ import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
+  codekbRepoName,
   auditBlockField,
   markdownBlocks,
   attemptEventDefinitelyBefore,
@@ -1938,6 +1939,8 @@ function handleLink(args: string[]): void {
     error("Cannot resolve the active intent for pipeline link logging.");
   }
   const singleRun = flags.single === "true";
+  // The repo the receipt records (none for the project root).
+  let recordedRepo: string | null = null;
 
   try {
     withAuditLock(pd, () => {
@@ -1956,24 +1959,30 @@ function handleLink(args: string[]): void {
       }
 
       const evidence = pipelineLinkEvidence(pd, node, { singleRun });
+      // With no registered repo, the project root is the one repo, under the
+      // name codekb-path prints. The codekb commands take that name as --repo,
+      // so a receipt reads it as the root too.
+      const rootName = evidence.repos.length === 0 ? codekbRepoName(pd) : null;
+      const repoFlag = flags.repo !== undefined && flags.repo === rootName ? undefined : flags.repo;
       if (evidence.repos.length > 0) {
-        if (!flags.repo) {
+        if (!repoFlag) {
           throw new Error(
             `Cannot record pipeline link for "${flags.stage}": this intent records repository identity; pass --repo <repo>.`,
           );
         }
-        if (!evidence.repos.includes(flags.repo)) {
+        if (!evidence.repos.includes(repoFlag)) {
           throw new Error(
-            `Cannot record pipeline link for "${flags.stage}": repo "${flags.repo}" is not registered for this intent (${evidence.repos.join(", ")}).`,
+            `Cannot record pipeline link for "${flags.stage}": repo "${repoFlag}" is not registered for this intent (${evidence.repos.join(", ")}).`,
           );
         }
-      } else if (flags.repo) {
+      } else if (repoFlag) {
         throw new Error(
           `Cannot record pipeline link for "${flags.stage}": this intent has no registered repo identity; omit --repo.`,
         );
       }
 
-      const repo = flags.repo ?? null;
+      const repo = repoFlag ?? null;
+      recordedRepo = repo;
       if (evidence.receipts.some((receipt) =>
         receipt.link === flags.link && receipt.repo === repo
       )) {
@@ -2016,16 +2025,16 @@ function handleLink(args: string[]): void {
             "Cannot record reverse-engineering developer link: active intent record is unavailable.",
           );
         }
-        const expected = join(
-          root,
-          "inception",
-          "reverse-engineering",
-          repo ? `developer-scan-${repo}.md` : "developer-scan.md",
-        );
+        const handoffDir = join(root, "inception", "reverse-engineering");
+        // The root's handoff may also carry the root's name, as a registered
+        // repo's does.
+        const accepted = repo
+          ? [join(handoffDir, `developer-scan-${repo}.md`)]
+          : [join(handoffDir, "developer-scan.md"), join(handoffDir, `developer-scan-${rootName}.md`)];
         const artifact = resolve(pd, flags.artifact);
-        if (artifact !== expected) {
+        if (!accepted.includes(artifact)) {
           throw new Error(
-            `Cannot record reverse-engineering developer link: --artifact must resolve to ${toPosix(relative(pd, expected))}.`,
+            `Cannot record reverse-engineering developer link: --artifact must resolve to ${toPosix(relative(pd, accepted[0]))}.`,
           );
         }
         if (!existsSync(artifact)) {
@@ -2101,7 +2110,7 @@ function handleLink(args: string[]): void {
     emitted: "PIPELINE_LINK_COMPLETED",
     stage: flags.stage,
     link: flags.link,
-    ...(flags.repo ? { repo: flags.repo } : {}),
+    ...(recordedRepo ? { repo: recordedRepo } : {}),
     ...(singleRun ? { single: true } : {}),
   }));
 }
