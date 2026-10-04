@@ -767,6 +767,7 @@ export async function driveAidlc(
     } else {
       turn++;
       writeSdkTrace(tracePath, "next_message", { turn, message: next });
+      personTurns.sent(next);
       input.send(next);
     }
   };
@@ -842,7 +843,9 @@ export async function driveAidlc(
             const chat = opts.chatAboutQuestionWhen?.({ questions, answers: {} }) === true;
             const answers = chat ? {} : buildAnswers(questions, answerScript, askMenuIndex);
             askMenuIndex++;
-            personTurns.sent(JSON.stringify(answers));
+            // "Chat about this" answers nothing: the person's reply comes in
+            // their next message.
+            if (!chat) personTurns.sent(JSON.stringify(answers));
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
             if (chat) {
