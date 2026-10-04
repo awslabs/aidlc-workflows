@@ -1761,6 +1761,14 @@ function agentDisplayName(slug: string): string | null {
   return /^[a-z0-9][a-z0-9-]{0,79}$/.test(slug) ? "a custom agent" : null;
 }
 
+// A stage as status names it. A plugin's display name is the plugin's own
+// text, so its stage is named by its slug, the name the person types to go
+// there; a slug of any other shape is not shown.
+function stageDisplayName(stage: StageEntry): string | null {
+  if (stage.plugin === undefined) return stage.name;
+  return /^[a-z0-9][a-z0-9-]{0,79}$/.test(stage.slug) ? stage.slug : null;
+}
+
 // An engine timestamp as a person reads it: the date and the minute, in UTC.
 function plainUtc(timestamp: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp)
@@ -1832,9 +1840,11 @@ To get started:
     : agentDisplayName(agentSlug);
   const lastStage = findStageBySlug((getField(content, "Last Completed Stage") ?? "").trim());
   const nextNode = findStageBySlug((getField(content, "Next Stage") ?? "").trim());
+  const lastName = lastStage === undefined || lastStage.phase === "initialization" ? null : stageDisplayName(lastStage);
+  const nextName = nextNode === undefined ? null : stageDisplayName(nextNode);
   const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
-  const lastLine = lastStage === undefined || lastStage.phase === "initialization" ? "" : `Last Completed: ${lastStage.name}\n`;
-  const nextLine = nextNode === undefined ? "" : `Next Stage:     ${nextNode.name}\n`;
+  const lastLine = lastName === null ? "" : `Last Completed: ${lastName}\n`;
+  const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
   let guardPolicyDisplay: string;
