@@ -135,6 +135,10 @@ export type PluginInput = {
         body: { parts: Array<{ type: "text"; text: string; synthetic?: boolean }> };
       }) => Promise<unknown>;
     };
+    // opencode's merged settings; `shell` names the shell bash-tool commands run in.
+    config?: {
+      get: () => Promise<{ data?: { shell?: unknown } | undefined }>;
+    };
     // opencode's SDK client exposes the TUI toast (`POST /tui/show-toast`);
     // optional because a headless `opencode run` has no TUI to show it on.
     tui?: {
@@ -162,21 +166,36 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
   : null;
 
-// opencode runs bash-tool commands with the configured shell, else /bin/sh on
-// POSIX and COMSPEC (cmd.exe) on Windows. The forms below read the same in
-// every POSIX shell; cmd.exe and PowerShell read a backslash and a line break
-// differently, so there they stay refused.
-const POSIX_SHELL = process.platform !== "win32";
+// opencode runs bash-tool commands with its `shell` setting, else /bin/sh on
+// POSIX and COMSPEC (cmd.exe) on Windows. The boundary reads a command the way
+// that shell would: "posix" for sh, bash, dash, zsh and ksh; "strict" for
+// anything else, including cmd.exe, PowerShell, and a shell it cannot learn.
+export type ShellDialect = "posix" | "strict";
+
+const POSIX_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+
+/** `configured` is the `shell` setting, null when unset, false when unreadable. */
+function shellDialect(configured: string | null | false): ShellDialect {
+  if (configured === false) return "strict";
+  if (configured === null || configured.trim() === "") {
+    return process.platform === "win32" ? "strict" : "posix";
+  }
+  const name = configured.trim().replaceAll("\\", "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
+  return POSIX_SHELLS.has(name) ? "posix" : "strict";
+}
 
 /**
- * Parse one expansion-free shell command into argv the way a POSIX shell reads
- * it, or reject shell syntax. An argument may carry apostrophes and line
- * breaks in the usual forms: single quotes (with '\'' or '"'"' for an
- * apostrophe), double quotes, and backslash escapes. Each stays one word
- * handed to the tool. Chaining, redirection, expansion, command substitution,
- * and $'...' (which /bin/sh may not read as one word) are refused.
+ * Parse one expansion-free shell command into argv, or reject shell syntax.
+ * Under a POSIX shell an argument may carry apostrophes and line breaks in the
+ * usual forms: single quotes (with '\'' or '"'"' for an apostrophe), double
+ * quotes, and backslash escapes. Each stays one word handed to the tool.
+ * Chaining, redirection, expansion, command substitution, line continuations
+ * and $'...' (which /bin/sh may not read as one word) are refused. Under any
+ * other shell only plain words and double-quoted text are read, because
+ * cmd.exe and PowerShell disagree about single quotes and backslashes.
  */
-function directShellWords(command: string): string[] | null {
+function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
+  const posix = dialect === "posix";
   const words: string[] = [];
   let word = "";
   let wordStarted = false;
@@ -193,37 +212,35 @@ function directShellWords(command: string): string[] | null {
         quote = null;
         continue;
       }
-      if (ch === "\\" && i + 1 < command.length) {
+      if (ch === "`" || ch === "$") return null;
+      if (posix && ch === "\\" && i + 1 < command.length) {
         const next = command[i + 1];
-        if (next === "\n" || next === "\r") {
-          if (!POSIX_SHELL) return null;
-          if (next === "\n") {
-            i++;
-            continue;
-          }
-        }
+        if (next === "\n" || next === "\r") return null;
         if (next === "$" || next === "`" || next === '"' || next === "\\") {
           word += next;
           i++;
           continue;
         }
-        word += ch;
-        continue;
       }
-      if (ch === "`" || ch === "$") return null;
-      if ((ch === "\n" || ch === "\r") && !POSIX_SHELL) return null;
+      if (!posix && (ch === "\n" || ch === "\r" || ch === "%" || ch === "!")) return null;
       word += ch;
       continue;
     }
-    if (ch === "'" || ch === '"') {
+    if (ch === '"') {
+      quote = ch;
+      wordStarted = true;
+      continue;
+    }
+    if (ch === "'") {
+      if (!posix) return null;
       quote = ch;
       wordStarted = true;
       continue;
     }
     if (ch === "\\") {
-      if (!POSIX_SHELL || i + 1 >= command.length) return null;
+      if (!posix || i + 1 >= command.length) return null;
       const next = command[++i];
-      if (next === "\n") continue;
+      if (next === "\n" || next === "\r") return null;
       word += next;
       wordStarted = true;
       continue;
@@ -248,7 +265,8 @@ function directShellWords(command: string): string[] | null {
       ch === "(" ||
       ch === ")" ||
       ch === "<" ||
-      ch === ">"
+      ch === ">" ||
+      (!posix && (ch === "%" || ch === "!" || ch === "^" || ch === "{" || ch === "}" || ch === "@"))
     ) {
       return null;
     }
@@ -264,9 +282,10 @@ function directShellWords(command: string): string[] | null {
 function aidlcBashBoundaryViolation(
   command: string,
   allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
+  dialect: ShellDialect = "posix",
 ): string | null {
   if (/^aidlc(?:[ \t]|$)/.test(command)) {
-    const words = directShellWords(command);
+    const words = directShellWords(command, dialect);
     if (words?.[0] === "aidlc") return null;
     return (
       "AIDLC bash permission allows one direct invocation of a framework tool only. " +
@@ -277,7 +296,7 @@ function aidlcBashBoundaryViolation(
     return null;
   }
   if (!AIDLC_BUN_PREFIX.test(command)) return null;
-  const words = directShellWords(command);
+  const words = directShellWords(command, dialect);
   const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
   if (
     words?.[0] === "bun" &&
@@ -433,6 +452,21 @@ export default async ({
   // What the person typed through /aidlc, by session, set by opencode's own
   // command hook. Only the message carrying the part it added reads it.
   const typedCommands = new Map<string, string>();
+  // The shell opencode runs bash-tool commands in, read once from its settings.
+  // An unreadable setting reads every command strictly and is asked again.
+  let dialect: ShellDialect | null = null;
+  async function currentShellDialect(): Promise<ShellDialect> {
+    if (dialect !== null) return dialect;
+    if (!client.config) return shellDialect(null);
+    try {
+      const settings = (await client.config.get()).data;
+      if (!settings) return shellDialect(false);
+      dialect = shellDialect(typeof settings.shell === "string" ? settings.shell : null);
+      return dialect;
+    } catch {
+      return shellDialect(false);
+    }
+  }
 
   // The guards judge the workflow of a bound session. A child (task-tool)
   // session skips SessionStart and has no binding, so send the main session
@@ -574,7 +608,7 @@ export default async ({
           : null;
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
-        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
+        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints, await currentShellDialect());
         if (violation) throw new Error(violation);
         // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
         // wiring. The state CLI's ownership check remains the hard floor; this

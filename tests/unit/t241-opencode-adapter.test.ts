@@ -363,13 +363,14 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     });
     const invoke = (callID: string, command: string) =>
       adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
-    await expect(
-      invoke("ok-dq-apostrophe", `bun .aidlc/tools/aidlc.ts engine orchestrate next '${SPEC.replaceAll("'", `'"'"'`)}'`),
-    ).resolves.toBeUndefined();
-    // A backslash or a line break in double quotes reads differently in
-    // cmd.exe and PowerShell, so these start only where the shell is POSIX.
+    // With no shell set, opencode runs /bin/sh on POSIX and cmd.exe on Windows.
     const posix = process.platform !== "win32";
-    for (const [i, command] of [START_SINGLE, START_DOUBLE, "aidlc engine orchestrate next today\\'s\\ rooms"].entries()) {
+    for (const [i, command] of [
+      START_SINGLE,
+      START_DOUBLE,
+      `bun .aidlc/tools/aidlc.ts engine orchestrate next '${SPEC.replaceAll("'", `'"'"'`)}'`,
+      "aidlc engine orchestrate next today\\'s\\ rooms",
+    ].entries()) {
       if (posix) await expect(invoke(`ok-${i}`, command)).resolves.toBeUndefined();
       else await expect(invoke(`ok-${i}`, command)).rejects.toThrow("one direct invocation");
     }
@@ -382,11 +383,57 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"today's $(touch /tmp/x)\"",
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"today's `touch /tmp/x`\"",
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"$HOME\"",
-      "bun .aidlc/tools/aidlc.ts engine orchestrate next $'today\\'s rooms\; touch /tmp/x'",
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next $'today\\'s rooms\\; touch /tmp/x'",
       "aidlc engine orchestrate next today\\' ; touch /tmp/x",
+      // A line continuation: the shell joins the lines, the later guards do not.
+      "aidlc engine orchestrate next today\\\naidlc engine state approve",
+      "aidlc engine orchestrate next \"today\\\naidlc engine state approve\"",
     ].entries()) {
       await expect(invoke(`no-${i}`, command)).rejects.toThrow("one direct invocation");
     }
+  });
+
+  test("the boundary reads a command the way the shell opencode is set to use reads it", async () => {
+    const root = freshProject();
+    const adapterWith = async (config: PluginInput["client"]["config"]) => {
+      const { client } = fakeClient();
+      const adapter = await createAdapter({
+        client: { ...client, config },
+        directory: root,
+        aidlcEntrypoints: new Set([...TEST_ENTRYPOINTS, "tools/aidlc.ts"]),
+        aidlcCommand: TEST_AIDLC_COMMAND,
+      });
+      return (callID: string, command: string) =>
+        adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
+    };
+    const plain = 'bun .aidlc/tools/aidlc.ts engine orchestrate next --scope feature "Staff see today\'s rooms"';
+    // cmd.exe reads a single quote as a plain character and PowerShell as a
+    // quote, and neither reads a backslash as an escape: under them, and when
+    // the setting cannot be read, only plain words and double-quoted text pass.
+    for (const config of [
+      { get: async () => ({ data: { shell: "pwsh" } }) },
+      { get: async () => ({ data: { shell: "C:\\Windows\\System32\\cmd.exe" } }) },
+      { get: async () => ({ data: undefined }) },
+      { get: async () => { throw new Error("offline"); } },
+    ]) {
+      const invoke = await adapterWith(config);
+      await expect(invoke("strict-plain", plain)).resolves.toBeUndefined();
+      for (const [i, command] of [
+        START_SINGLE,
+        START_DOUBLE,
+        "aidlc engine orchestrate next today\\'s",
+        "aidlc engine orchestrate next a\\;b",
+        "aidlc engine orchestrate next '\"' ; touch x ; '\"'",
+        "aidlc engine orchestrate next \"a\\\" ; touch x ; \\\"\"",
+        "aidlc engine orchestrate next \"%PATH%\"",
+      ].entries()) {
+        await expect(invoke(`strict-${i}`, command)).rejects.toThrow("one direct invocation");
+      }
+    }
+    // A POSIX shell set by path reads the usual quoting.
+    const bash = await adapterWith({ get: async () => ({ data: { shell: "C:\\Program Files\\Git\\bin\\bash.exe" } }) });
+    await expect(bash("posix-single", START_SINGLE)).resolves.toBeUndefined();
+    await expect(bash("posix-double", START_DOUBLE)).resolves.toBeUndefined();
   });
 
   test.skipIf(process.platform === "win32")("/bin/sh hands the tool those quoted requests as one argument, unchanged", () => {
