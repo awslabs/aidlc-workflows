@@ -3803,16 +3803,17 @@ function intentPickPromptIfRecordsExist(
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
   const entry = entrySkillInvocation();
-  // Where each stands; work whose record cannot be selected here is counted,
-  // never named.
-  const hidden = intents.length - selectable.length;
+  // Where each stands. Work whose record folder is here but whose name cannot
+  // be selected is counted, never named; a registry row whose folder is not in
+  // this checkout is neither.
+  const hidden = presentCount - selectable.length;
   const unlisted = hidden > 0 ? ` (${hidden} more ${hidden === 1 ? "has a record name that cannot" : "have record names that cannot"} be selected here)` : "";
-  const question = intents.length === 1
+  const question = presentCount === 1
     ? `This project has one piece of work in progress${spaceLabel}: ${list}. Pick it up to carry on.`
-    : `This project has ${intents.length} pieces of work in progress${spaceLabel}, and none is selected here: ${list}${unlisted}. ` +
+    : `This project has ${presentCount} pieces of work in progress${spaceLabel}, and none is selected here: ${list}${unlisted}. ` +
       "Pick one to carry on.";
   return intentPickAskDirective(
-    `${question} ${intents.length === 1 ? "Picking it up" : "Picking one"} selects it; then \`${entry}\` carries on where it left off.`,
+    `${question} ${presentCount === 1 ? "Picking it up" : "Picking one"} selects it; then \`${entry}\` carries on where it left off.`,
     selectors,
   );
 }
