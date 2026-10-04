@@ -233,9 +233,9 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     expect(parsed.additionalContext).toContain("send the first `next` as `next --resume`");
     // The hint is the recovery protocol's one SAY line; the request is typed.
     expect(parsed.additionalContext).toContain("including its one SAY line");
-    expect(parsed.additionalContext).toContain(
-      'report --result resumed --choice <redo|jump|fresh> --user-input "<their words>"',
-    );
+    expect(parsed.additionalContext).toContain("report --result resumed --choice <redo|jump|fresh>");
+    // None of the person's words travel in that command.
+    expect(parsed.additionalContext).not.toContain('--user-input "<their words>"');
     expect(parsed.additionalContext).toContain("`/aidlc` alone -> `next --resume`");
     expect(parsed.additionalContext).not.toContain("Resume / Redo / Jump / Start Fresh");
     expect(parsed.additionalContext).not.toContain("offer the user the standard resume options");

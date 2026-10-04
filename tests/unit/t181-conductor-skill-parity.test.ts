@@ -1367,6 +1367,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /Redo menu/,
         /Offer to resume from the last incomplete stage/i,
         /result resumed --user-input/,
+        /choice <redo\|jump\|fresh> --user-input/,
+        /--description "<the new work>"/,
       ]) {
         if (old.test(text)) stale.push(`${rel}  ${old.source}`);
       }
@@ -1377,7 +1379,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   test("a re-entry request is typed by the conductor and the hint is one SAY line", () => {
     // The conductor reads redo, jump, or start fresh from the person's words and
     // passes the choice; the engine never classifies their words.
-    const typed = 'report --result resumed --choice <redo|jump|fresh> --user-input "<their words>"';
+    const typed = "report --result resumed --choice <redo|jump|fresh>` with the choice you read from their words";
     const missing = skills.filter((rel) => !readFileSync(join(REPO_ROOT, rel), "utf-8").includes(typed));
     expect(missing).toEqual([]);
     const recovery = readFileSync(
@@ -1387,7 +1389,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(recovery).toContain(
       '**SAY:** "Say redo, jump to a stage, or start fresh if you\'d rather."',
     );
-    expect(recovery).toContain("--choice <redo|jump|fresh>");
+    expect(recovery).toContain("--choice <redo|jump|fresh>`");
+    expect(recovery).toContain("at an approval gate too");
     expect(recovery).not.toContain("Offer to resume from the last incomplete stage");
   });
 });

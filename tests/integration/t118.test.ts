@@ -428,14 +428,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(unknown.kind).toBe("error");
     expect(unknown.message).toContain('No stage is named "no-such-stage"');
 
-    const fresh = report("--choice", "fresh", "--description", "a CSV export for the reports page",
-      ...words("forget this, I want a CSV export for the reports page"));
+    // A fresh start carries none of the person's words: the new work starts the
+    // way new work always does, with their description quoted shell-safe.
+    const fresh = report("--choice", "fresh");
     expect(fresh.kind).toBe("print");
-    expect(fresh.message).toContain("Run `next --new-intent 'a CSV export for the reports page'`");
+    expect(fresh.message).toContain("run `next --new-intent` with their description as one single-quoted argument");
+    expect(fresh.message).toContain("ask them if they have not");
     expect(fresh.message).not.toContain("<scope>");
-
-    const freshUnsaid = report("--choice", "fresh", ...words("start over"));
-    expect(freshUnsaid.message).toContain("Ask the person what the new work is");
 
     const redo = report("--choice", "redo", ...words("do this one again please"));
     expect(redo.message).toContain("--direction redo");
@@ -446,6 +445,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const wrong = report("--choice", "sideways", ...words("hmm"));
     expect(wrong.kind).toBe("error");
     expect(wrong.message).toContain('Unknown --choice "sideways"');
+
+    // A stage goes only with a jump: a redo never quietly drops the stage it was given.
+    const redoWithTarget = report("--choice", "redo", "--target", "requirements-analysis");
+    expect(redoWithTarget.kind).toBe("error");
+    expect(redoWithTarget.message).toContain("--target goes only with --choice jump");
+    // The choice alone is enough; the person's words are not needed in the command.
+    expect(report("--choice", "resume").message).toContain("Re-run `next`");
 
     // The typed flags belong only to a re-entry request.
     const misplaced = directive(run(ORCHESTRATE, [

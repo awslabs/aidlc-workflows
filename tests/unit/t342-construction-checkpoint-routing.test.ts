@@ -1295,6 +1295,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(jump.message).toContain("tell the person in one line what was skipped");
       // The way back starts at the earliest step it skips, not the first per-unit stage.
       expect(jump.message).toContain("--stage code-generation` reopens it");
+      // One way back only: the jump's generic notice is not relayed as well.
+      expect(jump.message).not.toContain("carries `notice`");
       expect(jump.message).not.toContain("nothing needs skipping");
       expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     }

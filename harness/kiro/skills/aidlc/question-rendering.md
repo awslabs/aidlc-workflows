@@ -170,7 +170,7 @@ claim contract and
 `execute-remedy` follows only the human-selected executable guard remedy's
 command or action; empty remedies remain terminal. These routes do not fall
 back to reporting an ask answer. A redo, jump, or start-fresh request on re-entry alone
-uses non-stage `report --result resumed --choice <redo|jump|fresh> --user-input "<their words>"`; explicit
+uses non-stage `report --result resumed --choice <redo|jump|fresh>`; explicit
 guard-remedy stage reports retain their existing contract.
 
 ## Mandatory consolidated-summary checkpoint

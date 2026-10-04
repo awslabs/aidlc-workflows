@@ -10955,10 +10955,9 @@ interface ReportFlags {
   unit?: string; // --unit <name>: required for team-owned per-unit gates
   park?: boolean; // --park: the person also asked to stop here for now
   // A re-entry request (--result resumed): the choice the conductor read from
-  // the person's words, the stage they named, the new work they described.
+  // the person's words, and the stage they named for a jump.
   choice?: string;
   target?: string;
-  description?: string;
   parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
 
@@ -10978,7 +10977,6 @@ const REPORT_FLAGS = [
   "--park",
   "--choice",
   "--target",
-  "--description",
 ] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
@@ -11039,9 +11037,6 @@ function parseReportFlags(args: string[]): ReportFlags {
     } else if (a === "--target" && i + 1 < args.length) {
       flags.target = args[i + 1];
       i++;
-    } else if (a === "--description" && i + 1 < args.length) {
-      flags.description = args[i + 1];
-      i++;
     } else if (a === "--single") {
       flags.single = true;
     } else if (a === "--override-blocking-sensors") {
@@ -11068,8 +11063,7 @@ function parseReportFlags(args: string[]): ReportFlags {
       missingValue(a, "<resume|redo|jump|fresh>");
     } else if (a === "--target") {
       missingValue(a, "a stage name");
-    } else if (a === "--description") {
-      missingValue(a, "the new work, in the person's words");
+
     } else if (a !== "--") {
       refuse(
         `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}. ` +
@@ -12060,9 +12054,9 @@ function handleResumeReport(
     ));
     return;
   }
-  if (!flags.userInput?.trim()) {
+  if (flags.choice === undefined && !flags.userInput?.trim()) {
     emit(errorDirective(
-      "report --result resumed requires --user-input with the human's resume choice.",
+      "report --result resumed requires --choice <resume|redo|jump|fresh>, the choice you read from the person's words.",
     ));
     return;
   }
@@ -12094,7 +12088,7 @@ function handleResumeReport(
     "3": "jump to a stage",
     "4": "start fresh",
   };
-  const rawChoice = flags.userInput.trim().toLowerCase();
+  const rawChoice = (flags.userInput ?? "").trim().toLowerCase();
   const choice = numericChoices[rawChoice] ?? rawChoice;
   if (choice.includes("redo")) {
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
@@ -12136,8 +12130,9 @@ function handleResumeReport(
 }
 
 // A redo, jump, or start-fresh request on re-entry, typed by the conductor
-// from the person's own words (--user-input keeps them). Each print names the
-// whole command, or the one thing to ask when the person left it out.
+// from the person's own words; none of their words travel in the command. Each
+// print names the whole command, or the one thing to ask when the person left
+// it out.
 function emitTypedResumeChoice(
   flags: ReportFlags,
   pd: string,
@@ -12146,6 +12141,10 @@ function emitTypedResumeChoice(
 ): void {
   const choice = flags.choice?.trim().toLowerCase() ?? "";
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
+  if (flags.target !== undefined && choice !== "jump") {
+    emit(errorDirective("--target goes only with --choice jump: it names the stage to jump to."));
+    return;
+  }
   if (choice === "resume") {
     emit(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
@@ -12179,15 +12178,8 @@ function emitTypedResumeChoice(
     return;
   }
   if (choice === "fresh") {
-    const description = flags.description?.trim() ?? "";
-    if (!description) {
-      emit(printDirective(
-        "Ask the person what the new work is, then report again with `--choice fresh --description \"<their words>\"`.",
-      ));
-      return;
-    }
     emit(printDirective(
-      `Start-fresh accepted. Run \`next --new-intent ${shellArg(description)}\`; the work in progress stays as it is, and the new work starts alongside it.`,
+      "Start-fresh accepted. When the person has said what the new work is (ask them if they have not), run `next --new-intent` with their description as one single-quoted argument, quoted the way the engine's own commands quote a person's words; the work in progress stays as it is, and the new work starts alongside it.",
     ));
     return;
   }
@@ -12282,11 +12274,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   // A resume ask has no stage and commits no lifecycle outcome. Accept the
   // natural verdict used by conductors, then return to next without mutation.
-  const resumeRequest =
-    flags.choice !== undefined || flags.target !== undefined || flags.description !== undefined;
+  const resumeRequest = flags.choice !== undefined || flags.target !== undefined;
   if (resumeRequest && !(flags.result && RESUME_RESULTS.has(flags.result))) {
     emit(errorDirective(
-      "--choice, --target and --description go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
+      "--choice and --target go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
     ));
     return;
   }
