@@ -30,7 +30,8 @@
 // hook's run-mode-aware no-progress ceiling; this shim never counts. The
 // prompt's part is synthetic, so the agent reads it and the person's chat does
 // not show it. After the person stops a turn (Esc, a session.error
-// MessageAbortedError) no nudge is sent until they write again.
+// MessageAbortedError) or rejects a command (permission.replied "reject"), no
+// nudge is sent until they write again.
 //
 // /aidlc: opencode's command.execute.before names the command and its
 // arguments. This plugin shows the person what they typed instead of the
@@ -395,8 +396,9 @@ export default async ({
   const mainSession = new Map<string, boolean>();
   const sessionAgent = new Map<string, string>();
   const idleInFlight = new Set<string>();
-  // Main sessions whose turn the person stopped (Esc). The person stopped on
-  // purpose, so the idle that follows sends no nudge until they write again.
+  // Main sessions whose turn the person stopped (Esc) or in which they rejected
+  // a command. The person stopped on purpose, so the idle that follows sends no
+  // nudge until they write again.
   const interrupted = new Set<string>();
   // What the person typed through /aidlc, by session, set by opencode's own
   // command hook. Only the message carrying the part it added reads it.
@@ -441,6 +443,22 @@ export default async ({
       // transient failure; a later event gets a fresh lookup.
       return false;
     }
+  }
+
+  // The main session a helper's session works for: a command rejected there
+  // stops the person's turn too.
+  async function mainSessionOf(sessionID: string): Promise<string> {
+    let id = sessionID;
+    for (let hop = 0; hop < 8; hop++) {
+      try {
+        const parent = (await client.session.get({ path: { id } })).data?.parentID;
+        if (!parent) return id;
+        id = parent;
+      } catch {
+        return id;
+      }
+    }
+    return id;
   }
 
   return {
@@ -799,6 +817,13 @@ export default async ({
         const sessionID = (event.properties?.sessionID as string) ?? "";
         const error = event.properties?.error as { name?: unknown } | undefined;
         if (sessionID && error?.name === "MessageAbortedError") interrupted.add(sessionID);
+        return;
+      }
+      if (event.type === "permission.replied") {
+        const sessionID = (event.properties?.sessionID as string) ?? "";
+        // opencode 1.18 names the answer `reply`; earlier releases `response`.
+        const answer = event.properties?.reply ?? event.properties?.response;
+        if (sessionID && answer === "reject") interrupted.add(await mainSessionOf(sessionID));
         return;
       }
       if (event.type !== "session.idle") return;

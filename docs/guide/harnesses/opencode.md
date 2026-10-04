@@ -164,7 +164,8 @@ the project.
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
   (marked with a sentinel so it never mints human presence). The nudge is a
   synthetic part: the agent reads it, and your chat does not show it. When you
-  stop a turn with Esc, no nudge follows until you write again. A chatting or
+  stop a turn with Esc, or reject a command the agent asked to run, no nudge
+  follows until you write again. A chatting or
   pausing human is released by the hook's interactive cap.
 - **`/aidlc` shows what you typed.** opencode would show the command's whole
   template as your message; the plugin keeps the template for the agent and
