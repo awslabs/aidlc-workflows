@@ -94,6 +94,9 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
+// The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
+export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
+
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
 // The dispatcher's global flags: `aidlc` drops them wherever they appear
 // before `--`, then routes what remains.

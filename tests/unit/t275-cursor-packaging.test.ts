@@ -50,7 +50,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { copyChannelToolScripts, machineReachingTools } from "../../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -222,22 +222,20 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
 
   const SHIPPED_ALLOW = [
     "Shell(bun:.cursor/tools/aidlc.ts engine *)",
-    "Shell(bun:.cursor/tools/aidlc.ts config *)",
-    "Shell(bun:.cursor/tools/aidlc.ts --doctor*)",
-    "Shell(bun:.cursor/tools/aidlc.ts status*)",
-    ...copyChannelToolScripts().map((tool) => `Shell(bun:.cursor/tools/${tool}*)`),
+    ...copyChannelDispatcherCommands().map((command) => `Shell(bun:.cursor/tools/aidlc.ts ${command})`),
+    ...copyChannelToolScripts().flatMap((tool) => [`Shell(bun:.cursor/tools/${tool})`, `Shell(bun:.cursor/tools/${tool} *)`]),
   ];
-  const SHIPPED_DENY = ["--pin", "--unpin", "--channel", "--download", "--global"]
-    .map((flag) => `Shell(bun:.cursor/tools/aidlc.ts config *${flag}*)`);
+  const SHIPPED_DENY: string[] = [];
 
   test("6: cli.json pre-approves only AI-DLC's own workflow commands at the project level", () => {
     const cli = JSON.parse(readFileSync(join(ENGINE, "cli.json"), "utf-8")) as {
       permissions?: { allow?: string[]; deny?: string[] };
     };
     // Project-level cli.json is permissions-only (Cursor's documented
-    // contract); the shipped allowlist is the dispatcher's engine, config,
-    // doctor and status commands and each of AI-DLC's tool scripts but the
-    // ones behind a machine-changing command, nothing else bun can run.
+    // contract); the shipped allowlist is the dispatcher's engine namespace,
+    // its doctor, version, status and read-only config forms exactly as
+    // AI-DLC runs them, and each of AI-DLC's tool scripts but the ones behind
+    // a machine-changing command, nothing else bun can run.
     expect(cli.permissions?.allow).toEqual(SHIPPED_ALLOW);
     expect(cli.permissions?.deny).toEqual(SHIPPED_DENY);
     expect(machineReachingTools()).toEqual(expect.arrayContaining(["aidlc-lifecycle.ts", "aidlc-machine-config.ts"]));
@@ -263,15 +261,18 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     return hits(cli.allow) ? "allow" : "ask";
   }
 
-  test("6b: AI-DLC's own commands run with no prompt; a machine-changing one shows Cursor's prompt or is refused", () => {
+  test("6b: AI-DLC's own commands run with no prompt; anything that changes the machine or a setting shows Cursor's prompt", () => {
     const cli = { allow: SHIPPED_ALLOW, deny: SHIPPED_DENY };
     for (const command of [
       "bun .cursor/tools/aidlc.ts engine orchestrate next",
       "bun .cursor/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'",
-      "bun .cursor/tools/aidlc.ts config depth --show --json",
-      "bun .cursor/tools/aidlc.ts config models --deciding-effort high --project --yes",
+      "bun .cursor/tools/aidlc.ts config models --show --json",
+      "bun .cursor/tools/aidlc.ts config providers --help",
+      "bun .cursor/tools/aidlc.ts doctor",
+      "bun .cursor/tools/aidlc.ts version",
       "bun .cursor/tools/aidlc.ts --doctor",
       "bun .cursor/tools/aidlc.ts status",
+      "bun .cursor/tools/aidlc-utility.ts",
       "bun .cursor/tools/aidlc-utility.ts codekb-path",
       "bun .cursor/tools/aidlc-log.ts answers --stage x",
     ]) {
@@ -286,24 +287,24 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc.ts system config global set offline on",
       "bun .cursor/tools/aidlc.ts --yes update",
       ...machineReachingTools().map((tool) => `bun .cursor/tools/${tool} use 2.10.0`),
-    ]) {
-      expect(cursorShellEffect(cli, command), command).toBe("ask");
-    }
-    // A config flag that reaches the whole machine, wherever it sits, is
-    // refused, and the skill hands the person that one command.
-    for (const command of [
+      // Any config change, a machine-wide flag however it is spelled included,
+      // and a read that only looks like the shipped forms.
       "bun .cursor/tools/aidlc.ts config --pin 2.10.0",
       "bun .cursor/tools/aidlc.ts config --unpin",
+      "bun .cursor/tools/aidlc.ts config --channel",
       "bun .cursor/tools/aidlc.ts config --channel preview",
       "bun .cursor/tools/aidlc.ts config project --plugins all --download --yes",
       "bun .cursor/tools/aidlc.ts config models --deciding-effort high --global --yes",
+      'bun .cursor/tools/aidlc.ts config models --deciding-effort high --gl"obal" --yes',
+      "bun .cursor/tools/aidlc.ts config models --deciding-effort high --project --yes",
+      "bun .cursor/tools/aidlc.ts config models --show --json --global",
+      "bun .cursor/tools/aidlc.ts doctor --fix",
+      // A file whose name only starts with a tool script's.
+      "bun .cursor/tools/aidlc-log.tsx answers --stage x",
+      "bun .cursor/tools/aidlc-log.ts.bak answers --stage x",
     ]) {
-      expect(cursorShellEffect(cli, command), command).toBe("deny");
+      expect(cursorShellEffect(cli, command), command).toBe("ask");
     }
-    const skill = readFileSync(join(ENGINE, "skills", "aidlc", "SKILL.md"), "utf-8");
-    expect(skill).toContain(
-      "If Cursor refuses an AI-DLC `config` command that changes the whole machine (one holding `--pin`, `--unpin`, `--channel`, `--download`, or `--global`), never try it another way: give the person that one command to run in their own terminal.",
-    );
   });
 
   test("7: shipped cursor prose names no other harness's engine dir", () => {

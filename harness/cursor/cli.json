@@ -2,17 +2,8 @@
   "permissions": {
     "allow": [
       "Shell(bun:.cursor/tools/aidlc.ts engine *)",
-      "Shell(bun:.cursor/tools/aidlc.ts config *)",
-      "Shell(bun:.cursor/tools/aidlc.ts --doctor*)",
-      "Shell(bun:.cursor/tools/aidlc.ts status*)",
       "Shell(bun:.cursor/tools/aidlc-*)"
     ],
-    "deny": [
-      "Shell(bun:.cursor/tools/aidlc.ts config *--pin*)",
-      "Shell(bun:.cursor/tools/aidlc.ts config *--unpin*)",
-      "Shell(bun:.cursor/tools/aidlc.ts config *--channel*)",
-      "Shell(bun:.cursor/tools/aidlc.ts config *--download*)",
-      "Shell(bun:.cursor/tools/aidlc.ts config *--global*)"
-    ]
+    "deny": []
   }
 }

@@ -205,14 +205,13 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 - **Tab autocomplete is untouched** by this install - it rides Cursor's own
   models regardless of configuration.
 - **Permissions**: `.cursor/cli.json` pre-approves only AI-DLC's own workflow
-  commands: its engine, `config`, `--doctor` and `status` commands and its
-  `aidlc-*.ts` tools (a project-level `cli.json` carries permissions only).
-  Every other shell command follows your Cursor approval settings, including
-  the commands that change the machine's AI-DLC install (`use`, `update`,
-  `rollback`, `uninstall`, `system`) and the tool scripts behind them. On the
-  copy channel, Cursor refuses a `config` command that changes the whole
-  machine (`--pin`, `--unpin`, `--channel`, `--download`, `--global`); run that
-  one in your own terminal.
+  commands: its engine commands, `doctor`, `version`, `status`, the read-only
+  `config <section> --show --json` and `--help` forms, and its `aidlc-*.ts`
+  tools (a project-level `cli.json` carries permissions only). Every other
+  shell command follows your Cursor approval settings, including a `config`
+  change, the commands that change the machine's AI-DLC install (`use`,
+  `update`, `rollback`, `uninstall`, `system`), and the tool scripts behind
+  them.
 - **MCP servers**: none ship; configure your own under `.cursor/mcp.json` if
   needed.
 - **Headless `agent -p` runs cannot pass approval gates.** The human-presence

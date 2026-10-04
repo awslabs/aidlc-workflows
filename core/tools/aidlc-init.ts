@@ -19,6 +19,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 import { extractTarGz } from "./aidlc-archive.ts";
 import {
+  CONFIG_SECTIONS,
   EXIT,
   type CommandResult,
   emitResult,
@@ -486,14 +487,7 @@ const MODELS_BARE_FLAGS = new Set([
   "--yes",
 ]);
 
-const VALID_CONFIG_SECTIONS = new Set([
-  "models",
-  "runtime",
-  "providers",
-  "trust",
-  "flags",
-  "project",
-]);
+const VALID_CONFIG_SECTIONS = new Set<string>(CONFIG_SECTIONS);
 
 const ROOT_CONFIG_FLAGS = new Set([
   "--ca-bundle",
