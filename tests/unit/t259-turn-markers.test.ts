@@ -1,4 +1,4 @@
-// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath
+// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markAskTurnEnd, function:askTurnEndIsOpen, function:askTurnEndMarkerPath
 //
 // The turn-shape marker family: the transcript-free reading of the Stop hook's
 // tier-3 conversational carve-out. On harnesses that deliver no
@@ -254,7 +254,7 @@ describe("t259 the engine's last word was a question for the person", () => {
   test("the Stop hook lets the turn end at the new-work question, and nudges again once other work is handed out", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);
-    const env = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env[STOP_HOOK_PROBE_ENV];
     const run = (args: string[], input?: string) =>
       spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
