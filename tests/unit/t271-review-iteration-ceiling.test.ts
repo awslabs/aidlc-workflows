@@ -1898,13 +1898,49 @@ describe("t271 review iteration ceiling", () => {
     // The first reviewer, cut off earlier, writes its review of the old bytes late.
     const late = join(proj, firstSlot);
     mkdirSync(dirname(late), { recursive: true });
-    writeFileSync(late, "## Review\n\n**Verdict:** READY\n\nReviewed the old requirements.\n", "utf-8");
+    writeFileSync(late, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
     const stale = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
     expect(stale.status).not.toBe(0);
     expect(stale.stderr).toContain("no review was written for iteration 1");
     expect(stale.stderr).toContain(secondSlot);
+    // Named explicitly, the replaced request's file is still not this request's.
+    const named = runReview(
+      proj,
+      [...request, "--verdict", "READY", "--review-file", firstSlot],
+      { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+    );
+    expect(named.status).not.toBe(0);
+    expect(named.stderr).toContain("is another review request's file");
+    expect(named.stderr).toContain(secondSlot);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
 
     // The replacement's own review records.
+    const recorded = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(recorded.status, recorded.stderr).toBe(0);
+  });
+
+  test("a verdict after the outputs changed asks for the same pass again, never a restore", () => {
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    writeFileSync(artifact, "requirements rewritten after the request\n", "utf-8");
+    const verdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(verdict.status).not.toBe(0);
+    expect(verdict.stderr).toContain("Request it again so the reviewer reviews what is there now");
+    expect(verdict.stderr).not.toContain("Restore the bytes");
+    const command = /`([^`]*review[^`]*--iteration 1[^`]*)`/.exec(verdict.stderr)?.[1];
+    expect(command, verdict.stderr).toBeDefined();
+    expect(command).toContain("--stage requirements-analysis");
+    // The named command is the same-pass request, and its review records.
+    const again = runReview(proj, request);
+    expect(again.status, again.stderr).toBe(0);
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED")[1], "Iteration")).toBe("1");
+    expect(readFileSync(artifact, "utf-8")).toBe("requirements rewritten after the request\n");
     const recorded = runReview(proj, [...request, "--verdict", "READY"]);
     expect(recorded.status, recorded.stderr).toBe(0);
   });

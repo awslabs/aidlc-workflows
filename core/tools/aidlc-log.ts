@@ -119,6 +119,7 @@ import {
   reviewAttemptAccounting,
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
+  REVIEW_RECORDS_DIR,
   serializeReviewRecord,
   resolveProjectDir,
   resolveProjectFlag,
@@ -3201,6 +3202,30 @@ function handleReview(args: string[]): void {
       const slot = reviewSlot(attempt.floor, iteration, requestBinding.requestId);
       const legacy = requestBinding.legacyAppendix;
 
+      // A request whose outputs or source changed is requested again at the
+      // same pass; restoring the old bytes would undo the current work. The
+      // restore remedy stays for a request that cannot be replaced.
+      const changedRemedy = (restore: string): string => {
+        const status = pendingReviewRequestStatus(pd, node, flags.unit, attempt, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+          mergedBoltUnits,
+          single: flags.single === "true",
+        });
+        return status?.iteration === iteration && status.replaceable
+          ? "Request it again so the reviewer reviews what is there now: `" +
+              renderReviewRequestCommand({
+                projectDir: pd,
+                stage: flags.stage,
+                reviewer: flags.reviewer,
+                ...(flags.unit ? { unit: flags.unit } : {}),
+                ...(flags.single === "true" ? { single: true } : {}),
+                iteration,
+              }) +
+              "`."
+          : restore;
+      };
+
       // Deprecated input path: a reviewer that still appends `## Review` to
       // the artifact (see reviewAppendedAfterRequest). Read, never written to;
       // the validated section is copied into the completion's review record.
@@ -3217,9 +3242,30 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record the verdict for "${flags.stage}" because ` +
             `its output documents changed after review iteration ${iteration} started. ` +
-            "Restore the bytes the reviewer was dispatched on and re-run that exact " +
-            "iteration; --retry-pending cannot rebaseline changed content.",
+            changedRemedy(
+              "Restore the bytes the reviewer was dispatched on and re-run that exact " +
+                "iteration; --retry-pending cannot rebaseline changed content.",
+            ),
         );
+      }
+
+      // A review slot belongs to one request: an explicit review file in the
+      // review folder must be this request's own slot, never the slot of a
+      // request it replaced, whose reviewer read other bytes.
+      if (reviewFileFlag !== undefined) {
+        const named = toPosix(
+          relative(realpathSync(recordDir(pd) as string), resolve(pd, reviewFileFlag)),
+        ).toLowerCase();
+        if (
+          named.startsWith(`${REVIEW_RECORDS_DIR.toLowerCase()}/`) &&
+          named !== slot.draftRelativeToRecord.toLowerCase()
+        ) {
+          refuseReview(
+            `Cannot record review for "${flags.stage}": ${reviewFileFlag} is another review ` +
+              `request's file, not iteration ${iteration}'s. Have the reviewer write its review ` +
+              `to ${slot.draftRelative}, then record the verdict again.`,
+          );
+        }
       }
 
       // The review file is read the way the record will be read back: no
@@ -3347,8 +3393,8 @@ function handleReview(args: string[]): void {
         if (!sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint)) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
-              `REVIEW_REQUESTED iteration ${iteration}. Restore the requested source state ` +
-              "and re-dispatch the reviewer.",
+              `REVIEW_REQUESTED iteration ${iteration}. ` +
+              changedRemedy("Restore the requested source state and re-dispatch the reviewer."),
           );
         }
         // Same source; a request recorded before a file was excluded by name keeps
@@ -3375,8 +3421,8 @@ function handleReview(args: string[]): void {
           if (unitFingerprint !== requestBinding.unitSourceFingerprint) {
             refuseReview(
               `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
-                `changed after REVIEW_REQUESTED iteration ${iteration}. Restore the requested ` +
-                "unit source state and re-dispatch the reviewer.",
+                `changed after REVIEW_REQUESTED iteration ${iteration}. ` +
+                changedRemedy("Restore the requested unit source state and re-dispatch the reviewer."),
             );
           }
           fields["Unit Source Fingerprint"] = unitFingerprint;
