@@ -360,6 +360,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ]) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
       }
+      // No line sends the agent to park on its own instead.
+      if (body.includes("park instead")) failures.push(`${rel}  still says: park instead`);
     }
     expect(failures).toEqual([]);
   });
