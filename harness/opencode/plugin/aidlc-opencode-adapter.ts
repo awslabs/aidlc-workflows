@@ -168,20 +168,26 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
 
 // opencode runs bash-tool commands with its `shell` setting, else /bin/sh on
 // POSIX and COMSPEC (cmd.exe) on Windows. The boundary reads a command the way
-// that shell would: "posix" for sh, bash, dash, zsh and ksh; "strict" for
-// anything else, including cmd.exe, PowerShell, and a shell it cannot learn.
-export type ShellDialect = "posix" | "strict";
+// that shell would: "posix" for sh, bash, dash, zsh and ksh, "powershell" for
+// pwsh and powershell, "cmd" for cmd.exe, and "strict" (both of the last two
+// at once) for a shell it cannot learn.
+export type ShellDialect = "posix" | "powershell" | "cmd" | "strict";
 
 const POSIX_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
+const POWERSHELLS = new Set(["pwsh", "powershell"]);
 
 /** `configured` is the `shell` setting, null when unset, false when unreadable. */
 function shellDialect(configured: string | null | false): ShellDialect {
   if (configured === false) return "strict";
-  if (configured === null || configured.trim() === "") {
-    return process.platform === "win32" ? "strict" : "posix";
+  let shell = configured?.trim() ?? "";
+  if (shell === "") {
+    if (process.platform !== "win32") return "posix";
+    shell = process.env.COMSPEC?.trim() || "cmd.exe";
   }
-  const name = configured.trim().replaceAll("\\", "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
-  return POSIX_SHELLS.has(name) ? "posix" : "strict";
+  const name = shell.replaceAll("\\", "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
+  if (POSIX_SHELLS.has(name)) return "posix";
+  if (POWERSHELLS.has(name)) return "powershell";
+  return name === "cmd" ? "cmd" : "strict";
 }
 
 /**
@@ -190,26 +196,67 @@ function shellDialect(configured: string | null | false): ShellDialect {
  * usual forms: single quotes (with '\'' or '"'"' for an apostrophe), double
  * quotes, and backslash escapes. Each stays one word handed to the tool.
  * Chaining, redirection, expansion, command substitution, line continuations
- * and $'...' (which /bin/sh may not read as one word) are refused. Under any
- * other shell only plain words and double-quoted text are read, because
- * cmd.exe and PowerShell disagree about single quotes and backslashes.
+ * and $'...' (which /bin/sh may not read as one word) are refused. Under
+ * PowerShell a word may be double- or single-quoted (with '' for an
+ * apostrophe); under cmd.exe, which reads a single quote as a plain
+ * character, only plain words and double-quoted text are read.
  */
 function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
   const posix = dialect === "posix";
+  // cmd.exe reads the line, and on Windows also runs the aidlc launcher.
+  const cmdRules = !posix;
+  // PowerShell reads the line, then hands a native program its arguments for
+  // cmd.exe or the program to split again.
+  const psRules = dialect === "powershell" || dialect === "strict";
+  const singleQuotes = posix || dialect === "powershell";
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
+  if (cmdRules && /[\x00-\x08\x0a-\x1f\x7f-\x9f]/.test(command)) return null;
+  // PowerShell reads the typographic quotes as quotes.
+  if (psRules && /[\u2018-\u201f]/u.test(command)) return null;
+  // A PowerShell quote opens and closes a whole word: "a""b" and 'a'b join
+  // beyond this reading.
+  const wordEnds = (at: number): boolean => at >= command.length || command[at] === " " || command[at] === "\t";
+  // cmd.exe replaces a %NAME% pair even inside quotes; a lone % stays.
+  const percentPair = command.indexOf("%") !== command.lastIndexOf("%");
   const words: string[] = [];
+  // A trailing backslash escapes the quote the program reads around a word,
+  // and Windows PowerShell drops an empty argument and splits a bare -x.y.
+  const keep = (done: string): boolean => {
+    if (cmdRules && done.endsWith("\\")) return false;
+    if (psRules && (done === "" || /^-[^-].*\./.test(done))) return false;
+    words.push(done);
+    return true;
+  };
   let word = "";
   let wordStarted = false;
   let quote: "'" | '"' | null = null;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
+    if (quote !== null) {
+      // An argument PowerShell passes on without quotes is read by cmd.exe again.
+      if (psRules && (ch === "&" || ch === "|" || ch === "<" || ch === ">" || ch === "^")) return null;
+      if (cmdRules && ch === "%" && percentPair) return null;
+    }
     if (quote === "'") {
-      if (ch === "'") quote = null;
-      else word += ch;
+      if (ch === "'") {
+        if (!posix && command[i + 1] === "'") {
+          word += "'";
+          i++;
+          continue;
+        }
+        quote = null;
+        if (psRules && !wordEnds(i + 1)) return null;
+      } else if (psRules && ch === '"') {
+        return null;
+      } else {
+        word += ch;
+      }
       continue;
     }
     if (quote === '"') {
       if (ch === '"') {
         quote = null;
+        if (psRules && !wordEnds(i + 1)) return null;
         continue;
       }
       if (ch === "`" || ch === "$") return null;
@@ -222,21 +269,18 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
           continue;
         }
       }
-      if (!posix && (ch === "\n" || ch === "\r" || ch === "%" || ch === "!")) return null;
+      // The program's own argument reader takes \" as a quote inside the word.
+      if (cmdRules && ch === "\\" && command[i + 1] === '"') return null;
       word += ch;
       continue;
     }
-    if (ch === '"') {
+    if (ch === '"' || (ch === "'" && singleQuotes)) {
+      if (psRules && wordStarted) return null;
       quote = ch;
       wordStarted = true;
       continue;
     }
-    if (ch === "'") {
-      if (!posix) return null;
-      quote = ch;
-      wordStarted = true;
-      continue;
-    }
+    if (ch === "'") return null;
     if (ch === "\\") {
       if (!posix || i + 1 >= command.length) return null;
       const next = command[++i];
@@ -247,7 +291,7 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
     }
     if (ch === " " || ch === "\t") {
       if (wordStarted) {
-        words.push(word);
+        if (!keep(word)) return null;
         word = "";
         wordStarted = false;
       }
@@ -266,7 +310,10 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
       ch === ")" ||
       ch === "<" ||
       ch === ">" ||
-      (!posix && (ch === "%" || ch === "!" || ch === "^" || ch === "{" || ch === "}" || ch === "@"))
+      (cmdRules && (ch === "%" || ch === "!" || ch === "^" || ch === "{" || ch === "}" || ch === "@")) ||
+      // PowerShell splits a word at other whitespace, reads a list or a
+      // wildcard, and globs on Linux and macOS.
+      (psRules && (/\s/.test(ch) || ch === "," || ch === "[" || ch === "]" || ch === "*" || ch === "?"))
     ) {
       return null;
     }
@@ -274,7 +321,7 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
     wordStarted = true;
   }
   if (quote !== null) return null;
-  if (wordStarted) words.push(word);
+  if (wordStarted && !keep(word)) return null;
   return words;
 }
 

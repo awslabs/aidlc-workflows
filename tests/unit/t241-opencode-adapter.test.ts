@@ -16,6 +16,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import createAdapter, {
@@ -407,9 +408,9 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
     };
     const plain = 'bun .aidlc/tools/aidlc.ts engine orchestrate next --scope feature "Staff see today\'s rooms"';
-    // cmd.exe reads a single quote as a plain character and PowerShell as a
-    // quote, and neither reads a backslash as an escape: under them, and when
-    // the setting cannot be read, only plain words and double-quoted text pass.
+    // cmd.exe reads a single quote as a plain character, and neither cmd.exe
+    // nor PowerShell reads a backslash as an escape: under them, and when the
+    // setting cannot be read, these POSIX forms are refused.
     for (const config of [
       { get: async () => ({ data: { shell: "pwsh" } }) },
       { get: async () => ({ data: { shell: "C:\\Windows\\System32\\cmd.exe" } }) },
@@ -434,6 +435,115 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     const bash = await adapterWith({ get: async () => ({ data: { shell: "C:\\Program Files\\Git\\bin\\bash.exe" } }) });
     await expect(bash("posix-single", START_SINGLE)).resolves.toBeUndefined();
     await expect(bash("posix-double", START_DOUBLE)).resolves.toBeUndefined();
+  });
+
+  // Commands each shell runs as one call with these arguments, as AI-DLC's own
+  // commands and the opencode skill write them there.
+  const PWSH_OK: Array<[string, string[]]> = [
+    ["aidlc engine orchestrate report --stage x --result approved --user-input 'Approve'", ["Approve"]],
+    ["bun .aidlc/tools/aidlc.ts engine orchestrate next 'Staff see today''s rooms; 50% booked!'", ["Staff see today's rooms; 50% booked!"]],
+    ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
+  ];
+  const CMD_OK: Array<[string, string[]]> = [
+    ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
+    ['aidlc engine orchestrate next "Rename \u201cTasks\u201d, R&D | QA"', ["Rename \u201cTasks\u201d, R&D | QA"]],
+  ];
+
+  test("PowerShell and cmd.exe each read their own quoting, and a quote either reads differently is refused", async () => {
+    const root = freshProject();
+    const adapterWith = async (shell: string) => {
+      const { client } = fakeClient();
+      const adapter = await createAdapter({
+        client: { ...client, config: { get: async () => ({ data: { shell } }) } },
+        directory: root,
+        aidlcEntrypoints: new Set([...TEST_ENTRYPOINTS, "tools/aidlc.ts"]),
+        aidlcCommand: TEST_AIDLC_COMMAND,
+      });
+      return (callID: string, command: string) =>
+        adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
+    };
+    const pwsh = await adapterWith("pwsh");
+    const cmd = await adapterWith("cmd.exe");
+    for (const [i, [command]] of PWSH_OK.entries()) await expect(pwsh(`ps-ok-${i}`, command)).resolves.toBeUndefined();
+    for (const [i, [command]] of CMD_OK.entries()) await expect(cmd(`cmd-ok-${i}`, command)).resolves.toBeUndefined();
+    // PowerShell ends a quote at a typographic or doubled quote, joins a word
+    // to a quote, and passes a quoted word with no space on bare for cmd.exe
+    // to read again, so these do not reach the tool as written.
+    for (const [i, command] of [
+      'aidlc engine orchestrate next "fix \u201d; New-Item x; \u201c"',
+      "aidlc engine orchestrate next 'fix \u2019; New-Item x; \u2018'",
+      'aidlc engine orchestrate next "a""; New-Item x; ""b"',
+      "aidlc engine orchestrate next 'a''; New-Item x; ''b'x",
+      "aidlc engine orchestrate next 'a'b",
+      "aidlc engine orchestrate next 'R&D'",
+      "aidlc engine orchestrate next 'Rename \"Tasks\"'",
+      "aidlc engine orchestrate next 'C:\\dir\\'",
+      "aidlc engine orchestrate next ''",
+      "aidlc engine orchestrate next '%APPDATA% and %TEMP%'",
+      "aidlc engine orchestrate next a,b",
+      "aidlc engine orchestrate next *",
+      "aidlc engine orchestrate next a\u00a0b",
+    ].entries()) {
+      await expect(pwsh(`ps-no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // cmd.exe reads a single quote as a plain character, replaces %NAME% even
+    // inside quotes, and a program reads \" as a quote inside a word.
+    for (const [i, command] of [
+      "aidlc engine orchestrate next 'Approve'",
+      'aidlc engine orchestrate next "%APPDATA%"',
+      'aidlc engine orchestrate next "a\\" & touch x & "b"',
+      'aidlc engine orchestrate next R^&D',
+    ].entries()) {
+      await expect(cmd(`cmd-no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // A shell it cannot learn gets both readings' refusals.
+    const unknown = await adapterWith("nu");
+    await expect(unknown("strict-typographic", 'aidlc engine orchestrate next "a\u201d b"')).rejects.toThrow("one direct invocation");
+    await expect(unknown("strict-single", "aidlc engine orchestrate next 'Approve'")).rejects.toThrow("one direct invocation");
+  });
+
+  // What cmd.exe and Windows PowerShell hand the program, through the same
+  // `shell` spawn opencode uses, for the commands the adapter accepts there.
+  test.skipIf(process.platform !== "win32")("cmd.exe and PowerShell hand the tool those commands' arguments, unchanged", () => {
+    const root = mkdtempSync(join(tmpdir(), "t241-win-"));
+    scratch.push(root);
+    mkdirSync(join(root, ".aidlc", "tools"), { recursive: true });
+    writeFileSync(
+      join(root, ".aidlc", "tools", "aidlc.ts"),
+      "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+      "utf-8",
+    );
+    // A launcher built like the installed aidlc.cmd: cmd.exe reads its
+    // arguments again before PowerShell hands them to the engine.
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "aidlc-shim.ps1"),
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8\r\n[Console]::Out.Write((ConvertTo-Json -Compress -InputObject @($args)))\r\n",
+      "utf-8",
+    );
+    writeFileSync(
+      join(bin, "aidlc.cmd"),
+      [
+        "@echo off",
+        `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${join(bin, "aidlc-shim.ps1")}" %*`,
+        "exit /b %ERRORLEVEL%",
+        "",
+      ].join("\r\n"),
+      "utf-8",
+    );
+    // Windows names the variable Path; a second PATH key would be ignored.
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    const env = { ...process.env, [pathKey]: `${bin};${process.env[pathKey] ?? ""}` };
+    for (const [shell, cases] of [["cmd.exe", CMD_OK], ["powershell.exe", PWSH_OK]] as const) {
+      for (const [command, tail] of cases) {
+        const run = spawnSync(command, { cwd: root, env, shell, encoding: "utf-8" });
+        expect(run.status, `${shell}: ${command}\n${run.stderr}`).toBe(0);
+        const argv = JSON.parse(run.stdout) as string[];
+        expect(argv.slice(-tail.length), `${shell}: ${command}`).toEqual(tail);
+        expect(existsSync(join(root, "x")), `${shell}: ${command}`).toBe(false);
+      }
+    }
   });
 
   test.skipIf(process.platform === "win32")("/bin/sh hands the tool those quoted requests as one argument, unchanged", () => {
