@@ -806,6 +806,40 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
   });
 
+  // A real run (s20d) approved a Testing Posture whose Methodology gave its
+  // reasons; promotion then wrote it to team.md and Code Generation refused it.
+  test("Practices Discovery opens its gate only on a Testing Posture team.md can carry", () => {
+    const withDraft = (methodology: string): string => {
+      const proj = seedPracticesProject("[-]");
+      for (const agent of PRACTICES_SUPPORTS) {
+        writeContribution(proj, agent, undefined, "inception", "practices-discovery");
+      }
+      const draftDir = join(seededRecordDir(proj), "inception", "practices-discovery");
+      mkdirSync(draftDir, { recursive: true });
+      writeFileSync(
+        join(draftDir, "team-practices.md"),
+        `# Team Practices\n\n## Testing Posture\n\n- **Methodology**: ${methodology}\n- **Ordering**: one sentence.\n`,
+        "utf-8",
+      );
+      return proj;
+    };
+    const unreadable = withDraft("whatever the team prefers");
+    const before = mutationSnapshot(unreadable);
+    const refused = runReport(unreadable, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("In team-practices.md");
+    expect(refused.message).toContain('"Methodology evidence" line');
+    expect(readFileSync(seededStateFile(unreadable), "utf-8")).toBe(before.state);
+
+    // The s20d line: the value leads, so promotion splits off the reasons.
+    const reasons = withDraft(
+      "test-after (evidence and org default agree - `filter.ts`\n  ships with a colocated happy-path `filter.test.ts`).",
+    );
+    const opened = runReport(reasons, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(opened.kind, opened.message).toBe("print");
+    expect(readFileSync(seededStateFile(reasons), "utf-8")).toMatch(/- \[\?\] practices-discovery /);
+  });
+
   test("Practices Discovery approval requires a fresh promotion receipt after all spoke evidence exists", () => {
     const proj = seedPracticesProject();
     for (const agent of PRACTICES_SUPPORTS) {

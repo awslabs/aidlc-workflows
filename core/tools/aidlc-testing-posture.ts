@@ -81,6 +81,7 @@ import {
   sourceListingSha256,
   parseSourceListing,
   structuredField,
+  structuredFieldSpan,
   toPosix,
   stripRecommendedDecorator,
   sameWorkspaceSource,
@@ -580,6 +581,58 @@ function structuredMethodology(value: string): TestingMethodology {
   throw new Error(
     `Invalid Testing Posture Methodology "${value}". Expected one of: tdd, bdd, atdd, test-after, custom.`,
   );
+}
+
+// A Methodology value that leads with one of the five and then explains it:
+// "test-after (evidence and org default agree - ...)".
+const METHODOLOGY_WITH_REASONS =
+  /^[`*_]*(tdd|bdd|atdd|test-after|custom)[`*_]*(?=$|[\s(:;,])[\s:;,]*(.*)$/i;
+
+// A practices draft's Testing Posture section made readable by the renderer
+// before practices-promote writes it to team.md: the Methodology field must be
+// one bare value. A value that leads with one and then gives its reasons
+// becomes that value, and the reasons move to a `Methodology evidence` line,
+// which the renderer does not read. `problem` says what to fix when the field
+// cannot be read even so; nothing is rewritten then.
+export function promotableTestingPosture(
+  section: string,
+): { section: string; problem: string | null } {
+  const value = structuredField(classifiablePostureText(section), "Methodology");
+  if (value === null) return { section, problem: null };
+  try {
+    structuredMethodology(value);
+    return { section, problem: null };
+  } catch {
+    // Not one bare value: try to split off the reasons below.
+  }
+  const unreadable = {
+    section,
+    problem:
+      `The Testing Posture Methodology "${value}" is not one of tdd, bdd, atdd, test-after, custom. ` +
+      "Write the Methodology line as one of those values and nothing else, and put the reasons in a " +
+      'separate "Methodology evidence" line.',
+  };
+  const lead = value.trim().match(METHODOLOGY_WITH_REASONS);
+  const span = structuredFieldSpan(section, "Methodology");
+  if (!lead || !span || span.value !== value) return unreadable;
+  const lines = section.split(/\r?\n/);
+  const head = lines[span.start].match(/^(.*?Methodology(?:\*\*)?[ \t]*:)/i);
+  if (!head) return unreadable;
+  let reasons = lead[2].trim();
+  const wrapped = reasons.match(/^\((.*)\)\.?$/s);
+  if (wrapped) reasons = wrapped[1].trim();
+  const field = [`${head[1]} ${lead[1].toLowerCase()}`];
+  if (reasons) {
+    field.push(`${head[1].replace(/Methodology/i, (word) => `${word} evidence`)} ${reasons}`);
+  }
+  lines.splice(span.start, span.end - span.start, ...field);
+  const reduced = lines.join("\n");
+  try {
+    classifyPosture(reduced);
+  } catch {
+    return unreadable;
+  }
+  return { section: reduced, problem: null };
 }
 
 function defaultOrdering(methodology: TestingMethodology): string {

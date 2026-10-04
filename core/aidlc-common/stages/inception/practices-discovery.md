@@ -177,7 +177,9 @@ four declared artifacts:
    (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
    `## Deployment`, `## Code Style`), in team voice. `## Testing Posture`
    MUST include:
-   - `- **Methodology**: tdd | bdd | atdd | test-after | custom`
+   - `- **Methodology**: tdd | bdd | atdd | test-after | custom` (one of those
+     values and nothing else; put the reasons in a
+     `- **Methodology evidence**: ...` bullet)
    - `- **Ordering**: <the affirmed ordering in one explicit sentence>`
 
    Use `custom` whenever the answer mixes cadences (for example, BDD scenarios

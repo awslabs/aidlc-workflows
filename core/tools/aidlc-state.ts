@@ -209,6 +209,7 @@ import {
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
 import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -7358,11 +7359,23 @@ function handlePracticesPromote(args: string[]): void {
   ];
   let newTeamMd = teamMd;
   for (const heading of TEAM_SECTIONS) {
-    const draftSection = extractMarkdownSection(teamPracticesDraft, heading);
+    let draftSection = extractMarkdownSection(teamPracticesDraft, heading);
     if (draftSection === "") {
       // Section absent from draft → leave the live file's section alone.
       // Useful for partial re-runs that only change one practice area.
       continue;
+    }
+    // team.md gets only a Testing Posture the Code Generation renderer reads:
+    // a Methodology given with its reasons is split into the bare value and a
+    // `Methodology evidence` line; one that cannot be read stops here, before
+    // any write.
+    if (heading === "## Testing Posture") {
+      const promotable = promotableTestingPosture(draftSection);
+      if (promotable.problem !== null) {
+        fail(promotable.problem);
+        return;
+      }
+      draftSection = promotable.section;
     }
     try {
       newTeamMd = replaceSection(newTeamMd, heading, draftSection);

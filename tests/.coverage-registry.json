@@ -10544,6 +10544,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:structuredFieldSpan",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t75.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SUBAGENT_INFLIGHT_TTL_MS",
       "minMechanism": "none",
       "coveredBy": [

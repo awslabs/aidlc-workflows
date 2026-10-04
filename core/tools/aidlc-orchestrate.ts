@@ -326,6 +326,7 @@ import {
   pendingPersonLines,
   personLineHeard,
   PLAN_FIELD,
+  extractMarkdownSection,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -397,7 +398,7 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
-import { codeGenerationResumeNarration } from "./aidlc-testing-posture.ts";
+import { codeGenerationResumeNarration, promotableTestingPosture } from "./aidlc-testing-posture.ts";
 import {
   planApprovalOffAtCreation,
   planApprovalEnv,
@@ -11484,6 +11485,24 @@ function checkPipelineLinkEvidence(
   };
 }
 
+// The Testing Posture a Practices Discovery draft would promote into team.md,
+// read the way Code Generation reads it, so the person approves only
+// practices the tools can apply. Null when there is no draft or nothing to
+// fix; a Methodology given with its reasons is fine (promotion splits it).
+function practicesDraftPostureProblem(pd: string): string | null {
+  const prefix = engineRelativeRecordDir(pd);
+  if (prefix === null) return null;
+  const draft = join(pd, prefix, "inception", "practices-discovery", "team-practices.md");
+  if (!existsSync(draft)) return null;
+  let content: string;
+  try {
+    content = readFileSync(draft, "utf-8");
+  } catch {
+    return null;
+  }
+  return promotableTestingPosture(extractMarkdownSection(content, "## Testing Posture")).problem;
+}
+
 // The evidence required before a gated stage may either enter [?] or resolve
 // approval. Sharing this check prevents gate-start, revised, and approved from
 // disagreeing about whether per-unit work and collaborator dispatch completed.
@@ -11511,6 +11530,18 @@ function checkStageCompletionEvidence(
 
   const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd);
   if (!pipelineEvidence.ok) return pipelineEvidence;
+
+  if (slug === "practices-discovery") {
+    const problem = practicesDraftPostureProblem(pd);
+    if (problem !== null) {
+      return {
+        ok: false,
+        message:
+          `Cannot present "practices-discovery" for approval. In team-practices.md: ${problem} ` +
+          "Fix that line, then report the stage again.",
+      };
+    }
+  }
 
   if (isPerUnit(node) && !stageLevelPerUnit && !settledSwarm) {
     const resolution = boltResolution ?? resolveBoltBatches(pd);

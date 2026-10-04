@@ -35394,6 +35394,16 @@ const STRUCTURED_FIELD_HEAD = new RegExp(
 // and optional bolding around the field name. Shared with Testing Posture so
 // both memory sections read the same grammar.
 export function structuredField(section: string, field: string): string | null {
+  return structuredFieldSpan(section, field)?.value || null;
+}
+
+// Where that field sits: the head line and its wrapped continuation (line
+// indices into `section` split on line breaks, end exclusive) and the joined
+// value, so a writer can replace exactly the lines the reader read.
+export function structuredFieldSpan(
+  section: string,
+  field: string,
+): { start: number; end: number; value: string } | null {
   const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const lines = section.split(/\r?\n/);
   const head = new RegExp(
@@ -35420,8 +35430,7 @@ export function structuredField(section: string, field: string): string | null {
       if (STRUCTURED_FIELD_HEAD.test(line)) break;
       parts.push(line.trim());
     }
-    const value = parts.filter(Boolean).join(" ");
-    return value || null;
+    return { start: i, end: i + parts.length, value: parts.filter(Boolean).join(" ") };
   }
   return null;
 }

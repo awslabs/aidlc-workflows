@@ -283,7 +283,12 @@ Four lead artifacts plus three spoke contributions are written to
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
   Deployment, Code Style. Testing Posture carries structured
   `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...` bullets;
-  coverage/tooling/scope notes remain additional prose.
+  coverage/tooling/scope notes remain additional prose. The Methodology value
+  is one of those five and nothing else, with its reasons in a separate
+  `Methodology evidence:` bullet: the gate does not open on a value Code
+  Generation could not read, and `practices-promote` splits a value given with
+  its reasons ("test-after (because ...)") into the bare value and that bullet
+  before it writes `team.md`.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.

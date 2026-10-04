@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:practices-promote
+// covers: subcommand:aidlc-state:practices-promote, function:promotableTestingPosture, function:structuredFieldSpan
 //
 // CLI-contract port of tests/integration/t75-practices-promote.sh (TAP plan 24),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
@@ -84,6 +84,8 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { extractMarkdownSection } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { resolveTestingPostureFromSections } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -537,6 +539,64 @@ PARTIAL_NEW_TESTING
     // .sh test 23: sections absent from the draft keep their old content.
     expect(teamContent).toContain("OLD_WALKING_TEXT");
     expect(teamContent).toContain("OLD_DEPLOYMENT_TEXT");
+  });
+});
+
+// ============================================================
+// Case F/G: the Testing Posture team.md gets is one the renderer reads
+// ============================================================
+
+// The draft a real run approved (s20d, 2026-10-04): the Methodology line gave
+// its reasons, promotion copied it, and Code Generation then refused it
+// ("Invalid Testing Posture Methodology").
+const S20D_TESTING_POSTURE = `## Testing Posture
+
+- **Methodology**: test-after (evidence and org default agree - \`filter.ts\`
+  ships with a colocated happy-path \`filter.test.ts\`, a single commit, and no
+  red-green cadence or Gherkin; the org default for an unaffirmed posture is also
+  test-after).
+- **Ordering**: implement each applicable testable layer, then write and run
+  that layer's tests.
+- **Test Strategy**: Minimal (active). Requirement-driven unit tests, one per
+  requirement, with a happy-path floor per component.
+`;
+
+describe("t75 practices-promote: the promoted Testing Posture is readable", () => {
+  test("F: a Methodology given with its reasons lands as the bare value plus a Methodology evidence line", () => {
+    const fx = makeFixture();
+    writeFileSync(fx.teamPracticesPath, `# Team Practices Draft\n\n${S20D_TESTING_POSTURE}`, "utf-8");
+    const r = runPromote(fx);
+    expect(r.status, r.out).toBe(0);
+    const team = readFileSync(fx.teamMd, "utf-8");
+    expect(team).toContain(
+      "- **Methodology**: test-after\n" +
+        "- **Methodology evidence**: evidence and org default agree - `filter.ts` ships with a colocated " +
+        "happy-path `filter.test.ts`, a single commit, and no red-green cadence or Gherkin; the org default " +
+        "for an unaffirmed posture is also test-after\n" +
+        "- **Ordering**: implement each applicable testable layer, then write and run",
+    );
+    // The reader Code Generation renders with takes it as the team's posture.
+    const contract = resolveTestingPostureFromSections(
+      { team: extractMarkdownSection(team, "## Testing Posture") },
+      { scope: "classic", testStrategy: "minimal", projectType: "brownfield" },
+    );
+    expect(contract.methodology).toBe("test-after");
+    expect(contract.source).toBe("team");
+  });
+
+  test("G: a Methodology the renderer cannot read stops promotion before any write", () => {
+    const fx = makeFixture();
+    const before = readFileSync(fx.teamMd, "utf-8");
+    writeFileSync(
+      fx.teamPracticesPath,
+      "# Team Practices Draft\n\n## Testing Posture\n\n- **Methodology**: whatever the team prefers\n- **Ordering**: one sentence.\n",
+      "utf-8",
+    );
+    const r = runPromote(fx);
+    expect(r.status).not.toBe(0);
+    const refusal = (JSON.parse(r.out.trim().split("\n").at(-1) ?? "{}") as { error?: string }).error ?? "";
+    expect(refusal).toContain('"Methodology evidence" line');
+    expect(readFileSync(fx.teamMd, "utf-8")).toBe(before);
   });
 });
 
