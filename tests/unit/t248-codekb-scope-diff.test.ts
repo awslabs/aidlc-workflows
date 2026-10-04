@@ -515,6 +515,36 @@ describe("t248 codekb-scope-diff verb — compare mode", () => {
     expect(existsSync(elsewhere)).toBe(true);
   });
 
+  test("a compare removes only the compared repo's draft, whatever the store says", () => {
+    const proj = freshProject();
+    writeFileSync(seededStateFile(proj), "# AI-DLC State\n\n**Current Stage**: reverse-engineering\n");
+    const reDir = join(seededRecordDir(proj), "inception", "reverse-engineering");
+    mkdirSync(reDir, { recursive: true });
+    const draftFor = (repo: string) => {
+      const path = join(reDir, `scope-draft-${repo}.md`);
+      writeFileSync(path, timestampBody({ fingerprint: "abc" }));
+      return path;
+    };
+    // Another repo's draft compared under this repo's name is only read.
+    const other = draftFor("another-repo");
+    seedStore(proj, timestampBody({ fingerprint: "abc" }));
+    expect(runVerb(proj, "--compare", other).stdout).not.toContain("removed");
+    expect(existsSync(other)).toBe(true);
+    // A store that predates scope tracking, or none at all, still consumes it.
+    seedStore(proj, "# Reverse Engineering Timestamp\n\nno scope block\n");
+    const legacy = draftFor(basename(proj));
+    const unknown = JSON.parse(runVerb(proj, "--compare", legacy, "--json").stdout);
+    expect(unknown.verdict).toBe("UNKNOWN_SCOPE");
+    expect(unknown.draft_removed).toBe(true);
+    expect(existsSync(legacy)).toBe(false);
+    rmSync(join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb"), { recursive: true, force: true });
+    const first = draftFor(basename(proj));
+    const none = runVerb(proj, "--compare", first);
+    expect(none.stdout).toContain("NO_STORE");
+    expect(none.stdout).toContain("The scope draft has been removed.");
+    expect(existsSync(first)).toBe(false);
+  });
+
   test("disjoint incoming scope → NARROWER with the exact discard list", () => {
     const proj = freshProject();
     seedStore(proj, timestampBody({ fingerprint: "abc" }));

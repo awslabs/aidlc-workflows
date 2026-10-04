@@ -283,7 +283,9 @@ The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `bun <harness-dir>/tools/aidlc-utility.ts <verb>`, not `/aidlc <verb>`
 (`codekb-path` is also reachable through the dispatcher as
 `aidlc engine workspace codekb`).
-`codekb-path` and `codekb-scope-diff` are read-only. `codekb-snapshot` may
+`codekb-path` is read-only, and so is `codekb-scope-diff` except that a
+`--compare` removes the repo's own `scope-draft-<repo>.md` from the active
+intent record's `inception/reverse-engineering/`. `codekb-snapshot` may
 recover an interrupted prior CodeKB directory swap before returning the
 source/store generations. `codekb-publish` is the sole shared-store writer: it
 validates a complete nine-file candidate and commits it under a space+repo

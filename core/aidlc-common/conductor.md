@@ -56,7 +56,7 @@ stage that does not apply reports
 
 ## Files and commands
 
-Read, list, search, create, and edit files with your file tools, never through the shell (no `cat`, `ls`, `Get-ChildItem`, `find`, `grep`, `rg`, `sed`, `echo`, `python3`, heredoc, or `mkdir`; the file-write tool creates any missing folder), and run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): a shell line can stop and ask the person to approve it.
+Create and edit files with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). Read, list, and search with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): a shell line can stop and ask the person to approve it.
 
 ## Keeping the diary (memory.md)
 

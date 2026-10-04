@@ -1993,14 +1993,16 @@ export const AS_ITS_OWN_COMMAND =
  * owner of the wording: the worker brief renders it, and the conductor
  * persona, the subagent dispatch protocol, and the reviewer protocol carry it
  * verbatim (t-agent-conduct). Inside the project the file tools run without a
- * prompt on every harness; a shell line that reads, lists, or writes files can
- * stop and ask the person.
+ * prompt on every harness; a shell write, or a compound shell line, can stop
+ * and ask the person. Reads go through the shell only where that is the
+ * harness's one way to read (Codex), as one plain command.
  */
 export const FILE_TOOLS_RULE =
-  "Read, list, search, create, and edit files with your file tools, never through the shell " +
-  "(no `cat`, `ls`, `Get-ChildItem`, `find`, `grep`, `rg`, `sed`, `echo`, `python3`, heredoc, or `mkdir`; " +
-  "the file-write tool creates any missing folder), and run every AI-DLC command " +
-  `${AS_ITS_OWN_COMMAND}: a shell line can stop and ask the person to approve it.`;
+  "Create and edit files with your file tools, never through the shell (no heredoc, no `echo`, " +
+  "`printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any " +
+  "missing folder). Read, list, and search with your file tools where you have them; where the shell " +
+  "is your only way to read, use one plain read command (no `cd` before it, no pipe or second command " +
+  `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}: a shell line can stop and ask the person to approve it.`;
 
 // A rules part's receipt as the engine mints it: 8 base64url characters
 // (`steeringReceipt` in aidlc-orchestrate.ts).

@@ -1,7 +1,7 @@
 // covers: function:FILE_TOOLS_RULE function:AS_ITS_OWN_COMMAND
 //
-// t-agent-conduct: every AI-DLC agent does file work with its file tools and
-// runs AI-DLC's commands as printed. The wording has one owner,
+// t-agent-conduct: every AI-DLC agent writes files with its file tools, reads
+// with them where it has them, and runs AI-DLC's commands as printed. The wording has one owner,
 // FILE_TOOLS_RULE in core/tools/aidlc-testing-posture.ts; the engine's worker brief renders it
 // (t-plan-approval-ask), and the three shared prose places that reach the
 // conductor, every dispatched subagent prompt, and the reviewer carry it
@@ -28,6 +28,17 @@ describe("t-agent-conduct", () => {
       expect(readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", rel), "utf-8"), `dist ${rel}`)
         .toContain(FILE_TOOLS_RULE);
     }
+  });
+
+  // Codex has no file-read tool: it reads through the shell, and the rule
+  // must leave it a way to read.
+  test("the Codex tree carries the rule, which leaves a shell-only reader one plain read", () => {
+    for (const rel of PROSE) {
+      expect(readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", rel), "utf-8"), `codex ${rel}`)
+        .toContain(FILE_TOOLS_RULE);
+    }
+    expect(FILE_TOOLS_RULE).toContain("where the shell is your only way to read, use one plain read command");
+    expect(FILE_TOOLS_RULE).not.toMatch(/never through the shell[^.]*`(?:cat|ls|rg|grep|find)`/);
   });
 
   test("the diary bootstrap uses the write tool, not a shell mkdir", () => {
