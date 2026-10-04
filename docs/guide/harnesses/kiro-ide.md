@@ -164,7 +164,9 @@ The install ships:
   `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
   under its own permissions.
 - `.kiro/agents/aidlc-*-agent.md` — all 14 delegation personas, carrying
-  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships.
+  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships. Their shell
+  rules run AI-DLC's own commands, `date -u`, and `bun --version` without
+  asking; the project's own test and build commands still ask.
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
   registrations, and a hook cannot detect that from inside. Kiro IDE does not
