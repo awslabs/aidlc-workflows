@@ -195,7 +195,7 @@ installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
 | Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
-| `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks |
+| `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks. On Windows it also replaces an `aidlc` in the bin directory that AI-DLC did not write, keeping that file as a backup |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |
 | `--no-color` | `-NoColor` | Disable color output |
@@ -372,7 +372,10 @@ runtime without it. A missing
 `aidlc/` root is counted once: the Trust section's own
 `workspace-root-missing` issue is folded into the Workspace row. The Providers
 row reads `[ok]` with no recorded answer on Kiro CLI and Kiro IDE, which provide
-their own model access. On GitHub Copilot, Cursor, and Kiro IDE the Models row
+their own model access, and on GitHub Copilot and Cursor, where no answer means
+the session's own model access (for example `model access comes with your GitHub
+Copilot session`); `aidlc config providers` records Amazon Bedrock there if you
+bring your own (on Cursor, only the IDE takes Bedrock keys). On GitHub Copilot, Cursor, and Kiro IDE the Models row
 reads `[ok]` and names the host, for example `every agent uses your GitHub
 Copilot session's model and effort`: those hosts cannot pin an agent's model or
 effort, so there is no policy to ask for, and a recorded one is named as not
@@ -689,9 +692,11 @@ BYOK or provider settings, which AI-DLC tracks as a pending action rather than
 performs.
 
 On Kiro, `--check` says no answer is needed and exits zero even with a legacy
-record. On every other unrecorded section it names that state instead of
-reporting a verified answer, and still exits zero because the shipped fallback
-bytes remain valid.
+record. On GitHub Copilot and Cursor with no answer, `--check` and `doctor` say
+no answer is needed because model access comes with the session, and `--check`
+names the command that records your own Amazon Bedrock access. On every other unrecorded
+section it names that state instead of reporting a verified answer, and still
+exits zero because the shipped fallback bytes remain valid.
 
 On these harnesses `keep current` is the first answer and the default.
 `amazon-bedrock` is the second answer. Re-entering the section with the recorded
@@ -797,6 +802,13 @@ The recordable bypass set includes the documented recovery and ceremony switches
 
 The wizard never offers bypasses. They require an explicit `--bypass <name>`;
 `--show` surfaces every enabled bypass and its guard-weakening consequence.
+Every bypass except usage tracking, sensors, and learnings takes a check away
+from the person, so while one is on AI-DLC says so in one line: on the next
+step, at the start of every chat (not on opencode, which shows no session-start
+context), in `--show`, and in the doctor Flags row. The
+line names the check, since when, how it was set, and the `--clear-bypass`
+command that turns it back on (see "Environment kill switches" in
+[CLI commands](12-cli-commands.md)).
 
 Four of these switch off a fence for the whole machine. When the problem is one
 piece of work rather than one machine, `/aidlc config set guard.<fence> off`
@@ -1372,7 +1384,11 @@ check. Warnings are advisory and exit 0; any failed check exits 1.
 project context without changing the shell directory. Destructive operations
 such as `uninstall` ask nothing on a TTY: they print what they remove and
 keep, then do it. Without a TTY they require `--yes`. `--yes` never bypasses
-ownership, integrity, active-workflow, or release-authentication refusals.
+ownership, integrity, active-workflow, or release-authentication refusals, with
+one exception on Windows: an `aidlc` in the bin directory that AI-DLC did not
+write, such as a hand-made Git Bash forwarder. `aidlc use`, `aidlc update` and
+the installer ask once at a terminal whether to replace it; `--yes` answers
+yes, and the file is kept beside it as `aidlc.bak-<time>`.
 
 | Code | Meaning |
 |------|---------|

@@ -56,6 +56,12 @@ export interface StoredQuestion {
    * work it names. A reply that only names an option replays them.
    */
   settings?: QuestionSettings;
+  /**
+   * For a routing question that stopped an answer to another question (a plan
+   * approval, a scope confirmation): that question's id. New work started from
+   * the routing question answers it, so the work starts once.
+   */
+  approvedRequest?: string;
   createdAt: string;
 }
 
@@ -64,9 +70,9 @@ export interface QuestionSettings {
   existingWork: string[];
 }
 
-// Flag names and their one-word values only: `next`'s own parser reads them
-// back and checks each value.
-const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9-]*$/;
+// Flag names and their one-word values (a stage list joins slugs with commas)
+// only: `next`'s own parser reads them back and checks each value.
+const SETTING_TOKEN = /^(?:--)?[a-z0-9][a-z0-9,-]*$/;
 
 function isSettingTokens(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((token) => typeof token === "string" && SETTING_TOKEN.test(token));
@@ -122,7 +128,9 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.stateSha256 === undefined ||
       (typeof question.stateSha256 === "string" && /^[0-9a-f]{64}$/.test(question.stateSha256))) &&
     (question.settings === undefined ||
-      (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork)))
+      (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork))) &&
+    (question.approvedRequest === undefined ||
+      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest)))
   ) {
     return question as StoredQuestion;
   }
@@ -327,6 +335,7 @@ export function saveQuestion(
   composedFrom?: string,
   stateSha256?: string,
   settings?: QuestionSettings,
+  approvedRequest?: string,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -339,6 +348,7 @@ export function saveQuestion(
     ...(composedFrom ? { composedFrom } : {}),
     ...(stateSha256 ? { stateSha256 } : {}),
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
+    ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

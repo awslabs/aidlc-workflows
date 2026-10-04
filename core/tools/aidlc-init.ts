@@ -157,6 +157,8 @@ import {
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
   harnessOwnsModelAccess,
+  providerAnswerIsTheSession,
+  sessionModelAccessFact,
   availableScopeNames,
   completionInstruction,
   copilotCliTrust,
@@ -220,6 +222,7 @@ import {
   type ResolvedAidlcSettings,
   type SettingsTarget,
 } from "./aidlc-settings.ts";
+import { recordSwitchChange, switchesOffLines } from "./aidlc-recorded-switches.ts";
 
 type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -1712,6 +1715,12 @@ function checkDiagnosticSection(
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
+    : providersUnrecorded && providerAnswerIsTheSession(selected.harness)
+    ? `providers needs no answer for ${selected.harness}; ` +
+      sessionProvidersDetail(
+        selected.harness,
+        `'${configInvocationFor(projectDir)} config providers --harness ${selected.harness}${projectTarget(projectDir)}'`,
+      )
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
@@ -2276,11 +2285,13 @@ function setupMapRows(
   const workspace = outstanding.filter((action) => action.section === "workspace");
   // Harness-owned model access is complete regardless of a legacy answer.
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
-  const providerNeeds = providerManaged &&
-    (providers.length > 0 || records.providers === null);
   // Where the session sets every agent, there is no policy to ask for: the
   // row names the host's session as the lever and is never walked.
   const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  const sessionAccess = records.providers === null &&
+    providerAnswerIsTheSession(modelHarness(distribution));
+  const providerNeeds = providerManaged && !sessionAccess &&
+    (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
   const modelDetail = sessionSet
     ? sessionModelsDetail(modelHarness(distribution), policy)
@@ -2321,6 +2332,11 @@ function setupMapRows(
     : "no unmet host trust";
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
+    : sessionAccess
+    ? sessionProvidersDetail(
+      modelHarness(distribution),
+      `\`${configCommandForHarness(harnessDir, "providers")}\``,
+    )
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0
@@ -2461,6 +2477,15 @@ function existingProjectionOutstanding(
   ];
 }
 
+// What setup and `config providers --check` say where no answer means the
+// session's own model access (providerAnswerIsTheSession).
+function sessionProvidersDetail(harness: ModelHarness, command: string): string {
+  // Cursor takes Bedrock keys only in the IDE; its CLI always uses Cursor's backend.
+  const where = harness === "cursor" ? " in the Cursor IDE" : "";
+  return `${sessionModelAccessFact(harness)}; ` +
+    `to use your own Amazon Bedrock access${where} instead, run ${command}`;
+}
+
 function setupLedgerActions(
   projectDir: string,
   harnessDir: string,
@@ -2493,7 +2518,7 @@ function setupLedgerActions(
     // Only chase a missing answer where AI-DLC configures the model provider.
     // Asking a subscription-harness user to "choose and configure a model
     // provider" is a instruction they cannot complete and never needed.
-    if (record === null && !harnessOwnsModelAccess(harness)) {
+    if (record === null && !harnessOwnsModelAccess(harness) && !providerAnswerIsTheSession(harness)) {
       next.push({
         section: "providers",
         id: "provider-record-missing",
@@ -3071,6 +3096,7 @@ function showChoiceSection(
         resolved.flags,
         resolved,
       ),
+      switches: switchesOffLines(projectDir),
     };
   } else {
     const completion = records.project?.completions;
@@ -3159,6 +3185,7 @@ function showChoiceSection(
     for (const bypass of resolved.flags?.bypasses ?? []) {
       output += `  Bypass enabled: ${bypass} ${sourceLabel(bypass)}\n`;
     }
+    for (const line of data.switches as string[]) output += `  ${line}\n`;
     const files = data.files as ReturnType<typeof flagFiles>;
     if (files.length === 0) {
       output += "  Files carrying flags: none\n";
@@ -8162,6 +8189,7 @@ function handleSettingsOnlySection(
             record: resolved.flags,
             effective: effectiveProjectFlagValues(resolved.flags),
             sources: resolved.sources,
+            switches: switchesOffLines(projectDir),
           },
     ), options);
     return true;
@@ -8264,10 +8292,21 @@ function handleSettingsOnlySection(
       if (note) notes.push(note);
       invalidateSettingsCache(path);
     }
-    if (options.mode === "human") writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+    const switchLines = section === "flags"
+      ? recordSwitchChange(projectDir, target, currentFile, nextFile)
+      : [];
+    if (options.mode === "human") {
+      writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", switchLines);
+    }
     emitResult(success(
       `configured ${section} settings in ${path}`,
-      { target, path, ...(notes.length > 0 ? { notes } : {}) },
+      {
+        target,
+        path,
+        ...(notes.length > 0 ? { notes } : {}),
+        ...(switchLines.length > 0 ? { switches: switchLines } : {}),
+      },
     ), options);
   } catch (error) {
     emitResult(usage(
@@ -8437,11 +8476,18 @@ function recordBypassesOnly(
         );
       }
     }
+    // Which of the person's checks is now off or back on, in plain words.
+    // The lines above already name any other file that still records a
+    // cleared switch.
+    const switchLines = [...new Set(mutations.flatMap((change) =>
+      recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+    ))];
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);
       writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
       writeMenuLines("", changes.map((line) => `  ${line}`));
       writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", switchLines.map((line) => `  ${line}`));
     }
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
@@ -8465,6 +8511,7 @@ function recordBypassesOnly(
         changes,
         outstandingActions,
         choices,
+        ...(switchLines.length > 0 ? { switches: switchLines } : {}),
       },
     ), options);
   } catch (error) {
@@ -9608,6 +9655,14 @@ export async function main(
     if (settingsMutation && settingsMutation.target !== "global") {
       invalidateSettingsCache(settingsMutation.path);
     }
+    const switchLines = choicesContext?.section === "flags" && choicesContext.settings
+      ? recordSwitchChange(
+          projectDir,
+          choicesContext.settings.target,
+          choicesContext.settings.previous,
+          choicesContext.settings.next,
+        )
+      : [];
     if (modelsContext && options.mode === "human") {
       writeMenuLines("", modelsContext.summaryLines);
       writeMenuLines("", modelsContext.notes.map((note) => `  Note: ${note}`));
@@ -9619,6 +9674,7 @@ export async function main(
     if (choicesContext && options.mode === "human") {
       writeMenuLines("", choicesContext.summaryLines);
       writeMenuLines("", choicesContext.notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", switchLines);
     }
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -9717,6 +9773,7 @@ export async function main(
               },
             }
           : {}),
+        ...(switchLines.length > 0 ? { switches: switchLines } : {}),
       },
     ), options);
     if (

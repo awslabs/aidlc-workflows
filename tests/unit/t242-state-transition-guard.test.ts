@@ -184,6 +184,8 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc engine orchestrate report --stage feasibility --result completed",
       "aidlc engine state approve feasibility",
       "aidlc engine jump execute --target application-design",
+      "aidlc engine jump reopen --target nfr-design --units beta",
+      "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
       "/opt/aidlc/bin/aidlc engine orchestrate park",
     ]) {
       expect(isLifecycleBoundaryCommand(command), command).toBe(true);
@@ -207,6 +209,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
         "aidlc-jump.ts execute",
+      ],
+      [
+        "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
+        "aidlc-jump.ts reopen",
       ],
       [
         "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
@@ -333,6 +339,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "cd project && aidlc jump execute --target requirements-analysis",
         "aidlc jump execute",
+      ],
+      [
+        "cd project && aidlc jump reopen --target nfr-design --units beta",
+        "aidlc jump reopen",
       ],
       ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
       [
@@ -683,6 +693,8 @@ describe("t242 state-transition ownership guard", () => {
         `export ${name}=1`,
         `env ${name}=1 aidlc engine log answers`,
         `read ${name} <<< 1`,
+        `\\read ${name} <<< 1`,
+        `true && export ${name}`,
         `printf -v ${name} 1`,
         `declare -x ${name}`,
         `: \${${name}:=1}`,
@@ -732,6 +744,10 @@ describe("t242 state-transition ownership guard", () => {
       "Get-ChildItem env:",
       "printenv AIDLC_UNATTENDED",
       "MY_AIDLC_UNATTENDED=1 echo ok",
+      // A flag or a path segment that spells a builtin is not the builtin.
+      "aidlc config flags --local --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
+      "aidlc config flags --local --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "& 'C:\\Users\\me\\AppData\\Local\\aidlc\\versions\\1.0.0\\aidlc.exe' config flags --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
     ]) {
       expect(refused(command), command).toBe(false);
     }
