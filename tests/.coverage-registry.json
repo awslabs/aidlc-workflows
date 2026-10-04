@@ -3724,18 +3724,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:EXISTING_CODE_SCOPES",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t351-composer-unsaved-plans.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:exportBundle",
       "minMechanism": "none",
       "coveredBy": [],

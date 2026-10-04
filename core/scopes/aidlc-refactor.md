@@ -7,6 +7,7 @@ keywords:
   - simplify
 description: Clean up existing code
 skeleton: off
+existing_code: true
 guard_policy: off
 sensors: on
 learnings: on

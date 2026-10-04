@@ -8,6 +8,7 @@ keywords:
   - patch
 description: CVE response
 skeleton: off
+existing_code: true
 runner: true
 guard_policy: off
 sensors: on

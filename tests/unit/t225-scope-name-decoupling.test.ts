@@ -242,11 +242,9 @@ function makePluginOnlyInstall(): string {
 }
 
 // Known pre-existing couplings, exempted by exact (file, name-set) signature.
-// The workspace-detection greenfield advisory names the three incremental
-// scopes in a stderr note (predates this probe; decoupling it means changing
-// which scopes get the advisory, a behavior call outside this probe's job).
-// A NEW literal, or this one growing a fourth name, still fails.
-const KNOWN_COUPLINGS = new Set(["aidlc-utility.ts: [bugfix, refactor, security-patch]"]);
+// None remain: the scopes for existing code say so in their own frontmatter
+// (`existing_code: true`). A NEW literal still fails.
+const KNOWN_COUPLINGS = new Set<string>();
 
 // The inference policy names input keywords, not scope identities. Limit the
 // exception to this named declaration and its complete vocabulary; another

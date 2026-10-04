@@ -215,6 +215,10 @@ export interface ScopeDefinition {
   plugin?: string;
   runner?: boolean;
   skeleton?: boolean;
+  /** The scope changes code that already exists (`existing_code: true`): a new
+   *  project's custom plan runs on another scope when one fits, and creation
+   *  notes a new-project scan under it as a likely misread. */
+  existingCode?: boolean;
   /** The scope's Guard Policy default (`guard_policy:` frontmatter, or the
    *  retired `change_control:`); absent means strict. Resolution lives in
    *  resolveGuardPolicy. */
@@ -32549,6 +32553,7 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  existingCode?: boolean;
   /** Ceiling on how heavyweight stage reviews run under this scope:
    *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
    *  stages degrade to a single advisory pass), or "none" (no reviewer
@@ -32656,6 +32661,15 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.skeleton = skeleton === "on";
+    }
+    const existingCode = scalarField(fm, "existing_code");
+    if (existingCode) {
+      if (existingCode !== "true" && existingCode !== "false") {
+        throw new Error(
+          `Scope file ${filePath} has invalid existing_code value "${existingCode}". Expected "true" or "false".`
+        );
+      }
+      if (existingCode === "true") meta.existingCode = true;
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
     const reviewCap = scalarField(fm, "review_cap");
@@ -32833,6 +32847,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.plugin !== undefined) def.plugin = meta.plugin;
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
+    if (meta.existingCode) def.existingCode = true;
     if (meta.guardPolicy !== undefined) def.guardPolicy = meta.guardPolicy;
     if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
     out[name] = def;
@@ -33837,11 +33852,6 @@ export function splitSlugList(raw: string | undefined): string[] {
 
 /** The state field that marks a workflow running a plan composed for it. */
 export const PLAN_FIELD = "Plan";
-
-/** Stock scopes for changing code that already exists: a new project's custom
- *  plan runs on another one when one fits, and creation notes a new-project
- *  scan under one as a likely misread. */
-export const EXISTING_CODE_SCOPES: readonly string[] = ["bugfix", "refactor", "security-patch"];
 
 /** The Plan field value for a plan built on `scope`. */
 export function composedPlanLabel(scope: string): string {

@@ -53,7 +53,6 @@ import {
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import {
-  EXISTING_CODE_SCOPES,
   _resetAgentsForTests,
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -1899,7 +1898,7 @@ export function customPlanBase(
   };
   const qualifies = (scope: string): boolean =>
     guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(scope)) && addsNothing(scope);
-  const fitsNewWork = (scope: string): boolean => projectType !== "greenfield" || !EXISTING_CODE_SCOPES.includes(scope);
+  const fitsNewWork = (scope: string): boolean => projectType !== "greenfield" || mapping[scope]?.existingCode !== true;
   const base = nearest.find((candidate) => qualifies(candidate.scope) && fitsNewWork(candidate.scope)) ??
     nearest.find((candidate) => qualifies(candidate.scope));
   if (base === undefined) {

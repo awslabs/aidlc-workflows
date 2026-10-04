@@ -243,7 +243,6 @@ import {
   asReviewClass,
   scopeSettingsOffList,
   removeField,
-  EXISTING_CODE_SCOPES,
   PLAN_FIELD,
   type PlanChanges,
   planWithChanges,
@@ -7950,7 +7949,7 @@ function handleIntentCreateStateBuild(
       // wrong scope). We do NOT override routing (an empty workspace genuinely
       // has nothing to reverse-engineer); we point the user at the fix. A
       // greenfield the person declared is their call, so it gets no note.
-      if (!declaredType && EXISTING_CODE_SCOPES.includes(scope)) {
+      if (!declaredType && scopeDef.existingCode === true) {
         process.stderr.write(
           `Note: scope "${scope}" usually targets existing code, but the workspace scanned as Greenfield ` +
             `so Reverse Engineering will be skipped. If this project has a codebase the scanner missed, ` +
