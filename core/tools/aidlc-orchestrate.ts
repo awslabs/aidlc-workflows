@@ -128,6 +128,7 @@ import {
   intentDisplayLabel,
   isBindableIntentRecordName,
   isSafeIntentRecordName,
+  SPACE_NAME_REGEX,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
@@ -6302,14 +6303,28 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(errorDirective("--record answers a new-work routing question's continue or reshape; run the command that question supplied."));
       return;
     }
+    // Record names are repository text: one outside the record-name shape is
+    // shown quoted, as data, and never written into a command here.
+    const shown = isSafeIntentRecordName(flags.record) ? flags.record : JSON.stringify(flags.record);
     if (!question.askedAbout?.targets.some((target) => target.intent === flags.record)) {
-      emit(errorDirective(`${flags.record} is not a record this question offered; run a command the question supplied.`));
+      emit(errorDirective(`${shown} is not a record this question offered; run a command the question supplied.`));
       return;
     }
     if (!(selection.space === question.askedAbout.space && selection.intent === flags.record)) {
+      if (!isSafeIntentRecordName(flags.record)) {
+        emit(errorDirective(
+          `${shown} cannot be selected from this answer: its record name has characters a command here does not carry. ` +
+            "Rename the record directory (and its entry in intents.json), then answer again.",
+        ));
+        return;
+      }
       const route = flags.continue ? "--continue" : "compose";
+      // Back to the space the question was asked in first, then its record.
+      const spaceStep = selection.space === question.askedAbout.space || !SPACE_NAME_REGEX.test(question.askedAbout.space)
+        ? ""
+        : `\`${aidlcDispatcherInvocation("space switch")} ${shellArg(question.askedAbout.space)}\`, then `;
       emit(printDirective(
-        `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run \`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
+        `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run ${spaceStep}\`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
       ));
       return;
