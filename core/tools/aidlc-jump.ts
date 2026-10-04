@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   type CheckboxState,
   countCheckboxes,
@@ -742,11 +742,12 @@ function executeUnitsForward(
 }
 
 // The state tool, run as its own command: it owns the one-Unit skip, and
-// accepts it from this process only (the token names this PID).
+// accepts it from this process only (the token names this PID). The child is
+// the state tool this jump tool ships with, never one an environment variable
+// names, because it carries that token.
 function runStateTool(pd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  const executable = compiledExecutable();
-  const command = executable
-    ? [executable, "engine", "state", ...args, "--project-dir", pd]
+  const command = isCompiledExecutable()
+    ? [process.execPath, "engine", "state", ...args, "--project-dir", pd]
     : [process.execPath, join(TOOLS_DIR, "aidlc-state.ts"), ...args, "--project-dir", pd];
   const result = spawnSync(command[0], command.slice(1), {
     encoding: "utf-8",

@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -1100,7 +1100,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     );
     expect(jump.message).not.toContain("starts over");
     expect(jump.message).not.toContain('unit "alpha" (');
-    expect(jump.message).toContain("--stage nfr-requirements` reopens it");
+    expect(jump.message).toContain("--stage nfr-requirements --unit beta` reopens it");
     const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
     const executed = tool(p, "jump", command!.split(" "));
     expect(executed.status, executed.out).toBe(0);
@@ -1115,6 +1115,71 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(getField(state, "Current Stage")).toBe(currentStage);
     expect(state).not.toContain("- **Unit Stage**:");
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The jump's own print, and its commands run in order as the conductor does.
+  function jumpAhead(p: string, args: string[]) {
+    const jump = JSON.parse(tool(p, "orchestrate", ["next", ...args]).stdout);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    const steps = (jump.message as string).split(" to perform the jump")[0];
+    for (const [, name, rest] of steps.matchAll(/`[^`]*aidlc-(\w+)\.ts ([^`]+)`/g)) {
+      const ran = tool(p, name, rest.split(" "));
+      expect(ran.status, ran.out).toBe(0);
+    }
+    return jump.message as string;
+  }
+
+  test("a forward jump in a parked workflow unparks first, then lands on the unit's target step", () => {
+    const p = betaBuilding();
+    reopenFor(p, ["--stage", "nfr-requirements"]);
+    expect(tool(p, "state", ["unit", "start", "--stage", "nfr-requirements", "--unit", "beta"]).status).toBe(0);
+    expect(tool(p, "orchestrate", ["park"]).status).toBe(0);
+    expect(next(p).kind).toBe("parked");
+    const message = jumpAhead(p, ["--stage", "code-generation"]);
+    expect(message).toMatch(/^Run `[^`]*aidlc-state\.ts unpark`, then `[^`]*aidlc-jump\.ts execute [^`]* --units beta /);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+    expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The way back the jump names is for the unit it moved on, also once the walk
+  // has gone past it: a step skipped in this attempt counts as reached.
+  test("a step a jump skipped can be reopened for that unit later", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta", ["functional-design"]);
+    expect(next(p)).toMatchObject({ stage: "nfr-requirements", unit: "beta" });
+    const message = jumpAhead(p, ["--stage", "code-generation"]);
+    expect(message).toContain("--stages nfr-requirements,nfr-design,infrastructure-design ");
+    cover(p, "beta", ["code-generation"]);
+    approve(p, "beta");
+    const said = reopenFor(p, ["--stage", "nfr-design", "--unit", "beta"]);
+    expect(said).toContain("reopen --target nfr-design --stages nfr-design,infrastructure-design,code-generation --units beta ");
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
+    expect(approved(p, "alpha")).toBe(true);
+    // The line the person is given names that unit.
+    expect(message).toContain("--stage nfr-requirements --unit beta` reopens it");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The jump tool hands the state tool a token bound to its own process, so it
+  // runs the state tool it ships with, never one an environment variable names.
+  test("a forward jump runs the shipped state tool, whatever AIDLC_COMPILED_EXECUTABLE names", () => {
+    const p = betaBuilding();
+    reopenFor(p, ["--stage", "nfr-requirements"]);
+    const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
+    const marker = join(p, "shim-ran");
+    const shim = join(p, process.platform === "win32" ? "shim.cmd" : "shim.sh");
+    writeFileSync(shim, process.platform === "win32" ? `@echo ran > "${marker}"\r\n` : `#!/bin/sh\necho ran > "${marker}"\n`);
+    if (process.platform !== "win32") chmodSync(shim, 0o755);
+    const executed = tool(p, "jump", command!.split(" "), { ...process.env, AIDLC_COMPILED_EXECUTABLE: shim });
+    expect(executed.status, executed.out).toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    const skips = readAuditShardEvents(p).filter((row) =>
+      row.event === "UNIT_SKIPPED" && auditBlockField(row.block, "Unit") === "beta");
+    expect(skips.map((row) => auditBlockField(row.block, "Stage"))).toEqual([
+      "nfr-requirements", "nfr-design", "infrastructure-design",
+    ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a parked workflow resumed at the active unit's step unparks first, then stays resumed", () => {
@@ -1346,6 +1411,23 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(approved(p, "beta")).toBe(true);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Current Stage**: infrastructure-design");
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A unit's step reopened behind its stage approval, then "skip to build":
+  // that unit moves on, and the stage stays approved for every other unit.
+  test("after the stage gates, a jump ahead from a reopened step moves only that unit on", () => {
+    const p = gatesApprovedUntil("infrastructure-design");
+    reopenFor(p, ["--stage", "nfr-design", "--unit", "alpha"]);
+    expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "alpha" });
+    const message = jumpAhead(p, ["--stage", "code-generation"]);
+    expect(message).toContain("--units alpha --stages nfr-design,infrastructure-design ");
+    expect(jumped(p)).toBe(0);
+    for (const slug of stages) expect(unitCompletedReceipts(p, slug).has("beta"), slug).toBe(true);
+    expect(approved(p, "beta")).toBe(true);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(state).toContain("- **Current Stage**: infrastructure-design");
+    expect(state).toContain("- [x] nfr-design");
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "alpha" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("after the stage gates move Current Stage on, a jump back with --every-unit reopens it for each unit", () => {
