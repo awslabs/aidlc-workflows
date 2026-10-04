@@ -1803,12 +1803,12 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | Allow entry | AI-DLC Usage |
 |-------------|-------------|
 | `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
-| `Bash(bun .claude/tools/*)` | AI-DLC's own commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(bun .claude/tools/aidlc.ts engine *)`, `Bash(bun .claude/tools/aidlc.ts config *)`, `Bash(bun .claude/tools/aidlc.ts --doctor*)`, `Bash(bun .claude/tools/aidlc-*)` | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
 | `Bash(date -u *)` | Timestamps |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 
-Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does.
+Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`): the copy channel's `permissions.ask` names the two scripts behind them, `aidlc-lifecycle.ts` and `aidlc-machine-config.ts`, which the `aidlc-*` entry would otherwise cover.
 
 `AskUserQuestion` is always permitted by default and does not require explicit approval.
 

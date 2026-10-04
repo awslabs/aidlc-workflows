@@ -50,7 +50,7 @@
 //   .sh 12-16  provider/model env overrides absent         -> "provider-neutral env block"
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
@@ -61,7 +61,7 @@ const RAW = readFileSync(SETTINGS_PATH, "utf-8");
 // on malformed JSON, so a successful parse here IS the "valid JSON" assertion;
 // the test below also asserts it does not throw, making the guarantee explicit.
 interface Settings {
-  permissions?: { allow?: string[] };
+  permissions?: { allow?: string[]; ask?: string[] };
   statusLine?: { command?: string };
   model?: string;
   effortLevel?: string;
@@ -105,10 +105,92 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     const fileEntries = allow.filter((entry) => /^(Read|Edit|Write|Glob|Grep)\(/.test(entry));
     expect(fileEntries).toEqual(["Edit(/**)"]);
   });
-  test("permissions.allow grants only the Bun copy-channel tool directory", () => {
-    expect(allow).toContain("Bash(bun .claude/tools/*)");
+  test("permissions.allow grants AI-DLC's own workflow commands on the copy channel", () => {
+    for (const entry of [
+      "Bash(bun .claude/tools/aidlc.ts engine *)",
+      "Bash(bun .claude/tools/aidlc.ts config *)",
+      "Bash(bun .claude/tools/aidlc.ts --doctor*)",
+      "Bash(bun .claude/tools/aidlc-*)",
+    ]) {
+      expect(allow).toContain(entry);
+    }
+    expect(allow).not.toContain("Bash(bun .claude/tools/*)");
     expect(allow).not.toContain("Bash");
     expect(allow).not.toContain("Bash(aidlc *)");
+  });
+
+  // Claude Code's Bash rules: `*` matches any sequence, and ask outranks
+  // allow; a command no rule names asks too.
+  const ask = settings.permissions?.ask ?? [];
+  function claudeBashEffect(command: string): "ask" | "allow" | "none" {
+    const matches = (rules: readonly string[]) => rules.some((rule) => {
+      const m = /^Bash\((.*)\)$/.exec(rule);
+      if (!m) return false;
+      const glob = m[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*");
+      return new RegExp(`^${glob}$`).test(command);
+    });
+    if (matches(ask)) return "ask";
+    return matches(allow) ? "allow" : "none";
+  }
+
+  test("a command that changes the machine's AI-DLC install shows Claude Code's own prompt", () => {
+    for (const command of [
+      "bun .claude/tools/aidlc.ts use 2.10.0",
+      "bun .claude/tools/aidlc.ts update",
+      "bun .claude/tools/aidlc.ts update --check",
+      "bun .claude/tools/aidlc.ts rollback",
+      "bun .claude/tools/aidlc.ts uninstall --yes",
+      "bun .claude/tools/aidlc.ts system config global set offline true",
+      "bun .claude/tools/aidlc.ts --yes update",
+      // The two scripts behind those commands, which the aidlc-* entry
+      // would otherwise cover.
+      "bun .claude/tools/aidlc-lifecycle.ts use 2.10.0",
+      "bun .claude/tools/aidlc-lifecycle.ts",
+      "bun .claude/tools/aidlc-machine-config.ts set offline true",
+      // A config flag that reaches the whole machine, wherever it sits.
+      "bun .claude/tools/aidlc.ts config --pin 2.10.0",
+      "bun .claude/tools/aidlc.ts config --unpin",
+      "bun .claude/tools/aidlc.ts config --channel preview",
+      "bun .claude/tools/aidlc.ts config project --plugins all --download --yes",
+      "bun .claude/tools/aidlc.ts config models --deciding-effort high --global --yes",
+      "bun .claude/tools/aidlc.ts config models --global",
+    ]) {
+      expect(claudeBashEffect(command), command).not.toBe("allow");
+    }
+  });
+
+  test("AI-DLC's own commands, the ones its skill and stage files name included, run with no prompt", () => {
+    for (const command of [
+      "bun .claude/tools/aidlc.ts engine orchestrate next",
+      "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'",
+      "bun .claude/tools/aidlc.ts config depth --show --json",
+      "bun .claude/tools/aidlc.ts config depth --depth minimal --yes",
+      "bun .claude/tools/aidlc.ts config models --deciding-effort high --project --yes",
+      "bun .claude/tools/aidlc.ts config providers --show --json",
+      "bun .claude/tools/aidlc.ts --doctor",
+      "bun .claude/tools/aidlc-utility.ts codekb-path",
+      "date -u +%Y-%m-%dT%H:%M:%SZ",
+    ]) {
+      expect(claudeBashEffect(command), command).toBe("allow");
+    }
+    // Every AI-DLC command the copy tree's prose tells the agent to run.
+    const named = new Set<string>();
+    const visit = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) visit(path);
+        else if (name.endsWith(".md")) {
+          for (const [, span] of readFileSync(path, "utf-8").matchAll(/`(bun \.claude\/tools\/aidlc[^`\s]*\.ts [^`\n]+)`/g)) {
+            named.add(span);
+          }
+        }
+      }
+    };
+    visit(AIDLC_SRC);
+    expect(named.size).toBeGreaterThan(20);
+    for (const command of named) {
+      expect(claudeBashEffect(command), command).toBe("allow");
+    }
   });
 });
 

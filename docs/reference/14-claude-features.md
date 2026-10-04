@@ -214,8 +214,14 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
   "permissions": {
     "allow": [
       "Edit(/**)",
-      "Bash(bun .claude/tools/*)", "Bash(date -u *)",
+      "Bash(bun .claude/tools/aidlc.ts engine *)", "Bash(bun .claude/tools/aidlc.ts config *)",
+      "Bash(bun .claude/tools/aidlc.ts --doctor*)", "Bash(bun .claude/tools/aidlc-*)",
+      "Bash(date -u *)",
       "Task", "WebSearch"
+    ],
+    "ask": [
+      "Bash(bun .claude/tools/aidlc-lifecycle.ts*)",
+      "Bash(bun .claude/tools/aidlc-machine-config.ts*)"
     ]
   }
 }

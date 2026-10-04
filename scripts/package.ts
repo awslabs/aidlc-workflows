@@ -1078,17 +1078,27 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   if (m.tierFlavor !== "claude") return;
   const settingsPath = join(outRoot, m.harnessDir, "settings.json");
   const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-    permissions?: { allow?: unknown };
+    permissions?: { allow?: unknown; ask?: unknown };
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
+  // The copy channel's AI-DLC command entries (the tool rewrite above has
+  // already turned their `bun <dir>/tools/aidlc...` into `aidlc engine ...`)
+  // give way to the one trusted prefix. The machine-changing scripts they
+  // held back are not run through the dispatcher's engine namespace, so the
+  // native release needs no ask for them.
+  const aidlcEntry = (entry: unknown): boolean =>
+    typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc "));
   value.permissions!.allow = [
-    ...allow.filter((entry) =>
-      entry !== "Bash" &&
-      !(typeof entry === "string" && entry.startsWith("Bash(bun "))
-    ),
+    ...allow.filter((entry) => entry !== "Bash" && !aidlcEntry(entry)),
     `Bash(${trustedCommand("*")})`,
   ];
+  const ask = value.permissions?.ask;
+  if (Array.isArray(ask)) {
+    const kept = ask.filter((entry) => !aidlcEntry(entry));
+    if (kept.length > 0) value.permissions!.ask = kept;
+    else delete value.permissions!.ask;
+  }
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
