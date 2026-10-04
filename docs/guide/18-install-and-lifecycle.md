@@ -1001,12 +1001,12 @@ a link or a file (before reading anything under it), or when a hook entry
 AI-DLC does not own is a link or anything other than a regular file, rather
 than follow it. It needs that baseline
 (`.kiro/tools/data/aidlc-manifest.json`). Without one, refresh the installed row
-from the release it was installed from with `aidlc config --harness <installed>`
-first; the same holds for a baseline recorded before AI-DLC listed only the
-files it ships there, which a refresh brings up to date. The switch never
-changes a damaged one: move it aside yourself, then run that refresh. On a
-native install whose active release differs from the one the row came from,
-the printed steps pin that release first (`aidlc config --pin <version>`). A release passed with `--from`
+with `aidlc config --harness <installed>` first; the same holds for a baseline
+recorded before AI-DLC listed only the files it ships there, which a refresh
+brings up to date. The switch never changes a damaged one: move it aside
+yourself (the printed step names its full path), then run that refresh. A
+switch that clears the trust review names the `config trust --harness <row>`
+command that records it again. A release passed with `--from`
 and no `--harness` never switches the row. OpenCode and Copilot are not switched
 this way. For an older installed harness whose root block
 is not shared, the `predates shared onboarding` error suggests refreshing it with

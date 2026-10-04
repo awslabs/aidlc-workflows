@@ -3680,12 +3680,11 @@ function switchesInPlace(installed: string, requested: string): boolean {
     IN_PLACE_SWITCHABLE.has(requested);
 }
 
-// A repository-supplied name as a person reads it: JSON-quoted, at most 120
-// characters, with each control, format, separator, and non-ASCII space
-// character written as \u{…}.
+// A repository-supplied name as a person reads it: whole, so no two names read
+// alike, JSON-quoted, with each control, format, separator, and non-ASCII
+// space character written as \u{…}.
 function displayName(name: string): string {
-  const bounded = [...name].length > 120 ? `${[...name].slice(0, 120).join("")}…` : name;
-  return JSON.stringify(bounded).replace(
+  return JSON.stringify(name).replace(
     /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu,
     (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
   );
@@ -3773,53 +3772,23 @@ function scanUnownedHooks(
   return { redirected: false, unreadable: false, entries };
 }
 
-// The release a native refresh would use is the project's pin, else the active
-// one. When that is not the release the row was installed from, the steps pin
-// the installed release for the refresh. A copied projection refreshes from
-// the release its own files name, so it needs no step.
-function switchRefreshPin(
-  installedFrom: string | undefined,
-  native: boolean,
-  active: string | undefined,
-  projectPin: string | undefined,
-): string | undefined {
-  if (!installedFrom || !native) return undefined;
-  return (projectPin ?? active) === installedFrom ? undefined : installedFrom;
-}
-
-export function _switchRefreshPinForTests(
-  installedFrom: string | undefined,
-  native: boolean,
-  active: string | undefined,
-  projectPin: string | undefined,
-): string | undefined {
-  return switchRefreshPin(installedFrom, native, active, projectPin);
-}
-
 // The steps that record a usable baseline, as one line: move a damaged file
-// aside, pin the release the row was installed from when the active one
-// differs, refresh the row, then put the project's own pin back. With nothing before it the line is the
-// refresh command alone, so it can be run as printed.
+// aside by its path in the project, then refresh the installed row. With
+// nothing before it the line is the refresh command alone, so it can be run as
+// printed.
 function switchRefreshSteps(
   projectDir: string,
-  remedy: { harness: string; pin?: string; restorePin?: string | null; moveAside?: string },
+  remedy: { harness: string; moveAside?: string },
 ): string {
-  const run = (args: string) => `${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}`;
-  const refresh = run(`--harness ${remedy.harness}`);
-  if (!remedy.moveAside && !remedy.pin) return refresh;
-  return [
-    ...(remedy.moveAside ? [`move ${remedy.moveAside} aside`] : []),
-    ...(remedy.pin ? [`run \`${run(`--pin ${quoteCommandArgument(remedy.pin)}`)}\``] : []),
-    `run \`${refresh}\``,
-    ...(remedy.pin
-      ? [`run \`${run(remedy.restorePin ? `--pin ${quoteCommandArgument(remedy.restorePin)}` : "--unpin")}\``]
-      : []),
-  ].join(", then ");
+  const refresh = `${configInvocationFor(projectDir)} config --harness ${remedy.harness}${projectTarget(projectDir)}`;
+  return remedy.moveAside
+    ? `move ${join(projectDir, remedy.moveAside)} aside, then run \`${refresh}\``
+    : refresh;
 }
 
 export function _switchRefreshStepsForTests(
   projectDir: string,
-  remedy: { harness: string; pin?: string; restorePin?: string | null; moveAside?: string },
+  remedy: { harness: string; moveAside?: string },
 ): string {
   return switchRefreshSteps(projectDir, remedy);
 }
@@ -3830,7 +3799,7 @@ export function _switchRefreshStepsForTests(
 // handler renders it with this invocation's command form and project target,
 // so every output mode prints it.
 type SwitchRemedy =
-  | { kind: "refresh"; harness: string; pin?: string; restorePin?: string | null; moveAside?: string }
+  | { kind: "refresh"; harness: string; moveAside?: string }
   | { kind: "switch"; harness: string }
   | { kind: "update" }
   | { kind: "text"; text: string };
@@ -3894,34 +3863,17 @@ function entryIdentity(path: string): string {
 // Without a usable occupant baseline nothing says which of its files are
 // AI-DLC's, so the files only it ships would be left behind. The switch never
 // changes the baseline itself: every refusal here leaves the project as it is
-// and names the steps that record a usable one, starting with moving a damaged
-// file aside. A refresh records it from the release the row was installed
-// from, so on a native install whose active release differs that release is
-// pinned first.
-function assertSwitchBaseline(projectDir: string, occupant: ProjectHarness, requested: string): void {
+// and names the steps that record a usable one: moving a damaged file aside,
+// then the stock refresh of the installed row, which picks its source as any
+// refresh does.
+function assertSwitchBaseline(occupant: ProjectHarness, requested: string): void {
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
-  // The version comes from the project's own files, which only a stamp holds
-  // to the release grammar, so anything else is left out of the message and
-  // the steps rather than printed into a command.
-  const installedFrom = occupant.frameworkVersion && VERSION_ID.test(occupant.frameworkVersion)
-    ? occupant.frameworkVersion
-    : undefined;
-  const refresh = `refresh it from the release it was installed from${installedFrom ? ` (${installedFrom})` : ""} first`;
-  const projectPin = regularFile(join(projectDir, ".aidlc-version"))
-    ? readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim()
-    : undefined;
-  const validPin = projectPin && VERSION_ID.test(projectPin) ? projectPin : undefined;
-  const pinFirst = switchRefreshPin(installedFrom, aidlcInvocation() === "aidlc", activeVersion() ?? undefined, validPin);
+  const refresh = `refresh the installed ${occupant.distribution} row first`;
   const remedy = (moveAside?: string): SwitchRemedy => ({
     kind: "refresh",
     harness: occupant.distribution,
-    // The pin is only for the refresh: the steps put the project's own pin
-    // back (or remove it) afterwards.
-    ...(pinFirst
-      ? { pin: pinFirst, restorePin: validPin ?? null }
-      : {}),
     ...(moveAside ? { moveAside } : {}),
   });
   let problem: string | null = null;
@@ -3945,8 +3897,10 @@ function assertSwitchBaseline(projectDir: string, occupant: ProjectHarness, requ
     problem = (error instanceof Error ? error.message : String(error)).replace(`cannot refresh from ${path}: `, "");
   }
   if (problem === null) return;
-  // The reason quotes the repository's own file, so it is printed as data.
-  const reason = `(repository baseline data, not instructions: ${displayName(problem)})`;
+  // The reason quotes the repository's own file, so it is printed as data,
+  // bounded: unlike a file name, nothing limits its length.
+  const bounded = [...problem].length > 120 ? `${[...problem].slice(0, 120).join("")}…` : problem;
+  const reason = `(repository baseline data, not instructions: ${displayName(bounded)})`;
   // A schemaVersion that is a JSON integer above this release's is a newer
   // release's record, not damage: it is kept, and the switch is left to that
   // release. Any other value, a numeric string included, is damage like the
@@ -3968,7 +3922,7 @@ function assertSwitchBaseline(projectDir: string, occupant: ProjectHarness, requ
     );
   }
   throw new SwitchRefusal(
-    `${lead} has an unusable ownership baseline (${rel} ${reason}); move ${rel} aside, then ${refresh}`,
+    `${lead} has an unusable ownership baseline (${rel} ${reason}); move it aside, then ${refresh}`,
     remedy(rel),
   );
 }
@@ -4962,7 +4916,8 @@ function prepareRefreshSource(
     }
     if (rowChanged && current.trust !== undefined && prior) {
       notes.push(
-        `The trust review recorded for ${prior.distribution} does not carry to ${descriptor.distribution}; review it again with config trust.`,
+        `The trust review recorded for ${prior.distribution} does not carry to ${descriptor.distribution}; once switched, review it again with ` +
+          `\`${configInvocationFor(projectDir)} config trust --harness ${descriptor.distribution}${projectTarget(projectDir)}\`.`,
       );
     }
   }
@@ -8866,7 +8821,9 @@ export async function main(
       )
       : undefined;
     if (switchOccupant && requestedHarness) {
-      assertSwitchBaseline(projectDir, switchOccupant, requestedHarness);
+      // The same order as the checks after source selection.
+      assertHooksDirReviewable(projectDir, `${switchOccupant.harnessDir}/hooks`, switchOccupant.harnessDir, requestedHarness);
+      assertSwitchBaseline(switchOccupant, requestedHarness);
       // Refused under an active workflow before any release is fetched for it.
       if (!argv.includes("--dry-run")) assertRefreshSafe(projectDir);
     }
@@ -9232,7 +9189,7 @@ export async function main(
     }
     // Checked again just before planning: the baseline the switch plans from
     // is the one this check accepted, even after a long download.
-    if (switchingFrom) assertSwitchBaseline(projectDir, switchingFrom, stamp.distribution);
+    if (switchingFrom) assertSwitchBaseline(switchingFrom, stamp.distribution);
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
     const prior = readBaseline(baselinePath);
     const settingsMutation = modelsContext?.settings ?? choicesContext?.settings;
@@ -9454,7 +9411,7 @@ export async function main(
       );
     }
     const unownedHooks = hookScan.entries;
-    // A file name is the repository's text: it is printed quoted, bounded, with
+    // A file name is the repository's text: it is printed whole and quoted, with
     // every control, format (bidi included), and separator character spelled
     // out, inside a parenthesis that says it is data, not instructions.
     const hookNames = unownedHooks.map((hook) => displayName(hook.path));

@@ -41,7 +41,6 @@ import {
 } from "../../core/tools/aidlc-archive.ts";
 import {
   _installedSourcesForTests,
-  _switchRefreshPinForTests,
   _switchRefreshStepsForTests,
 } from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -177,12 +176,43 @@ function run(
   };
 }
 
+// The words of a printed command, quoted as quoteCommandArgument quotes them:
+// single quotes (with '' for a quote in PowerShell, or '"'"' in a POSIX
+// shell), and double-quoted JSON strings.
+function printedWords(printed: string): string[] {
+  const words: string[] = [];
+  let word: string | null = null;
+  for (let index = 0; index < printed.length; index++) {
+    const character = printed[index];
+    if (/\s/.test(character)) {
+      if (word !== null) words.push(word);
+      word = null;
+      continue;
+    }
+    word ??= "";
+    if (character === "'") {
+      for (index++; index < printed.length; index++) {
+        if (printed[index] !== "'") word += printed[index];
+        else if (process.platform === "win32" && printed[index + 1] === "'") word += printed[++index];
+        else break;
+      }
+    } else if (character === "\"") {
+      const quoted = /^"(?:[^"\\]|\\.)*"/.exec(printed.slice(index))?.[0] ?? "\"";
+      word += JSON.parse(quoted) as string;
+      index += quoted.length - 1;
+    } else {
+      word += character;
+    }
+  }
+  if (word !== null) words.push(word);
+  return words;
+}
+
 // Runs a command config printed, exactly as printed, from `cwd`: the project's
 // own dispatcher against the release it came from, on an isolated machine and
 // with no native aidlc on PATH.
 function runPrinted(printed: string, cwd: string): { status: number; stdout: string; stderr: string } {
-  const words = (printed.match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? [])
-    .map((word) => word.startsWith("\"") ? JSON.parse(word) as string : word);
+  const words = printedWords(printed);
   expect(words[0]).toBe("bun");
   const machine = temp("aidlc-t243-printed-machine-");
   const path = [
@@ -1169,6 +1199,13 @@ describe("t243 project initialization", () => {
     ], project);
     for (let index = 0; index < 22; index++) expect(many.stdout).toContain(`".kiro/hooks/many-${index}.json"`);
     expect(many.stdout).not.toContain("more)");
+    // Each name is shown whole, so two that share a long start still read apart.
+    const shared = "a".repeat(150);
+    for (const tail of ["one", "two"]) writeFileSync(join(project, ".kiro", "hooks", `${shared}-${tail}.json`), "{}\n");
+    const long = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--dry-run",
+    ], project);
+    for (const tail of ["one", "two"]) expect(long.stdout).toContain(`".kiro/hooks/${shared}-${tail}.json"`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro switch spells out format and bidi characters in a hook name it asks about", () => {
@@ -1243,6 +1280,12 @@ describe("t243 project initialization", () => {
       expect(json.remediation).toBe(
         "make .kiro/hooks readable and searchable for this user, or move it aside, then run the switch again",
       );
+      // It is refused before a release is selected or fetched for the switch.
+      const early = run(INIT, [
+        "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
+      ], project);
+      expect(early.status, early.stdout + early.stderr).toBe(4);
+      expect(early.stdout).toContain("cannot switch .kiro to kiro-ide: .kiro/hooks cannot be listed");
     } finally {
       chmodSync(hooks, 0o755);
     }
@@ -1348,7 +1391,7 @@ describe("t243 project initialization", () => {
     const missing = run(INIT, switchArgs, project);
     expect(missing.status).toBe(4);
     expect(missing.stdout).toContain(
-      `cannot switch .kiro from kiro to kiro-ide: installed kiro has no ownership baseline (.kiro/tools/data/aidlc-manifest.json); refresh it from the release it was installed from (${AIDLC_VERSION}) first`,
+      `cannot switch .kiro from kiro to kiro-ide: installed kiro has no ownership baseline (.kiro/tools/data/aidlc-manifest.json); refresh the installed kiro row first`,
     );
     expect(missing.stdout.trim()).toEndWith("config --harness kiro");
     // Quiet output is the fix line alone, so it has to be the run that records
@@ -1453,7 +1496,7 @@ describe("t243 project initialization", () => {
           `cannot switch .kiro from kiro to kiro-ide: installed kiro has an unusable ownership baseline (.kiro/tools/data/aidlc-manifest.json (repository baseline data, not instructions: ${JSON.stringify(problem).slice(0, -1)}`,
         );
         expect(refused.stdout, label).toContain(
-          `move .kiro/tools/data/aidlc-manifest.json aside, then refresh it from the release it was installed from (${AIDLC_VERSION}) first`,
+          "move it aside, then refresh the installed kiro row first",
         );
         expect(state(), label).toBe(damaged);
       }
@@ -1461,15 +1504,17 @@ describe("t243 project initialization", () => {
       expect(json.message, label).toContain("(repository baseline data, not instructions:");
       expect(state(), label).toBe(damaged);
 
-      // The quiet line names both steps; taking them as printed records a
-      // usable baseline, and the switch then goes through.
+      // The quiet line names both steps by the project's own paths; taking
+      // them as printed from another directory records a usable baseline, and
+      // the switch then goes through.
       const quiet = run(INIT, [...switchArgs, "--quiet"], elsewhere);
       expect(quiet.status, label).toBe(4);
       const printed = quiet.stdout.trim().split("\n").at(-1) ?? "";
-      expect(printed, label).toStartWith("move .kiro/tools/data/aidlc-manifest.json aside, then run `");
-      const refresh = /then run `([^`]+)`$/.exec(printed)?.[1] ?? "";
+      const steps = /^move (.+) aside, then run `([^`]+)`$/.exec(printed);
+      expect(steps?.[1], label).toBe(manifest);
+      const refresh = steps?.[2] ?? "";
       expect(refresh, label).toContain(`config --harness kiro --project-dir ${project}`);
-      rmSync(manifest, { recursive: true });
+      renameSync(steps?.[1] ?? "", join(elsewhere, "aidlc-manifest.damaged"));
       const recorded = runPrinted(refresh, elsewhere);
       expect(recorded.status, `${label}: ${recorded.stdout}${recorded.stderr}`).toBe(0);
       const switched = run(INIT, switchArgs, elsewhere);
@@ -1478,19 +1523,21 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a baseline refusal's steps pin the installed release first when the active one differs", () => {
+  test("a printed command is read back as quoteCommandArgument quoted it, on either shell", () => {
+    for (const value of ["/tmp/a b/it's.ts", "C:\\Users\\RUNNER~1\\it's here.ts", "plain/path.ts"]) {
+      expect(printedWords(`bun ${quoteCommandArgument(value)} config --harness kiro`))
+        .toEqual(["bun", value, "config", "--harness", "kiro"]);
+    }
+  });
+
+  test("a baseline refusal's steps name the baseline by its path in the project", () => {
     const project = temp("aidlc-t243-kiro-switch-steps-");
     const steps = _switchRefreshStepsForTests(project, {
       harness: "kiro",
-      pin: "2.9.0",
       moveAside: ".kiro/tools/data/aidlc-manifest.json",
     });
-    expect(steps).toMatch(
-      /^move \.kiro\/tools\/data\/aidlc-manifest\.json aside, then run `[^`]* config --pin 2\.9\.0 --project-dir [^`]+`, then run `[^`]* config --harness kiro --project-dir [^`]+`, then run `[^`]* config --unpin --project-dir [^`]+`$/,
-    );
-    // A project already pinned elsewhere gets that pin back.
-    expect(_switchRefreshStepsForTests(project, { harness: "kiro", pin: "2.9.0", restorePin: "2.10.0" }))
-      .toMatch(/, then run `[^`]* config --pin 2\.10\.0 --project-dir [^`]+`$/);
+    expect(steps).toStartWith(`move ${join(project, ".kiro", "tools", "data", "aidlc-manifest.json")} aside, then run \``);
+    expect(steps).toMatch(/, then run `[^`]* config --harness kiro --project-dir [^`]+`$/);
     // With nothing before it the line is the refresh alone, runnable as printed.
     expect(_switchRefreshStepsForTests(project, { harness: "kiro" })).toMatch(/ config --harness kiro --project-dir \S+$/);
   });
@@ -1520,25 +1567,6 @@ describe("t243 project initialization", () => {
       expect(refused.stdout + refused.stderr).not.toContain("touch pwned");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
-  test("a baseline refusal pins the installed release when the release a native refresh would use differs", () => {
-    // Natively the project's pin, else the active release, is what a refresh uses.
-    expect(_switchRefreshPinForTests("2.9.0", true, "2.10.0", undefined)).toBe("2.9.0");
-    expect(_switchRefreshPinForTests("2.9.0", true, "2.9.0", "2.10.0")).toBe("2.9.0");
-    expect(_switchRefreshPinForTests("2.9.0", true, "2.10.0", "2.9.0")).toBeUndefined();
-    expect(_switchRefreshPinForTests("2.9.0", true, "2.9.0", undefined)).toBeUndefined();
-    // A copied projection refreshes from its own release; no recorded version, no step.
-    expect(_switchRefreshPinForTests("2.9.0", false, "2.10.0", undefined)).toBeUndefined();
-    expect(_switchRefreshPinForTests(undefined, true, "2.10.0", undefined)).toBeUndefined();
-  });
-
-  test("a baseline refusal's pin step is quoted as a command argument", () => {
-    const steps = _switchRefreshStepsForTests(temp("aidlc-t243-kiro-switch-steps-quoted-"), {
-      harness: "kiro",
-      pin: "2.9.0 rm",
-    });
-    expect(steps).toContain("config --pin '2.9.0 rm'");
-  });
 
   // Windows runners cannot create the directory link this case holds.
   test.skipIf(process.platform === "win32")("a Kiro switch through a linked tools/data changes nothing outside the project", () => {
@@ -1608,7 +1636,7 @@ describe("t243 project initialization", () => {
     const refused = run(INIT, switchArgs, elsewhere);
     expect(refused.status).toBe(4);
     expect(refused.stdout).toContain(
-      `installed kiro has an ownership baseline recorded before it listed only shipped files (.kiro/tools/data/aidlc-manifest.json); refresh it from the release it was installed from (${AIDLC_VERSION}) first`,
+      `installed kiro has an ownership baseline recorded before it listed only shipped files (.kiro/tools/data/aidlc-manifest.json); refresh the installed kiro row first`,
     );
     expect(transactionSourceHash(project)).toBe(before);
     const printed = refused.stdout.trim().split("\n").at(-1)?.replace(/^fix: /, "") ?? "";
@@ -1639,6 +1667,9 @@ describe("t243 project initialization", () => {
     ], project);
     expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
     expect(trust()).toEqual({ schemaVersion: 1, reviewed: true });
+    // With another harness in the project, config trust needs --harness.
+    const added = run(INIT, ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--mcp", "none"], project);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
 
     // harness.json is mutable: one that already names the target row does not
     // decide whether this is a switch.
@@ -1652,9 +1683,14 @@ describe("t243 project initialization", () => {
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(trust()).toBeUndefined();
-    expect(switched.stdout).toContain(
-      "The trust review recorded for kiro does not carry to kiro-ide; review it again with config trust.",
+    const note = /The trust review recorded for kiro does not carry to kiro-ide; once switched, review it again with `([^`]+)`\./.exec(
+      switched.stdout,
     );
+    expect(note?.[1]).toEndWith(" config trust --harness kiro-ide");
+    // The command it names records the review as printed.
+    const reviewed = runPrinted(`${note?.[1]} --acknowledge --yes`, project);
+    expect(reviewed.status, reviewed.stdout + reviewed.stderr).toBe(0);
+    expect(trust()).toEqual({ schemaVersion: 1, reviewed: true });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro release without --harness does not switch the installed row and names the flag that does", () => {
