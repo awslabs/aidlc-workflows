@@ -915,7 +915,7 @@ export async function run(
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
     if (commandKind === "continue" && subArgs.length > 1) {
-      return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("continue <receipt>")}\` with that receipt.` };
+      return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
     }
     if (commandKind === "park" && subArgs.length !== 0) {
       const extra = /^[A-Za-z0-9_.:=+-]+$/.test(subArgs[0]) ? `, and this one has \`${subArgs[0]}\`` : "";

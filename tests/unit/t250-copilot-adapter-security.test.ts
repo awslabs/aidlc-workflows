@@ -899,7 +899,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       expect(reason("aidlc engine orchestrate park 'a `b` c'")).not.toContain("`b`");
       const extra = reason("aidlc continue ABCD1234 EFGH5678");
       expect(extra).toContain("`continue` takes only the receipt");
-      expect(extra).toContain("`aidlc continue <receipt>`");
+      expect(extra).toContain("Run `aidlc next`");
+      expect(extra).not.toContain("<receipt>");
       expect(extra).not.toContain("chaining");
       for (const command of ["aidlc engine orchestrate next --project-dir", "aidlc engine orchestrate next --project-dir ./no-such-folder"]) {
         const text = reason(command);
@@ -912,6 +913,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       // The form it names is the next step that works.
       const parked = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate park")));
       expect(parked.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+      const fresh = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc next")));
+      expect(fresh.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
     } finally {
       s.cleanup();
     }
