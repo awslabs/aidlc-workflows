@@ -169,6 +169,10 @@ export interface DriveResult {
   stoppedAfterAskUserQuestion: boolean;
   /** True when an intentional matching tool_result boundary aborted the stream. */
   stoppedAfterToolResult: boolean;
+  /** Each finished turn, in order (the last turn is absent when a stop aborted it). */
+  turns?: DriveTurnEnd[];
+  /** Stop hook verdicts, when captureStopHooks was set. */
+  stopHooks?: CapturedStopHook[];
 }
 
 // ---------------------------------------------------------------------------
@@ -270,24 +274,41 @@ function buildAnswers(
 
 export interface DriveInput {
   readonly messages: AsyncIterable<SDKUserMessage>;
+  /** The person's next message in the same session; ignored once closed. */
+  send(text: string): void;
   close(reason: string): void;
   readonly closedReason: string | undefined;
 }
 
 export function driveInput(prompt: string): DriveInput {
-  let release!: () => void;
-  const released = new Promise<void>((resolve) => { release = resolve; });
+  const queued = [prompt];
+  let wake: (() => void) | undefined;
   let closedReason: string | undefined;
+  const release = (): void => {
+    const resume = wake;
+    wake = undefined;
+    resume?.();
+  };
   async function* messages(): AsyncGenerator<SDKUserMessage> {
-    yield {
-      type: "user",
-      message: { role: "user", content: prompt },
-      parent_tool_use_id: null,
-    } as SDKUserMessage;
-    await released;
+    for (;;) {
+      while (queued.length > 0) {
+        yield {
+          type: "user",
+          message: { role: "user", content: queued.shift()! },
+          parent_tool_use_id: null,
+        } as SDKUserMessage;
+      }
+      if (closedReason !== undefined) return;
+      await new Promise<void>((resolve) => { wake = resolve; });
+    }
   }
   return {
     messages: messages(),
+    send(text: string) {
+      if (closedReason !== undefined) return;
+      queued.push(text);
+      release();
+    },
     close(reason: string) {
       if (closedReason !== undefined) return;
       closedReason = reason;
@@ -295,6 +316,19 @@ export function driveInput(prompt: string): DriveInput {
     },
     get closedReason() { return closedReason; },
   };
+}
+
+/** Claude Code's own result when the person picks a picker's "Chat about
+ *  this" instead of an option (bundled CLI 2.1.158): no answer, and the agent
+ *  is told to ask what they want to clarify. */
+export function chatAboutThisResult(questions: AskUserQuestionItem[]): string {
+  return `The user wants to clarify these questions.
+    This means they may have additional information, context or questions for you.
+    Take their response into account and then reformulate the questions if appropriate.
+    Start by asking them what they would like to clarify.
+
+    Questions asked:
+${questions.map((q) => `- "${q.question}"\n  (No answer provided)`).join("\n")}`;
 }
 
 /** Tasks the CLI has started and not yet reported, read from its
@@ -397,6 +431,41 @@ export interface DriveOptions {
     resultIncludes: string;
     inputExcludes?: string;
   };
+  /**
+   * The person picks the picker's "Chat about this" instead of an option for a
+   * menu this selects: the question stays unanswered (empty `answers`) and the
+   * agent gets Claude Code's own clarify result, so the turn can end with the
+   * question open, as it does for a person who answers in their own message.
+   */
+  chatAboutQuestionWhen?: (menu: CapturedAskUserQuestion) => boolean;
+  /**
+   * The person's next message in the same session. Called when a turn ends (a
+   * result with no task pending) with what that turn did; return the message to
+   * send, or undefined to end the drive. Without it the drive ends at the first
+   * such result, as before.
+   */
+  nextMessage?: (turn: DriveTurnEnd) => string | undefined;
+  /** Capture every Stop hook verdict into DriveResult.stopHooks. */
+  captureStopHooks?: boolean;
+}
+
+/** What one turn of a drive left behind, counted from the start of the drive. */
+export interface DriveTurnEnd {
+  /** One-based turn number: 1 is the drive's prompt. */
+  turn: number;
+  askedQuestions: number;
+  toolResults: number;
+  stopHooks: number;
+}
+
+/** One Stop hook run, from the SDK's hook_response event. */
+export interface CapturedStopHook {
+  /** The turn it ended or re-fed (one-based). */
+  turn: number;
+  /** True when its output blocked the stop; `reason` is what the agent got. */
+  blocked: boolean;
+  reason?: string;
+  outcome: string;
 }
 
 interface ClaudeSettings {
@@ -589,6 +658,8 @@ export async function driveAidlc(
 
   const toolResults: CapturedToolResult[] = [];
   const askedQuestions: CapturedAskUserQuestion[] = [];
+  const turns: DriveTurnEnd[] = [];
+  const stopHooks: CapturedStopHook[] = [];
   // toolUseID -> { toolName, input } so we can join tool_use to its later
   // synthetic-user tool_result block.
   const pendingTools = new Map<
@@ -599,6 +670,7 @@ export async function driveAidlc(
   let assistantText = "";
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
+  let turn = 1;
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
   let stopAfterAskUserQuestionToolUseId: string | undefined;
@@ -658,6 +730,7 @@ export async function driveAidlc(
         // Each drive has its own config directory. Natural-completion tests
         // need the transcript that Stop hooks inspect before accepting a stop.
         persistSession: opts.persistSession ?? false,
+        ...(opts.captureStopHooks ? { includeHookEvents: true } : {}),
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         ...(containment
@@ -671,10 +744,19 @@ export async function driveAidlc(
           if (toolName === "AskUserQuestion") {
             const questions =
               (input as { questions?: AskUserQuestionItem[] }).questions ?? [];
-            const answers = buildAnswers(questions, answerScript, askMenuIndex);
+            const chat = opts.chatAboutQuestionWhen?.({ questions, answers: {} }) === true;
+            const answers = chat ? {} : buildAnswers(questions, answerScript, askMenuIndex);
             askMenuIndex++;
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
+            if (chat) {
+              writeSdkTrace(tracePath, "ask_user_question_chat", {
+                turn,
+                questions: questions.map((q) => q.question),
+              });
+              opts.onAskUserQuestion?.(captured);
+              return { behavior: "deny", message: chatAboutThisResult(questions) };
+            }
             const predicateSelected = opts.stopAfterAskUserQuestionWhen?.(captured) === true;
             if (predicateSelected && stopAfterAskUserQuestionToolUseId === undefined) {
               if (!permissionOptions.toolUseID) {
@@ -724,6 +806,11 @@ export async function driveAidlc(
       if (msg.type === "system") {
         const m = msg as Record<string, unknown>;
         trackDriveTask(pendingTasks, m);
+        if (m.subtype === "hook_response" && m.hook_event === "Stop") {
+          const stop = capturedStopHook(m, turn);
+          stopHooks.push(stop);
+          writeSdkTrace(tracePath, "stop_hook", { ...stop });
+        }
         if (typeof m.subtype === "string" && m.subtype.startsWith("task_")) {
           writeSdkTrace(tracePath, "system", {
             subtype: m.subtype,
@@ -871,7 +958,21 @@ export async function driveAidlc(
         // With a task still unreported the session resumes when it reports,
         // so the stream stays open; the drive's own timeout bounds the wait.
         if (resultEvent.is_error || pendingTasks.size === 0) {
-          closeInput(resultEvent.is_error ? "error result" : "result with no task pending");
+          const ended: DriveTurnEnd = {
+            turn,
+            askedQuestions: askedQuestions.length,
+            toolResults: toolResults.length,
+            stopHooks: stopHooks.length,
+          };
+          turns.push(ended);
+          const next = resultEvent.is_error ? undefined : opts.nextMessage?.(ended);
+          if (next === undefined) {
+            closeInput(resultEvent.is_error ? "error result" : "result with no task pending");
+          } else {
+            turn++;
+            writeSdkTrace(tracePath, "next_message", { turn, message: next });
+            input.send(next);
+          }
         }
       }
     }
@@ -947,6 +1048,8 @@ export async function driveAidlc(
     timedOut,
     stoppedAfterAskUserQuestion,
     stoppedAfterToolResult,
+    turns,
+    stopHooks,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the
@@ -957,6 +1060,20 @@ export async function driveAidlc(
   if (audit !== undefined) result.auditEvents = audit;
 
   return result;
+}
+
+/** A Stop hook's verdict: a block rides its stdout as {"decision":"block"}. */
+export function capturedStopHook(message: Record<string, unknown>, turn: number): CapturedStopHook {
+  const stdout = typeof message.stdout === "string" ? message.stdout.trim() : "";
+  let verdict: { decision?: unknown; reason?: unknown } = {};
+  try { if (stdout) verdict = JSON.parse(stdout) as typeof verdict; } catch { /* not a block */ }
+  const blocked = verdict.decision === "block";
+  return {
+    turn,
+    blocked,
+    ...(blocked && typeof verdict.reason === "string" ? { reason: verdict.reason } : {}),
+    outcome: typeof message.outcome === "string" ? message.outcome : "",
+  };
 }
 
 // ---------------------------------------------------------------------------
