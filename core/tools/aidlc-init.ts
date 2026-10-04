@@ -83,6 +83,7 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
+  type TransactionOptions,
   type TransactionPlan,
   TransactionFilesystemError,
   assertTransactionFilesystem,
@@ -4098,11 +4099,11 @@ function executeGlobalSettingsMutation(
 function executeSettingsAndProjectMutation(
   mutation: SettingsMutation | undefined,
   projectPlan: TransactionPlan,
-  validateProjectLocked?: () => void,
+  projectChecks: Pick<TransactionOptions, "validateLocked" | "validateCommitted"> = {},
 ): void {
   const operation = globalSettingsOperation(mutation);
   if (!operation || !mutation) {
-    executePlan(projectPlan, { validateLocked: validateProjectLocked });
+    executePlan(projectPlan, projectChecks);
     return;
   }
   const machinePlan: TransactionPlan = {
@@ -4142,7 +4143,7 @@ function executeSettingsAndProjectMutation(
     invalidateSettingsCache(mutation.path);
   }
   try {
-    executePlan(projectPlan, { validateLocked: validateProjectLocked });
+    executePlan(projectPlan, projectChecks);
   } catch (error) {
     const restoreOperations: TransactionOperation[] = priorBytes === null
       ? committed === "absent"
@@ -9377,8 +9378,16 @@ export async function main(
       Object.keys(files).some((rel) => rel.startsWith(`${hooksDir}/`) && rel.endsWith(".json"));
     // A link could pull in files the plan never saw, or make this run read
     // outside the project, so a switch refuses rather than follow one.
+    // A hook file the plan removes (the installed row shipped it) is not one
+    // Kiro will run, so it is neither named nor expected after the commit.
+    const accounted: Record<string, string> = {
+      ...files,
+      ...Object.fromEntries(
+        operations.filter((operation) => operation.kind === "remove").map((operation) => [operation.path, "remove"]),
+      ),
+    };
     const hookScan = hookGate
-      ? scanUnownedHooks(projectDir, hooksDir, files)
+      ? scanUnownedHooks(projectDir, hooksDir, accounted)
       : { redirected: false, unreadable: false, entries: [] };
     // The directory itself was held reviewable before planning.
     const redirected = hookScan.entries.filter((entry) => !entry.regular).map((entry) => entry.path);
@@ -9578,30 +9587,38 @@ export async function main(
         return;
       }
     }
-    // Under the transaction lock the hook set is read again: a file added,
-    // removed, renamed, or changed since the plan was approved stops the switch.
-    const validateHooksLocked = hookGate
-      ? () => {
-        const now = scanUnownedHooks(projectDir, hooksDir, files);
-        if (now.redirected || now.unreadable || canonical(now.entries) !== canonical(unownedHooks)) {
-          throw new SwitchRefusal(
-            `${hooksDir}: hook files AI-DLC does not own changed after this switch was planned; review them and run the switch again`,
-            { kind: "text", text: "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token" },
-          );
-        }
-      }
-      : undefined;
-    // Test seam: a writer that adds a hook file after approval and before the
-    // transaction lock. The file is an empty object, which registers nothing.
-    if (hookGate && process.env.AIDLC_TEST_SWITCH_HOOK_INTERFERENCE === "1") {
+    // Under the transaction lock the hook set is read again before staging,
+    // and once more after the files are committed, where a mismatch rolls the
+    // switch back: a file added, removed, renamed, or changed between the
+    // approval and the commit stops the switch.
+    // Test seam: a writer that adds a hook file after approval, before the
+    // transaction lock ("1") or while the switch commits ("committed"). The
+    // file is an empty object, which registers nothing.
+    const interference = hookGate ? process.env.AIDLC_TEST_SWITCH_HOOK_INTERFERENCE : undefined;
+    const interfere = () =>
       writeFileSync(join(projectDir, hooksDir, "aidlc-test-interference.json"), "{}\n");
-    }
+    if (interference === "1") interfere();
+    const checkHooks = (committed: boolean) => {
+      if (committed && interference === "committed") interfere();
+      const now = scanUnownedHooks(projectDir, hooksDir, accounted);
+      if (now.redirected || now.unreadable || canonical(now.entries) !== canonical(unownedHooks)) {
+        throw new SwitchRefusal(
+          committed
+            ? `${hooksDir}: hook files AI-DLC does not own changed while this switch was applied, so it was rolled back; review them and run the switch again`
+            : `${hooksDir}: hook files AI-DLC does not own changed after this switch was planned; review them and run the switch again`,
+          { kind: "text", text: "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token" },
+        );
+      }
+    };
+    const hookChecks = hookGate
+      ? { validateLocked: () => checkHooks(false), validateCommitted: () => checkHooks(true) }
+      : {};
     if (refreshing) {
       withAuditLock(
         projectDir,
         () => {
           assertRefreshSafe(projectDir);
-          executeSettingsAndProjectMutation(settingsMutation, plan, validateHooksLocked);
+          executeSettingsAndProjectMutation(settingsMutation, plan, hookChecks);
         },
         undefined,
         undefined,

@@ -1035,12 +1035,58 @@ describe("t243 project initialization", () => {
     expect(stampOf()).toBe("kiro");
     rmSync(join(hooks, "aidlc-test-interference.json"));
 
+    // One added while the switch commits rolls it back.
+    const committing = run(INIT, switchArgs, project, {
+      AIDLC_TEST_CONFIG_TTY: "1",
+      AIDLC_TEST_CONFIG_INPUT: "y\n",
+      AIDLC_TEST_SWITCH_HOOK_INTERFERENCE: "committed",
+    });
+    expect(committing.status, committing.stdout + committing.stderr).toBe(4);
+    expect(committing.stdout + committing.stderr).toContain(
+      ".kiro/hooks: hook files AI-DLC does not own changed while this switch was applied, so it was rolled back",
+    );
+    expect(committing.stdout + committing.stderr).toContain(
+      "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token",
+    );
+    expect(stampOf()).toBe("kiro");
+    expect(existsSync(join(hooks, "aidlc-continue-workflow.json"))).toBe(false);
+    expect(readdirSync(project).filter((name) => name.startsWith(".aidlc-txn-"))).toEqual([]);
+    rmSync(join(hooks, "aidlc-test-interference.json"));
+
     const applied = apply(token);
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
     expect(stampOf()).toBe("kiro-ide");
     expect(readFileSync(hook, "utf-8")).toBe(reviewed);
     expect(statSync(hook).ino).toBe(statSync(shared).ino);
     expect(statSync(hook).nlink).toBe(2);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Kiro switch neither names nor rechecks a hook file it removes", () => {
+    const project = temp("aidlc-t243-kiro-switch-removed-hook-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    // The installed row's baseline owns a hook file the next row does not ship,
+    // so the switch removes it.
+    const shipped = ".kiro/hooks/aidlc-retired.json";
+    const bytes = "{}\n";
+    writeFileSync(join(project, shipped), bytes);
+    const manifestPath = join(project, ".kiro", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    manifest.files[shipped] = sha256Bytes(Buffer.from(bytes));
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const switched = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
+    ], project);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(switched.stdout).not.toContain("AI-DLC does not own");
+    expect(existsSync(join(project, shipped))).toBe(false);
+    expect(
+      JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution,
+    ).toBe("kiro-ide");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Creating a file or directory symlink needs a privilege Windows runners do not grant.
