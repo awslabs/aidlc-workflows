@@ -375,6 +375,10 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc --claim u1", "aidlc --claim"],
       ["aidlc engine --release u1", "aidlc engine --release"],
       ["bun .claude/tools/aidlc.ts --claim u1", "aidlc.ts --claim"],
+      // Purging parked Bolt work.
+      ["bun .claude/tools/aidlc-worktree.ts purge --slug u1 --older-than 0", "aidlc-worktree.ts purge"],
+      ["bun .claude/tools/aidlc-worktree.ts --project-dir . purge --slug u1", "aidlc-worktree.ts purge"],
+      ["aidlc engine worktree --json purge --slug u1", "aidlc engine worktree purge"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
@@ -429,6 +433,11 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc-runtime.ts read",
       "bun .claude/tools/aidlc-testing-posture.ts brief --unit u1",
       "bun .claude/tools/aidlc-worktree.ts merge u1",
+      "bun .claude/tools/aidlc-worktree.ts create --slug u1 --base main",
+      "bun .claude/tools/aidlc-worktree.ts discard --slug u1",
+      "aidlc engine worktree restore --slug u1",
+      "aidlc engine worktree info --slug u1",
+      "aidlc engine plugin select --no-color",
     ]) {
       expect(delegatedLifecycleCommand(read), read).toBeNull();
     }

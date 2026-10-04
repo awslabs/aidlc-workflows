@@ -91,6 +91,9 @@ const DELEGATED_LEARNINGS_VERBS = ["persist"];
 const DELEGATED_RUNTIME_VERBS = ["fragment-fork", "fragment-merge"];
 // The Code Generation boundary and the plan-approval fingerprint.
 const DELEGATED_TESTING_POSTURE_VERBS = ["begin", "fingerprint"];
+// Purging a Bolt's parked work deletes its only retained copy; the other
+// worktree verbs are pipeline-deploy's dispatches or reads.
+const DELEGATED_WORKTREE_VERBS = ["purge"];
 const DELEGATED_SCRIPT_VERBS: Readonly<Record<string, readonly string[]>> = {
   "aidlc-orchestrate.ts": DELEGATED_ORCHESTRATE_VERBS,
   "aidlc-jump.ts": DELEGATED_JUMP_VERBS,
@@ -101,6 +104,7 @@ const DELEGATED_SCRIPT_VERBS: Readonly<Record<string, readonly string[]>> = {
   "aidlc-learnings.ts": DELEGATED_LEARNINGS_VERBS,
   "aidlc-runtime.ts": DELEGATED_RUNTIME_VERBS,
   "aidlc-testing-posture.ts": DELEGATED_TESTING_POSTURE_VERBS,
+  "aidlc-worktree.ts": DELEGATED_WORKTREE_VERBS,
   "aidlc-plugin.ts": ["sync"],
 };
 export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
@@ -161,6 +165,7 @@ const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = 
   learnings: DELEGATED_LEARNINGS_VERBS,
   runtime: DELEGATED_RUNTIME_VERBS,
   "testing-posture": DELEGATED_TESTING_POSTURE_VERBS,
+  worktree: DELEGATED_WORKTREE_VERBS,
 };
 
 const isOneOf = (list: readonly string[], word: string): boolean => list.includes(word);

@@ -25,7 +25,7 @@ import {
   delegatedLifecycleCommand,
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { ROUTES, TOOLS } from "../../core/tools/aidlc.ts";
-import { trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
+import { LAUNCHER_GLOBAL_FLAGS, trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { isWorkspaceNoun, parseWorkspaceCommand, UTILITY_COMMANDS, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
 export type ShellDeny = { match: string[]; exclude: string[] };
@@ -38,11 +38,12 @@ const delegateMayRun = (command: string): boolean =>
   [`${command} x`, `${command} x y`].every((sample) => delegatedLifecycleCommand(sample) === null);
 // A command the guard refuses with an argument but allows bare (a query, such
 // as `select-plugins` printing the current selection) is excluded exactly, and
-// with `--json` when the guard allows that too.
-const exactQuery = (command: string): string[] =>
-  [command, ...(command.endsWith(" --json") ? [] : [`${command} --json`])].filter(
-    (query) => delegatedLifecycleCommand(query) === null,
-  );
+// with each of the dispatcher's global flags the guard allows there too.
+const exactQuery = (command: string): string[] => {
+  const words = command.split(" ");
+  return [command, ...[...LAUNCHER_GLOBAL_FLAGS].filter((flag) => !words.includes(flag)).map((flag) => `${command} ${flag}`)]
+    .filter((query) => delegatedLifecycleCommand(query) === null);
+};
 const exclusionsFor = (command: string): string[] =>
   delegateMayRun(command) ? both(command) : exactQuery(command);
 
@@ -54,11 +55,11 @@ const hostOnlyTools = new Set(
 // A workspace noun's reads, as the workspace parser reads them: the bare noun
 // (excluded exactly, since `<noun> <name>` switches) and the list and help forms.
 const workspaceReads = (noun: string): string[] =>
-  ["list", "--json", "--all", "help", "-h"]
+  ["list", "--all", "help", "-h"]
     .filter((token) => ["list", "help"].includes(parseWorkspaceCommand([noun, token]).kind))
     .map((token) => `${noun} ${token}`);
 const workspaceExclusions = (prefix: string, noun: string): string[] => [
-  `${prefix} ${noun}`,
+  ...exactQuery(`${prefix} ${noun}`),
   ...workspaceReads(noun).flatMap((read) => exclusionsFor(`${prefix} ${read}`)),
 ];
 
