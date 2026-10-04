@@ -3,6 +3,7 @@
 // summary and the published notes carry the failing jobs and test cases instead.
 import fs from "node:fs";
 import { basename, join } from "node:path";
+import { unmetLegs } from "./ci-full-suite-result.ts";
 
 const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z-p\d+$/;
 const FAILED_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure"]);
@@ -143,6 +144,8 @@ export function renderReport(options: {
   runUrl: string;
   runId: string;
   legs: Record<string, string> | undefined;
+  /** Legs this run's purpose skips by design; they are not failures. */
+  omittedLegs?: readonly string[];
   runs: RunFailures[];
   jobs: FailedJob[] | undefined;
 }): string {
@@ -154,7 +157,7 @@ export function renderReport(options: {
     return `${lines.join("\n")}\n`;
   }
   lines.push(`Full Suite **failed** for ${source} in ${run}. The preview build does not wait for these tests.`, "");
-  const legs = Object.entries(options.legs ?? {}).filter(([, status]) => status !== "success");
+  const legs = unmetLegs(options.legs ?? {}, options.omittedLegs ?? []);
   lines.push(options.legs
     ? `Failed legs: ${legs.map(([job, status]) => `${code(job)} (${status})`).join(", ") || "none recorded"}.`
     : "The Full Suite result file was not available.");
@@ -253,7 +256,7 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     process.exit(1);
   }
   const result = readJson(join(evidenceDir, "full-suite-result", "full-suite-result.json")) as
-    { legs?: Record<string, string> } | undefined;
+    { legs?: Record<string, string>; omittedLegs?: unknown } | undefined;
   const pages = readJson(jobsPath);
   const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
   const runId = process.env.FULL_SUITE_RUN_ID || process.env.GITHUB_RUN_ID || "";
@@ -263,6 +266,7 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     runUrl: `${server}/${process.env.GITHUB_REPOSITORY ?? ""}/actions/runs/${runId}`,
     runId,
     legs: result?.legs,
+    omittedLegs: Array.isArray(result?.omittedLegs) ? result.omittedLegs.filter((job) => typeof job === "string") : [],
     runs: collectFailures(evidenceDir),
     jobs: pages === undefined ? undefined : failedJobs(pages),
   });
