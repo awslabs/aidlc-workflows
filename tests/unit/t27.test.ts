@@ -771,6 +771,25 @@ describe("t27 aidlc-utility scope-change", () => {
     expect(auditEventCount(auditPath(p), "SCOPE_CHANGED")).toBe(1);
   });
 
+  test("22b: scope-change records a setting only when its value changes", () => {
+    const p = emptyDir();
+    expect(util(["intent-create", "--scope", "bugfix"], p).status).toBe(0);
+    expect(util(["scope-change", "--scope", "feature"], p).status).toBe(0);
+    // The rows the scope change wrote follow its own SCOPE_CHANGED row.
+    const blocks = readAudit(p).split(/\n---\n/);
+    const changed = blocks.findIndex((block) => /^\*\*Event\*\*: SCOPE_CHANGED$/m.test(block));
+    expect(changed).toBeGreaterThanOrEqual(0);
+    const settings = blocks.slice(changed + 1)
+      .filter((block) => /^\*\*Event\*\*: (CEREMONY_SET|GUARD_POLICY_SET)$/m.test(block));
+    for (const row of settings) {
+      const before = /^\*\*Old(?: Value)?\*\*: (.*)$/m.exec(row)?.[1];
+      const after = /^\*\*New(?: Value)?\*\*: (.*)$/m.exec(row)?.[1];
+      expect(after, row).not.toBe(before);
+    }
+    // The state still says which scope each kept value now comes from.
+    expect(stateField(p, "Guard Policy")).toBe("off (from scope feature)");
+  });
+
   test("44: scope-change with --depth overrides default (Comprehensive)", () => {
     const p = pocStateAuditProj(true);
     util(["scope-change", "--scope", "mvp", "--depth", "comprehensive"], p);

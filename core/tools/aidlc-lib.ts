@@ -6783,6 +6783,28 @@ export function updateIntentStatus(
   status: string,
   space?: string,
 ): boolean {
+  return updateIntentRow(projectDir, dirName, "status", status, space);
+}
+
+// Record the scope an intent now runs on in its registry row, after a scope
+// change, so a restart offer names the scope the person last chose. Same
+// match, lock, and no-op rules as updateIntentStatus.
+export function updateIntentScope(
+  projectDir: string,
+  dirName: string,
+  scope: string,
+  space?: string,
+): boolean {
+  return updateIntentRow(projectDir, dirName, "scope", scope, space);
+}
+
+function updateIntentRow(
+  projectDir: string,
+  dirName: string,
+  field: "status" | "scope",
+  value: string,
+  space?: string,
+): boolean {
   const sp = space ?? activeSpace(projectDir);
   const path = intentsRegistryPath(projectDir, sp);
   const list = readIntentRegistry(projectDir, sp);
@@ -6790,8 +6812,8 @@ export function updateIntentStatus(
   for (const entry of list) {
     // Match the active dirName via the shared join rule listIntents() uses.
     if (!recordDirMatches(entry, dirName)) continue;
-    if (entry.status !== status) {
-      entry.status = status;
+    if (entry[field] !== value) {
+      entry[field] = value;
       changed = true;
     }
     break;

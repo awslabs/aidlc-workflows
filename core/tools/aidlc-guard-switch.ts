@@ -431,10 +431,14 @@ export function applyIntentSettings(
       content = setGuardPolicyLine(content, line);
       if (previous !== line || cc.conflict !== undefined) {
         const oldValue = cc.conflict !== undefined ? cc.value : cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
-        audit.push({
-          eventType: "GUARD_POLICY_SET",
-          fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
-        });
+        // A scope's default that keeps the value only renames where it came
+        // from: the scope change's own row records that, not a setting row.
+        if (oldValue !== changeControl || cc.conflict !== undefined || !scopeDefault("guard-policy")) {
+          audit.push({
+            eventType: "GUARD_POLICY_SET",
+            fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
+          });
+        }
         const oldDisplay = cc.conflict === undefined && cc.intent === null && cc.rawStateValue !== null
           ? cc.rawStateValue : formatGuardPolicy(cc.value, cc.source);
         if (oldValue !== changeControl || !scopeDefault("guard-policy")) {
@@ -503,8 +507,9 @@ export function applyIntentSettings(
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
     content = setCeremonyField(content, key, value, source);
     const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    // Same as Guard Policy: a scope's default that keeps the value writes no row.
     if (oldValue === value && scopeDefault(flag)) continue;
+    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);

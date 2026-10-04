@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-create, function:intentPickPromptIfRecordsExist, function:createPrintDirective, function:listIntents, function:activeSpace, function:shellArg, function:mintIntentRecord, function:registerIntentRecord, function:selectIntentForSession, function:intentStartedByQuestion, function:unlistedRecordForQuestion, function:listUnlistedIntentRecord
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:intent-create, function:intentPickPromptIfRecordsExist, function:createPrintDirective, function:listIntents, function:activeSpace, function:shellArg, function:mintIntentRecord, function:registerIntentRecord, function:selectIntentForSession, function:intentStartedByQuestion, function:unlistedRecordForQuestion, function:listUnlistedIntentRecord, function:updateIntentScope
 //
 // Mechanism: cli (spawned dist tools) — creation + `next` run end-to-end the way
 // the conductor runs them.
@@ -1186,6 +1186,22 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(createdDescription()).toBe("fix the login bug");
       });
     }
+
+    test("work whose scope changed is offered again on the scope it ran on", () => {
+      const { ask, command } = startWork();
+      expect(ask.proposed_scope).toBe("bugfix");
+      expect(runEmittedCommand(command).status).toBe(0);
+      const [record] = recordDirs(proj);
+      const changed = runEmittedCommand("bun .claude/tools/aidlc.ts engine scope change --scope feature");
+      expect(changed.status, changed.out).toBe(0);
+      expect(readIntentRegistry(proj).find((row) => row.dirName === record)?.scope).toBe("feature");
+      archive(record);
+      const refused = runEmittedCommand(command);
+      const decide = refused.out.match(/Run `([^`]+)` to decide whether to start it again/)?.[1] ?? "";
+      const again = JSON.parse(runEmittedCommand(decide).stdout.trim());
+      expect(again.question).toContain('Say go ahead to set it up again as "feature" work');
+      expect(again.proposed_scope).toBe("feature");
+    });
 
     for (const point of ["after-mint", "before-state"] as const) {
       test(`a start cut off ${point} lists nothing, and trying again just works`, () => {

@@ -385,8 +385,9 @@ describe("t338 atomic per-intent settings", () => {
     expect(getField(content, "Learnings")).toBe("on (from scope feature)");
     expect(getField(content, "Summary Confirmation")).toBeNull();
     const scopeRows = rows(proj).filter((row) => auditBlockField(row.block, "Source") === "scope feature");
-    // Both scope-owned rows now name feature as their source.
-    expect(scopeRows.map((row) => auditBlockField(row.block, "Key"))).toEqual(["learnings", "plan_approval"]);
+    // Both scope-owned rows now name feature as their source. Their values did
+    // not change, so the audit holds no setting row for them.
+    expect(scopeRows).toEqual([]);
     expect(getField(content, "Plan Approval")).toBe("on (from scope feature)");
     const explicit = run(UTILITY, ["scope-change", "--scope", "classic", "--summary-confirmation", "on"], proj);
     expect(explicit.status, explicit.stderr).toBe(0);
