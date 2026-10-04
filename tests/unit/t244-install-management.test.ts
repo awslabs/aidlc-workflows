@@ -2063,9 +2063,11 @@ describe("t244 Windows and completion release surfaces", () => {
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
+  // A fixed binary's preview id comes after the first release with the current
+  // helper: an earlier id is a release that wrote an older one, and gets it back.
   test.skipIf(process.platform !== "win32").each([
     [AIDLC_VERSION, "short"],
-    [`${NEXT_VERSION}-preview.20260930.1`, "long"],
+    [`${NEXT_VERSION}-preview.20261004.1`, "long"],
   ] as const)(
     "a fixed Windows binary replaces the previous launcher helper an update left (%s, %s install path)",
     (fixtureVersion, spelling) => {
