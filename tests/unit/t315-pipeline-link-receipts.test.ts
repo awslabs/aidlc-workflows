@@ -995,7 +995,9 @@ describe("t315 pipeline link receipts", () => {
       links: [LEAD, FINAL],
       completed: [LEAD, FINAL],
     });
-    writeAllCodekbArtifacts(proj);
+    // The close names the code knowledge base in one plain line, and only
+    // when every store the run covers matches the code.
+    writeCurrentCodekbStore(proj);
     const completed = report(proj, [
       "--single",
       "--stage",
@@ -1004,6 +1006,7 @@ describe("t315 pipeline link receipts", () => {
       "completed",
     ]);
     expect(completed.directive?.kind).toBe("done");
+    expect(completed.directive?.narration).toBe("The code knowledge base now matches the code.");
 
     const mainBefore = pipelineLinkEvidence(proj, {
       slug: RE_STAGE,

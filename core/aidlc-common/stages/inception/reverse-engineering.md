@@ -260,8 +260,10 @@ hand-written code.
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
-- Unrecorded project-root repo:
-  `<record>/inception/reverse-engineering/developer-scan.md`
+- Unrecorded project-root repo (no repo is registered, and `codekb-path`
+  prints the project folder's own name):
+  `<record>/inception/reverse-engineering/developer-scan.md`, also when you
+  pass that name as `--repo`, so a rescan replaces the earlier handoff
 - Registered repo (including an exactly-one repo set):
   `<record>/inception/reverse-engineering/developer-scan-<repo>.md`
 
