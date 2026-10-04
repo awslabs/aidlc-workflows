@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -298,6 +298,51 @@ describe("t342 Construction checkpoint routing", () => {
     for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
     approve(p, "alpha", "skeleton");
     expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // At a Unit's checkpoint Current Stage still names the Unit's first stage,
+  // while the checkpoint's questions are logged under its last one. The Stop
+  // hook read Current Stage and pushed the agent past the learnings question
+  // and the approval. Both now end the turn; an answered one does not.
+  test("the turn ends at a checkpoint's learnings question and at its approval", () => {
+    const p = fixture();
+    cpSync(AIDLC_SRC, join(p, ".claude"), { recursive: true });
+    cover(p, "alpha");
+    recordCommand(p);
+    const run = (args: string[], input?: Record<string, unknown>) => spawnSync(process.execPath, args, {
+      encoding: "utf-8", cwd: p,
+      env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_HARNESS_DIR: ".claude" },
+      input: input ? JSON.stringify({ session_id: "t342-stop", ...input }) : undefined,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const hook = (name: string, input: Record<string, unknown>) =>
+      run([join(p, ".claude/tools/aidlc.ts"), "engine", "hook", name], input);
+    const stop = () => {
+      // Each stop stands for a new turn, so the hook's repeat count starts over.
+      rmSync(join(seededRecordDir(p), ".aidlc-engine", "stop-hook"), { recursive: true, force: true });
+      const result = run([join(p, ".claude/hooks/aidlc-continue-workflow.ts")], { hook_event_name: "Stop", stop_hook_active: false });
+      return result.stdout.includes('"decision":"block"') ? "pushed on" : "ends";
+    };
+    expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).status).toBe(0);
+    expect(hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "go on" }).status).toBe(0);
+    Bun.sleepSync(20);
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
+    expect(directive.stage).toBe("code-generation");
+    expect(stop()).toBe("pushed on");
+    const log = (...args: string[]) => {
+      const result = run([join(AIDLC_SRC, "tools/aidlc-log.ts"), ...args, "--stage", directive.stage, "--project-dir", p]);
+      expect(result.status, result.stderr).toBe(0);
+    };
+    log("decision", "--decision", "Anything to add for next time?", "--options", "Nothing to add,Add a note");
+    expect(stop()).toBe("ends");
+    log("answer", "--details", "Nothing to add");
+    expect(stop()).toBe("pushed on");
+    for (const args of [["--action", "verify"], ["--action", "ask", "--session", "t342-stop"]]) {
+      const result = run([join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", "alpha", "--kind", "unit", ...args, "--project-dir", p]);
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    }
+    expect(stop()).toBe("ends");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major reviews alpha before starting beta", () => {
