@@ -1112,6 +1112,33 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     expect(prompts).toHaveLength(2);
   });
 
+  test("a Reject in a helper's chat whose owner cannot be confirmed still ends the person's turn", async () => {
+    for (const lookup of ["throws", "has no record"] as const) {
+      const { root } = nudgingProject();
+      const prompts: string[] = [];
+      const client: PluginInput["client"] = {
+        session: {
+          get: async ({ path }) => {
+            if (path.id === "main") return { data: {} };
+            if (lookup === "throws") throw new Error("lookup failed");
+            return {};
+          },
+          prompt: async ({ body }) => {
+            prompts.push(body.parts[0]?.text ?? "");
+          },
+        },
+      };
+      const adapter = await createTestAdapter(client, root);
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+      await adapter.event(replied("worker", { reply: "reject" }));
+      await adapter.event(idle);
+      expect(prompts, lookup).toHaveLength(0);
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "go on" }] });
+      await adapter.event(idle);
+      expect(prompts, lookup).toHaveLength(1);
+    }
+  });
+
   // What opencode does for a typed /aidlc: its command hook gets the command
   // name and arguments with the template part, then chat.message gets the
   // same parts with ids.

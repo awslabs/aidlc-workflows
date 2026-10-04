@@ -400,6 +400,9 @@ export default async ({
   // a command. The person stopped on purpose, so the idle that follows sends no
   // nudge until they write again.
   const interrupted = new Set<string>();
+  // A Reject whose conversation could not be confirmed: every main session
+  // waits for the person until they write again.
+  let rejectedUnowned = false;
   // What the person typed through /aidlc, by session, set by opencode's own
   // command hook. Only the message carrying the part it added reads it.
   const typedCommands = new Map<string, string>();
@@ -445,22 +448,6 @@ export default async ({
     }
   }
 
-  // The main session a helper's session works for: a command rejected there
-  // stops the person's turn too.
-  async function mainSessionOf(sessionID: string): Promise<string> {
-    let id = sessionID;
-    for (let hop = 0; hop < 8; hop++) {
-      try {
-        const parent = (await client.session.get({ path: { id } })).data?.parentID;
-        if (!parent) return id;
-        id = parent;
-      } catch {
-        return id;
-      }
-    }
-    return id;
-  }
-
   return {
     "chat.message": async (
       input: { sessionID: string; agent?: string },
@@ -480,6 +467,7 @@ export default async ({
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
       interrupted.delete(input.sessionID);
+      rejectedUnowned = false;
       if (!started.has(input.sessionID)) {
         const result = await runCore(
           "aidlc-session-start.ts",
@@ -823,12 +811,18 @@ export default async ({
         const sessionID = (event.properties?.sessionID as string) ?? "";
         // opencode 1.18 names the answer `reply`; earlier releases `response`.
         const answer = event.properties?.reply ?? event.properties?.response;
-        if (sessionID && answer === "reject") interrupted.add(await mainSessionOf(sessionID));
+        if (!sessionID || answer !== "reject") return;
+        // A Reject in a helper's session stops the person's turn too.
+        try {
+          interrupted.add(await owningSession(sessionID));
+        } catch {
+          rejectedUnowned = true;
+        }
         return;
       }
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties?.sessionID as string) ?? "";
-      if (interrupted.has(sessionID)) return;
+      if (interrupted.has(sessionID) || rejectedUnowned) return;
       // A workflow can be created during the first turn, after session-start saw
       // no state. Let the core Stop hook's own state-file guard decide.
       if (!sessionID || !sawHumanTurn.has(sessionID)) return;
