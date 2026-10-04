@@ -1799,6 +1799,12 @@ export function decodeHarnessPlainText(
   );
 }
 
+// How the conductor shows a relayed terminal command's output: Kiro renders the
+// reply as Markdown, which joins single line breaks, so doctor and help read as
+// one block of text; a fenced text block keeps their lines and indentation.
+export const RELAY_AS_TEXT_BLOCK =
+  "inside one fenced text block (```text on its own line before it, ``` after it), exactly as it is";
+
 // A Kiro prompt hook hands the conductor a terminal command's output as context
 // text. That output can carry project text (a document body, a path, a state
 // field), so it sits between markers it cannot reproduce: a fresh random id the

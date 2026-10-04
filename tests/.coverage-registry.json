@@ -8501,6 +8501,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:RELAY_AS_TEXT_BLOCK",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t147-kiro-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:releaseAuditLock",
       "minMechanism": "none",
       "coveredBy": [

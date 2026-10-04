@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv, function:RELAY_AS_TEXT_BLOCK
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -50,6 +50,7 @@ import {
   readAuditShardEvents,
   readIntentRegistry,
   readSessionBinding,
+  RELAY_AS_TEXT_BLOCK,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
@@ -812,6 +813,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("\u001b");
       expect(r.stdout).not.toContain("\u0008");
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+      // Kiro renders the reply as Markdown, which joins single line breaks; a
+      // fenced text block keeps doctor and help on their own lines.
+      expect(r.stdout).toContain(`relay that output to the user ${RELAY_AS_TEXT_BLOCK}, then STOP.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

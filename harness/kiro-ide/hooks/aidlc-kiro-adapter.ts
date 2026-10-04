@@ -103,6 +103,7 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
+  RELAY_AS_TEXT_BLOCK,
   presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -1698,7 +1699,7 @@ function terminalContext(result: TerminalResult): string {
   return (
     "SYSTEM (deterministic harness dispatch): The command " +
     `\`/aidlc ${result.typed}\` has ALREADY been run by the harness. ` +
-    "It carries no workflow work. Relay the output below verbatim, then STOP. " +
+    `It carries no workflow work. Relay the output below ${RELAY_AS_TEXT_BLOCK}, then STOP. ` +
     "Do not call any AIDLC tool this turn.\n\n" +
     fenceCommandOutput(result.output, result.exitCode)
   );
@@ -1710,7 +1711,7 @@ function terminalRefusal(result: TerminalResult): string {
     "already run inside the hook, and this shell call is intentionally refused " +
     "to keep Kiro's Windows shell transport from changing its UTF-8 output. " +
     "Do not retry or run another AIDLC command this turn. Relay the output below " +
-    "verbatim to the user, then stop.\n\n" +
+    `to the user ${RELAY_AS_TEXT_BLOCK}, then stop.\n\n` +
     fenceCommandOutput(result.output, result.exitCode)
   );
 }
