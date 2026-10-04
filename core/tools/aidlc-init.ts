@@ -9492,11 +9492,14 @@ function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutati
 // line says so, and when it moved the project to another release, how to go
 // back. Natively a pin brings the earlier release back; a copied project takes
 // that release's files again. A harness added beside open work has no command
-// that removes it, so its line names the folder it added.
+// that removes it, so its line names the folder it added. A switch is undone
+// by switching back, which the summary line already names, so it has no
+// release line.
 function refreshDoneLines(
   projectDir: string,
   change: {
     added?: string;
+    switched: boolean;
     from?: string;
     to: string;
     pinned: boolean;
@@ -9522,6 +9525,7 @@ function refreshDoneLines(
       stopped.length === 1 ? "it continues" : "they continue"
     } once ${plugins.length === 1 ? "it is" : "they are"} on again.`;
   if (change.added) return [`Added ${change.added}. ${carriesOn}`];
+  if (change.switched) return [`Updated. ${carriesOn}`];
   // The earlier version is read from the project's committed manifest, so it
   // is printed only when it is a release id.
   if (!change.from || change.from === change.to || !VERSION_ID.test(change.from)) return [`Updated. ${carriesOn}`];
@@ -10315,7 +10319,7 @@ export async function main(
     const installed = discoverProjectHarnesses(projectDir);
     // The harness this run replaces in its own directory, if any. A switch is
     // a refresh of that directory: it plans from the occupant's ownership
-    // baseline and is refused under an active workflow like any refresh.
+    // baseline and, like any refresh, is done while work is open.
     let switchingFrom: ProjectHarness | undefined;
     if (!existing.distribution) {
       const collision = installed.find(
@@ -10981,7 +10985,8 @@ export async function main(
     if (openLine) changes.push(openLine);
     if (!recordOnly) {
       changes.push(...refreshDoneLines(projectDir, {
-        added: existing.distribution ? undefined : descriptor.harnessDir,
+        added: existing.distribution || switchingFrom ? undefined : descriptor.harnessDir,
+        switched: switchingFrom !== undefined,
         from: prior?.frameworkVersion,
         to: stamp.frameworkVersion,
         pinned: requiredVersion !== undefined,

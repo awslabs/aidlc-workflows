@@ -1328,7 +1328,7 @@ describe("t243 project initialization", () => {
       .toBe("kiro");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a Kiro switch is refused under an active workflow, like any refresh", () => {
+  test("a Kiro switch while work is open is done, like any refresh", () => {
     const project = temp("aidlc-t243-kiro-switch-active-");
     mkdirSync(join(project, ".git"));
     const initialized = run(INIT, [
@@ -1351,21 +1351,17 @@ describe("t243 project initialization", () => {
       join(intentsDir, "active-switch-probe", "aidlc-state.md"),
       "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
     );
-    const before = transactionSourceHash(project);
-
-    const refused = run(INIT, [
+    const switched = run(INIT, [
       "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
     ], project);
-    expect(refused.status).toBe(4);
-    expect(refused.stdout + refused.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
-    expect(transactionSourceHash(project)).toBe(before);
-    // The guard comes before any source is read or fetched for the switch.
-    const unread = run(INIT, [
-      "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
-    ], project);
-    expect(unread.status).toBe(4);
-    expect(unread.stdout + unread.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
-    expect(transactionSourceHash(project)).toBe(before);
+    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+    expect(switched.stdout + switched.stderr).not.toContain("refusing to refresh");
+    expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
+    expect(switched.stdout).toContain("Updated. Your open work (default/active-switch-probe) carries on.");
+    expect(switched.stdout).not.toContain("Added .kiro");
+    expect(switched.stdout).not.toContain("To go back");
+    expect(JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution)
+      .toBe("kiro-ide");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a copied Kiro project that needs release files for a switch names the switch, not an add", () => {

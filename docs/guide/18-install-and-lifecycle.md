@@ -1067,7 +1067,7 @@ instead: in a project that has one of them, `aidlc config --harness kiro-ide`
 (or `--harness kiro`) switches `.kiro/` to the other in place. The switch is a
 refresh planned from the installed row's ownership baseline: it removes the files
 only that row shipped, keeps `aidlc/`, reports a locally modified file it would
-replace or remove as a conflict, and is refused while a workflow is active.
+replace or remove as a conflict, and, like any refresh, is done while work is open.
 Switching to `kiro-ide` names every `.kiro/hooks/*.json` file AI-DLC does not
 own: Kiro runs those on its v3 engine, which the switch pins in
 `.kiro/settings/cli.json`, and in Kiro IDE. When there is one, the switch applies
