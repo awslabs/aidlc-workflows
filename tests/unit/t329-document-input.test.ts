@@ -162,7 +162,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "already heard how the request was split (the `document_split` line) when the work started, so do not say it again.",
         "Never split the request yourself or ask the user to delimit it again.",
         "Never search for the file yourself or choose among matches for the user: `document-input` looks the name up.",
-        "returns a `selection_note`. When the result also has `notes_said_by_aidlc: true`, AI-DLC says that line to the user itself; otherwise tell the user that line.",
+        "returns a `selection_note`: tell the user that line.",
         "returns `matches` instead: offer them as a numbered pick",
       ]) {
         expect(flat, `${file}: ${phrase}`).toContain(phrase);
@@ -175,9 +175,10 @@ describe("t329 project-description and document-input boundaries", () => {
         "ask the user to delimit it, and end the turn",
         "Never search recursively",
         "require exactly one explicit path",
-        // AI-DLC says these lines itself, so the stage never repeats them.
+        // The person heard how the request was split when the work started.
         "tell the user its `document_split` line",
-        "returns a `selection_note`: tell the user that line.",
+        // The stage says which file it read when it gets it, never later.
+        "notes_said_by_aidlc",
       ]) {
         expect(flat, `${file}: ${retired}`).not.toContain(retired);
       }
@@ -206,7 +207,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "For a PDF or Word file the user named",
         "document-input --onboard`",
         "never ask the user to run a command or type a document id",
-        "When the result has `notes_said_by_aidlc: true`, AI-DLC says the `onboard_note` to the user itself; otherwise tell the user the `onboard_note`. Use that id",
+        "Tell the user the `onboard_note` and use that id",
         "When it returns an `ask` instead, the file is git-ignored (or git could not say) and nothing was copied",
         "Only after they say to use it anyway, run",
         "document-input --onboard --include-ignored`",
@@ -218,7 +219,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "/aidlc knowledge onboard <path>",
         "/aidlc knowledge show <id>",
         "direct the user to place the file",
-        "Tell the user the `onboard_note`",
+        "notes_said_by_aidlc",
       ]) {
         expect(flat, `${file}: ${retired}`).not.toContain(retired);
       }

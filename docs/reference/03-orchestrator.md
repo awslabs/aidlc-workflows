@@ -420,9 +420,11 @@ speaking: the `print` that creates the work ("Setting up a poc workflow for
 this ... The folder has no code yet, so I'm starting this as a new project
 ..."), and the `workspace reclassify` reply. The agent runs those and goes on,
 then speaks only at a later step, so a line left there was lost. A request
-typed with its scope never passed an ask, so its creation line also says how a
-pasted document was split (the `document_split` line); the stages that read
-the document do not say it again. The engine
+typed with its scope, or typed straight to compose, never passed an ask, so its
+creation line also says how a pasted document was split (the `document_split`
+line); the stages that read the document do not say it again. A plan composed
+for the piece of work is named "the plan you approved" in these lines, never by
+the scope it was built on. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
 and puts them, in order and once, in front of the `narration` of the next
 directive the agent speaks from: an `ask`, `present-gate`, `parked`, `error`
@@ -431,15 +433,16 @@ A rules part (`load-steering`) never takes them; its `run-stage` does. They
 belong to the person's current turn: a newer prompt on the work, or fifteen
 minutes with no prompt hook, drops them, so a line never surfaces later or in
 another chat. A line a tool gives inside a stage (`document-input`'s
-`selection_note` and `onboard_note`) is held across the person's turns on the
-same work instead, and is also said with the `print` that opens or re-opens
-the stage's gate, so it reaches the person at the latest with the gate; it is
-said once per piece of work. Only a line whose paths are plain (letters,
-digits, spaces, `.`, `_`, `-`, `/`) is held, and the tool's result then says
-`notes_said_by_aidlc: true`; otherwise the stage says the line itself, next to
-the untrusted-path notice. Without a chat to keep them for, a line stays on
-its own step.
+`selection_note` and `onboard_note`) is said by the stage as soon as it gets
+it, next to the untrusted-path notice. Without a chat to keep them for, a line
+stays on its own step.
 A line that would push a step over its size limit waits for the next one.
+Every skill says a `run-stage`'s `narration` first, in the same message as the
+stage's context reads, so the lines it carries are heard as the stage starts.
+When the reclassify reply names a finished stage that ran before the code was
+there, the chat counts that stage's out-of-date warning as heard on that work
+(in the same file), and the `stage_validity` advisory with that warning is
+left off its later steps.
 
 ### Inline Execution
 

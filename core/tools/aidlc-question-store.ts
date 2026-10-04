@@ -68,6 +68,8 @@ export interface StoredQuestion {
    * the routing question answers it, so the work starts once.
    */
   approvedRequest?: string;
+  /** The person has not yet heard how the request's pasted document was split. */
+  splitUnsaid?: true;
   createdAt: string;
 }
 
@@ -143,7 +145,8 @@ function parseQuestion(id: string, raw: unknown): StoredQuestion | null {
     (question.settings === undefined ||
       (isSettingTokens(question.settings?.newWork) && isSettingTokens(question.settings.existingWork))) &&
     (question.approvedRequest === undefined ||
-      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest)))
+      (typeof question.approvedRequest === "string" && QUESTION_ID.test(question.approvedRequest))) &&
+    (question.splitUnsaid === undefined || question.splitUnsaid === true)
   ) {
     return question as StoredQuestion;
   }
@@ -349,6 +352,7 @@ export function saveQuestion(
   stateSha256?: string,
   settings?: QuestionSettings,
   approvedRequest?: string,
+  splitUnsaid = false,
 ): StoredQuestion {
   pruneExpiredQuestions(projectDir);
   const question: StoredQuestion = {
@@ -362,6 +366,7 @@ export function saveQuestion(
     ...(stateSha256 ? { stateSha256 } : {}),
     ...(settings && (settings.newWork.length > 0 || settings.existingWork.length > 0) ? { settings } : {}),
     ...(approvedRequest && QUESTION_ID.test(approvedRequest) ? { approvedRequest } : {}),
+    ...(splitUnsaid ? { splitUnsaid: true as const } : {}),
     createdAt: new Date().toISOString(),
   };
   writeRecordFileNoFollow(projectDir, questionRel(projectDir, question.id), `${JSON.stringify(question)}\n`);

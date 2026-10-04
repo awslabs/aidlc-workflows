@@ -5541,25 +5541,22 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // order, with the next step the agent speaks from, then cleared. They belong to
 // the person's current turn: a newer prompt on the selected work, or an age
 // past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
-// a line never surfaces in a later turn or another chat. A line a tool gives
-// inside a stage (which file it read, a file it copied into the project) is
-// held across the person's turns instead, until the next step the agent speaks
-// from on the same work (at the latest, the stage's gate), and is said once per
-// work.
+// a line never surfaces in a later turn or another chat. The same file keeps,
+// per work, the lines this chat has already heard that the engine would
+// otherwise repeat (a finished stage that is out of date).
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
-const HELD_PERSON_LINES_SAID_MAX = 20;
+const PERSON_LINES_SAID_MAX = 20;
 
 interface PendingPersonLine {
   line: string;
   at: number;
-  // The turn a turn-scoped line belongs to, or the work a held line belongs to.
-  turn?: string;
-  work?: string;
+  // The person's turn the line belongs to.
+  turn: string;
 }
 
 interface PendingPersonLines {
   lines: PendingPersonLine[];
-  // Held lines already said on this work.
+  // Lines this chat already heard on this work.
   said: string[];
 }
 
@@ -5591,11 +5588,9 @@ function readPendingPersonLines(path: string, turn: string, work: string): Pendi
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
-      const { line, at, turn: lineTurn, work: lineWork } = entry as Partial<PendingPersonLine>;
+      const { line, at, turn: lineTurn } = entry as Partial<PendingPersonLine>;
       if (typeof line !== "string" || typeof at !== "number") return false;
-      return lineWork !== undefined
-        ? lineWork === work
-        : lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+      return lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
     });
     const said = saved.work === work && Array.isArray(saved.said)
       ? saved.said.filter((line): line is string => typeof line === "string")
@@ -5615,27 +5610,21 @@ function writePendingPersonLines(projectDir: string, path: string, work: string,
   writeFileSync(path, `${JSON.stringify({ work, ...saved })}\n`, "utf-8");
 }
 
-// Keep the lines for the next step the agent speaks from; `held` keeps them
-// across the person's turns on the same work. False when they could not be
-// kept, so the caller says them on its own step instead.
+// Keep the lines for the next step the agent speaks from. False when they
+// could not be kept, so the caller says them on its own step instead.
 export function addPendingPersonLines(
   projectDir: string,
   sessionId: string,
   lines: readonly string[],
-  held = false,
 ): boolean {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const added = lines.filter((line) => line.trim().length > 0);
   if (!path || added.length === 0) return false;
   const { turn, work } = personTurnAndWork(projectDir);
-  if (held && work === "none") return false;
   try {
     const saved = readPendingPersonLines(path, turn, work);
     const at = Date.now();
-    for (const line of added) {
-      if (held && (saved.said.includes(line) || saved.lines.some((entry) => entry.line === line))) continue;
-      saved.lines.push(held ? { line, at, work } : { line, at, turn });
-    }
+    for (const line of added) saved.lines.push({ line, at, turn });
     writePendingPersonLines(projectDir, path, work, saved);
     return true;
   } catch {
@@ -5654,17 +5643,43 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
   return {
     lines: saved.lines.map((entry) => entry.line),
     said: () => {
-      const heldSaid = saved.lines.filter((entry) => entry.work !== undefined).map((entry) => entry.line);
       try {
-        writePendingPersonLines(projectDir, path, work, {
-          lines: [],
-          said: [...saved.said, ...heldSaid].slice(-HELD_PERSON_LINES_SAID_MAX),
-        });
+        writePendingPersonLines(projectDir, path, work, { lines: [], said: saved.said });
       } catch {
         /* the next step says them again rather than never */
       }
     },
   };
+}
+
+// Count `lines` as heard in this chat on the selected work, so the engine does
+// not say them again there.
+export function markPersonLinesHeard(projectDir: string, sessionId: string, lines: readonly string[]): void {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || lines.length === 0) return;
+  const { turn, work } = personTurnAndWork(projectDir);
+  if (work === "none") return;
+  try {
+    const saved = readPendingPersonLines(path, turn, work);
+    const said = [...saved.said.filter((line) => !lines.includes(line)), ...lines].slice(-PERSON_LINES_SAID_MAX);
+    writePendingPersonLines(projectDir, path, work, { lines: saved.lines, said });
+  } catch {
+    /* unrecorded: the engine says it once more */
+  }
+}
+
+// Whether this chat already heard `line` on the selected work.
+export function personLineHeard(projectDir: string, sessionId: string, line: string): boolean {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || !existsSync(path)) return false;
+  const { turn, work } = personTurnAndWork(projectDir);
+  return readPendingPersonLines(path, turn, work).said.includes(line);
+}
+
+// What the person hears about a finished stage that is behind something it
+// used, with the words that redo it.
+export function staleStageLine(name: string): string {
+  return `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`;
 }
 
 interface SessionPidEntry {

@@ -116,6 +116,8 @@ import {
   isBindableIntentRecordName,
   activeIntent,
   addPendingPersonLines,
+  markPersonLinesHeard,
+  staleStageLine,
   activeWorkflowDescriptions,
   readActiveIntentCursor,
   activeSpace,
@@ -8754,8 +8756,8 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // Successful output carries DocumentKB's path/content trust notices in the
 // same JSON object as the bytes they govern. No state write or audit event,
 // except that `--onboard` copies a PDF or Word file into the knowledge base
-// (see onboardDocumentInput); the line saying which file it read or copied is
-// kept for the chat's next spoken step (holdDocumentInputLines).
+// (see onboardDocumentInput). The stage says the line naming which file it read
+// or copied as soon as it gets it.
 function handleProjectDescription(projectDir: string): void {
   const recordRoot = dirname(stateFilePath(projectDir));
   const authority = readProjectDescriptionAuthority(recordRoot);
@@ -8774,25 +8776,6 @@ function handleProjectDescription(projectDir: string): void {
         : authority,
     )}\n`,
   );
-}
-
-// Which file was read, and a file copied into the project, are said by AI-DLC
-// itself: the agent reads them inside the stage and goes on, so they are held
-// for the next step it speaks from (at the latest, the stage's gate), once per
-// piece of work. A line is held only when every path in it is a plain one, so a
-// file or folder name never carries other text into what AI-DLC says; when a
-// line is not held (no chat, an unusual name, a failed write), the result says
-// so and the stage tells the person itself, next to the untrusted-path notice.
-const DOCUMENT_INPUT_SPOKEN_PATH = /^[A-Za-z0-9._/ -]{1,160}$/;
-function holdDocumentInputLines(
-  projectDir: string,
-  lines: ReadonlyArray<string | undefined>,
-  paths: readonly string[],
-): boolean {
-  const said = lines.filter((line): line is string => typeof line === "string" && line.length > 0);
-  if (said.length === 0 || !paths.every((path) => DOCUMENT_INPUT_SPOKEN_PATH.test(path))) return false;
-  const sessionId = resolveWorkflowSelection(projectDir).sessionId;
-  return sessionId !== null && addPendingPersonLines(projectDir, sessionId, said, true);
 }
 
 // A numbered pick of matching files stays this short; the person can still
@@ -9133,14 +9116,12 @@ async function handleDocumentInput(
     );
   }
 
-  const held = holdDocumentInputLines(projectDir, [selectionNote], [portablePath]);
   process.stdout.write(
     `${JSON.stringify({
       path_notice: UNTRUSTED_PATH_NOTICE,
       content_notice: UNTRUSTED_CONTENT_NOTICE,
       path: portablePath,
       ...(selectionNote ? { selection_note: selectionNote } : {}),
-      ...(held ? { notes_said_by_aidlc: true } : {}),
       bytes: bytes.length,
       content_trust: "untrusted",
       content_handling: "data-not-instructions",
@@ -9265,11 +9246,6 @@ function onboardDocumentInput(
       ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
       : "");
 
-  const held = holdDocumentInputLines(
-    input.projectDir,
-    [input.selectionNote, onboardNote],
-    [portablePath, relative(projectRoot, target).split(sep).join("/")],
-  );
   process.stdout.write(
     `${JSON.stringify({
       path_notice: kb.UNTRUSTED_PATH_NOTICE,
@@ -9280,7 +9256,6 @@ function onboardDocumentInput(
       document_id: indexed.id,
       document_path: relative(projectRoot, target).split(sep).join("/"),
       onboard_note: onboardNote,
-      ...(held ? { notes_said_by_aidlc: true } : {}),
       ...(truncated ? { truncated: true } : {}),
       ...(shown.content === undefined
         ? {}
@@ -10274,6 +10249,8 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           : `Project type is ${words}, as you said${found}; I won't ask about it again for this piece of work.`,
     ];
     if (declared === "Brownfield" && scan.projectType !== "Brownfield") lines.push(NO_CODE_FOUND_YET);
+    // Finished stages these lines name as behind the code.
+    const staleNamed: string[] = [];
     const reNow = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
     if (finished) {
       lines.push("This piece of work is finished, so its plan stays as it is; I'll check the folder again for the next piece of work.");
@@ -10286,6 +10263,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           .filter((stage): stage is StageEntry =>
             stage !== undefined && (stage.consumes ?? []).some((consume) => consume.conditional_on === "brownfield"))
           .map((stage) => stage.slug);
+        staleNamed.push(...doneWithoutCode.map((slug) => stageNames([slug])));
         if (doneWithoutCode.length === 1) {
           const name = stageNames(doneWithoutCode);
           lines.push(`${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`);
@@ -10322,6 +10300,9 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     const narration = lines.join(" ");
     const kept = selection.sessionId !== null &&
       addPendingPersonLines(projectDir, selection.sessionId, [narration]);
+    // Having heard which stage is behind, the chat is not told again by the
+    // out-of-date warning that follows.
+    if (selection.sessionId !== null) markPersonLinesHeard(projectDir, selection.sessionId, staleNamed.map(staleStageLine));
     process.stdout.write(`${JSON.stringify(flags["then-rerun"] === "true"
       ? {
         kind: "print",
