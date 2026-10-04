@@ -2,7 +2,7 @@
 // person's needs a turn the driver sent after its gate or question opened.
 // Seeded audit rows stand in for the engine's, so each case is exact.
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
@@ -183,7 +183,7 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toHaveLength(1);
   });
 
-  test("rows the engine backfills or approves on its own are not the person's", () => {
+  test("the rows an approval backfills keep the gate's first opening", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
     drive.sent("start");
@@ -191,12 +191,68 @@ describe("person-turn check", () => {
     drive.sent('{"Approve the user stories?":"Approve"}');
     // The approval backfills a revision the agent never reported, then approves.
     row(dir, "GATE_REJECTED", { Stage: "user-stories", Recovered: "true" });
+    row(dir, "STAGE_REVISING", { Stage: "user-stories", Recovered: "true" });
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories", Recovered: "true" });
     row(dir, "GATE_APPROVED", { Stage: "user-stories", "User Input": "Approve" });
-    // An autonomous Unit checkpoint is approved by the engine, with no question to the person.
+    expect(drive.unbacked()).toEqual([]);
+  });
+
+  test("a field on a row never makes it the engine's", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "code-generation" });
+    row(dir, "GATE_APPROVED", { Stage: "code-generation", Autonomous: "true" });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "build-and-test" });
+    row(dir, "GATE_APPROVED", { Stage: "build-and-test", Recovered: "true" });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });
+    row(dir, "GATE_REJECTED", { Stage: "user-stories", Recovered: "true" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(3);
+    expect(problems[0]).toContain("GATE_APPROVED code-generation");
+    expect(problems[1]).toContain("GATE_APPROVED build-and-test");
+    expect(problems[2]).toContain("GATE_REJECTED user-stories");
+  });
+
+  test("under the person's autonomous grant the engine approves Construction; the walking skeleton still asks", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "units-generation" });
+    drive.sent('{"Approve the units?":"Approve"}');
+    row(dir, "GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" });
+    drive.sent('{"How should Construction run?":"Autonomous"}');
+    row(dir, "AUTONOMY_MODE_SET", { Mode: "autonomous" });
+    // An ordinary stage gate and a Unit checkpoint, approved with no question.
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "functional-design" });
+    row(dir, "GATE_APPROVED", { Stage: "functional-design" });
     row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "alpha", Kind: "unit" });
     row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "alpha", Autonomous: "true" });
     expect(drive.unbacked()).toEqual([]);
+    row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "beta", Kind: "skeleton" });
+    row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "walking-skeleton", Unit: "beta", Autonomous: "true" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("GATE_APPROVED code-generation (Unit beta)");
+  });
+
+  test("the autonomous grant needs a turn after the last gate, and a new workflow ends it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "units-generation" });
+    drive.sent('{"Approve the units?":"Approve"}');
+    row(dir, "GATE_APPROVED", { Stage: "units-generation", "User Input": "Approve" });
+    row(dir, "AUTONOMY_MODE_SET", { Mode: "autonomous" });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "functional-design" });
+    row(dir, "GATE_APPROVED", { Stage: "functional-design" });
+    expect(drive.unbacked()).toHaveLength(1);
+    expect(drive.unbacked()[0]).toContain('AUTONOMY_MODE_SET at');
+    row(dir, "WORKFLOW_STARTED");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "code-generation" });
+    row(dir, "GATE_APPROVED", { Stage: "code-generation" });
+    expect(drive.unbacked()).toHaveLength(2);
+    expect(drive.unbacked()[1]).toContain("GATE_APPROVED code-generation");
   });
 
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {
@@ -235,5 +291,33 @@ describe("person-turn check", () => {
     expect(unbackedTuiDecisions(dir)).toEqual([]);
     expect(unbackedFailure("The TUI drive", problems).message)
       .toStartWith("The TUI drive recorded 1 decision(s) as the person's that no turn from them backs:\n  GATE_APPROVED");
+  });
+
+  test.each([
+    { case: "is removed", tamper: (file: string) => rmSync(file), says: "is gone: the driver sent 2 turn(s) to 1 session(s)" },
+    {
+      case: "loses a turn",
+      tamper: (file: string) => writeFileSync(file, readFileSync(file, "utf-8").split("\n").slice(0, 2).join("\n")),
+      says: "holds 1 of the 2 turn(s) the driver sent",
+    },
+    {
+      case: "loses its start",
+      tamper: (file: string) => writeFileSync(file, readFileSync(file, "utf-8").split("\n").slice(1).join("\n")),
+      says: "holds 2 of the 2 turn(s) the driver sent and no session start",
+    },
+    { case: "is garbled", tamper: (file: string) => appendFileSync(file, "{not json\n"), says: "cannot be read" },
+  ])("a TUI ledger that $case during the drive fails it", ({ tamper, says }) => {
+    const folder = ledgerFolder();
+    const dir = project();
+    const session = `t-person-turns-tamper-${process.pid}`;
+    startPersonTurnSession(session, dir);
+    submittedToPersonTurnSession(session, "/aidlc --scope mvp");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "team-formation" });
+    submittedToPersonTurnSession(session, "Approve");
+    row(dir, "GATE_APPROVED", { Stage: "team-formation", "User Input": "Approve" });
+    const [ledger] = readdirSync(folder).filter((name) => name.startsWith("ledger-"));
+    tamper(join(folder, ledger));
+    expect(() => unbackedTuiDecisions(dir)).toThrow(says);
+    expect(readdirSync(folder)).toEqual([]);
   });
 });

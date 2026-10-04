@@ -30,7 +30,12 @@ import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.
 
 type AuditReader = Pick<
   typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"),
-  "auditBlockField" | "readAuditShardEvents" | "nextOpenDecision" | "decisionAnsweredBy" | "DECISION_CLOSING_EVENTS"
+  | "auditBlockField"
+  | "readAuditShardEvents"
+  | "nextOpenDecision"
+  | "decisionAnsweredBy"
+  | "DECISION_CLOSING_EVENTS"
+  | "findStageBySlug"
 >;
 let reader: AuditReader | undefined;
 // The engine's own audit reader and question pairing, loaded on first use:
@@ -96,6 +101,16 @@ const gateItem = (row: AuditShardEvent) =>
  * answers need a reply: a turn that was only a command (it starts with "/", as
  * the human-turn hook reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
+ *
+ * Which rows are the engine's own comes from the trail and the stage graph,
+ * never from a field a row carries. An approval is the engine's when the
+ * person's grant of autonomous Construction is in force (the latest
+ * WORKFLOW_STARTED or AUTONOMY_MODE_SET is AUTONOMY_MODE_SET to autonomous)
+ * and the stage is a Construction stage; a walking-skeleton checkpoint still
+ * asks the person. That grant is itself the person's decision, backed by a
+ * turn after the last gate resolution, as the engine requires. The rows an
+ * approval backfills before it (a Recovered rejection and re-opening) leave
+ * the gate's first opening in place, and the rejection is checked as usual.
  */
 export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
   const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
@@ -107,36 +122,45 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     const gates = new Map<string, number>();
     const gated = new Map<string, number>();
     let workspace = -1;
+    let autonomous = false;
+    let resolved = -1;
     for (let index = 0; index < events.length; index++) {
       const row = events[index];
       const stage = auditBlockField(row.block, "Stage") ?? "";
       const pending = open.get(stage);
       const closes = DECISION_CLOSING_EVENTS.has(row.event);
       const gate = row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED";
-      // The engine's own rows: an autonomous checkpoint approval, and the gate
-      // rows an approval backfills (Recovered). Neither is recorded as the person's.
-      const synthetic = auditBlockField(row.block, "Autonomous") === "true" ||
-        auditBlockField(row.block, "Recovered") === "true";
+      // The engine writes Recovered only on the rows an approval backfills.
+      const backfilled = auditBlockField(row.block, "Recovered") === "true" &&
+        (row.event === "GATE_REJECTED" || row.event === "STAGE_AWAITING_APPROVAL");
+      const engineApproved = row.event === "GATE_APPROVED" && autonomous &&
+        audit().findStageBySlug(stage)?.phase === "construction" &&
+        auditBlockField(row.block, "Checkpoint") !== "walking-skeleton";
       let since: number | undefined;
       let reply = true;
       if (closes) {
         since = pending?.index ?? answered.get(stage) ?? -1;
         answered.set(stage, index);
-      } else if (gate && !synthetic) {
+      } else if (gate && !engineApproved) {
         reply = row.event === "GATE_APPROVED";
         if (pending && decisionAnsweredBy(pending.block, row.event, row.block)) {
           since = pending.index;
           answered.set(stage, index);
         } else {
           since = gates.get(gateItem(row)) ?? gated.get(gateItem(row)) ?? -1;
-          gates.delete(gateItem(row));
-          gated.set(gateItem(row), index);
+          if (!backfilled) {
+            gates.delete(gateItem(row));
+            gated.set(gateItem(row), index);
+          }
         }
       } else if (row.event === "WORKSPACE_RECLASSIFIED") {
         since = workspace;
         reply = false;
+      } else if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") {
+        since = resolved;
+        reply = false;
       }
-      if (since !== undefined && index >= first && !synthetic) {
+      if (since !== undefined && index >= first) {
         const after = Math.max(since + 1, first);
         const needsReply = reply;
         const backed = turns.some((turn) => {
@@ -150,8 +174,11 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         if (next === null) open.delete(stage);
         else if (row.event === "DECISION_RECORDED") open.set(stage, { block: row.block, index });
       }
-      if (row.event === "STAGE_AWAITING_APPROVAL" && !synthetic) gates.set(gateItem(row), index);
+      if (row.event === "STAGE_AWAITING_APPROVAL" && !backfilled) gates.set(gateItem(row), index);
       if (row.event === "WORKSPACE_INITIALISED" || row.event === "WORKSPACE_RECLASSIFIED") workspace = index;
+      if (row.event === "WORKFLOW_STARTED") autonomous = false;
+      if (row.event === "AUTONOMY_MODE_SET") autonomous = auditBlockField(row.block, "Mode") === "autonomous";
+      if (gate) resolved = index;
     }
   }
   return problems;
@@ -160,7 +187,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
 function describe(row: AuditShardEvent, key: string, turns: readonly PersonTurn[]): string {
   const stage = auditBlockField(row.block, "Stage");
   const unit = auditBlockField(row.block, "Unit");
-  const words = ["Person Reply", "User Input", "Details", "Feedback", "New Project Type"]
+  const words = ["Person Reply", "User Input", "Details", "Feedback", "New Project Type", "Mode"]
     .map((field) => auditBlockField(row.block, field)).find((value) => value !== null) ?? null;
   const sent = turns.slice(-8).map((turn) => JSON.stringify(turn.words.slice(0, 60))).join(", ");
   return [
@@ -199,8 +226,10 @@ export class PersonTurnLedger {
 
 // The TUI driver runs once per command (start, send, kill), so it keeps its
 // ledger in files: one per project, out of the agent's working tree, and one
-// pointer per session naming its project and what was typed but not yet
-// submitted. They live in a directory only this account can use.
+// pointer per session naming its project, what was typed but not yet
+// submitted, and how many turns the driver sent. They live in a directory only
+// this account can use. A ledger that is gone, or holds fewer turns than the
+// driver sent, fails the drive: the run can no longer show who decided.
 function privateDirectory(): string {
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const dir = process.env.AIDLC_PERSON_TURNS_DIR ??
@@ -237,6 +266,7 @@ function appendLine(projectDir: string, kind: LedgerLine["kind"], words: string)
 interface SessionPointer {
   projectDir: string;
   typed?: string;
+  sent?: number;
 }
 
 function readPointer(session: string): SessionPointer | undefined {
@@ -249,7 +279,10 @@ function readPointer(session: string): SessionPointer | undefined {
 
 /** A TUI session started in `projectDir`: later turns sent to it are the person's. */
 export function startPersonTurnSession(session: string, projectDir: string): void {
-  replaceFile(sessionPointer(session), JSON.stringify({ projectDir } satisfies SessionPointer));
+  // A restarted session keeps the count of what it sent before.
+  const before = readPointer(session);
+  const sent = before?.projectDir === projectDir ? before.sent ?? 0 : 0;
+  replaceFile(sessionPointer(session), JSON.stringify({ projectDir, sent } satisfies SessionPointer));
   appendLine(projectDir, "start", "");
 }
 
@@ -262,31 +295,53 @@ export function typedIntoPersonTurnSession(session: string, text: string): void 
 /** The driver submitted what it typed, then `text`; a session with no project is not tracked. */
 export function submittedToPersonTurnSession(session: string, text: string): void {
   const pointer = readPointer(session);
-  if (!pointer || !existsSync(ledgerFile(pointer.projectDir))) return;
+  if (!pointer) return;
   appendLine(pointer.projectDir, "turn", `${pointer.typed ?? ""}${text}`);
-  if (pointer.typed) replaceFile(sessionPointer(session), JSON.stringify({ projectDir: pointer.projectDir }));
+  const sent = (pointer.sent ?? 0) + 1;
+  replaceFile(sessionPointer(session), JSON.stringify({ projectDir: pointer.projectDir, sent } satisfies SessionPointer));
 }
 
 /**
  * The decisions no turn backs across every TUI session the project had, from
- * the first session's start; empty when no session recorded one. Removes the
+ * the first session's start; empty when no session started. Throws when the
+ * ledger is gone, unreadable, or short of what the driver sent. Removes the
  * project's ledger and session pointers.
  */
 export function unbackedTuiDecisions(projectDir: string): string[] {
+  const folder = privateDirectory();
+  let sessions = 0;
+  let sent = 0;
+  for (const name of readdirSync(folder).filter((entry) => entry.startsWith("session-") && entry.endsWith(".json"))) {
+    try {
+      const pointer = JSON.parse(readFileSync(join(folder, name), "utf-8")) as Partial<SessionPointer>;
+      if (pointer.projectDir !== projectDir) continue;
+      sessions++;
+      sent += typeof pointer.sent === "number" ? pointer.sent : 0;
+      rmSync(join(folder, name), { force: true });
+    } catch { /* another driver is writing it */ }
+  }
   const file = ledgerFile(projectDir);
-  if (!existsSync(file)) return [];
-  const lines = readFileSync(file, "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as LedgerLine);
+  const record = `The TUI drive's record of what the person sent to ${projectDir}`;
+  if (!existsSync(file)) {
+    if (sessions === 0) return [];
+    throw new Error(`${record} is gone: the driver sent ${sent} turn(s) to ${sessions} session(s), so the run cannot show who made its decisions.`);
+  }
+  const text = readFileSync(file, "utf-8");
+  rmSync(file, { force: true });
+  let lines: LedgerLine[];
+  try {
+    lines = text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as LedgerLine);
+  } catch {
+    throw new Error(`${record} cannot be read, so the run cannot show who made its decisions.`);
+  }
   const start = lines.find((line) => line.kind === "start");
   const turns = lines.filter((line) => line.kind === "turn")
     .map((line) => ({ words: line.words, cursor: new Map(line.cursor) }));
-  const problems = start && existsSync(projectDir) ? unbackedDecisions(projectDir, new Map(start.cursor), turns) : [];
-  rmSync(file, { force: true });
-  const folder = privateDirectory();
-  for (const name of readdirSync(folder).filter((entry) => entry.startsWith("session-") && entry.endsWith(".json"))) {
-    try {
-      const pointer = JSON.parse(readFileSync(join(folder, name), "utf-8")) as { projectDir?: string };
-      if (pointer.projectDir === projectDir) rmSync(join(folder, name), { force: true });
-    } catch { /* another driver is writing it */ }
+  if (!start || turns.length < sent) {
+    throw new Error(
+      `${record} holds ${turns.length} of the ${sent} turn(s) the driver sent${start ? "" : " and no session start"}, ` +
+        "so the run cannot show who made its decisions.",
+    );
   }
-  return problems;
+  return existsSync(projectDir) ? unbackedDecisions(projectDir, new Map(start.cursor), turns) : [];
 }

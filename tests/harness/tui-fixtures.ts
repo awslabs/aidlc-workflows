@@ -966,14 +966,22 @@ export function removeTuiProjectTreeWithRetry(
 }
 
 export function cleanupTuiProject(proj: string, options: TuiProjectCleanupOptions = {}): void {
-  // Every decision recorded as the person's needs a turn the driver sent.
-  const unbacked = proj ? unbackedTuiDecisions(proj) : [];
+  // Every decision recorded as the person's needs a turn the driver sent. A
+  // record that is gone or short still lets the project be removed first.
+  let unbacked: string[] = [];
+  let record: unknown;
+  try {
+    unbacked = proj ? unbackedTuiDecisions(proj) : [];
+  } catch (error) {
+    record = error;
+  }
   if (process.env.AIDLC_KEEP_TEMP === "1") {
     if (proj) process.stderr.write(`[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved ${proj}\n`);
   } else {
     if (proj) assertNoPendingTuiSessionsForProject(proj);
     if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj, options);
   }
+  if (record !== undefined) throw record;
   if (unbacked.length > 0) throw unbackedFailure("The TUI drive", unbacked);
 }
 
