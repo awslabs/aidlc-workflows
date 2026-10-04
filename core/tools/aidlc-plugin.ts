@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
@@ -1072,7 +1072,12 @@ function removeFragments(content: string, key: string, path: string): string {
   return output;
 }
 
-function pruneContributions(stagedProject: string, harnessDir: string, key: string): void {
+function pruneContributions(
+  stagedProject: string,
+  harnessDir: string,
+  key: string,
+  writable: (path: string) => boolean = () => true,
+): void {
   const sidecar = join(harnessDataDir(stagedProject, harnessDir), `plugin-contrib-${key}.json`);
   let records: Record<string, {
     produces?: string[];
@@ -1119,21 +1124,22 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
         }
       }
       after = removeFragments(after, key, path);
-      if (after !== before) writeFileSync(path, after);
+      if (after !== before && writable(path)) writeFileSync(path, after);
     }
   }
-  rmSync(sidecar, { force: true });
+  if (writable(sidecar)) rmSync(sidecar, { force: true });
 }
 
-// The harness's data folder, or a folder on the way to it, that links
-// elsewhere: a removal there would land outside this project and outside the
-// transaction, so prune leaves the plugin records in it alone and says so.
-function linkedDataFolder(stagedProject: string, harnessDir: string): string | null {
-  let path = stagedProject;
-  for (const part of [harnessDir, "tools", "data"]) {
+// The first folder on the way from the project to `target` that links
+// elsewhere, relative to the project, or null. A removal or rewrite through it
+// would land outside this project and outside the transaction, so prune
+// leaves what is behind it alone and says so.
+function linkOnTheWay(projectDir: string, target: string): string | null {
+  let path = projectDir;
+  for (const part of relative(projectDir, dirname(target)).split(/[\\/]/).filter(Boolean)) {
     path = join(path, part);
     try {
-      if (lstatSync(path).isSymbolicLink()) return join(harnessDir, "tools", "data");
+      if (lstatSync(path).isSymbolicLink()) return relative(projectDir, path);
     } catch {
       return null;
     }
@@ -1141,7 +1147,7 @@ function linkedDataFolder(stagedProject: string, harnessDir: string): string | n
   return null;
 }
 
-// Returns the data folder it left alone, or null.
+// Returns the first linked folder it left alone, or null.
 function pruneOwnedPlugin(
   stagedProject: string,
   harnessDir: string,
@@ -1158,17 +1164,23 @@ function pruneOwnedPlugin(
       throw new Error(`cannot prune ${key}: owned path changed since composition: ${file.path}`);
     }
   }
-  pruneContributions(stagedProject, harnessDir, key);
+  let leftAlone: string | null = null;
+  const writable = (target: string): boolean => {
+    const link = linkOnTheWay(stagedProject, target);
+    if (link !== null) leftAlone ??= link;
+    return link === null;
+  };
+  pruneContributions(stagedProject, harnessDir, key, writable);
   for (const file of ownership.files) {
-    rmSync(assertOwnedPath(stagedProject, file.path), { force: true });
+    const target = assertOwnedPath(stagedProject, file.path);
+    if (writable(target)) rmSync(target, { force: true });
   }
-  const linked = linkedDataFolder(stagedProject, harnessDir);
-  if (linked !== null) return linked;
   const dataDir = harnessDataDir(stagedProject, harnessDir);
-  rmSync(join(dataDir, `plugin-owned-${key}.json`), { force: true });
-  rmSync(join(dataDir, `plugin-compose-${key}.json`), { force: true });
-  rmSync(join(dataDir, `plugin-files-${key}.json`), { force: true });
-  return null;
+  for (const name of [`plugin-owned-${key}.json`, `plugin-compose-${key}.json`, `plugin-files-${key}.json`]) {
+    const target = join(dataDir, name);
+    if (writable(target)) rmSync(target, { force: true });
+  }
+  return leftAlone;
 }
 
 function replaceOwnedPluginPrimitives(

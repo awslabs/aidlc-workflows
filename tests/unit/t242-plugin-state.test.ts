@@ -1042,6 +1042,12 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     symlinkSync(outside, data, process.platform === "win32" ? "junction" : "dir");
     const outsideRecord = join(outside, "plugin-files-test-pro.json");
     const before = readFileSync(outsideRecord, "utf-8");
+    // Every record of the plugin's outside the project.
+    const snapshot = () =>
+      readdirSync(outside).filter((name) => /^plugin-[a-z]+-test-pro\.json$/.test(name)).sort()
+        .map((name) => `${name}\n${readFileSync(join(outside, name), "utf-8")}`);
+    const outsideBefore = snapshot();
+    expect(outsideBefore.some((entry) => entry.startsWith("plugin-contrib-test-pro.json\n"))).toBe(true);
     writeFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "{\"version\":2,\"plugins\":{}}\n");
     const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
     expect(existsSync(stage)).toBe(true);
@@ -1061,8 +1067,9 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(printed).toContain(
       `Left plugin files in ${join(".claude", "tools", "data")} alone: that folder links outside this project.`,
     );
-    // The file outside the project is unchanged, and the rest of the prune happened.
+    // None of them was removed or changed, and the rest of the prune happened.
     expect(readFileSync(outsideRecord, "utf-8")).toBe(before);
+    expect(snapshot()).toEqual(outsideBefore);
     expect(existsSync(stage)).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
