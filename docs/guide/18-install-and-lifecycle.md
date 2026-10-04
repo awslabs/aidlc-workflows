@@ -928,6 +928,14 @@ Locally modified framework-owned files conflict against the prior baseline.
 edits to hand-authored orchestrator prose. It does not claim unrelated
 project content.
 
+An unchanged framework file the new release no longer ships is removed, and
+config names each one: the refresh prints `Removed N files that are no longer
+part of AI-DLC <version>:` and the list, and `--dry-run` prints the same list
+as `Will remove`. Several files in one folder show as one line. When git
+tracks every removed file, config also names `git restore <path>` to get one
+back; later refreshes leave a restored file alone. In JSON these actions carry
+`detail: "no longer shipped"`.
+
 Provider, scope, and model answers preserve project-owned fields in
 `.claude/settings.json` and `.codex/config.toml`. The Claude
 `companyAnnouncements`, `permissions`, `statusLine`, and `hooks` keys remain
@@ -1428,7 +1436,13 @@ release asset. Download one exact release, extract it, and copy the complete
 project-root files stay together. The copy runtime leaves out files a team's
 editor owns, such as Copilot's `.vscode/settings.json`, so copying never
 replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
-names the one setting to add yourself. Bun is the runtime prerequisite; the native
+names the one setting to add yourself. It also leaves out the team's memory
+files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
+the practices you affirmed, and `project.md`, where your project rules and
+learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
+release, or a second harness, over a project therefore keeps them. In a fresh
+copy, AI-DLC creates the two memory files from its bundled copy the first time
+you start work. Bun is the runtime prerequisite; the native
 `aidlc` executable is not required. Markdown analysis (summary confirmation,
 Plan Approval tags, and the claim-sources sensor) uses Bun's built-in
 `Bun.markdown` renderer, so it needs Bun 1.3.8 or newer and follows the installed

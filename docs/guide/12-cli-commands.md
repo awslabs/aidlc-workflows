@@ -2218,7 +2218,9 @@ path, both leave out .NET `bin/`, `obj/`, and `out/` beside a `.csproj`,
 `.fsproj`, or `.vbproj` file, and the fallback also skips dependency and cache
 directories such as `node_modules/` and tool byproduct files such as
 `.DS_Store`, so a `dotnet build` during the scan does not invalidate it. A path
-named in `--paths` is always read. A space+repo lock keeps
+named in `--paths` is always read. When the workspace root is the repository
+root, both also leave out AI-DLC's own files, as `codekb-scope-diff` does
+(below). A space+repo lock keeps
 the two values from straddling a concurrent publication. The returned
 `store_generation`, `source_fingerprint`, and `paths` are inputs to
 `codekb-publish`.
@@ -2289,12 +2291,20 @@ new knowledge into it cumulatively, so the stage checks first:
 
 Add `--json` for the structured shape. Always exits 0 with the verdict in the
 output (except usage errors); writes nothing, no audit event. The fingerprint
-is a `git write-tree` over a temporary index restricted to the analyzed paths,
-excluding the framework-owned `aidlc/` tree when the workspace root is the
-repository root. It tracks source working-tree content without invalidating
-itself when codekb/state artifacts are written; rebases or squashes that
-rewrite history do not fool it, and reverting an edit restores the original
-fingerprint.
+is a `git write-tree` over a temporary index restricted to the analyzed paths.
+When the workspace root is the repository root it leaves out AI-DLC's own
+files, which the scan never reads: the `aidlc/` workspace, the harness
+directories (`.claude/`, `.kiro/`, `.codex/`, `.cursor/`, `.opencode/`,
+`.aidlc/`), the `aidlc`-named agents, hooks and skills and the generated stage
+runners under `.github/` and `.agents/`, every root file an installed
+harness's projection writes into (such as `.gitignore`, `AGENTS.md`,
+`.mcp.json`, `.vscode/settings.json`, `opencode.json`, and Cursor's
+`install.ts`), and `aidlc.settings.json` and `aidlc.settings.local.json`. So
+an AI-DLC update, a setting change, or committing the install leaves the store
+`CURRENT`; only a change to the project's own files makes it `STALE`. It tracks
+source working-tree content without invalidating itself when codekb/state
+artifacts are written; rebases or squashes that rewrite history do not fool
+it, and reverting an edit restores the original fingerprint.
 
 ### `aidlc-utility detect` - read-only workspace scan
 

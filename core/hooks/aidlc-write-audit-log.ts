@@ -6,7 +6,7 @@
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the existing "only log when
 // relevant" behaviour.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
@@ -20,6 +20,7 @@ import {
   errorMessage,
   hookDebug,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   activeSummaryAuthorizationForRecordPath,
   isoTimestamp,
@@ -54,8 +55,7 @@ hookDebug(projectDir, "write-audit-log", "invoked", { projectDir, cwd: process.c
 
 // Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "write-audit-log.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "write-audit-log.last", isoTimestamp());
 
 // Read JSON from stdin. If stdin is a TTY (interactive shell, test harness
 // running under `bash -x`-inheriting pipeline), no JSON is coming — exit

@@ -131,6 +131,14 @@ then use the ignored local `dist/copilot/` output.
 - **One install, two surfaces.** Skills, personas, instructions, and hooks
   behave identically on the CLI and in VS Code agent mode; the divergences
   below are called out explicitly.
+- **Runners start only when you type them.** Every generated runner
+  (`/aidlc-bugfix`, `/aidlc-<stage>`, `/aidlc-init`, and the rest, plugin
+  runners included) carries `disable-model-invocation: true`, so the agent
+  never starts one on its own and the runners' descriptions stay out of
+  Copilot's skill list. Typing one works as before in VS Code chat and the
+  interactive CLI. A headless `copilot -p "/aidlc-bugfix ..."` hands your line
+  to the agent as plain text; the root `AGENTS.md` tells it to read that
+  runner's file and follow it, so the runner still runs.
 - **Questions render as numbered prose options.** Although both surfaces expose
   native picker tools, picker answers return as tool results and do not fire
   the trusted `UserPromptSubmit` event required by the human-presence guard.
@@ -200,7 +208,15 @@ then use the ignored local `dist/copilot/` output.
     VS Code's terminal is PowerShell or cmd, a backslash is a plain path
     separator, so a path such as `C:\work\app` or `.aidlc\tools\...` runs
     without a click; only a backslash right before a double quote keeps the
-    prompt. In a Git Bash or WSL terminal a backslash still keeps it;
+    prompt. In a Git Bash or WSL terminal a backslash still keeps it. In a
+    PowerShell terminal one `cd` or `Set-Location` to the project folder
+    itself, by its full path, may come first:
+    `cd C:\work\app; aidlc engine orchestrate next` runs like
+    `aidlc engine orchestrate next`, also while a plan waits for approval. A
+    `cd` to any other folder, a subfolder included, keeps the prompt, and
+    while a plan waits for approval it is refused, because the installed
+    `aidlc` takes the folder it runs in as the project. Run the command
+    without the `cd`, or `cd` to the project folder itself;
   - every argument that reads as a path stays inside the project;
   - no option hands AI-DLC a command of its own to run (`--check-cmd`);
   - a bare `aidlc` is the installed launcher: when the project holds a file
@@ -235,8 +251,9 @@ then use the ignored local `dist/copilot/` output.
     remote (all but `unit merge-status`);
   - commands that run code AI-DLC does not ship or rewrite its installed
     skills: `engine sensor fire` and the `engine sensor-*` checks (they run
-    your project's linter and type checker), `engine knowledge onboard` and
-    `sync` (they run the document extractor your harness names),
+    your project's linter and type checker), `engine knowledge onboard`,
+    `sync`, and `engine workspace document-input --onboard` (they run the
+    document extractor your harness names),
     `engine plugin sync`, `select`, and `build`, `plugin build`, and
     `engine gen runners` and `runner-scopes`.
 

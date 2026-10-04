@@ -309,7 +309,14 @@ files outside hidden folders, never offering symlinks or a path with a secret-lo
 matches for a numbered pick. When git fails inside a repository or the walk
 hits its cap, it chooses nothing and asks for the path. `project-description` splits a pasted
 document from the person's directions, so no stage splits it by itself. Successful reads emit the same inline untrusted-path and
-untrusted-content notices as DocumentKB.
+untrusted-content notices as DocumentKB. `document-input --onboard` is the one
+form that writes: for a PDF or Word file it copies the bytes it read into the
+active space's `knowledge/documents/` (a staged file published with `link()`, so
+no existing file is replaced) and calls the knowledge tool's `onboard` and
+`showDocument` in-process. A git-ignored source, or one git cannot check, returns
+one `ask` and copies nothing unless `--include-ignored` is passed, which the stages add only after
+the person agrees. The Copilot adapter keeps the Allow prompt for this form,
+because it runs the extractor.
 
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):

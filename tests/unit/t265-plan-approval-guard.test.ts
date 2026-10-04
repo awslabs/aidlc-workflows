@@ -2251,6 +2251,9 @@ describe("t265b hook lifecycle", () => {
         `& '${active}' ${next}`,
         ...(windows ? [`${launcher} ${next}`, `${active} ${next}`] : []),
         `cd '${proj}'; aidlc ${next}`,
+        // The form an agent types in VS Code on Windows (#1411).
+        `cd ${proj}; aidlc ${next}`,
+        `cd ${proj}; aidlc --version`,
         `Set-Location -LiteralPath '${proj}'; aidlc ${next} 2>$null | Select-Object -Last 1`,
       ]) {
         const result = pwsh(command);

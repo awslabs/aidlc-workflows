@@ -18,7 +18,7 @@
 // semantics defer to the future ralph driver.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import { aidlcEngineCommand } from "../tools/aidlc-runtime-paths.ts";
@@ -30,6 +30,7 @@ import {
   type ClaudeCodeHookInput,
   getField,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   LEGACY_SENSORS_DIR,
@@ -149,12 +150,7 @@ if (resolveCeremony("sensors", scope, stateContent).value === "off") return 0;
 // with empty sensors_applicable like workspace-scaffold, (b) no
 // matches glob hit since last fire. See plan § Cross-milestone for the
 // canonical heuristic.
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(
-  join(healthDir, "run-sensors.last"),
-  isoTimestamp(),
-  "utf-8"
-);
+writeHookStatusFile(healthDir, "run-sensors.last", isoTimestamp());
 
 // Step 8b — First-fire banner. On the first invocation against a
 // workspace (no .first-fired marker yet), print a one-line stderr
@@ -170,11 +166,8 @@ if (!existsSync(firstFiredMarker)) {
       "See the AI-DLC documentation to learn how rules and " +
       "the learning loop work.\n"
   );
-  try {
-    writeFileSync(firstFiredMarker, isoTimestamp(), "utf-8");
-  } catch {
-    // Marker write failure is non-fatal — banner may repeat next fire.
-  }
+  // Marker write failure is non-fatal: the banner may repeat next fire.
+  writeHookStatusFile(healthDir, ".first-fired", isoTimestamp());
 }
 
 // Step 9 — Active stage lookup (C3). The compile-resolved

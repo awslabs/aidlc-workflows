@@ -1629,6 +1629,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:aidlcRootIntegrations",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:anyIntentRecordExists",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2655,6 +2667,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbFingerprintExcludes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4591,6 +4615,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasRunnerGenMarker",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -8005,14 +8036,23 @@
       "unitClass": "function",
       "unitId": "function:recordHookDrop",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
       "unitId": "function:recordHookTrace",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t37.test.ts",
           "mechanism": "cli"
@@ -8233,6 +8273,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removeHookStatusFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -11377,6 +11429,10 @@
         {
           "file": "tests/unit/t400-byproduct-files-excluded-from-source-fingerprint.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t401-vs-cache-excluded-from-source-fingerprint.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -11561,6 +11617,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeHookStatusFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hook-status-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

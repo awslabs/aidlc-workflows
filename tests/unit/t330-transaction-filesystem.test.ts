@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { waitForBarrierLine } from "../harness/barrier-file.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TRANSACTION = pathToFileURL(join(REPO_ROOT, "core/tools/aidlc-transaction.ts")).href;
@@ -93,7 +94,7 @@ function childSource(root: string, options: Options): string {
     function pause(phase) {
       if (cfg.pause !== phase || paused) return;
       paused = true;
-      fs.writeFileSync(join(dirname(root), "ready"), phase);
+      fs.writeFileSync(join(dirname(root), "ready"), phase + "\\n");
       const deadline = performance.now() + 20000;
       while (!fs.existsSync(join(dirname(root), "continue"))) {
         if (performance.now() > deadline) throw new Error("holder rendezvous timed out");
@@ -489,10 +490,9 @@ for (const [pause, fallback, crash] of [
     });
     const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
     try {
-      const ready = join(dirname(root), "ready"), deadline = performance.now() + 10_000;
-      while (!existsSync(ready) && child.exitCode === null && performance.now() < deadline) await Bun.sleep(10);
-      expect(existsSync(ready), "holder must reach the synchronized lock boundary").toBe(true);
-      expect(readFileSync(ready, "utf8")).toBe(pause);
+      // The holder must reach the synchronized lock boundary and say which.
+      const ready = join(dirname(root), "ready");
+      expect(await waitForBarrierLine(ready, { writer: child, timeoutMs: 10_000 })).toBe(`${pause}\n`);
       const before = readdirSync(root).sort(), content = readFileSync(join(root, "existing.txt"), "utf8");
       const blocked = observe(root, { requestedRoot: alias, contender: true, fallback: fallback ? undefined : "EMLINK" });
       expect(blocked.error?.message).toContain("another AI-DLC mutation");
