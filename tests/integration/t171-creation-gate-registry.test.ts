@@ -815,6 +815,45 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.new_work_description).toBe("Part of existing work");
       });
 
+      // The follow-up question after a plan composed and approved in a fresh
+      // clone is one of these: its separate-work option creates the plan the
+      // person approved, exactly as its own new-work command does.
+      for (const text of ["2", "Separate new piece of work"]) {
+        test(`${JSON.stringify(text)} on the approved-plan follow-up creates the approved plan, as its new-work command does`, () => {
+          seedTwoIntentsNoCursor();
+          const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+          const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+          const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+          expect(ask.ask_type).toBe("new-work-routing");
+          const creation = directive(text);
+          expect(creation.kind, JSON.stringify(creation).slice(0, 300)).toBe("print");
+          expect(creation).toEqual(emitted(ask.new_intent_command));
+          expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
+          expect(creation.message).toContain(`--request ${composed}`);
+          const created = runEmittedCommand(printedCommand(creation.message));
+          expect(created.status, created.out).toBe(0);
+          expect(recordDirs(proj)).toHaveLength(3);
+          expectApprovedPlan(composed);
+        });
+      }
+
+      test("once the approved plan started, its follow-up's options are the person's own words, even with none selected", () => {
+        seedTwoIntentsNoCursor();
+        const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+        const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+        const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+        const created = runEmittedCommand(printedCommand(emitted(ask.new_intent_command).message));
+        expect(created.status, created.out).toBe(0);
+        rmSync(cursorPath(proj), { force: true });
+        for (const text of ["2", "Separate new piece of work", "Part of existing work"]) {
+          const d = directive(text);
+          expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
+          expect(JSON.stringify(d)).not.toContain("Already started");
+          expect(d.message ?? "").not.toContain("but not which piece of work");
+        }
+        expect(recordDirs(proj)).toHaveLength(3);
+      });
+
       test("control: an option with no routing question asked is asked about, never acted on", () => {
         seedTwoIntentsNoCursor();
         for (const text of ["1", "Part of existing work"]) {
