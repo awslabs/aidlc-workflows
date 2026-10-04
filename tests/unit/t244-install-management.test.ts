@@ -1674,6 +1674,49 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       }
     },
   );
+
+  // 2.8.2 switching a machine to 2.8.1 left its own shared-marker helper,
+  // which 2.8.1 does not accept. A newer binary that runs while 2.8.1 is
+  // active, a pinned project's say, puts 2.8.1's own helper back; a helper
+  // AI-DLC did not write is left alone.
+  test.skipIf(process.platform !== "win32")(
+    "a newer binary gives an older active release back its own helper, and leaves a hand-edited one",
+    () => {
+      const older = "2.8.1";
+      const newer = patchVersion(1);
+      const machine = temp("aidlc-t244-older-helper-repair-");
+      const project = temp("aidlc-t244-older-helper-repair-project-");
+      mkdirSync(join(project, ".git"));
+      const env = envFor(machine);
+      for (const version of [older, newer]) {
+        const installed = run(LIFECYCLE, [
+          "update", "--version", version, "--from", fixture(version, { binary: "executable" }),
+        ], project, env);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      }
+      expect(run(LIFECYCLE, ["use", older], project, env).status).toBe(0);
+      const helperPath = join(machine, "aidlc-shim.ps1");
+      const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const [sharedMarker, stableOnly] = previousWindowsShimHelpers();
+        expect(readFileSync(helperPath, "utf-8")).toBe(stableOnly);
+        writeFileSync(helperPath, sharedMarker);
+        replacePreviousWindowsShimHelper();
+        expect(readFileSync(helperPath, "utf-8")).toBe(stableOnly);
+        const handEdited = `${stableOnly}# a local edit\r\n`;
+        writeFileSync(helperPath, handEdited);
+        replacePreviousWindowsShimHelper();
+        expect(readFileSync(helperPath, "utf-8")).toBe(handEdited);
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+  );
 });
 
 describe("t244 installer has no machine-level harness selection", () => {

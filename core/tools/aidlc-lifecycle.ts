@@ -1601,17 +1601,39 @@ export function previousWindowsShimHelperState(): PreviousShimHelperState {
 export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
-    if (previousWindowsShimHelperState()?.kind !== "replace") return;
+    const helper = olderReleaseHelperRepair() ??
+      (previousWindowsShimHelperState()?.kind === "replace" ? windowsShimHelper() : null);
+    if (helper === null) return;
     const root = machineTransactionRoot();
     executePlan({
       schemaVersion: 1,
       root,
       operations: [
-        writeOperation(relative(root, windowsShimPath()), windowsShimHelper(), expected, 0o700),
+        writeOperation(relative(root, windowsShimPath()), helper, expected, 0o700),
       ],
     });
   } catch {
     // The previous helper still starts aidlc; a later command retries.
+  }
+}
+
+// While a release from before the current helper is active, it needs the
+// helper it wrote itself. An installer-owned helper of another era (2.8.2
+// switching to 2.8.1 left its own) is put back to that one by any newer binary
+// that runs, a pinned project's for example; anything else is left alone.
+function olderReleaseHelperRepair(): string | null {
+  try {
+    const active = readActiveExecutable();
+    if (!active) return null;
+    const target = basename(dirname(active));
+    if (!predatesCurrentHelper(target) || readVersionMarker(activeVersionPath()) !== target) return null;
+    if (!completeVersion(target) || readFileSync(commandPath(), "utf-8") !== windowsShim()) return null;
+    const installed = readFileSync(windowsShimPath(), "utf-8");
+    const wanted = windowsShimHelperFor(target);
+    if (installed === wanted) return null;
+    return [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(installed) ? wanted : null;
+  } catch {
+    return null;
   }
 }
 
