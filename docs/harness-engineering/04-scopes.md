@@ -39,6 +39,7 @@ The scope frontmatter fields are:
 | `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Flat string lists may use block (`- item`) or flow (`[item, item]`) form; an empty list opts out. |
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
+| `existing_code` | No | `true` marks a scope that changes code that already exists, so a new project's custom plan runs on another scope when one fits; `false` or absence means the scope suits new work too. Any other value is rejected. |
 | `runner` | No | `true` includes the scope in the default generated scope-runner set. |
 | `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`classic`) is not enabled. |
 | `guard_policy` | No | The scope's Guard Policy default, `strict`, `relaxed`, or `off`: how far the guards stand aside for work on this scope. It decides what happens when an input changes after a human approved or confirmed something (strict reopens the approval; relaxed and off record the change once, tell the human in one line, and continue; workspace source that moved after a plan was approved is recorded and continued under every value) and which authority fences hold (strict lowers none; relaxed lowers `plan-approval` and `review-freeze`; off lowers those two plus `state-transition` and `reviewer-scope`; `human-presence` is never lowered by the word). Absence means strict. The shipped defaults are strict on `enterprise` and off on the rest. A memory layer's `## Guard Policy` section (`Mode: strict`) wins over every scope default and every per-intent flip; see [Guard Policy](../guide/13-customization.md#guard-policy). `change_control` is the retired spelling, read for one release; a file naming both keys with different values is rejected. |
@@ -87,6 +88,16 @@ walking-skeleton ceremony for this scope. `skeleton: off` means the first Bolt
 runs as a regular Bolt. Absence defaults to off, so composed/runtime-approved
 scopes and plugin scopes do not conjure a skeleton Bolt unless they opt in
 explicitly.
+
+### Scopes for existing code
+
+The optional `existing_code: true` field marks a scope that changes code that
+already exists (`bugfix`, `refactor`, and `security-patch` ship with it). A
+plan the composer tailors for a new project does not run on such a scope when
+a scope meant for new work fits, so new work is not recorded as a fix; and
+creating work on one in a folder that scans as a new project, which drops its
+Reverse Engineering, prints a note that the scope usually targets existing code. Absence means the scope suits new
+work too.
 
 ### Guard Policy default
 
@@ -158,7 +169,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 ### Steps
 
-1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
+1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, keep `existing_code: true` from `aidlc-bugfix.md`, since a hotfix changes code that already exists, `freeform_default: true` only if this is the selected install's unique fallback nomination, `testStrategy` only if it should diverge from `depth`, and `review_cap` only if the scope should lower stage reviews. Write a short prose body explaining the intent.
    Set `sensors`, `learnings`, and `summary_confirmation` to `off` only for ceremonies the scope should omit; absent keys stay on. Intent overrides and global kill switches use the table above.
 
 2. **Tag the stages that should run under `hotfix`.** In each stage you want `EXECUTE` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages must include it (they always run).

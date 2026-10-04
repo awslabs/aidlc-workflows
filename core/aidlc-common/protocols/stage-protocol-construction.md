@@ -239,7 +239,8 @@ human approval. An ordinary Unit needs one when `human_required` is true
 the verified ordinary Unit automatically. At a human checkpoint, run the §13
 learnings ritual for the represented stages only when
 `directive.protocol_modules` lists `learnings`. With the module listed,
-consolidate relevant candidates into one Unit learning question and persist only
+consolidate relevant candidates into one Unit learning question (log it and its
+answer with `--stage "<directive.stage>"`) and persist only
 the human's explicit selections through each owning stage's learning tools, then
 open the checkpoint approval with `ask` below as a separate question and turn. During automatic
 execution, retain candidates in the diaries for the next human checkpoint or

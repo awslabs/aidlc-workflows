@@ -160,6 +160,8 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
   const PROTECTED = [
     "STAGE_COMPLETED",
     "HUMAN_TURN",
+    // Spends a person's turn: an agent appending it would force a re-ask.
+    "QUESTION_UNANSWERED",
     "GATE_APPROVED",
     "GATE_REJECTED",
     "QUESTION_ANSWERED",
@@ -202,6 +204,7 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
     // nothing landed on disk
     expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
+    expect(readAllAuditShards(proj)).not.toContain("QUESTION_UNANSWERED");
   });
 
   test("append-batch refuses a protected event smuggled among diagnostics", () => {

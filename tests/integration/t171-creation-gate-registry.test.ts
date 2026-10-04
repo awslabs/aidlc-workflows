@@ -17,7 +17,7 @@
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   cleanupTestProject,
@@ -824,6 +824,71 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         for (const text of ["1", "Part of existing work"]) {
           expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
         }
+      });
+
+      test("a setting typed with the request reaches the record the continue option picks", () => {
+        const record = seedOneIntentNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+        // Its select command carries the setting, and a reply naming the option runs the same.
+        expect(ask.select_commands[0].command).toContain("--depth comprehensive");
+        for (const text of ["1", "Part of existing work"]) expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
+        // It selects the record, then continues it with the setting.
+        const step = emitted(ask.select_commands[0].command);
+        expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+        const commands = [...String(step.message).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+        expect(commands).toHaveLength(2);
+        expect(runEmittedCommand(commands[0]).status).toBe(0);
+        expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(record);
+        const applied = emitted(commands[1]);
+        expect(applied.kind, JSON.stringify(applied).slice(0, 300)).toBe("print");
+        expect(applied.message).toContain("config set depth comprehensive");
+        expect(runEmittedCommand(printedCommand(applied.message)).status).toBe(0);
+        expect(readFileSync(join(intentsDir(proj), record, "aidlc-state.md"), "utf-8")).toContain("- **Depth**: Comprehensive");
+      });
+
+      test("a continue answer given from another space goes back to the question's space first", () => {
+        const record = seedOneIntentNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        // Another chat moves the shared space cursor before the answer runs.
+        mkdirSync(join(proj, "aidlc", "spaces", "other", "intents"), { recursive: true });
+        writeFileSync(join(proj, "aidlc", "active-space"), "other\n");
+        const step = emitted(ask.select_commands[0].command);
+        expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
+        const commands = [...String(step.message).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+        expect(commands[0]).toMatch(/space switch default$/);
+        expect(commands[1]).toMatch(new RegExp(`intent switch ${record}$`));
+      });
+
+      test("a record named outside the record-name shape is never written into a command", () => {
+        const [kept, other] = seedTwoIntentsNoCursor();
+        const odd = "odd`name";
+        renameSync(join(intentsDir(proj), kept), join(intentsDir(proj), odd));
+        const rows = readIntentRegistry(proj).map((row) => (row.dirName === kept ? { ...row, dirName: odd } : row));
+        writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        const entry = ask.select_commands.find((row: { selector: string }) => row.selector === odd);
+        expect(entry, JSON.stringify(ask).slice(0, 400)).toBeDefined();
+        // Other work is selected by the time the answer runs.
+        writeFileSync(cursorPath(proj), `${other}\n`);
+        const refused = emitted(entry.command);
+        expect(refused.kind).toBe("error");
+        expect(refused.message).toContain(JSON.stringify(odd));
+        expect(refused.message).toContain("Rename the record directory");
+        expect(refused.message).not.toContain("intent switch");
+      });
+
+      test("with two records, the setting rides the continue command of whichever one is picked", () => {
+        seedTwoIntentsNoCursor();
+        const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
+        const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        for (const row of ask.select_commands) expect(row.command).toContain(`--record ${row.selector} --depth comprehensive`);
+        const which = directive("1");
+        expect(which.ask_type).toBe("intent-pick");
+        expect(which.select_commands).toEqual(ask.select_commands);
       });
 
       test("with one record listed, the reshape option reshapes it, exactly as its reshape command does", () => {

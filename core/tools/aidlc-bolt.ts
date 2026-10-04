@@ -79,7 +79,7 @@ import {
   legacyParkedRefPrefix,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
@@ -445,7 +445,7 @@ function handleStart(args: string[]): void {
   if (stateContent && getField(stateContent, "Status") === "Archived") {
     error(
       "Cannot start a Bolt for an Archived workflow. Bring it back first with " +
-        "`/aidlc intent unarchive <name>`.",
+        `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
     );
   }
   const teamOwnership = isTeamUnitOwnership(stateContent);
@@ -647,7 +647,7 @@ function handleComplete(args: string[]): void {
   if (stateContent && getField(stateContent, "Status") === "Archived") {
     error(
       "Cannot complete a Bolt for an Archived workflow. Bring it back first with " +
-        "`/aidlc intent unarchive <name>`.",
+        `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
     );
   }
   const teamOwnership = isTeamUnitOwnership(stateContent);
@@ -1222,7 +1222,7 @@ function handleSetAutonomy(args: string[]): void {
     if (getField(content, "Status") === "Archived") {
       error(
         "Cannot change autonomy for an Archived workflow. Bring it back first with " +
-          "`/aidlc intent unarchive <name>`.",
+          `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
       );
     }
     // Human-presence guard on ESCALATION only. Switching to autonomous is the

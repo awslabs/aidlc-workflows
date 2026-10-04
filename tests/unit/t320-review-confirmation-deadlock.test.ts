@@ -28,6 +28,7 @@ import {
   seedAidlcMemory,
   seedBoltDag,
   recordArtifactWriteViaHook,
+  REPO_ROOT,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -531,6 +532,19 @@ describe("t320 review/summary deadlock prevention", () => {
 });
 
 describe("t320 recovery guidance", () => {
+  test("names the command the person types on Codex", () => {
+    // The Codex tree's own lib, in its own process: the tree names the harness.
+    const lib = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-lib.ts");
+    const state = "- [R] requirements-analysis \u2014 EXECUTE";
+    const script = `const { recoveryGuidance } = await import(${JSON.stringify(lib)});\n` +
+      `console.log(recoveryGuidance("/p", ${JSON.stringify(state)}, "requirements-analysis"));`;
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "AIDLC_HARNESS_DIR"));
+    const r = Bun.spawnSync({ cmd: [BUN, "-e", script], env, stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode, r.stderr.toString()).toBe(0);
+    expect(r.stdout.toString()).toContain("$aidlc --stage requirements-analysis");
+    expect(r.stdout.toString()).not.toContain("/aidlc ");
+  });
+
   test("maps every checkbox and absent-stage state to one executable exit", () => {
     expect(
       recoveryGuidance(

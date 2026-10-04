@@ -255,6 +255,22 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(r.status).toBe(1);
   });
 
+  test("3b: the session skills name the commands a Codex user types, and leave paths alone", () => {
+    const skills = join(REPO_ROOT, "dist", "codex", ".agents", "skills");
+    const read = (skill: string) => readFileSync(join(skills, skill, "SKILL.md"), "utf-8");
+    expect(read("aidlc-session-cost")).toContain("Run $aidlc to\nbegin, then re-run $aidlc-session-cost.");
+    expect(read("aidlc-replay")).toContain("start a workflow with $aidlc before running\n$aidlc-replay.");
+    expect(read("aidlc-replay")).toContain("`$aidlc-outcomes-pack`");
+    expect(read("aidlc-outcomes-pack")).toContain("Run $aidlc to completion first.");
+    for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack"]) {
+      expect(read(skill), skill).not.toMatch(/(^|[\s(`"])\/aidlc(?![a-z0-9-]*\.[a-z])/m);
+    }
+    // Paths keep their slash, and the Claude tree keeps its slash commands.
+    expect(read("aidlc-replay")).toContain("`<record>/aidlc-state.md`");
+    expect(read("aidlc-replay")).toContain("bun .codex/tools/aidlc.ts engine runtime summary");
+    expect(readFileSync(join(CLAUDE_SRC, "skills", "aidlc-replay", "SKILL.md"), "utf-8")).toContain("/aidlc-replay.");
+  });
+
   test("4: method relocated to workspace-root aidlc/spaces/default/memory/; native rules/ is Starlark-only", () => {
     // The AIDLC method ("memory") no longer ships under .codex/aidlc-rules/ (the
     // old D-10 rename target). It relocated OUT of the harness dir to the
@@ -398,6 +414,15 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(shippedBody).toContain(
       'session_start:0:0"]\ntrusted_hash = "sha256:58956c1f8f0b66e96c0f4d02e26946e79979e0f30599e8dc06a512ebecf03843"',
     );
+    // Codex hashes a group's matcher too. These two are the hashes Codex 0.160.0
+    // itself wrote for the Bash-matched hooks after "Trust all": a seed without
+    // the matcher left every matched hook untrusted, and they never ran.
+    expect(shippedBody).toContain(
+      'pre_tool_use:0:0"]\ntrusted_hash = "sha256:e7a90e58ec814e697217f2bc230585e508be24e62833294da2e2095dc66ff0d4"',
+    );
+    expect(shippedBody).toContain(
+      'post_tool_use:3:0"]\ntrusted_hash = "sha256:5f9a79604c580af77ffe63c58e0b76871e229f051df824b8add818dfbd44c388"',
+    );
   });
 
   test("7: default trust paths round-trip Unix and Windows path characters exactly", () => {
@@ -446,7 +471,7 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     const project = "/tmp/project path that must not replace the hook path";
     const hooksJson = String.raw`D:\custom hooks\hook "set"\hooks.json`;
     const emitTrustEntries = trustEntries();
-    const expected = emitTrustEntries(project, hooksJson);
+    const expected = emitTrustEntries(project, hooksJson, ".codex", "codex", SOURCE_INVOKE);
     const direct = parseTrustDocument(expected);
     expect(Object.keys(direct.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
 
@@ -620,6 +645,13 @@ describe("t150 dist/codex packaging determinism + trust", () => {
     expect(entries.length).toBe(groupCount);
     expect(entries).toEqual(expectedTrustKeys("/tmp/example-proj/.codex/hooks.json"));
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
+    // It trusts the hooks the copied dist/codex runs (`bun .codex/tools/aidlc.ts
+    // ...`): the shipped seed's entries for this project, hash for hash. Native
+    // `aidlc ...` hashes here left every hook in a copied project untrusted.
+    const seed = readFileSync(join(CODEX_DST, "trust-seed.toml"), "utf-8");
+    expect(r.stdout.trimEnd()).toBe(
+      seed.slice(seed.indexOf("[hooks.state")).replaceAll("<PROJECT_DIR>", "/tmp/example-proj").trimEnd(),
+    );
   });
 
   test.each(["0.144.9", "0.145.0"])("13: doctor enforces the compact-session reload floor for Codex %s", (version) => {

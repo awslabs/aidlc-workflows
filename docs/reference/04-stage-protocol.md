@@ -135,10 +135,12 @@ AskUserQuestion({
 })
 ```
 
-`[next stage]` is rendered verbatim from the run-stage directive's `next_stage`
-field (the display name of the next in-scope stage, computed by the engine at
-emit time), or `Complete workflow` when `next_stage` is null. The conductor
-never guesses the next stage.
+`[next stage]` is rendered verbatim from the `next_stage` field (the display
+name of the next in-scope stage) on the reply that opened the gate (`report
+--result awaiting-approval` or `revised`, computed when the gate opens, so a
+plan change made during the stage is in it), else the run-stage directive's
+(computed at emit time), or `Complete workflow` when `next_stage` is null. The
+conductor never guesses the next stage.
 
 Pass the person's reply unchanged in `--user-input`, as one single-quoted
 argument (a `'` inside becomes `'\''` on POSIX shells, `''` on PowerShell): the label they picked
@@ -1115,7 +1117,8 @@ change. See
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
 3. **Verdict and decision brief.** The conductor records the verdict with the
    same `aidlc-log.ts review` command plus `--verdict`. The logger reads the
-   review from the request's `reviewFile` (or `--review-file <path>`),
+   review from the request's `reviewFile` (a `--review-file <path>` must
+   name that same file),
    validates it, rechecks current summary confirmation and output admission,
    proves the review manifest and request-time source identity are unchanged,
    and writes the review record

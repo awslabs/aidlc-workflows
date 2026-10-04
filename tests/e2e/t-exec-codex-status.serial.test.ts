@@ -23,7 +23,9 @@
 // What this proves on the SHIPPED tree, structurally:
 //   - skill discovery at .agents/skills/aidlc under a real codex session;
 //   - the engine's print-directive terminal arm (status names no workflow);
-//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature).
+//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature);
+//   - the trust `package.ts codex trust` seeds is the trust Codex checks, so
+//     the project's hooks run, matched ones included.
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
 // (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
@@ -152,6 +154,12 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
         // workspace signals are the state file and the scaffold tree.
         expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
         expect(existsSync(join(proj, "aidlc-docs", "ideation"))).toBe(false);
+        // The seeded trust is the trust Codex checks: Codex reports running the
+        // project's hooks, SessionStart and a matched one (every PostToolUse
+        // group has a matcher; this run's tool calls are Bash). With a seed
+        // Codex did not recognise, it ran none of them and this run passed.
+        expect(r.out, codexExecDiagnostic(r)).toContain("hook: SessionStart Completed");
+        expect(r.out, codexExecDiagnostic(r)).toContain("hook: PostToolUse Completed");
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

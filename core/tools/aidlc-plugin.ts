@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
@@ -775,7 +775,7 @@ export function comparePluginState(
       state: provedMissing ? "installed-missing" : "inventory-unavailable",
       action: provedMissing ? "attention" : "current",
       message: provedMissing
-        ? "installed plugin missing; reinstall via host, or sync --prune-missing"
+        ? `installed plugin missing; reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove what it added`
         : "not compared: no host plugin list",
     });
   }
@@ -1072,7 +1072,12 @@ function removeFragments(content: string, key: string, path: string): string {
   return output;
 }
 
-function pruneContributions(stagedProject: string, harnessDir: string, key: string): void {
+function pruneContributions(
+  stagedProject: string,
+  harnessDir: string,
+  key: string,
+  writable: (path: string) => boolean = () => true,
+): void {
   const sidecar = join(harnessDataDir(stagedProject, harnessDir), `plugin-contrib-${key}.json`);
   let records: Record<string, {
     produces?: string[];
@@ -1119,18 +1124,36 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
         }
       }
       after = removeFragments(after, key, path);
-      if (after !== before) writeFileSync(path, after);
+      if (after !== before && writable(path)) writeFileSync(path, after);
     }
   }
-  rmSync(sidecar, { force: true });
+  if (writable(sidecar)) rmSync(sidecar, { force: true });
 }
 
+// The first folder on the way from the project to `target` that links
+// elsewhere, relative to the project, or null. A removal or rewrite through it
+// would land outside this project and outside the transaction, so prune
+// leaves what is behind it alone and says so.
+function linkOnTheWay(projectDir: string, target: string): string | null {
+  let path = projectDir;
+  for (const part of relative(projectDir, dirname(target)).split(/[\\/]/).filter(Boolean)) {
+    path = join(path, part);
+    try {
+      if (lstatSync(path).isSymbolicLink()) return relative(projectDir, path);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Returns the first linked folder it left alone, or null.
 function pruneOwnedPlugin(
   stagedProject: string,
   harnessDir: string,
   key: string,
   ownership: OwnershipRecord | undefined,
-): void {
+): string | null {
   if (!ownership) {
     throw new Error(`cannot prune ${key}: no composition ownership record proves its files`);
   }
@@ -1141,13 +1164,23 @@ function pruneOwnedPlugin(
       throw new Error(`cannot prune ${key}: owned path changed since composition: ${file.path}`);
     }
   }
-  pruneContributions(stagedProject, harnessDir, key);
+  let leftAlone: string | null = null;
+  const writable = (target: string): boolean => {
+    const link = linkOnTheWay(stagedProject, target);
+    if (link !== null) leftAlone ??= link;
+    return link === null;
+  };
+  pruneContributions(stagedProject, harnessDir, key, writable);
   for (const file of ownership.files) {
-    rmSync(assertOwnedPath(stagedProject, file.path), { force: true });
+    const target = assertOwnedPath(stagedProject, file.path);
+    if (writable(target)) rmSync(target, { force: true });
   }
   const dataDir = harnessDataDir(stagedProject, harnessDir);
-  rmSync(join(dataDir, `plugin-owned-${key}.json`), { force: true });
-  rmSync(join(dataDir, `plugin-compose-${key}.json`), { force: true });
+  for (const name of [`plugin-owned-${key}.json`, `plugin-compose-${key}.json`, `plugin-files-${key}.json`]) {
+    const target = join(dataDir, name);
+    if (writable(target)) rmSync(target, { force: true });
+  }
+  return leftAlone;
 }
 
 function replaceOwnedPluginPrimitives(
@@ -1323,6 +1356,9 @@ function compositionIsCurrent(
 
 // The person asked for --prune-missing, so at a terminal it says what goes and
 // how to get it back, then prunes. A script or an agent passes --yes.
+// A command used the wrong way, which exits 2 like every other usage refusal.
+class PluginUsageError extends Error {}
+
 export function announcePrune(
   argv: string[],
   keys: string[],
@@ -1331,11 +1367,11 @@ export function announcePrune(
 ): void {
   if (keys.length === 0 || argv.includes("--yes")) return;
   if (!input.isTTY) {
-    throw new Error("plugin sync --prune-missing requires --yes in non-interactive mode");
+    throw new PluginUsageError("plugin sync --prune-missing requires --yes in non-interactive mode");
   }
   output.write(
-    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project, ` +
-      "their additions to stage files, and their composition records. To get them back, reinstall " +
+    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project ` +
+      "and their additions to stage files. To get them back, reinstall " +
       `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
   );
 }
@@ -1345,7 +1381,7 @@ export async function syncPlugins(
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
   lockRetry = 0,
-): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
+): Promise<{ synced: string[]; pruned: string[]; operations: number; leftAlone?: string }> {
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
@@ -1413,8 +1449,9 @@ export async function syncPlugins(
       );
       await runComposer(plugin, stagedProject, harnessDir);
     }
+    let leftAlone: string | null = null;
     for (const key of pruned) {
-      pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key));
+      leftAlone = pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key)) ?? leftAlone;
     }
     const claimedPaths = new Set<string>();
     for (const plugin of plugins) {
@@ -1469,6 +1506,7 @@ export async function syncPlugins(
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned,
       operations: plan.operations.length,
+      ...(leftAlone !== null ? { leftAlone } : {}),
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -1484,7 +1522,7 @@ function jsonEnvelope(
     schemaVersion: 1,
     ok: code === 0,
     code,
-    status: code === 0 ? "ok" : "failed",
+    status: code === 0 ? "ok" : code === 2 ? "usage" : "failed",
     message,
     data,
   })}\n`;
@@ -1507,7 +1545,10 @@ export async function main(argv: string[]): Promise<void> {
     if (command === "sync") {
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
-        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "");
+        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
+        (result.leftAlone
+          ? `\nLeft plugin files in ${result.leftAlone} alone: that folder links outside this project.`
+          : "");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;
@@ -1515,9 +1556,10 @@ export async function main(argv: string[]): Promise<void> {
     throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing]>");
   } catch (error) {
     const message = errorMessage(error);
-    if (flags.json === "true") process.stdout.write(jsonEnvelope(1, message, null));
+    const code = error instanceof PluginUsageError ? 2 : 1;
+    if (flags.json === "true") process.stdout.write(jsonEnvelope(code, message, null));
     else process.stderr.write(`aidlc engine plugin: ${message}\n`);
-    process.exitCode = 1;
+    process.exitCode = code;
   }
 }
 

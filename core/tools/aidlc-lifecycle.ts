@@ -1844,7 +1844,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
     return success(
       (versions.length
         ? versions.map((item) =>
-            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}] pins=${item.pinPaths.length} stale-pins=${item.stalePinPaths.length}${item.complete ? "" : " incomplete"}`
+            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
           ).join("\n")
         : "no retained versions") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
@@ -2081,7 +2081,7 @@ function uninstallCommand(argv: string[]): CommandResult {
   const plan = buildUninstallPlan(purge);
   const settings = purge
     ? "Machine settings, update cache, pins, harness default, and release channel will be removed."
-    : "Machine configuration, update cache, pins, and harness default will be kept.";
+    : "Machine settings, update cache, pins, harness default, and release channel will be kept.";
   announceRemoval(
     argv,
     warned(`Uninstalling AI-DLC (${versions.length} retained version(s)). Project trees will not be changed. ${settings}${
@@ -2796,25 +2796,36 @@ export function humanLifecycleNarration(
     const data = result.data as {
       purge?: boolean;
       deferred?: boolean;
+      recovered?: number;
+      warnings?: string[];
       preservedUnowned?: string[];
     } | undefined;
-    if (data?.deferred) return null;
+    // A resumed cleanup keeps its own line.
+    if (data?.recovered !== undefined) return null;
+    // On Windows the files go once this command has exited, so the line says
+    // what Windows is about to remove rather than that it is gone, and where
+    // to look if something stays.
+    const removes = (what: string): string =>
+      data?.deferred ? `Windows removes ${what} after this command ends.` : `Removed ${what}.`;
+    const check = data?.deferred ? " If aidlc still runs after that, aidlc doctor shows what is left." : "";
+    const warnings = data?.deferred && data.warnings?.length ? `${data.warnings.join("\n")}\n` : "";
+    const machineState = "machine settings, update cache, pins, harness default, and release channel";
     if (data?.preservedUnowned?.length) {
       return successText(
-        `Removed owned aidlc files.${
+        `${warnings}${
           data.purge
-            ? " Removed owned machine settings and cache files."
-            : " Machine settings, update cache, pins, and harness default were kept."
-        } Project files were kept.${
+            ? removes(`owned aidlc files and ${machineState}`)
+            : `${removes("owned aidlc files")} Machine settings, update cache, pins, harness default, and release channel were kept.`
+        } Project files were kept.${check}${
           preservedUninstallPaths(data.preservedUnowned)
         }`,
         process.stdout,
       );
     }
     return successText(
-      data?.purge
-        ? "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept."
-        : "Removed aidlc and all retained releases. Machine settings, update cache, pins, harness default, and project files were kept.",
+      `${warnings}${data?.purge
+        ? `${removes(`aidlc, all retained releases, ${machineState}`)} Project files were kept.${check}`
+        : `${removes("aidlc and all retained releases")} Machine settings, update cache, pins, harness default, release channel, and project files were kept.${check}`}`,
       process.stdout,
     );
   }

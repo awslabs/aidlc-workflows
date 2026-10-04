@@ -159,7 +159,7 @@ Two drift guards keep the on-disk runner sets pinned to their sources: `aidlc-ru
 
 Scope is a file-authored primitive, the same muscle memory as authoring a sensor or an agent. There is **no `scope-mapping.json`** — it has been removed from the shipped tree. Scope identity and stage membership are split across two file-authored surfaces, transposed into a compiled grid:
 
-1. **Identity** is authored in one file per scope at `core/scopes/aidlc-<name>.md` and projected to `<harness-dir>/scopes/` — frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `review_cap`, `guard_policy` (retired spelling `change_control`), `sensors`, `learnings`, `summary_confirmation`, and `runner`) plus prose describing the scope. The shipped set is `bugfix`, `classic`, `enterprise`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
+1. **Identity** is authored in one file per scope at `core/scopes/aidlc-<name>.md` and projected to `<harness-dir>/scopes/`: frontmatter (required `name` and `depth`, plus optional `keywords`, `description`, `testStrategy`, `skeleton`, `review_cap`, `guard_policy` (retired spelling `change_control`), `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `runner`, `freeform_default`, and `existing_code`; the field table in `docs/harness-engineering/04-scopes.md` is the full list) plus prose describing the scope. The shipped set is `bugfix`, `classic`, `enterprise`, `express`, `feature`, `infra`, `mvp`, `poc`, `refactor`, `security-patch`, `workshop`.
 2. **Membership** lives in each stage's `scopes:` frontmatter - the list of scopes for which that stage is EXECUTE. Classic includes Initialization plus Inception and Construction through Build and Test (18 of 33 stages); CI Pipeline and Operation stay outside its executable membership. Classic runs advisory reviews, sensors, and the learnings ritual, and disables summary confirmation; explicit autonomy keeps the single pre-merge review.
 
 `aidlc engine graph compile` (the same compile path that produces `stage-graph.json`) transposes these into the grid at `tools/data/scope-grid.json` — a `scope → {stages: {slug: EXECUTE|SKIP}}` map that the engine reads for all scope-level routing. The engine's `validScopes()` derives its canonical scope-name set from that compiled grid.
@@ -188,7 +188,7 @@ batch. A successful native merge may remove its child; `--resume-existing`
 preserves the rejection revision, not an unconditional promise that the original
 child directory exists. See the [prepare and resume commands](../guide/12-cli-commands.md#aidlc-engine-swarm-prepare-prepare-a-reproducible-batch).
 
-These seven `SWARM_*` events are part of the 112-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
+These seven `SWARM_*` events are part of the 113-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool - it is the harness's Stop-hook ceiling, which is 8 blocks on this autonomous-Construction path (§3).
 
@@ -204,6 +204,6 @@ test instructions. Workers never re-resolve Testing Posture independently.
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** - the workflow / phase / stage machines and the 112-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 113-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).

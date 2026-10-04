@@ -217,6 +217,10 @@ export interface ScopeDefinition {
   plugin?: string;
   runner?: boolean;
   skeleton?: boolean;
+  /** The scope changes code that already exists (`existing_code: true`): a new
+   *  project's custom plan runs on another scope when one fits, and creation
+   *  notes a new-project scan under it as a likely misread. */
+  existingCode?: boolean;
   /** The scope's Guard Policy default (`guard_policy:` frontmatter, or the
    *  retired `change_control:`); absent means strict. Resolution lives in
    *  resolveGuardPolicy. */
@@ -5555,25 +5559,22 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // order, with the next step the agent speaks from, then cleared. They belong to
 // the person's current turn: a newer prompt on the selected work, or an age
 // past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
-// a line never surfaces in a later turn or another chat. A line a tool gives
-// inside a stage (which file it read, a file it copied into the project) is
-// held across the person's turns instead, until the next step the agent speaks
-// from on the same work (at the latest, the stage's gate), and is said once per
-// work.
+// a line never surfaces in a later turn or another chat. The same file keeps,
+// per work, the lines this chat has already heard that the engine would
+// otherwise repeat (a finished stage that is out of date).
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
-const HELD_PERSON_LINES_SAID_MAX = 20;
+const PERSON_LINES_SAID_MAX = 20;
 
 interface PendingPersonLine {
   line: string;
   at: number;
-  // The turn a turn-scoped line belongs to, or the work a held line belongs to.
-  turn?: string;
-  work?: string;
+  // The person's turn the line belongs to.
+  turn: string;
 }
 
 interface PendingPersonLines {
   lines: PendingPersonLine[];
-  // Held lines already said on this work.
+  // Lines this chat already heard on this work.
   said: string[];
 }
 
@@ -5605,11 +5606,9 @@ function readPendingPersonLines(path: string, turn: string, work: string): Pendi
     const now = Date.now();
     const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
       if (!entry || typeof entry !== "object") return false;
-      const { line, at, turn: lineTurn, work: lineWork } = entry as Partial<PendingPersonLine>;
+      const { line, at, turn: lineTurn } = entry as Partial<PendingPersonLine>;
       if (typeof line !== "string" || typeof at !== "number") return false;
-      return lineWork !== undefined
-        ? lineWork === work
-        : lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+      return lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
     });
     const said = saved.work === work && Array.isArray(saved.said)
       ? saved.said.filter((line): line is string => typeof line === "string")
@@ -5629,27 +5628,21 @@ function writePendingPersonLines(projectDir: string, path: string, work: string,
   writeFileSync(path, `${JSON.stringify({ work, ...saved })}\n`, "utf-8");
 }
 
-// Keep the lines for the next step the agent speaks from; `held` keeps them
-// across the person's turns on the same work. False when they could not be
-// kept, so the caller says them on its own step instead.
+// Keep the lines for the next step the agent speaks from. False when they
+// could not be kept, so the caller says them on its own step instead.
 export function addPendingPersonLines(
   projectDir: string,
   sessionId: string,
   lines: readonly string[],
-  held = false,
 ): boolean {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const added = lines.filter((line) => line.trim().length > 0);
   if (!path || added.length === 0) return false;
   const { turn, work } = personTurnAndWork(projectDir);
-  if (held && work === "none") return false;
   try {
     const saved = readPendingPersonLines(path, turn, work);
     const at = Date.now();
-    for (const line of added) {
-      if (held && (saved.said.includes(line) || saved.lines.some((entry) => entry.line === line))) continue;
-      saved.lines.push(held ? { line, at, work } : { line, at, turn });
-    }
+    for (const line of added) saved.lines.push({ line, at, turn });
     writePendingPersonLines(projectDir, path, work, saved);
     return true;
   } catch {
@@ -5668,17 +5661,43 @@ export function pendingPersonLines(projectDir: string, sessionId: string): { lin
   return {
     lines: saved.lines.map((entry) => entry.line),
     said: () => {
-      const heldSaid = saved.lines.filter((entry) => entry.work !== undefined).map((entry) => entry.line);
       try {
-        writePendingPersonLines(projectDir, path, work, {
-          lines: [],
-          said: [...saved.said, ...heldSaid].slice(-HELD_PERSON_LINES_SAID_MAX),
-        });
+        writePendingPersonLines(projectDir, path, work, { lines: [], said: saved.said });
       } catch {
         /* the next step says them again rather than never */
       }
     },
   };
+}
+
+// Count `lines` as heard in this chat on the selected work, so the engine does
+// not say them again there.
+export function markPersonLinesHeard(projectDir: string, sessionId: string, lines: readonly string[]): void {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || lines.length === 0) return;
+  const { turn, work } = personTurnAndWork(projectDir);
+  if (work === "none") return;
+  try {
+    const saved = readPendingPersonLines(path, turn, work);
+    const said = [...saved.said.filter((line) => !lines.includes(line)), ...lines].slice(-PERSON_LINES_SAID_MAX);
+    writePendingPersonLines(projectDir, path, work, { lines: saved.lines, said });
+  } catch {
+    /* unrecorded: the engine says it once more */
+  }
+}
+
+// Whether this chat already heard `line` on the selected work.
+export function personLineHeard(projectDir: string, sessionId: string, line: string): boolean {
+  const path = pendingPersonLinesPath(projectDir, sessionId);
+  if (!path || !existsSync(path)) return false;
+  const { turn, work } = personTurnAndWork(projectDir);
+  return readPendingPersonLines(path, turn, work).said.includes(line);
+}
+
+// What the person hears about a finished stage that is behind something it
+// used, with the words that redo it.
+export function staleStageLine(name: string): string {
+  return `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`;
 }
 
 interface SessionPidEntry {
@@ -10599,6 +10618,20 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "CONSTRUCTION_POLICY_RECORDED",
   "PLAN_APPROVAL_RECORDED",
 ]);
+// A question box that came back with nothing picked: Codex returns exactly
+// {"answers":{}} when its box runs out unattended. Nobody answered.
+export function emptyPickerResult(toolResponse: unknown): boolean {
+  let response = toolResponse;
+  if (typeof response === "string") {
+    try { response = JSON.parse(response); } catch { return false; }
+  }
+  if (response === null || typeof response !== "object" || Array.isArray(response)) return false;
+  const keys = Object.keys(response);
+  if (keys.length !== 1 || keys[0] !== "answers") return false;
+  const answers = (response as Record<string, unknown>).answers;
+  return answers !== null && typeof answers === "object" && !Array.isArray(answers) &&
+    Object.keys(answers).length === 0;
+}
 const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
@@ -10656,8 +10689,12 @@ export function humanTurnState(projectDir: string): HumanTurnState {
       if (ev === "DECISION_RECORDED") {
         decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
       }
+      // QUESTION_UNANSWERED (hook-owned: a question box closed with no answer)
+      // spends any earlier turn, so a remark typed before the box never answers
+      // the question asked in it. The question itself stays open.
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
+        ev === "QUESTION_UNANSWERED" ||
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
@@ -11143,6 +11180,68 @@ export function approvedConstructionUnits(
 export function hasOpenGate(stateContent: string | null): boolean {
   if (!stateContent) return false;
   return parseCheckboxes(stateContent).some((c) => c.state === "awaiting-approval");
+}
+
+const CONSTRUCTION_POLICY_SETTER_FIELDS: Readonly<Record<string, string>> = {
+  "set-construction-iteration": "Construction Iteration",
+  "set-construction-checkpoints": "Construction Checkpoints",
+  "set-construction-execution": "Construction Execution",
+};
+
+// One Construction policy setter in exactly a form the engine issues, and the
+// field and value it sets, or null: `aidlc engine state <setter> <value>`,
+// `bun <harness>/tools/aidlc.ts engine state <setter> <value>`, or
+// `bun <harness>/tools/aidlc-state.ts <setter> <value>`, with the executable
+// named bare. No prelude, environment assignment, wrapper, interpreter option,
+// other path, chain, pipe, redirection or expansion matches.
+function literalConstructionPolicySetter(command: string): { field: string; value: string } | null {
+  const literal = parseLiteralShellInvocation(command);
+  if (!literal || literal.directory !== null) return null;
+  const words = literal.argv;
+  if (words.length !== literal.rawWords.length || words.some((word, i) => word !== literal.rawWords[i])) {
+    return null;
+  }
+  const tools = `${harnessDir()}/tools`;
+  let rest: string[];
+  if (words[0] === "aidlc" && words[1] === "engine" && words[2] === "state") rest = words.slice(3);
+  else if (words[0] === "bun" && words[1] === `${tools}/aidlc.ts` && words[2] === "engine" && words[3] === "state") {
+    rest = words.slice(4);
+  } else if (words[0] === "bun" && words[1] === `${tools}/aidlc-state.ts`) rest = words.slice(2);
+  else return null;
+  const field = CONSTRUCTION_POLICY_SETTER_FIELDS[rest[0] ?? ""];
+  return field !== undefined && rest.length === 2 ? { field, value: rest[1] } : null;
+}
+
+// The human-presence floors' one rule (Kiro CLI and Kiro IDE): whether a tool
+// call waits for the person's turn. It holds only while a stage gate the person
+// must answer is open and no turn of theirs is on record since it opened. A
+// gate the engine approves itself (isAutonomousConstructionGate, the rule its
+// approval uses) does not need them, and the one Construction policy setter
+// their recorded choice authorizes (the setter's own check) runs while a gate
+// stays open for its later approval. Neither lets through what the engine
+// would refuse, and either one that cannot be read leaves the floor holding.
+export function presenceFloorHolds(
+  projectDir: string,
+  stateContent: string | null,
+  command: string,
+): boolean {
+  if (!stateContent || !hasOpenGate(stateContent)) return false;
+  if (humanActedSinceGate(projectDir)) return false;
+  const setter = literalConstructionPolicySetter(command);
+  try {
+    if (setter !== null && constructionPolicyReceiptApplies(projectDir, setter.field, setter.value)) {
+      return false;
+    }
+  } catch { /* an unreadable receipt authorizes nothing */ }
+  return parseCheckboxes(stateContent).some((entry) => {
+    if (entry.state !== "awaiting-approval") return false;
+    try {
+      const stage = findStageBySlug(entry.slug);
+      return stage === undefined || !isAutonomousConstructionGate(stateContent, stage, projectDir);
+    } catch {
+      return true; // a gate that cannot be classified is the person's
+    }
+  });
 }
 
 // The interview path (handleAnswer) uses the SAME resolution-boundary check: a
@@ -15779,19 +15878,29 @@ export function reviewRecordRelativePath(
  * Where the reviewer writes its review for one request: the scratch slot the
  * request opens (deleting any earlier draft) and the verdict consumes. The
  * record beside it is the review; the draft is the reviewer's input to it.
+ * A request with an id has a slot of its own, so a reviewer of a replaced
+ * request that writes late never fills the replacement's slot; a request
+ * recorded before request ids keeps the pass's shared slot.
  */
 export function reviewDraftRelativePath(
   stage: string,
   unit: string | undefined,
   attemptId: string,
   iteration: number,
+  requestId: string | null = null,
 ): string {
   if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
   const unitProblem = unit === undefined ? null : validateUnitName(unit);
   if (unitProblem !== null) throw new Error(unitProblem);
+  if (requestId !== null && !REVIEW_REQUEST_ID_RE.test(requestId)) {
+    throw new Error(`Invalid review request id "${requestId}".`);
+  }
+  const name = requestId === null
+    ? `${iteration}.review.md`
+    : `${iteration}.${requestId.slice("review:".length)}.review.md`;
   return unit === undefined
-    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.review.md`
-    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.review.md`;
+    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${name}`
+    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${name}`;
 }
 
 /** Whether `path` has exactly one supported stage or Unit record shape. */
@@ -17043,6 +17152,9 @@ export interface ReviewAttemptAccounting {
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
+      // The request row names its own review file (rows recorded before
+      // per-request review files do not).
+      ownReviewFile: boolean;
     }
   >;
   recoveryIteration: number | null;
@@ -17319,6 +17431,7 @@ export function reviewAttemptAccounting(
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
+      ownReviewFile: boolean;
     }
   >();
   for (let i = floor + 1; i < events.length; i++) {
@@ -17354,7 +17467,11 @@ export function reviewAttemptAccounting(
     if (entry.event === "REVIEW_REQUESTED") {
       const binding = reviewRequestBindingFromBlock(entry.block);
       if (binding === null) continue;
-      if (auditBlockField(entry.block, "Retry") !== "pending-request") {
+      // A replacement takes the pass of the request it replaces: it is a new
+      // dispatch of new bytes, so it neither counts again nor inherits a retry.
+      const previous = pendingRequests.get(iteration);
+      const replacement = reviewRequestReplaces(entry.block, previous);
+      if (auditBlockField(entry.block, "Retry") !== "pending-request" && !replacement) {
         requestCount++;
       }
       if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
@@ -17362,14 +17479,15 @@ export function reviewAttemptAccounting(
         recoverySpent = true;
       }
       pendingIterations.add(iteration);
-      const previous = pendingRequests.get(iteration);
       const modernBinding = reviewRequestBindingIsModern(binding, stage);
       pendingRequests.set(iteration, {
         binding,
         retried:
-          previous?.retried === true ||
-          (auditBlockField(entry.block, "Retry") === "pending-request" &&
-            modernBinding),
+          !replacement &&
+          (previous?.retried === true ||
+            (auditBlockField(entry.block, "Retry") === "pending-request" &&
+              modernBinding)),
+        ownReviewFile: auditBlockField(entry.block, "Review File") !== null,
       });
     } else {
       const pending = pendingRequests.get(iteration);
@@ -17408,6 +17526,11 @@ export interface PendingReviewRequestStatus {
   requestCurrent: boolean;
   retryable: boolean;
   verdictRecordable: boolean;
+  // Its outputs or source changed since the request (every output and any unit
+  // source manifest still reads), so it can never finish and a new request may
+  // replace it. A missing output is not this: restoring it can make the request
+  // current again.
+  replaceable: boolean;
 }
 
 // Whether the request's artifact fingerprint still describes the bytes on disk.
@@ -17440,10 +17563,109 @@ export function reviewAppendedAfterRequest(
     : !binding.legacyAppendix.priorAppendix;
 }
 
+// Whether a pending request's binding still describes the bytes on disk: its
+// artifacts (one stable snapshot), the workspace source and, for a per-unit
+// workspace stage, the unit source. `readable` is false when an output or the
+// unit source manifest cannot be read: restoring it may make the request
+// current again. One check, shared by the attempt accounting view
+// (pendingReviewRequestStatus) and the receipts view (freshReviewReceipts).
+export function pendingRequestCurrency(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit: string | undefined,
+  binding: ReviewRequestBinding,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    mergedBoltUnits?: ReadonlySet<string>;
+    single?: boolean;
+    sourceState?: WorkspaceSourceState | null;
+  } = {},
+): { requestCurrent: boolean; readable: boolean; modernVerdictBinding: boolean } {
+  const snapshot = reviewArtifactSnapshot(projectDir, stage, unit, {
+    requireRequiredArtifacts: options.requireRequiredArtifacts,
+    boltDag: options.boltDag,
+    mergedBoltUnits: options.mergedBoltUnits,
+  });
+  if (snapshot === null) {
+    return { requestCurrent: false, readable: false, modernVerdictBinding: false };
+  }
+
+  let readable = true;
+  let requestCurrent =
+    reviewRequestArtifactsCurrent(binding, snapshot) ||
+    reviewAppendedAfterRequest(binding, snapshot);
+  let modernVerdictBinding = reviewRequestBindingIsModern(binding, stage);
+
+  const sourceState = stage.workspace_requires
+    ? options.sourceState !== undefined
+      ? options.sourceState
+      : workspaceSourceState(projectDir)
+    : null;
+  if (stage.workspace_requires) {
+    // A source walk that cannot be read proves no change, so the request is
+    // not one to replace; restoring the walk can make it current again.
+    if (sourceState === null) readable = false;
+    const currentSource =
+      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
+    if (
+      binding.sourceFingerprint !== null &&
+      !sameWorkspaceSource(binding.sourceFingerprint, currentSource)
+    ) {
+      requestCurrent = false;
+    }
+  }
+
+  const bindsUnitSource =
+    stage.workspace_requires === true &&
+    unit !== undefined &&
+    stage.for_each === "unit-of-work" &&
+    options.single !== true;
+  if (bindsUnitSource) {
+    const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
+    if (manifest.ok !== true) {
+      requestCurrent = false;
+      modernVerdictBinding = false;
+      readable = false;
+    } else {
+      const currentUnitSource =
+        sourceState === null
+          ? UNBINDABLE_FINGERPRINT
+          : unitSourceFingerprint(
+              sourceState.listing,
+              manifest,
+              manifest.rawBytesSha256,
+            );
+      if (
+        binding.unitSourceFingerprint !== null &&
+        currentUnitSource !== binding.unitSourceFingerprint
+      ) {
+        requestCurrent = false;
+      }
+      if (binding.unitSourceFingerprint === null) modernVerdictBinding = false;
+    }
+  }
+  return { requestCurrent, readable, modernVerdictBinding };
+}
+
+// A REVIEW_REQUESTED row replaces the pending request at its scope and pass when
+// it names that request's id (`none` for one recorded before request ids). A
+// replacement interrupted in turn is replaced the same way. Any other row
+// carrying the field is an ordinary request.
+export function reviewRequestReplaces(
+  block: string,
+  pending: { binding: ReviewRequestBinding | null } | undefined,
+): boolean {
+  const named = auditBlockField(block, "Replaces Request Id");
+  if (named === null || pending === undefined || pending.binding === null) {
+    return false;
+  }
+  return named === (pending.binding.requestId ?? "none");
+}
+
 // What can still be done with the oldest pending review request: retried once
-// against its original binding, or completed with a verdict. Both require the
-// request's artifact and source identities to still describe the current bytes;
-// the verdict itself arrives as a review record, so nothing else is needed.
+// against its original binding, completed with a verdict, or (its outputs or
+// source changed) replaced by a new request at the same pass.
 export function pendingReviewRequestStatus(
   projectDir: string,
   stage: ReviewFingerprintStage,
@@ -17467,78 +17689,18 @@ export function pendingReviewRequestStatus(
       requestCurrent: false,
       retryable: false,
       verdictRecordable: false,
+      replaceable: false,
     };
   }
-
-  const snapshot = reviewArtifactSnapshot(projectDir, stage, unit, {
-    requireRequiredArtifacts: options.requireRequiredArtifacts,
-    boltDag: options.boltDag,
-    mergedBoltUnits: options.mergedBoltUnits,
-  });
-  if (snapshot === null) {
-    return {
-      iteration,
-      requestCurrent: false,
-      retryable: false,
-      verdictRecordable: false,
-    };
-  }
-
-  let requestCurrent =
-    reviewRequestArtifactsCurrent(binding, snapshot) ||
-    reviewAppendedAfterRequest(binding, snapshot);
-  let modernVerdictBinding = reviewRequestBindingIsModern(binding, stage);
-
-  const sourceState = stage.workspace_requires
-    ? options.sourceState !== undefined
-      ? options.sourceState
-      : workspaceSourceState(projectDir)
-    : null;
-  if (stage.workspace_requires) {
-    const currentSource =
-      sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
-    if (
-      binding.sourceFingerprint !== null &&
-      !sameWorkspaceSource(binding.sourceFingerprint, currentSource)
-    ) {
-      requestCurrent = false;
-    }
-  }
-
-  const bindsUnitSource =
-    stage.workspace_requires === true &&
-    unit !== undefined &&
-    stage.for_each === "unit-of-work" &&
-    options.single !== true;
-  if (bindsUnitSource) {
-    const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
-    if (manifest.ok !== true) {
-      requestCurrent = false;
-      modernVerdictBinding = false;
-    } else {
-      const currentUnitSource =
-        sourceState === null
-          ? UNBINDABLE_FINGERPRINT
-          : unitSourceFingerprint(
-              sourceState.listing,
-              manifest,
-              manifest.rawBytesSha256,
-            );
-      if (
-        binding.unitSourceFingerprint !== null &&
-        currentUnitSource !== binding.unitSourceFingerprint
-      ) {
-        requestCurrent = false;
-      }
-      if (binding.unitSourceFingerprint === null) modernVerdictBinding = false;
-    }
-  }
-
+  const { requestCurrent, readable, modernVerdictBinding } = pendingRequestCurrency(
+    projectDir, stage, unit, binding, options,
+  );
   return {
     iteration,
     requestCurrent,
     retryable: requestCurrent && !pending.retried,
     verdictRecordable: requestCurrent && modernVerdictBinding,
+    replaceable: readable && !requestCurrent,
   };
 }
 
@@ -17637,9 +17799,13 @@ export function worktreeReviewAttemptProjection(
       if (crossShardTied(i)) continue;
       const binding = reviewRequestBindingFromBlock(event.block);
       if (binding === null) continue;
+      // A retry or replacement of the recovery request is still the recovery
+      // request, as in freshReviewReceipts.
+      const previous = pendingRequests.get(requestKey);
       pendingRequests.set(requestKey, {
         binding,
         recovery:
+          previous?.recovery === true ||
           auditBlockField(event.block, "Recovery") === "stale-receipt",
         timestamp: event.timestamp,
         shard: event.shard,
@@ -18381,9 +18547,35 @@ export function freshReviewReceipts(
   }
   applyDeferredBoundaries();
 
+  // The workspace source is read once per call, here or for source freshness.
+  let sourceRead = false;
+  let sharedSource: WorkspaceSourceState | null = null;
+  const currentSource = (): WorkspaceSourceState | null => {
+    if (!sourceRead) {
+      sharedSource = options.sourceState !== undefined ? options.sourceState : workspaceSourceState(projectDir);
+      sourceRead = true;
+    }
+    return sharedSource;
+  };
+  const requireRequiredArtifacts =
+    resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, projectDir) !== "1";
   for (const request of pendingRequests.values()) {
+    // A pending request whose outputs or source changed before its verdict can
+    // never finish (a retry re-dispatches the old bytes); the next move is a new
+    // request at the same pass, which is what `outstanding` names to every
+    // reader (wave entries, gates, recovery).
+    const currency =
+      request.binding === null
+        ? null
+        : pendingRequestCurrency(projectDir, stage, request.unit, request.binding, {
+            requireRequiredArtifacts,
+            boltDag: options.boltDag,
+            mergedBoltUnits,
+            ...(stage.workspace_requires ? { sourceState: currentSource() } : {}),
+          });
+    const replaceable = currency?.readable === true && !currency.requestCurrent;
     const pending: PendingReviewProgress = {
-      state: "retry-required",
+      state: replaceable ? "outstanding" : "retry-required",
       iteration: request.iteration,
       recovery: request.recovery,
       ...(request.verificationFailed ? { verificationFailed: true } : {}),
@@ -18407,9 +18599,7 @@ export function freshReviewReceipts(
     (newestSourceFingerprint !== null || modernUnitReceipts.size > 0);
   // One shared temp-index pass supplies BOTH global reconciliation and every
   // per-unit comparison. Never recompute inside the unit loop.
-  const currentSourceState = needsCurrentSource
-    ? options.sourceState !== undefined ? options.sourceState : workspaceSourceState(projectDir)
-    : null;
+  const currentSourceState = needsCurrentSource ? currentSource() : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
   const sourceMismatch =
@@ -24351,7 +24541,8 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 //   .aidlc-engine/human-turn   - touched by the UserPromptSubmit mint, once per human
 //                         prompt, alongside the HUMAN_TURN ledger event.
 //   .aidlc-engine/engine-touch - touched by aidlc-orchestrate on every ADVANCING
-//                         invocation (`next` / `report` / `park`).
+//                         invocation (`next` / `report` / `park`), and by
+//                         `intent create` for the work it creates.
 //
 //   conversational  <=>  mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
 //
@@ -24516,7 +24707,7 @@ export function askTurnEndIsOpen(projectDir: string, intent?: string, space?: st
 }
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
-// aidlc-orchestrate.ts's `next` / `report` / `park` entry points. A no-op in three
+// orchestrate's `next` / `report` / `park` and `intent create`. A no-op in three
 // cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
 // for read-only utility routing (excluded at the call site), and before creation.
 //
@@ -24524,7 +24715,7 @@ export function askTurnEndIsOpen(projectDir: string, intent?: string, space?: st
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
 // aidlc-bolt / aidlc-swarm invocation and the mutating aidlc-state verbs
 // (approve, advance, skip, set, …). NONE of those tools touch this marker: the
-// only writers are orchestrate's three subcommands. So on a transcript-free
+// only writers are orchestrate's three subcommands and intent create. So on a transcript-free
 // harness a conductor that runs, say, `aidlc-jump` — mutating the stage pointer
 // and emitting audit — and then ends its turn without consulting the engine
 // reads as CONVERSATIONAL here, while the same turn BLOCKS on Claude/Codex where
@@ -27381,14 +27572,18 @@ export function fenceSwitchSentence(
   }
 }
 
-export function renderReviewVerdictCommand(input: {
+interface ReviewCommandInput {
   projectDir: string;
   stage: string;
   reviewer: string;
   unit?: string;
   single?: boolean;
   iteration: number;
-}): string {
+}
+
+// The review request and its verdict, rendered once: the same scope selectors
+// and the project the request belongs to (a Bolt worktree included).
+function renderReviewCommand(input: ReviewCommandInput, verdict: boolean): string {
   return renderEngineInvocation({
     route: "log",
     args: [
@@ -27401,19 +27596,26 @@ export function renderReviewVerdictCommand(input: {
       ...(input.single ? ["--single"] : []),
       "--iteration",
       String(input.iteration),
-      "--verdict",
-      "<READY|NOT-READY>",
+      ...(verdict ? ["--verdict", "<READY|NOT-READY>"] : []),
       "--project-dir",
       input.projectDir,
     ],
   }, { harnessDir: harnessDir() });
 }
 
+export function renderReviewVerdictCommand(input: ReviewCommandInput): string {
+  return renderReviewCommand(input, true);
+}
+
+export function renderReviewRequestCommand(input: ReviewCommandInput): string {
+  return renderReviewCommand(input, false);
+}
+
 function restartStageRemedy(stage: string): GuardRemedy {
   return {
     op: "restart-stage",
     action:
-      `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
+      `Restart this stage with ${entrySkillInvocation()} --stage ${stage}; the recorded answers ` +
       "survive, and the stage will ask for confirmation again.",
     ...guardOperation({ kind: "restart-stage", stage }),
     requiresHuman: true,
@@ -27517,7 +27719,7 @@ function lifecycleResetRemedies(
       op: "change-scope",
       action:
         "This stage is excluded from the current plan; change to a scope that " +
-        `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
+        `includes it with ${entrySkillInvocation()} --scope <scope>, then restart ${input.stage}.`,
       requiresHuman: true,
       executableNow: true,
     };
@@ -27609,7 +27811,7 @@ function lifecycleResetRemedies(
       {
         op: "redo-jump",
         action:
-          `Restart the stage from the top with /aidlc --stage ${input.stage}. ` +
+          `Restart the stage from the top with ${entrySkillInvocation()} --stage ${input.stage}. ` +
           "This costs more than finishing the current revision: your " +
           "recorded answers survive, but you re-confirm the summary once and then " +
           "save every output document again, so each one descends from the new " +
@@ -27628,9 +27830,9 @@ function lifecycleResetRemedies(
         (input.attempt.sourceCoverage === "unbindable"
           ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
             "workspace source boundary so the application source can be checked, or jump back with " +
-            `/aidlc --stage ${input.stage} to redo it.`
+            `${entrySkillInvocation()} --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
-            `jump back with /aidlc --stage ${input.stage} to redo it.`) + cost("jump"),
+            `jump back with ${entrySkillInvocation()} --stage ${input.stage} to redo it.`) + cost("jump"),
       ...guardOperation({ kind: "restart-stage", stage: input.stage }),
       requiresHuman: true,
       executableNow: true,
@@ -28005,7 +28207,7 @@ export function guardAttemptState(
   const pendingIterations = [...(accounting?.pendingIterations ?? [])].sort(
     (a, b) => a - b,
   );
-  const pendingReviewFor = (iteration: number) => ({
+  const pendingReviewAt = (iteration: number) => ({
     pendingReview: {
       iteration,
       retryable:
@@ -28024,6 +28226,12 @@ export function guardAttemptState(
       }),
     },
   });
+  // A pending request that can never finish (its outputs or source changed
+  // before a verdict) is requested again at the same pass, once per attempt.
+  const pendingReviewFor = (iteration: number) =>
+    pendingStatus?.iteration === iteration && pendingStatus.replaceable
+      ? { nextReview: { iteration } }
+      : pendingReviewAt(iteration);
   const budget = options.reviewBudget ?? null;
   const attempt: GuardAttemptState = {
     floor:
@@ -31457,7 +31665,9 @@ export function teamUnitGateStatus(
 // unit-major block. A Construction policy change is not a boundary either: a
 // stage start recorded while stage-major flooring was in force (per the
 // CONSTRUCTION_POLICY_SET rows) keeps counting after a switch to unit-major
-// flooring, so the Units finished before the switch stay finished.
+// flooring, and a start recorded under unit-major flooring stays ignored after a
+// switch back to stage-major flooring, so the Units finished before either
+// switch stay finished.
 //
 // The no-boundary sentinel keeps fixture/recovery flows deterministic while
 // unstamped legacy rows still fail closed.
@@ -31505,6 +31715,31 @@ export function latestMainWorkflowStageRunFloorForProject(
   );
 }
 
+// The floor a Unit's lifecycle receipt carries and is read against. Unlike the
+// stage's other attempt floors, stage-major flooring here leaves out a stage
+// start recorded while unit-major flooring was in force, so a switch back to
+// stage-major keeps the Units finished before it. A Unit floored per Unit
+// (`unitScoped`), or one with its own reopen (a Unit-tagged rejection, such
+// as one made before such a switch), is floored on that Unit, so the reopened
+// Unit still owes its redo after the switch; every other floor is unchanged.
+export function unitLifecycleRunFloorForProject(
+  projectDir: string,
+  slug: string,
+  unitMajor: boolean,
+  unit?: string,
+  auditRows?: readonly AuditShardEvent[],
+  unitScoped = unit !== undefined,
+): string {
+  const rows = auditRows ?? readAuditShardEvents(projectDir);
+  const ownReopen = (name: string): boolean =>
+    rows.some((row) =>
+      row.event === "GATE_REJECTED" &&
+      auditBlockField(row.block, "Unit") === name &&
+      gateStagesFromBlock(row.block).includes(slug));
+  const floored = unit !== undefined && (unitScoped || ownReopen(unit)) ? unit : undefined;
+  return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
+}
+
 // Callers may hand in raw readAuditShardEvents rows, which are shard-major,
 // so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
@@ -31512,6 +31747,7 @@ function latestMainWorkflowStageRunFloorFromRows(
   slug: string,
   unitMajor = false,
   unit?: string,
+  unitReceipts = false,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -31527,6 +31763,7 @@ function latestMainWorkflowStageRunFloorFromRows(
   // flooring count, each with the ordinal it had there (its place among all of
   // this stage's starts), so its floor token is unchanged by the switch.
   const stageFloored = unitMajor ? stageStartsUnderStageFlooring(rowsInput) : null;
+  const unitFloored = unitMajor || !unitReceipts ? null : stageStartsUnderUnitFlooring(rowsInput);
   const startOrdinals = new Map(
     sortAttemptEvents(rowsInput.filter(stageStart)).map((row, index) => [row, index + 1]),
   );
@@ -31539,7 +31776,9 @@ function latestMainWorkflowStageRunFloorFromRows(
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
-      return stageStart(row) && (stageFloored === null || stageFloored.has(row));
+      return stageStart(row) &&
+        (stageFloored === null || stageFloored.has(row)) &&
+        (unitFloored === null || !unitFloored.has(row));
     });
   rows.sort((a, b) => {
     if (a.timestamp !== b.timestamp) {
@@ -31618,6 +31857,66 @@ function stageStartsUnderStageFlooring(
     if (candidates.some((change) => !constructionPolicyFoundUnitMajor(change))) counted.add(start);
   }
   return counted;
+}
+
+const UNIT_LIFECYCLE_EVENTS = new Set([
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
+]);
+
+// The stage starts recorded while unit-major flooring was in force, which a
+// Unit receipt's stage-major floor leaves out so a switch back keeps the Units
+// finished under unit-major. A start after the last change follows the current
+// stage-major flooring and counts. A start is left out only when it is plainly
+// before every change that may be the first one after it and all of them found
+// unit-major flooring: a start in the same second as a change in another shard
+// may have come after it, so it counts, as a restart would.
+function stageStartsUnderUnitFlooring(
+  rows: readonly AuditShardEvent[],
+): Set<AuditShardEvent> {
+  const ignored = new Set<AuditShardEvent>();
+  const changes = rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET" && constructionPolicyRowComplete(row));
+  if (changes.length === 0) return ignored;
+  const before = attemptEventDefinitelyBefore;
+  for (const start of rows) {
+    if (start.event !== "STAGE_STARTED") continue;
+    const after = changes.filter((change) => !before(change, start));
+    if (after.length === 0) continue;
+    const firstAfter = after.filter((change) =>
+      !after.some((other) => before(start, other) && before(other, change)));
+    const candidates = firstAfter.length > 0 ? firstAfter : after;
+    if (candidates.every((change) => before(start, change) && constructionPolicyFoundUnitMajor(change))) {
+      ignored.add(start);
+    }
+  }
+  // A unit-major walk finishes a later stage's Units before that stage's first
+  // STAGE_STARTED, which the late gate cascade records only when the earlier
+  // stage is approved, possibly after a switch back. That first start of the
+  // stage in its attempt, after a change that found unit-major flooring and
+  // after Unit rows of the stage, is not a restart of it.
+  const unitRows = rows.filter((row) => UNIT_LIFECYCLE_EVENTS.has(row.event));
+  const boundaries = rows.filter((row) => row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED");
+  for (const start of rows) {
+    if (start.event !== "STAGE_STARTED" || ignored.has(start)) continue;
+    const slug = auditBlockField(start.block, "Stage");
+    if (!slug || auditBlockField(start.block, "Workflow")?.startsWith("single-stage:")) continue;
+    const opened = (row: AuditShardEvent): boolean =>
+      before(row, start) && !boundaries.some((boundary) => before(row, boundary) && before(boundary, start));
+    const first = !rows.some((other) =>
+      other !== start && other.event === "STAGE_STARTED" &&
+      auditBlockField(other.block, "Stage") === slug && opened(other));
+    if (
+      first &&
+      changes.some((change) => before(change, start) && constructionPolicyFoundUnitMajor(change)) &&
+      unitRows.some((row) => auditBlockField(row.block, "Stage") === slug && opened(row))
+    ) {
+      ignored.add(start);
+    }
+  }
+  return ignored;
 }
 
 // A policy row the typed setters wrote in full: a known field with a value,
@@ -32242,6 +32541,17 @@ function currentUnitLifecycleRows(
         })
         .at(-1)?.timestamp ?? ""
     : latestMainWorkflowStageStarted(audit, slug);
+  // Under stage-major flooring the rows start at the latest stage start that
+  // counts for the receipts (see unitLifecycleRunFloorForProject), so a later
+  // stage started after its Units finished in a unit-major walk keeps them.
+  const ignoredStarts = unitMajor ? new Set<AuditShardEvent>() : stageStartsUnderUnitFlooring(sourceRows);
+  const cutoff = ignoredStarts.size === 0
+    ? startedAt
+    : sortAttemptEvents(sourceRows.filter((row) =>
+        row.event === "STAGE_STARTED" &&
+        auditBlockField(row.block, "Stage") === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
+        !ignoredStarts.has(row))).at(-1)?.timestamp ?? "";
   let unitScoped = false;
   try {
     const state = stateContent ?? readStateFile(projectDir);
@@ -32249,19 +32559,14 @@ function currentUnitLifecycleRows(
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
+  // Each Unit's receipts are read against the floor its writer stamps, which
+  // keeps a reopen of that Unit as a boundary in every mode.
   const floorByUnit = new Map<string, string>();
   const floorFor = (unit: string): string => {
-    const key = unitScoped ? unit : "";
-    const existing = floorByUnit.get(key);
+    const existing = floorByUnit.get(unit);
     if (existing) return existing;
-    const floor = latestMainWorkflowStageRunFloorForProject(
-      projectDir,
-      slug,
-      unitMajor,
-      unitScoped ? unit : undefined,
-      sourceRows,
-    );
-    floorByUnit.set(key, floor);
+    const floor = unitLifecycleRunFloorForProject(projectDir, slug, unitMajor, unit, sourceRows, unitScoped);
+    floorByUnit.set(unit, floor);
     return floor;
   };
   const unitEvents = new Set([
@@ -32279,7 +32584,7 @@ function currentUnitLifecycleRows(
     if (!unit) continue;
     if (!eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
     if (auditBlockField(row.block, "Run floor") !== floorFor(unit)) continue;
-    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
+    if (!unitMajor && cutoff && row.timestamp < cutoff) continue;
     rows.push({
       ts: row.timestamp,
       pos: row.pos,
@@ -32796,6 +33101,7 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  existingCode?: boolean;
   /** Ceiling on how heavyweight stage reviews run under this scope:
    *  "adversarial" (no cap - stages run as declared), "advisory" (adversarial
    *  stages degrade to a single advisory pass), or "none" (no reviewer
@@ -32903,6 +33209,15 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
         );
       }
       meta.skeleton = skeleton === "on";
+    }
+    const existingCode = scalarField(fm, "existing_code");
+    if (existingCode) {
+      if (existingCode !== "true" && existingCode !== "false") {
+        throw new Error(
+          `Scope file ${filePath} has invalid existing_code value "${existingCode}". Expected "true" or "false".`
+        );
+      }
+      if (existingCode === "true") meta.existingCode = true;
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
     const reviewCap = scalarField(fm, "review_cap");
@@ -33080,6 +33395,7 @@ export function loadScopeMapping(): Record<string, ScopeDefinition> {
     if (meta.plugin !== undefined) def.plugin = meta.plugin;
     if (meta.runner !== undefined) def.runner = meta.runner;
     def.skeleton = meta.skeleton;
+    if (meta.existingCode) def.existingCode = true;
     if (meta.guardPolicy !== undefined) def.guardPolicy = meta.guardPolicy;
     if (meta.ceremony !== undefined) def.ceremony = meta.ceremony;
     out[name] = def;

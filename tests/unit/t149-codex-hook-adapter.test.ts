@@ -1,7 +1,7 @@
 // t149-codex-hook-adapter: the Codex stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard, function:hasExplicitHumanSelection
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-write-audit-log.ts, hook:aidlc-plan-approval-guard, function:hasExplicitHumanSelection, function:emptyPickerResult, audit:QUESTION_UNANSWERED
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/codex-hook-payloads/
 // (field-verbatim captures off Codex CLI 0.137.0 — the spike corpus at
@@ -26,6 +26,9 @@
 //   malformed stdin   → fail-open exit 0 (advisory contract).
 //   record-human-turn -> a subagent's prompt (it carries agent_id) is not the
 //                       person's turn: no HUMAN_TURN, no kept words (#1411).
+//   record-human-turn -> a question box that ran out ({"answers":{}}) records
+//                       QUESTION_UNANSWERED, which spends the turn before it,
+//                       and tells the agent to ask again.
 //
 // WHY SUBPROCESS. The adapter IS a subprocess shim — in-process unit testing
 // would bypass the exact stdin/stdout/exit-code surface being contracted.
@@ -454,6 +457,75 @@ describe("t149 Codex structured request_user_input presence", () => {
       }));
       expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(humanTurnCount(dir)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Measured live on Codex 0.160.0: the person typed a remark, the agent put
+  // the next question in the box, the box ran out ({"answers":{}}), and an
+  // answer the agent then logged was taken on the remark's turn.
+  test("a box that runs out spends the remark before it, so the agent cannot answer for the person", () => {
+    const dir = scratchProject(true);
+    const answer = (details: string) => spawnSync(
+      "bun",
+      [join(dir, ".codex", "tools", "aidlc.ts"), "engine", "log", "answer", "--stage", "requirements-analysis", "--details", details],
+      {
+        cwd: dir,
+        encoding: "utf-8",
+        // The fixture guard profile skips presence; this case is about presence.
+        env: {
+          ...process.env,
+          AIDLC_UNATTENDED: undefined,
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+          CLAUDE_PROJECT_DIR: undefined,
+        } as NodeJS.ProcessEnv,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      },
+    );
+    const typed = (turn: string, prompt: string) => runAdapter(dir, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit",
+      session_id: "codex-structured-session",
+      turn_id: turn,
+      cwd: dir,
+      prompt,
+    });
+    try {
+      expect(typed("remark", "Can you ask me that one in the question box?").code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+
+      const expired = structuredSelectionPayload(dir, JSON.stringify({ answers: {} }), "expired");
+      const ran = runAdapter(dir, "record-human-turn", expired);
+      expect(ran.code, ran.stderr).toBe(0);
+      const context = JSON.parse(ran.stdout) as {
+        hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
+      };
+      expect(context.hookSpecificOutput?.hookEventName).toBe("PostToolUse");
+      expect(context.hookSpecificOutput?.additionalContext).toContain("Ask the same question again");
+      expect(context.hookSpecificOutput?.additionalContext).toContain("never pick an answer for the person");
+      const annex = readFileSync(
+        join(REPO_ROOT, "dist", "codex", ".agents", "skills", "aidlc", "question-rendering.md"),
+        "utf-8",
+      );
+      expect(annex.replace(/\s+/g, " ")).toContain(
+        "ask the same question again in your reply as numbered prose, not in the box, and end the turn; never pick an answer for the person",
+      );
+      // Duplicate delivery replays the response and records one row.
+      expect(runAdapter(dir, "record-human-turn", expired).code).toBe(0);
+      expect(readAudit(dir).split("**Event**: QUESTION_UNANSWERED").length - 1).toBe(1);
+      expect(humanTurnCount(dir)).toBe(1);
+      expect(humanTurnState(dir)).toBe("consumed");
+
+      const refused = answer("A");
+      expect(refused.status).not.toBe(0);
+      expect(`${refused.stdout}${refused.stderr}`).toContain("no new human reply has arrived");
+      expect(readAudit(dir)).not.toContain("**Event**: QUESTION_ANSWERED");
+
+      // The person's own reply when they come back works as before.
+      expect(typed("reply", "A").code).toBe(0);
+      const recorded = answer("A");
+      expect(recorded.status, recorded.stderr).toBe(0);
+      expect(recorded.stdout).toContain("QUESTION_ANSWERED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

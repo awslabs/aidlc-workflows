@@ -253,6 +253,10 @@ export function validateProjectionDescriptor(
     }
     declare(safe);
     assertProjectionPathHasNoSymlinks(root, safe);
+    // Checked even when the file and its copy are absent: the marker names the copy.
+    if (integration.policy !== "managed-block" && integration.marker !== undefined) {
+      throw new Error(`${root}: ${safe} has a marker, which only a managed block takes`);
+    }
     const path = shippedRootIntegrationPath(root, descriptor.harnessDir, integration);
     if (
       !existsSync(path) &&
@@ -336,32 +340,45 @@ export function copyChannelOmits(
 ): Set<string> {
   return new Set([
     ...descriptor.rootIntegrations
-      .filter((integration) => integration.policy === "jsonc-settings" || integration.policy === "managed-block")
+      .filter((integration) =>
+        integration.policy === "jsonc-settings" || integration.policy === "managed-block" ||
+        copyStartsWithout(integration))
       .map((integration) => integration.path),
     ...TEAM_MEMORY_FILES.map((name) => `aidlc/spaces/default/memory/${name}`),
     "aidlc/active-space",
   ]);
 }
 
-// Every managed-block root file a release ships is also copied, byte for
-// byte, to <harnessDir>/tools/data/root-blocks/<marker>, inside the harness
-// folder a copy brings along.
+// An optional settings file a copy starts without, as `config` does by
+// default: Claude Code's .mcp.json, whose servers would otherwise all be
+// offered at first start. Its shipped list still travels in root-blocks.
+export function copyStartsWithout(integration: Pick<RootIntegration, "policy" | "optional">): boolean {
+  return integration.policy === "json-map" && integration.optional === true;
+}
+
+// Every managed-block root file a release ships, and every file a copy starts
+// without, is also copied, byte for byte, to
+// <harnessDir>/tools/data/root-blocks/<marker or file name>, inside the
+// harness folder a copy brings along. Only a managed block has a marker.
 export function rootBlockPath(
   harnessRoot: string,
-  integration: Pick<RootIntegration, "path" | "marker">,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy">,
 ): string {
-  return join(harnessRoot, "tools", "data", "root-blocks", integration.marker || basename(integration.path));
+  const name = integration.policy === "managed-block" && integration.marker
+    ? integration.marker
+    : basename(integration.path);
+  return join(harnessRoot, "tools", "data", "root-blocks", name);
 }
 
 // Where a projection holds the bytes it ships for a root integration: the root
-// file, or for a managed block the copy runtime leaves out, its root-blocks copy.
+// file, or for one the copy runtime leaves out, its root-blocks copy.
 export function shippedRootIntegrationPath(
   root: string,
   harnessDir: string,
-  integration: Pick<RootIntegration, "path" | "marker" | "policy">,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy" | "optional">,
 ): string {
   const path = join(root, integration.path);
-  if (integration.policy !== "managed-block" || existsSync(path)) return path;
+  if ((integration.policy !== "managed-block" && !copyStartsWithout(integration)) || existsSync(path)) return path;
   const block = rootBlockPath(join(root, harnessDir), integration);
   return existsSync(block) ? block : path;
 }
@@ -382,7 +399,8 @@ export function managedBlockMarkers(
 }
 
 // One harness's shipped .gitignore lines combined with each sibling's: the
-// first (by name) is the base, and each other adds only the lines not seen.
+// first (by name) is the base, and each other adds only the entries not seen,
+// so the part keeps its one comment line.
 export function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
   contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
   let base = contributors[0].text.trim();
@@ -400,11 +418,14 @@ export function unionBlocks(contributors: Array<{ distribution: string; text: st
       extras.push(entry);
       seen.add(entry);
     }
-    if (extras.length > 0) {
-      base += `\n\n# ${contributor.distribution} harness\n${extras.join("\n")}`;
-    }
+    if (extras.length > 0) base += `\n${extras.join("\n")}`;
   }
   return base;
+}
+
+// The ignore entries of a .gitignore part, without its comments and blank lines.
+function ignoreEntries(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).sort().join("\n");
 }
 
 // Earlier releases shipped a generic template above their own "# AI-DLC"
@@ -463,8 +484,11 @@ export function mergeBlock(
       }`,
       currentHash: sha256Bytes(currentBlock),
       nextHash: sha256Bytes(block),
+      // A .gitignore part with exactly the shipped entries is a release's own,
+      // whatever notes an earlier release put between them.
       currentBlockShipped: currentBody === body ||
-        legacyWholeFileHashes.includes(sha256Bytes(`${currentBody.replace(/\r\n/g, "\n")}\n`)),
+        legacyWholeFileHashes.includes(sha256Bytes(`${currentBody.replace(/\r\n/g, "\n")}\n`)) ||
+        (path === ".gitignore" && ignoreEntries(currentBody) === ignoreEntries(body)),
       ...(kept ? { keptOwnLines: true } : {}),
     };
   }

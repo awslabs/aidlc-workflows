@@ -43,7 +43,9 @@ This file is listed in `.gitignore` so your personal changes are never committed
 Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys. With no recorded model policy, judgment and templated agents inherit the session model and effort. Balanced reviewers use Sonnet at medium effort on Claude Code, while Codex and opencode inherit the session model and apply their medium reasoning setting. On Kiro, Cursor, and Copilot all tiers inherit the session model and effort. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
 The first-run wizard defaults to the `balanced` **preset**, which is distinct
-from the reviewer **tier**: it records medium effort for all three groups.
+from the reviewer **tier**: it records medium effort for all three groups. On
+Kiro IDE, Cursor, and Copilot it records no preset, because agents there keep
+your session's model and effort.
 Select a preset with `aidlc config models --preset balanced --project --yes`:
 
 | Preset | Deciding | Reviewing | Writing up |
@@ -53,13 +55,18 @@ Select a preset with `aidlc config models --preset balanced --project --yes`:
 | `minimal` | `medium` | `medium` | `low` |
 
 Presets set effort only, never model IDs. Per-agent exceptions override group
-dials, which override shipped tier defaults. Kiro CLI/IDE, Cursor, and Copilot
-cannot express these group effort dials; the policy is recorded and reported
-as unexpressed rather than written as inert keys. See
+dials, which override shipped tier defaults. Kiro IDE, Cursor, and Copilot
+cannot express these group effort dials; a policy you record there anyway is
+kept and reported as unexpressed rather than written as inert keys. Kiro CLI runs each session
+on one model, so there a preset sets ONE effort for the whole session
+(`minimal` low, `balanced` medium, `thorough` extra-high), saved with the
+session model in your personal Kiro settings; see
+[Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+Explicit group dials still have no Kiro CLI surface. See
 [Model Policy](18-install-and-lifecycle.md#model-policy) for profiles, overrides,
 and the upgrade path.
 
-To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter. On Kiro the surface depends on the harness: on Kiro CLI add a `"model"` field to the agent's `.kiro/agents/aidlc-*-agent.json`, and on Kiro IDE set a `model:` line in the agent's `.kiro/agents/aidlc-*-agent.md` frontmatter (the agent JSON files are CLI-only — the IDE reads the `.md` frontmatter when spawning). In both cases use a model ID enabled on your install; Kiro agents ship without a model pin so they inherit the session model by default. The edit survives until `aidlc config` refreshes that framework-owned file or you manually replace it from the same versioned `runtime/<harness>/` release payload. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI takes a model, and an effort only together with a model. On Kiro IDE, Cursor, and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there; on Kiro IDE a `model:` line you add by hand to an agent's `.kiro/agents/aidlc-*-agent.md` changes that agent until the next `aidlc config`. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 

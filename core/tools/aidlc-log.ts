@@ -112,12 +112,15 @@ import {
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
+  renderReviewRequestCommand,
   renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
   reviewAttemptAccounting,
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
+  fileIdentity,
+  sameFileIdentity,
   serializeReviewRecord,
   resolveProjectDir,
   resolveProjectFlag,
@@ -185,7 +188,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { entrySkillInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   readApprovalGateReply,
@@ -221,7 +224,7 @@ function resolveActiveProjectDir(explicit?: string): string {
   const pd = resolveProjectDir(explicit);
   if (!existsSync(stateFilePath(pd))) {
     error(
-      'No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (/aidlc "build the auth service"), or switch to an existing one with /aidlc intent <name>.'
+      `No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (${entrySkillInvocation()} "build the auth service"), or switch to an existing one with ${entrySkillInvocation()} intent <name>.`
     );
   }
   return pd;
@@ -2195,7 +2198,7 @@ function reviewRecoveryGuidance(
     });
   } catch {
     return (
-      `Restart this stage cleanly with /aidlc --stage ${stage}, then confirm ` +
+      `Restart this stage cleanly with ${entrySkillInvocation()} --stage ${stage}, then confirm ` +
       "its summary and review the finished output again."
     );
   }
@@ -2509,6 +2512,7 @@ function handleReview(args: string[]): void {
   const reviewSlot = (
     floor: string,
     iteration: number,
+    requestId: string | null,
   ): {
     draftRelative: string;
     draftRelativeToRecord: string;
@@ -2517,7 +2521,7 @@ function handleReview(args: string[]): void {
     const record = recordDir(pd);
     if (record === null) refuseReview("Cannot resolve the active intent record.");
     const attemptId = reviewAttemptId(floor);
-    const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration);
+    const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration, requestId);
     return {
       draftRelative: toPosix(relative(pd, join(record, ...draft.split("/")))),
       draftRelativeToRecord: draft,
@@ -2613,13 +2617,14 @@ function handleReview(args: string[]): void {
     let retried = false;
     let upgraded = false;
     let recovery: "stale-receipt" | undefined;
+    let replaces: string | null = null;
     let requestId: string | null = null;
     let reviewFile: string | null = null;
     const requestChangeNotices: string[] = [];
     // Open the reviewer's slot for this request: any draft an earlier dispatch of
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
-      const slot = reviewSlot(floor, iteration);
+      const slot = reviewSlot(floor, iteration, requestId);
       // Never through a symlinked `.aidlc-engine/reviews`: a redirected slot is not
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
@@ -2632,6 +2637,9 @@ function handleReview(args: string[]): void {
         );
       }
       reviewFile = slot.draftRelative;
+      // The request names its own review file, so its verdict reads that file
+      // only; a request recorded without one predates per-request files.
+      fields["Review File"] = slot.draftRelativeToRecord;
     };
     try {
       withAuditLock(pd, () => {
@@ -2710,6 +2718,21 @@ function handleReview(args: string[]): void {
             `artifact-stale:${artifactScopeStale}`,
           ]);
         };
+        // The one request that still works when a pending review can never
+        // finish (see replaceIteration below): named in every refusal that would
+        // otherwise leave the conductor restoring bytes it cannot restore.
+        const requestAgain = (n: number): string => renderReviewRequestCommand({
+          projectDir: pd,
+          stage: flags.stage,
+          reviewer: flags.reviewer,
+          ...(flags.unit ? { unit: flags.unit } : {}),
+          ...(flags.single === "true" ? { single: true } : {}),
+          iteration: n,
+        });
+        const startAgain = (n: number): string =>
+          pendingStatus?.iteration === n && pendingStatus.replaceable
+            ? ` It never got a verdict, so request it again instead: \`${requestAgain(n)}\`.`
+            : "";
         if (retryPending) {
           const pendingRequest = attempt.pendingRequests.get(iteration);
           if (!pendingRequest) {
@@ -2745,12 +2768,10 @@ function handleReview(args: string[]): void {
                   message,
                 );
               }
-              const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
               refuseReview(
                 `Cannot retry the prior review for "${flags.stage}" because it completed ` +
                   "before the stage output or project source changed. Start the one recovery " +
-                  `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
-                  `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
+                  `pass with \`${requestAgain(expected)}\`.`,
               );
             }
             if (recoverySpent) {
@@ -2817,7 +2838,8 @@ function handleReview(args: string[]): void {
               `Refusing review retry for "${flags.stage}": declared artifacts no ` +
                 `longer match the bytes from REVIEW_REQUESTED iteration ${iteration}. ` +
                 "A retry re-dispatches that exact request and cannot rebaseline changed " +
-                "content. Restore the requested artifact bytes before retrying.",
+                "content. Restore the requested artifact bytes before retrying." +
+                startAgain(iteration),
             );
           }
           // A request written before review records, or before source binding on
@@ -2843,7 +2865,8 @@ function handleReview(args: string[]): void {
               refuseReview(
                 `Refusing review retry for "${flags.stage}": workspace source no ` +
                   `longer matches REVIEW_REQUESTED iteration ${iteration}. A retry ` +
-                  "cannot rebaseline source changed while review was pending.",
+                  "cannot rebaseline source changed while review was pending." +
+                  startAgain(iteration),
               );
             }
             const currentUnitSource = fields["Unit Source Fingerprint"];
@@ -2854,7 +2877,8 @@ function handleReview(args: string[]): void {
               refuseReview(
                 `Refusing review retry for "${flags.stage}": unit source or ` +
                   `source-manifest.json no longer matches REVIEW_REQUESTED ` +
-                  `iteration ${iteration}. A retry cannot rebaseline changed unit source.`,
+                  `iteration ${iteration}. A retry cannot rebaseline changed unit source.` +
+                  startAgain(iteration),
               );
             }
           }
@@ -2893,6 +2917,50 @@ function handleReview(args: string[]): void {
           openReviewDraftSlot(attempt.floor);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
+          return;
+        }
+        // A pending request whose outputs or source changed before its verdict
+        // can never finish: a retry re-dispatches the old bytes, and a verdict
+        // cannot bind to them. A new request at the same pass replaces it (and a
+        // replacement interrupted in turn is replaced the same way), so an
+        // interrupted review never leaves the stage with no way to be reviewed.
+        const replaceIteration = pendingStatus?.replaceable ? pendingStatus.iteration : null;
+        if (replaceIteration !== null) {
+          if (iteration !== replaceIteration) {
+            refuseReview(
+              `Cannot start review iteration ${iteration} for "${flags.stage}": iteration ` +
+                `${replaceIteration} never got a verdict and its outputs or source changed since, so it ` +
+                `is requested again as iteration ${replaceIteration}: ` +
+                `\`${requestAgain(replaceIteration)}\`.`,
+            );
+          }
+          const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
+            requireRequiredArtifacts,
+            boltDag: unitResolution ?? undefined,
+            mergedBoltUnits,
+          });
+          if (snapshot === null) {
+            refuseReview(
+              `Cannot start review for "${flags.stage}": a required output document ` +
+                "is missing or unreadable. Create every required output document " +
+                "for this stage, then retry the review.",
+            );
+          }
+          const replaced = attempt.pendingRequests.get(replaceIteration)?.binding ?? null;
+          replaces = replaced?.requestId ?? "none";
+          fields["Artifact Fingerprint"] = snapshot.fingerprint;
+          requestId = mintReviewRequestId();
+          fields["Request Id"] = requestId;
+          fields["Replaces Request Id"] = replaces;
+          // A replaced recovery request stays the attempt's recovery request.
+          if (replaced?.recoveryCause) {
+            fields.Recovery = "stale-receipt";
+            fields["Recovery Cause"] = replaced.recoveryCause;
+            recovery = "stale-receipt";
+          }
+          stampRequestedSourceBinding(node);
+          openReviewDraftSlot(attempt.floor);
+          emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           return;
         }
         const recoveryEligible =
@@ -2954,6 +3022,19 @@ function handleReview(args: string[]): void {
             message,
           );
         }
+        // A pending request comes before the budget: the stage is waiting on its
+        // verdict, not out of passes, and saying "include the findings" for a
+        // review that never returned sent conductors to a gate that refuses.
+        if (attempt.pendingIterations.size > 0) {
+          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
+          refuseAttemptGuard(
+            "REVIEW_VERDICT_PENDING",
+            "A review request receives its verdict before another request starts.",
+            `Cannot start another review for "${flags.stage}" because iteration ` +
+              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
+              "repeat the same iteration with --retry-pending if the reviewer did not run.",
+          );
+        }
         // The budget is measured against `expected` ONLY. `iteration` is the
         // caller's claim about which pass this is, and it is validated against
         // `expected` further down with a message that names the right ordinal.
@@ -2973,16 +3054,6 @@ function handleReview(args: string[]): void {
             "REVIEW_BUDGET_EXHAUSTED",
             "Review requests do not exceed the configured attempt budget.",
             reviewBudgetMessage(flags.stage, expected, budget),
-          );
-        }
-        if (attempt.pendingIterations.size > 0) {
-          const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
-          refuseAttemptGuard(
-            "REVIEW_VERDICT_PENDING",
-            "A review request receives its verdict before another request starts.",
-            `Cannot start another review for "${flags.stage}" because iteration ` +
-              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
-              "repeat the same iteration with --retry-pending if the reviewer did not run.",
           );
         }
         if (iteration !== expected) {
@@ -3043,6 +3114,7 @@ function handleReview(args: string[]): void {
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
+      ...(replaces !== null ? { replaces } : {}),
       requestId,
       reviewFile,
       recordVerdict,
@@ -3129,8 +3201,34 @@ function handleReview(args: string[]): void {
         );
       }
 
-      const slot = reviewSlot(attempt.floor, iteration);
+      // This request's own slot: a review left in another request's slot (one
+      // it replaced) is never this one's.
+      const slot = reviewSlot(attempt.floor, iteration, requestBinding.requestId);
       const legacy = requestBinding.legacyAppendix;
+
+      // A request whose outputs or source changed is requested again at the
+      // same pass; restoring the old bytes would undo the current work. The
+      // restore remedy stays for a request that cannot be replaced.
+      const changedRemedy = (restore: string): string => {
+        const status = pendingReviewRequestStatus(pd, node, flags.unit, attempt, {
+          requireRequiredArtifacts,
+          boltDag: unitResolution ?? undefined,
+          mergedBoltUnits,
+          single: flags.single === "true",
+        });
+        return status?.iteration === iteration && status.replaceable
+          ? "Request it again so the reviewer reviews what is there now: `" +
+              renderReviewRequestCommand({
+                projectDir: pd,
+                stage: flags.stage,
+                reviewer: flags.reviewer,
+                ...(flags.unit ? { unit: flags.unit } : {}),
+                ...(flags.single === "true" ? { single: true } : {}),
+                iteration,
+              }) +
+              "`."
+          : restore;
+      };
 
       // Deprecated input path: a reviewer that still appends `## Review` to
       // the artifact (see reviewAppendedAfterRequest). Read, never written to;
@@ -3148,22 +3246,30 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record the verdict for "${flags.stage}" because ` +
             `its output documents changed after review iteration ${iteration} started. ` +
-            "Restore the bytes the reviewer was dispatched on and re-run that exact " +
-            "iteration; --retry-pending cannot rebaseline changed content.",
+            changedRemedy(
+              "Restore the bytes the reviewer was dispatched on and re-run that exact " +
+                "iteration; --retry-pending cannot rebaseline changed content.",
+            ),
         );
       }
 
       // The review file is read the way the record will be read back: no
       // symlinked container or leaf, no hardlink, no oversize file. A slot
       // draft that is absent is an incomplete review; one that is anything but
-      // a plain file is refused, never silently treated as missing.
+      // a plain file is refused, never silently treated as missing. Each request
+      // is reviewed in one file: the one its row names, or for a request
+      // recorded before per-request files, the pass's shared file, where its
+      // reviewer was told to write. A --review-file must be that same file.
+      const readFrom = pendingRequest.ownReviewFile ? slot : reviewSlot(attempt.floor, iteration, null);
       let body: Buffer | null = null;
       try {
+        const recordRoot = realpathSync(recordDir(pd) as string);
+        const target = assertNoSymlinkInChainOrThrow(recordRoot, readFrom.draftRelativeToRecord);
+        const present = lstatExists(target);
         if (reviewFileFlag !== undefined) {
           // An explicit review file must live inside the active intent record,
           // where the reviewer's slot lives, reached through no symlink: a
           // path outside it is not the reviewer's output.
-          const recordRoot = realpathSync(recordDir(pd) as string);
           const relativeToRecord = toPosix(relative(recordRoot, resolve(pd, reviewFileFlag)));
           if (
             relativeToRecord === "" ||
@@ -3173,24 +3279,25 @@ function handleReview(args: string[]): void {
           ) {
             throw new Error("the path is outside the active intent record");
           }
-          body = readRegularFileNoFollowOrThrow(
-            assertNoSymlinkInChainOrThrow(recordRoot, relativeToRecord),
-            "review file",
-            REVIEW_RECORD_MAX_BYTES,
-          );
-        } else {
-          const target = assertNoSymlinkInChainOrThrow(
-            realpathSync(recordDir(pd) as string),
-            slot.draftRelativeToRecord,
-          );
-          if (lstatExists(target)) {
-            body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+          const named = assertNoSymlinkInChainOrThrow(recordRoot, relativeToRecord);
+          if (!present || !sameFileIdentity(fileIdentity(named), fileIdentity(target))) {
+            // Named here, it must be that same file, never another request's
+            // review or a copy of one.
+            refuseReview(
+              `Cannot record review for "${flags.stage}": ${reviewFileFlag} is not the review ` +
+                `file for iteration ${iteration}. Have the reviewer write its review to ` +
+                `${readFrom.draftRelative}, then record the verdict again.`,
+            );
           }
         }
+        if (present) {
+          body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+        }
       } catch (readError) {
+        if (readError instanceof ReviewRefusal) throw readError;
         refuseReview(
           `Cannot record review for "${flags.stage}": the review file ` +
-            `${reviewFileFlag ?? slot.draftRelative} is not a plain readable file ` +
+            `${reviewFileFlag ?? readFrom.draftRelative} is not a plain readable file ` +
             `(${errorMessage(readError)}).`,
         );
       }
@@ -3212,7 +3319,7 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record review for "${flags.stage}": no review was written for ` +
             `iteration ${iteration}. The reviewer writes its review to ` +
-            `${slot.draftRelative} (or pass --review-file <path>); a retried ` +
+            `${readFrom.draftRelative}; a retried ` +
             "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
@@ -3278,8 +3385,8 @@ function handleReview(args: string[]): void {
         if (!sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint)) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
-              `REVIEW_REQUESTED iteration ${iteration}. Restore the requested source state ` +
-              "and re-dispatch the reviewer.",
+              `REVIEW_REQUESTED iteration ${iteration}. ` +
+              changedRemedy("Restore the requested source state and re-dispatch the reviewer."),
           );
         }
         // Same source; a request recorded before a file was excluded by name keeps
@@ -3306,8 +3413,8 @@ function handleReview(args: string[]): void {
           if (unitFingerprint !== requestBinding.unitSourceFingerprint) {
             refuseReview(
               `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
-                `changed after REVIEW_REQUESTED iteration ${iteration}. Restore the requested ` +
-                "unit source state and re-dispatch the reviewer.",
+                `changed after REVIEW_REQUESTED iteration ${iteration}. ` +
+                changedRemedy("Restore the requested unit source state and re-dispatch the reviewer."),
             );
           }
           fields["Unit Source Fingerprint"] = unitFingerprint;
@@ -3439,7 +3546,7 @@ function handleReview(args: string[]): void {
           `Cannot record the verdict for "${flags.stage}": the review record ` +
             `would be ${recordBytes} bytes, over the ${REVIEW_RECORD_MAX_BYTES}-byte ` +
             `limit readers accept. Shorten the review file ` +
-            `${reviewFileFlag ?? slot.draftRelative} and record the verdict again.`,
+            `${reviewFileFlag ?? readFrom.draftRelative} and record the verdict again.`,
         );
       }
       try {
@@ -3461,7 +3568,7 @@ function handleReview(args: string[]): void {
       // The draft was the reviewer's input; the record now holds it. The
       // chain was verified when the draft was read, so this cannot redirect.
       if (body !== null && reviewFileFlag === undefined) {
-        removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        removeRecordFileNoFollow(recordDir(pd) as string, readFrom.draftRelativeToRecord);
       }
       // A readable copy for people, beside the artifact the review is about:
       // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.

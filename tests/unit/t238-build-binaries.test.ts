@@ -614,6 +614,11 @@ describe("t238 build-binaries release builder", () => {
         join("aidlc", "spaces", "default", "memory", "project.md"),
         join("aidlc", "active-space"),
       ];
+      // A copy starts with no MCP servers; the shipped list rides in the
+      // harness folder. The native runtime ships the file for config.
+      expect(existsSync(join(copyRoot, "runtime", "claude", ".mcp.json"))).toBe(false);
+      expect(existsSync(join(copyRoot, "runtime", "claude", ".claude", "tools", "data", "root-blocks", ".mcp.json"))).toBe(true);
+      expect(existsSync(join(nativeRoot, "runtime", "claude", ".mcp.json"))).toBe(true);
       for (const distribution of ["claude", "copilot"]) {
         for (const path of kept) {
           expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
@@ -643,6 +648,7 @@ describe("t238 build-binaries release builder", () => {
         [kept[2], "payments\n"],
         [".gitignore", "node_modules\n.env\nsecrets/\n"],
         ["AGENTS.md", "# Shop\n\nOur own notes for agents.\n"],
+        [".mcp.json", '{\n  "mcpServers": {\n    "ours": { "command": "our-server" }\n  }\n}\n'],
       ]);
       for (const [path, body] of teamFiles) {
         mkdirSync(dirname(join(upgraded, path)), { recursive: true });

@@ -5448,19 +5448,57 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
         AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
       });
       expect(r.code, r.stderr).toBe(2);
-      expect(r.stderr).toContain("no reply from the person is on record since it opened");
+      expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
       expect(r.stderr).toContain(
-        "If they already replied, that reply was not recorded: Kiro may not have passed it to AI-DLC's hooks in this window.",
+        "If they already answered, tell them to trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
       );
+      expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
       expect(r.stderr).toContain(
-        "trusting the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
-      );
-      expect(r.stderr).toContain('running "Developer: Reload Window" from the Command Palette');
-      expect(r.stderr).toContain(
-        "choosing the aidlc agent in the chat panel's agent picker should let their next message be recorded; if it still is not, `/aidlc --doctor` shows why.",
+        "choose the aidlc agent in the chat panel's agent picker, so their next message is recorded; `/aidlc --doctor` shows anything else to fix.",
       );
       expect(r.stderr).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
+      // It says what to do, never how the hooks work, and never asks for the answer again.
+      expect(r.stderr).not.toContain("hooks");
       expect(r.stderr).not.toContain("reply again");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t218 enforce-approval-gate lets only the engine-issued chosen setter through", () => {
+  test("the Construction setting the person chose runs at an open gate; an altered form waits", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      const shard = join(seededAuditDir(dir), pinnedShardName());
+      writeFileSync(
+        shard,
+        readFileSync(shard, "utf-8") +
+        "\n## WORKFLOW_STARTED\n**Timestamp**: 2025-12-31T00:00:00Z\n**Event**: WORKFLOW_STARTED\n**Scope**: feature\n\n---\n" +
+        "\n## STAGE_STARTED\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n" +
+        "\n## HUMAN_TURN\n**Timestamp**: 2026-01-01T00:00:01Z\n**Event**: HUMAN_TURN\n**Session**: kiro-ide-person\n\n---\n" +
+          "\n## CONSTRUCTION_POLICY_RECORDED\n**Timestamp**: 2026-01-01T00:00:02Z\n**Event**: CONSTRUCTION_POLICY_RECORDED\n" +
+          "**Stage**: requirements-analysis\n**Checkpoint**: Construction Policy\n**Field**: Construction Iteration\n" +
+          "**Value**: unit-major\n**Session**: kiro-ide-person\n**User Input**: Approve\n\n---\n",
+        "utf-8",
+      );
+      const gate = (command: string) =>
+        runIdeStdin(dir, "enforce-approval-gate", JSON.stringify({
+          hook_event_name: "PreToolUse", cwd: dir, tool_name: "execute_bash", tool_input: { command },
+        }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+      const setter = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
+      const applied = gate(setter);
+      expect(applied.code, applied.stderr).toBe(0);
+      for (const altered of [`PATH=./bin ${setter}`, `env FOO=1 ${setter}`, `./bin/${setter}`]) {
+        expect(gate(altered).code, altered).toBe(2);
+      }
+      expect(gate("bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved").code)
+        .toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5564,7 +5602,7 @@ describe("t218 terminal-command-guard runs nothing while an approval gate awaits
         }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
       const gated = gate("sess_gated_chat");
       expect(gated.code, gated.stderr).toBe(2);
-      expect(gated.stderr).toContain("no reply from the person is on record since it opened");
+      expect(gated.stderr).toContain("An approval is waiting for the person's answer");
       const free = gate("sess_free_chat");
       expect(free.code, free.stderr).toBe(0);
     } finally {
@@ -5886,6 +5924,56 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         expect(r.code, label).toBe(2);
         expect(r.stdout, label).toBe("");
         expect(r.stderr, label).toBe(UNCHECKED);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Every Kiro IDE agent runs AI-DLC's own commands without a card, and a
+  // permission glob cannot tell a bare grouping from a quoted label, so an
+  // argument PowerShell builds by running code is refused on both channels.
+  // The refusal goes to the agent; the same value written literally runs.
+  const codeRefusal = (subject: string): string =>
+    `AIDLC stopped this command before it ran. ${subject} is PowerShell code, which PowerShell would run ` +
+    "before the command starts. Write the value itself in single quotes, then run the command again.\n";
+
+  test("refuses PowerShell code in an AI-DLC command's arguments, on both channels", () => {
+    const copy = "bun .kiro/tools/aidlc.ts engine";
+    const refused: Array<[label: string, command: string, subject: string]> = [
+      ["a grouping", `${copy} log decision --stage s --decision (Get-Content x)`, "The --decision value"],
+      ["a subexpression", `${copy} log decision --stage s --decision $(Get-Content x)`, "The --decision value"],
+      ["a subexpression in double quotes", `${copy} log decision --stage s --decision "a $(Get-Content x)"`, "The --decision value"],
+      ["a --flag=value grouping", `${copy} log decision --stage s --decision=(Get-Content x)`, "The --decision value"],
+      ["an array", `${copy} orchestrate continue @(Get-Content x)`, "A value"],
+      ["a hashtable", `${copy} orchestrate continue @{a=(Get-Content x)}`, "A value"],
+      ["the request after next", `${copy} orchestrate next (Get-Content x)`, "The request after next"],
+      ["an aidlc-* tool", "bun .kiro/tools/aidlc-utility.ts codekb-path --repo (Get-Content x)", "The --repo value"],
+      ["through bun run", "bun run .kiro/tools/aidlc.ts engine log decision --stage s --decision (Get-Content x)", "The --decision value"],
+      ["inside a grouping", `$r = (${copy} log decision --stage s --decision (Get-Content x))`, "The --decision value"],
+      ["a native engine token", "aidlc engine orchestrate continue (Get-Content x)", "A value"],
+    ];
+    const passes: Array<[label: string, command: string]> = [
+      ["a single-quoted label", `${copy} orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`],
+      ["a double-quoted label", `${copy} orchestrate report --stage requirements-analysis --result approved --user-input "Approve (Recommended)"`],
+      ["quoted text and options", `${copy} log decision --stage s --decision 'Pick a layout (grid or list)?' --options 'Grid (fast),List'`],
+      ["the refused value written literally", `${copy} log decision --stage s --decision 'Get-Content x'`],
+      ["a native single-quoted label", "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'"],
+      ["a grouping in another program", "Write-Output (Get-Date)"],
+      ["a POSIX shell", `${copy} log decision --stage s --decision (x)`],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, subject] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(codeRefusal(subject));
+      }
+      for (const [label, command] of passes) {
+        const r = pwshCommand(dir, command, label === "a POSIX shell" ? "execute_bash" : "execute_pwsh");
+        expect(r.code, label).toBe(0);
+        expect(r.stderr, label).toBe("");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

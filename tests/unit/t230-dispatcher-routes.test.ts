@@ -2968,6 +2968,14 @@ describe("t230 dispatcher help and errors", () => {
     );
   });
 
+  test("a system noun with no verb points to system help, not engine help", () => {
+    const res = viaDispatcher(["system", "versions"], REPO_ROOT);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr.toString("utf-8")).toBe(
+      "aidlc: missing verb for system noun 'versions'; try 'aidlc system --help'\n",
+    );
+  });
+
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);

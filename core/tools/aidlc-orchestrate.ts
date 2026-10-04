@@ -128,6 +128,7 @@ import {
   intentDisplayLabel,
   isBindableIntentRecordName,
   isSafeIntentRecordName,
+  SPACE_NAME_REGEX,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
@@ -320,12 +321,16 @@ import {
   takeSessionSelectionNotice,
   addPendingPersonLines,
   pendingPersonLines,
+  personLineHeard,
+  PLAN_FIELD,
+  staleStageLine,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
   checkpointPolicyEnabled,
   loadConstructionEvidence,
   resolveConstructionCheckpoint,
+  constructionCheckpointKind,
   type ConstructionCheckpointKind,
   type ConstructionEvidence,
 } from "./aidlc-construction-checkpoints.ts";
@@ -415,6 +420,19 @@ import {
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
 // not an error to throw. Composes engineStateFilePath() for the canonical location.
+// The deepest folder every path shares (POSIX paths), or "" when none does.
+function commonFolder(paths: readonly string[]): string {
+  if (paths.length === 0) return "";
+  const split = paths.map((path) => path.split("/").slice(0, -1));
+  const shared: string[] = [];
+  for (let index = 0; index < split[0].length; index++) {
+    const segment = split[0][index];
+    if (split.some((parts) => parts[index] !== segment) || segment.includes("<")) break;
+    shared.push(segment);
+  }
+  return shared.join("/");
+}
+
 function loadStateFileIfPresent(projectDir: string): string | null {
   const path = engineStateFilePath(projectDir);
   if (!existsSync(path)) return null;
@@ -505,9 +523,11 @@ function projectStageValidityAdvisory(
     const name = earliest ? nodeForSlug(earliest)?.name ?? earliest : null;
     const warning = state === "drifted"
       ? name
-        ? `${name} finished before something it used changed; say "redo ${name.toLowerCase()}" to bring it up to date.`
+        ? staleStageLine(name)
         : `Some finished stages may be out of date; ${entrySkillInvocation()} --status shows which.`
       : stageValidityUnchecked();
+    // This chat already heard it, in the reply that named the stage.
+    if (engineSessionId && personLineHeard(projectDir, engineSessionId, warning)) return undefined;
     return {
       state,
       directly_stale: direct,
@@ -1496,8 +1516,9 @@ function narrateStageEntry(
 ): string {
   const stageName = node.name;
   if (isFirst) {
+    const plan = stateContent && getField(stateContent, PLAN_FIELD) ? "the plan you approved" : `the ${scope} plan`;
     return (
-      `Starting the ${scope} plan for this project. First step is ${stageName}, ` +
+      `Starting ${plan} for this project. First step is ${stageName}, ` +
       `and I will stop for your review before anything is final.`
     );
   }
@@ -2082,7 +2103,11 @@ function pickedRouteRecordAsk(
   const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
   const selectors = records.selectable.map(({ selector }) => selector);
   if (route === "continue") {
-    return intentPickAskDirective(`Which piece of work is this part of: ${records.list}?`, selectors);
+    return intentPickAskDirective(
+      `Which piece of work is this part of: ${records.list}?`,
+      selectors,
+      routingSelectCommands(question.id, selectors, existingWork),
+    );
   }
   return intentPickAskDirective(
     `Which piece of work should I reshape: ${records.list}?`,
@@ -2146,6 +2171,21 @@ function routingReshapeCommand(questionId: string, selector: string, existingWor
   return `${aidlcToolInvocation("orchestrate")} next compose --request ${questionId} --record ${shellArg(selector)}${existingWork}`;
 }
 
+// A routing question's answer that this is part of a listed record: with
+// settings typed with the request, it selects that record and continues it
+// with them; with none, it is the record's plain select command.
+function routingSelectCommands(
+  questionId: string,
+  selectors: string[],
+  existingWork: string,
+): Array<{ selector: string; command: string }> {
+  if (existingWork.length === 0) return selectCommands(selectors);
+  return selectors.map((selector) => ({
+    selector,
+    command: `${aidlcToolInvocation("orchestrate")} next --continue --request ${questionId} --record ${shellArg(selector)}${existingWork}`,
+  }));
+}
+
 function newWorkRoutingAskDirective(
   question: string,
   numberedProseQuestion: string,
@@ -2190,7 +2230,7 @@ function newWorkRoutingAskDirective(
     ...(availableIntents
       ? {
         available_intents: availableIntents,
-        select_commands: selectCommands(availableIntents),
+        select_commands: routingSelectCommands(stored.id, availableIntents, carried.existingWork),
         reshape_commands: availableIntents.map((selector) => ({
           selector,
           command: routingReshapeCommand(stored.id, selector, carried.existingWork),
@@ -2560,7 +2600,7 @@ export function renderTeamConstructionBoard(
   ]);
   for (const unit of [...reclaimable].sort(compareBoardKeys)) {
     nextActions.push(
-      `- Claim or reclaim \`${unit}\` when eligible with \`/aidlc --claim ${unit}\`.`,
+      `- Claim or reclaim \`${unit}\` when eligible with \`${entrySkillInvocation()} --claim ${unit}\`.`,
     );
   }
   for (const row of board.awaitingMerge) {
@@ -2652,7 +2692,7 @@ function staleStateVersionError(stateContent: string): string | null {
 function parkedDirective(
   reason: string,
   stage: string,
-  narration = "Pausing here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+  narration = `Pausing here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
 ): ParkedDirective {
   return {
     kind: "parked",
@@ -2676,11 +2716,11 @@ function workflowParkedDirective(
   const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, parkedAt) : null;
   return beat
     ? parkedDirective(
-        `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with /aidlc --resume.`,
+        `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with ${entrySkillInvocation()} --resume.`,
         beat.stage.slug,
       )
     : parkedDirective(
-        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
+        `Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`,
         parkedAt,
       );
 }
@@ -2696,14 +2736,14 @@ function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
   } catch { /* the workflow park result carries no Unit */ }
   if (parkedUnit !== undefined) {
     return parkedDirective(
-      `Unit "${parkedUnit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      `Unit "${parkedUnit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
       (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
     );
   }
   const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
   return stateContent
     ? workflowParkedDirective(pd, stateContent, parkedAt)
-    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`, parkedAt);
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt);
 }
 
 // "Approve, but let's stop there for today": the approval is recorded, then
@@ -2724,7 +2764,7 @@ function parkAfterApproval(pd: string, slug: string, attended: boolean, unit?: s
   return parkedDirective(
     `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
     parked.stage,
-    "Approved, and paused here with everything saved. Run `/aidlc --resume` when you want to pick it back up.",
+    `Approved, and paused here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
   );
 }
 
@@ -2899,7 +2939,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
   const verb = leadingOrchestratorVerb(args);
   if (verb === "park") return { orchestratorVerb: "park" };
   if (args.length === 1 && args[0] === "unpark") {
-    return { parseError: "unpark is not a command: a parked workflow resumes with /aidlc --resume." };
+    return { parseError: `unpark is not a command: a parked workflow resumes with ${entrySkillInvocation()} --resume.` };
   }
   if (verb === "team-board") {
     // The verb is set even on a refused form so the engine-marker exclusion
@@ -2913,7 +2953,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
   // text drew the new-work offer over an active intent. The engine executes
   // the config route; the setter itself decides what a setting does.
   if (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")) {
-    const usage = "Usage: /aidlc config set <key> <value> [--key value ...] | config get <key> | config list [--json].";
+    const usage = `Usage: ${entrySkillInvocation()} config set <key> <value> [--key value ...] | config get <key> | config list [--json].`;
     const tail = args.slice(2);
     const malformed =
       (args[1] === "set" && (tail.length < 2 || tail[0].startsWith("--") || tail[1].startsWith("--"))) ||
@@ -2936,7 +2976,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
       return {
         config: true,
         parseError:
-          "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
+          `Usage: ${entrySkillInvocation()} --config [models|runtime|providers|trust|flags|project].`,
       };
     }
     return {
@@ -3270,7 +3310,7 @@ function freshWorkOfferDirective(
   return composeOfferAskDirective(
     `None of the ready-made plans is an obvious fit for: "${requestPreview(intentText)}".${documentSplitSentence(intentText)} ` +
       "I can work out a plan tailored to this task (recommended: reply \"compose\"), " +
-      `or you can pick one directly (e.g. ${examples}; see /aidlc --help for the full list).`,
+      `or you can pick one directly (e.g. ${examples}; see ${entrySkillInvocation()} --help for the full list).`,
     intentText,
     pd,
     carriedCreationFlags(flags),
@@ -3381,9 +3421,12 @@ function createPrintDirective(
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
   // counts the compiled grid already gave us.
+  // A plan composed for this piece of work is the one the person approved; its
+  // base scope is not a name they know it by.
+  const plan = flags.planChanges ? "the plan you approved" : `a ${scope} workflow`;
   directive.narration = clause
-    ? `Setting up a ${scope} workflow for this: ${clause}.`
-    : `Setting up a ${scope} workflow for this.`;
+    ? `Setting up ${plan} for this: ${clause}.`
+    : `Setting up ${plan} for this.`;
   // A request typed with its scope was never shown on an ask, so the line on
   // how a pasted document was split is said here.
   if (description && !flags.request) directive.narration += documentSplitSentence(description);
@@ -3401,14 +3444,19 @@ function createPrintDirective(
   return directive;
 }
 
+// A new project leaves out Reverse Engineering when its plan runs it, and when
+// a plan composed for the empty folder leaves out the one its scope runs:
+// creation records both as the new-project skip, which existing code undoes.
 function newProjectDropsReverseEngineering(
   scope: string,
   projectDir: string,
   planChanges?: PlanChanges,
 ): boolean {
   const planned = planChanges ? planWithChanges(scope, planChanges) : null;
-  const stages = planned && planned.errors.length === 0 ? planned.stages : loadScopeMapping()[scope]?.stages;
-  return stages?.["reverse-engineering"] === "EXECUTE" && detectedProjectType(projectDir) === "greenfield";
+  const plannedStages = planned && planned.errors.length === 0 ? planned.stages : undefined;
+  const runs = plannedStages?.["reverse-engineering"] === "EXECUTE" ||
+    loadScopeMapping()[scope]?.stages["reverse-engineering"] === "EXECUTE";
+  return runs && detectedProjectType(projectDir) === "greenfield";
 }
 
 // How a routing question names the work already in progress.
@@ -3759,7 +3807,7 @@ function intentPickPromptIfRecordsExist(
     );
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
-  const entry = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+  const entry = entrySkillInvocation();
   return intentPickAskDirective(
     `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
       `(which one you are on is tracked per-person and does not travel with the repo). ` +
@@ -5867,7 +5915,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
     return;
   }
-  if (routingAnswer && pickedRecords && routingAnswer.route === "continue") {
+  // Settings typed with the request ride a continue answer to the record it
+  // picks; with none, it is that record's plain select command.
+  const typedForExistingWork = (routingAnswer?.question.settings?.existingWork.length ?? 0) > 0;
+  if (routingAnswer && pickedRecords && routingAnswer.route === "continue" && !typedForExistingWork) {
     // Its select command, exactly as the question supplied it.
     flags.intent = undefined;
     flags.workspaceCommand = parseNextFlags(["intent", pickedRecords.selectable[0].selector]).workspaceCommand;
@@ -5876,6 +5927,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.request = routingAnswer.question.id;
     if (routingAnswer.route === "continue") {
       flags.continue = true;
+      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
     } else if (routingAnswer.route === "reshape") {
       flags.compose = true;
       if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
@@ -5969,7 +6021,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     )
   ) {
     emit(errorDirective(
-      "Cannot combine --review with read-only, workspace, compose, single-stage, jump, or resume modes. Apply /aidlc --review <class> first, then run the other command.",
+      `Cannot combine --review with read-only, workspace, compose, single-stage, jump, or resume modes. Apply ${entrySkillInvocation()} --review <class> first, then run the other command.`,
     ));
     return;
   }
@@ -6012,7 +6064,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       : "";
     emit(printDirective(
       `Run \`${aidlcInvocation()} --${verb} ${shellArg(unit)}${teamArg}${rhythmArg}\`, ` +
-        "print its output verbatim, then stop. Re-run /aidlc after the claim registry changes.",
+        `print its output verbatim, then stop. Re-run ${entrySkillInvocation()} after the claim registry changes.`,
     ));
     return;
   }
@@ -6204,7 +6256,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // The engine names the exact public command; the mutation stays in `park`.
   if (flags.orchestratorVerb === "park") {
     emit(printDirective(
-      `Run \`${aidlcInvocation()} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with /aidlc --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
+      `Run \`${aidlcInvocation()} park\`. It prints a \`parked\` directive: act on it exactly as the directive table says (tell the user the workflow is parked and how to resume with ${entrySkillInvocation()} --resume), then stop. This is a deliberate park, NOT new work: do NOT run \`next\` and do NOT advance or run any workflow stage.`,
     ));
     return;
   }
@@ -6288,18 +6340,33 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // A reshape answer that chose a listed record selects it, then reshapes it:
   // no stop between the two, and only a record the question offered.
   if (flags.record !== undefined) {
-    if (!flags.compose || question?.origin !== "routing") {
-      emit(errorDirective("--record answers a new-work routing question's reshape; run the command that question supplied."));
+    if (!(flags.compose || flags.continue) || question?.origin !== "routing") {
+      emit(errorDirective("--record answers a new-work routing question's continue or reshape; run the command that question supplied."));
       return;
     }
+    // Record names are repository text: one outside the record-name shape is
+    // shown quoted, as data, and never written into a command here.
+    const shown = isSafeIntentRecordName(flags.record) ? flags.record : JSON.stringify(flags.record);
     if (!question.askedAbout?.targets.some((target) => target.intent === flags.record)) {
-      emit(errorDirective(`${flags.record} is not a record this question offered; run a command the question supplied.`));
+      emit(errorDirective(`${shown} is not a record this question offered; run a command the question supplied.`));
       return;
     }
     if (!(selection.space === question.askedAbout.space && selection.intent === flags.record)) {
+      if (!isSafeIntentRecordName(flags.record)) {
+        emit(errorDirective(
+          `${shown} cannot be selected from this answer: its record name has characters a command here does not carry. ` +
+            "Rename the record directory (and its entry in intents.json), then answer again.",
+        ));
+        return;
+      }
+      const route = flags.continue ? "--continue" : "compose";
+      // Back to the space the question was asked in first, then its record.
+      const spaceStep = selection.space === question.askedAbout.space || !SPACE_NAME_REGEX.test(question.askedAbout.space)
+        ? ""
+        : `\`${aidlcDispatcherInvocation("space switch")} ${shellArg(question.askedAbout.space)}\`, then `;
       emit(printDirective(
-        `To reshape ${flags.record}, run \`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
-          `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
+        `To ${flags.continue ? "continue" : "reshape"} ${flags.record}, run ${spaceStep}\`${aidlcDispatcherInvocation("intent switch")} ${shellArg(flags.record)}\`, ` +
+          `then run \`${aidlcToolInvocation("orchestrate")} next ${route} --request ${question.id}${carriedRoutingFlags(flags).existingWork}\` and follow what it returns.`,
       ));
       return;
     }
@@ -6390,8 +6457,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       kind: "done",
       reason:
         `Intent "${archivedIntent}" is archived; its remaining stages do not run. ` +
-        `Bring it back with \`/aidlc intent unarchive ${archivedIntent}\`, or pick another ` +
-        `intent with \`/aidlc intent <name>\` (\`/aidlc intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
+        `Bring it back with \`${entrySkillInvocation()} intent unarchive ${archivedIntent}\`, or pick another ` +
+        `intent with \`${entrySkillInvocation()} intent <name>\` (\`${entrySkillInvocation()} intent list --all\` shows archived ones).${NEW_WORK_HINT}`,
     });
     return;
   }
@@ -6449,7 +6516,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     existsSync(unitParkedPath(pd))
   ) {
     emit(parkedDirective(
-      `Unit "${unitScope.unit}" is parked in this checkout. Resume with /aidlc --resume.`,
+      `Unit "${unitScope.unit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
       getField(stateContent!, "Current Stage") ?? "functional-design",
     ));
     return;
@@ -6636,7 +6703,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // Only a front composition continues into creation, which needs the
     // request by id; an in-flight reshape carries its text in the dispatch.
     // A request typed straight to compose passed no question, so how its
-    // pasted document was split is said here.
+    // pasted document was split is said here, before the plan is offered.
     let splitSaid = "";
     if (flags.intent && !flags.request && !inFlight) {
       splitSaid = documentSplitSentence(flags.intent);
@@ -6980,8 +7047,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     emit(errorDirective(
       "No workflow state found (no active intent). " +
-        "Start one by describing what to build (/aidlc \"build the auth service\") " +
-        "or by naming a scope (/aidlc --scope <scope>).",
+        `Start one by describing what to build (${entrySkillInvocation()} "build the auth service") ` +
+        `or by naming a scope (${entrySkillInvocation()} --scope <scope>).`,
     ));
     return;
   }
@@ -7518,6 +7585,11 @@ function applyConstructionCheckpointShape(
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
   directive.protocol_modules = ["construction"];
+  // A checkpoint the person approves offers one learnings ritual for the
+  // stages it covers, as a stage's own approval gate does.
+  if (directive.ceremony.learnings === "on" && checkpoint.human_required) {
+    directive.protocol_modules.push("learnings");
+  }
 }
 
 function applySwarmCheckpointShape(
@@ -8310,7 +8382,7 @@ function activePerUnitWave(
             },
           );
         } catch {
-          guidance = `Restart this stage with /aidlc --stage ${node.slug}.`;
+          guidance = `Restart this stage with ${entrySkillInvocation()} --stage ${node.slug}.`;
         }
         const snapshot = guardAttemptState(projectDir, stateContent ?? "", node, {
           unit,
@@ -9384,10 +9456,7 @@ function unitMajorWalkStep(
       if (stop) return stop;
     }
     if (checkpoints && stateContent) {
-      const kind: ConstructionCheckpointKind =
-        constructionSkeletonOn(stateContent) && u === allUnits[0]
-          ? "skeleton"
-          : "unit";
+      const kind = constructionCheckpointKind(stateContent, u, allUnits);
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
     }
@@ -10152,7 +10221,7 @@ function emitForSlug(
 // `single:true` marker gives the conductor a typed branch before ordinary gate
 // handling; isolated runs have no main-workflow approval lifecycle.
 const SINGLE_INIT_ERROR =
-  "Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
+  `Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 
 // Call only after confirming an open attempt. Match its boundary ordering and
 // never borrow ceremony policy from the main workflow; legacy rows return null.
@@ -10214,7 +10283,7 @@ function emitSingleRunStage(
   const node = nodeForSlug(slug);
   if (!node) {
     emit(errorDirective(
-      `Unknown stage "${slug}". Run /aidlc --help for the full list.`,
+      `Unknown stage "${slug}". Run ${entrySkillInvocation()} --help for the full list.`,
     ));
     return;
   }
@@ -10375,7 +10444,7 @@ function skippedJumpDirective(target: string, direction: string, current: string
 // (`aidlc-jump.ts resolve` treats init stages as valid targets, returning
 // valid:true), so the engine enforces it here rather than relaying a tool error.
 const INIT_JUMP_ERROR =
-  "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
+  `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 
 // Why a jump cannot reopen its target for the unit the person named, said
 // before anything changes. The person gets one line that speaks to them; the
@@ -10515,7 +10584,7 @@ function emitJumpDirective(
   const node = nodeForSlug(stageSlug);
   if (!node) {
     emit(errorDirective(
-      `Unknown stage "${stageSlug}". Run /aidlc --help for the full list.`,
+      `Unknown stage "${stageSlug}". Run ${entrySkillInvocation()} --help for the full list.`,
     ));
     return;
   }
@@ -11535,7 +11604,7 @@ function handleSingleReport(
   const node = nodeForSlug(flags.stage);
   if (!node) {
     emit(errorDirective(
-      `Unknown stage "${flags.stage}". Run /aidlc --help for the full list.`,
+      `Unknown stage "${flags.stage}". Run ${entrySkillInvocation()} --help for the full list.`,
     ));
     return;
   }
@@ -11857,7 +11926,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const archivedIntent = engineSelection(pd).intent ?? "(unknown)";
         emit(errorDirective(
           `Intent "${archivedIntent}" is archived, so report cannot mutate its workflow state. ` +
-            `Bring it back with /aidlc intent unarchive ${archivedIntent}.`,
+            `Bring it back with ${entrySkillInvocation()} intent unarchive ${archivedIntent}.`,
         ));
         return;
       }
@@ -12122,13 +12191,21 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emit({
+    // A stage skipped because it does not apply is said, in one line, with the
+    // next step the agent speaks from: the agent reports the skip and goes
+    // straight on. The agent's reason stays in the audit; it is the agent's
+    // own words, so it never becomes a line the engine says.
+    const skipped: Directive = {
       kind: "done",
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-    });
+      narration: `${node.name} does not apply here, so I skipped it.`,
+    };
+    // Carried only while the work goes on; the last stage's skip is said here.
+    if (skipped.kind === "done" && skipped.workflow_continues === true) carriesNarration.add(skipped);
+    emit(skipped);
     return;
   }
 
@@ -12512,8 +12589,26 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       changeNoticesFromToolOutput(res.stdout),
     );
     // The agent shows the gate next, so lines held from inside the stage are
-    // said with it.
-    if (flags.result === "awaiting-approval" || flags.result === "revised") leadsToSpeech.add(gateReply);
+    // said with it, and its Approve option names the stage the plan runs next
+    // now: a plan change made during the stage is in it.
+    if (flags.result === "awaiting-approval" || flags.result === "revised") {
+      leadsToSpeech.add(gateReply);
+      if (gateReply.kind === "print") {
+        const next = nextInScopeStage(slug, scope, loadStateFileIfPresent(pd) ?? undefined);
+        gateReply.next_stage = next ? next.name : null;
+        // Where the stage's output is, said with the gate, so the person can
+        // look even when no summary comes before the question. A stage that
+        // repeats per unit writes under the unit's folder, so without the unit
+        // named no folder is said rather than a wrong one.
+        const unit = flags.unit?.trim() || null;
+        const gateState = loadStateFileIfPresent(pd);
+        const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
+        const folder = unitFolders && !unit
+          ? ""
+          : commonFolder(resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(pd), codekbCtxFor(pd)));
+        if (folder) gateReply.narration = `${node.name} is ready for your review: what it produced is in ${folder}/.`;
+      }
+    }
     emit(gateReply);
     return;
   }

@@ -8,12 +8,27 @@ permissions:
       effect: allow
       match:
         - "bun {{HARNESS_DIR}}/tools/aidlc-*"
+        - "{{INVOKE}} engine *"
         - "date -u *"
+        - "bun --version"
     - capability: shell
       effect: ask
       match:
         - "{{INVOKE}} engine config set *"
         - "{{INVOKE}} engine adapter *"
+        - "*$*"
+        - "*`*"
+        - "*>*"
+        - "*<*"
+        - "*&*"
+        - "*@(*"
+        - "*@{*"
+        - "*\n*"
+        - "*\r*"
+        - "*aidlc-doctor.ts*"
+        - "*aidlc-init.ts*"
+        - "*aidlc-lifecycle.ts*"
+        - "*aidlc-machine-config.ts*"
     - capability: shell
       effect: deny
       match:

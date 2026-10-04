@@ -1155,6 +1155,42 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
   });
 
+  // A live run: new work made from one chat, then a new chat on it. A plain
+  // question there was followed by a hidden nudge that started the new work's
+  // first stage. The question ends the turn; an advance still leads to the nudge.
+  test("in a new chat on work made from another chat, a plain question gets no nudge, and an advance still does", async () => {
+    const root = freshInstalledProject();
+    const engine = (session: string, ...args: string[]) => {
+      const run = Bun.spawnSync({
+        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", ...args, "--project-dir", root],
+        cwd: root,
+        env: { ...process.env, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      return run.stdout.toString();
+    };
+    const offer = JSON.parse(engine("other-chat", "orchestrate", "next", "--scope", "poc", "build a lunch poll")) as { message?: string };
+    const request = /--request ([0-9a-f]{8})/.exec(String(offer.message))?.[1];
+    expect(request, String(offer.message)).toBeDefined();
+    engine("other-chat", "intent", "create", "--scope", "poc", "--request", request ?? "", "--label", "lunch-poll");
+
+    const { client, prompts } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "what does the lunch poll do?" }] });
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(0);
+
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "carry on" }] });
+    await Bun.sleep(20);
+    expect(JSON.parse(engine("main", "orchestrate", "next")).kind).not.toBe("print");
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+  });
+
   test("idle suppresses its nudge for an open logged question and restores it after the answer", async () => {
     const root = freshInstalledProject();
     seedStateFile(root, "state-brownfield-feature.md");
@@ -1379,6 +1415,67 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     await adapter.event(idle);
     expect(readFileSync(stopCount, "utf-8")).toBe("1");
     expect(prompts).toHaveLength(1);
+  });
+
+  // A live run: after a read-only /aidlc --status a nudge started the open
+  // stage, the person pressed Reject on its first command, and a second nudge
+  // made the agent carry on and write files. A Reject ends the turn.
+  const replied = (sessionID: string, answer: Record<string, string>) => ({
+    event: { type: "permission.replied", properties: { sessionID, requestID: "per_1", ...answer } },
+  });
+
+  test("after the person rejects a command, no nudge follows until they write again", async () => {
+    const { root, stopCount } = nudgingProject();
+    const { client, prompts } = fakeClient({ worker: "main" });
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+    await adapter.event(replied("main", { reply: "once" }));
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+
+    for (const [sessionID, answer] of [
+      ["main", { reply: "reject" }],
+      ["main", { response: "reject" }],
+      ["worker", { reply: "reject" }],
+    ] as const) {
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "go on" }] });
+      await adapter.event(replied(sessionID, answer));
+      await adapter.event(idle);
+      await adapter.event(idle);
+      expect(prompts, `${sessionID} ${JSON.stringify(answer)}`).toHaveLength(1);
+    }
+    expect(readFileSync(stopCount, "utf-8")).toBe("1");
+
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "carry on" }] });
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(2);
+  });
+
+  test("a Reject in a helper's chat whose owner cannot be confirmed still ends the person's turn", async () => {
+    for (const lookup of ["throws", "has no record"] as const) {
+      const { root } = nudgingProject();
+      const prompts: string[] = [];
+      const client: PluginInput["client"] = {
+        session: {
+          get: async ({ path }) => {
+            if (path.id === "main") return { data: {} };
+            if (lookup === "throws") throw new Error("lookup failed");
+            return {};
+          },
+          prompt: async ({ body }) => {
+            prompts.push(body.parts[0]?.text ?? "");
+          },
+        },
+      };
+      const adapter = await createTestAdapter(client, root);
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+      await adapter.event(replied("worker", { reply: "reject" }));
+      await adapter.event(idle);
+      expect(prompts, lookup).toHaveLength(0);
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "go on" }] });
+      await adapter.event(idle);
+      expect(prompts, lookup).toHaveLength(1);
+    }
   });
 
   // What opencode does for a typed /aidlc: its command hook gets the command

@@ -68,7 +68,8 @@
 //      Autonomous Construction stays guarded except for unit-major
 //      code-generation's mandatory Plan Approval. Any miss falls through to the
 //      cap-bounded block, so a genuine mid-stage quit is still nudged.
-//   4. A LOGGED NON-GATE QUESTION has a current-stage DECISION_RECORDED with no
+//   4. A LOGGED NON-GATE QUESTION has a current-stage (or, in a unit-major walk
+//      or at a Unit's checkpoint, active-stage) DECISION_RECORDED with no
 //      later answer (nextOpenDecision: QUESTION_ANSWERED, a checkpoint's own
 //      event such as SUMMARY_CONFIRMATION_RECORDED or PLAN_APPROVAL_RECORDED,
 //      or the gate row of a Swarm Batch / Construction Unit Approval). This is
@@ -790,6 +791,13 @@ function isPendingDecisionStop(
     if (!teamUnitMajorDirective) {
       const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
       if (row?.state !== "in-progress") return false;
+      // A unit-major walk, and a Unit's checkpoint (its learnings question and
+      // approval), can run ahead of Current Stage and log under the active
+      // stage, the same stage the questions-file carve-out reads.
+      const ahead = activeStage?.trim();
+      if (ahead && ahead !== slug && hasPendingDecision(projectDir, ahead, undefined, undefined, true)) {
+        return true;
+      }
     }
     return hasPendingDecision(
       projectDir,

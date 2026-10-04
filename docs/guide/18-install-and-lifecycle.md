@@ -343,7 +343,13 @@ removed is named instead); see
 Recommended defaults preserve the harness's current model provider.
 Customization walks Harness, Model provider, Model effort preset, Plugins, MCP
 servers, and the model-preset settings layer. The provider step offers keeping
-the current provider first and Amazon Bedrock second. Every numbered prompt has
+the current provider first and Amazon Bedrock second. On Kiro CLI, step 2 is
+Session model instead: it lists your Kiro account's models and saves the chosen
+model, with the preset's session effort, in your personal Kiro settings, last,
+after every AI-DLC step. Under Kiro auto, recommended defaults ask that one
+model question; see
+[Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
+Every numbered prompt has
 a bracketed default, invalid input re-asks in place, and each answer is echoed.
 A check-your-answers table accepts Enter to apply or a step number to edit. No
 files are written before that final gate. After apply, gerund receipts name the
@@ -353,7 +359,10 @@ launch and first workflow command.
 
 Step 3 also offers a fourth option, `unchanged`, which records no preset and
 preserves existing model settings; projects without model policy use shipped
-defaults. `balanced` remains the recommended default.
+defaults. `balanced` remains the recommended default, except on Kiro IDE,
+Cursor, and GitHub Copilot: every agent there uses your session's model and
+effort, so setup recommends and defaults to `unchanged`, and the rerun map
+shows Models as `[ok]`, naming the host session.
 
 An existing-project rerun keeps the eight-row map for Harnesses, Models,
 Runtime, Flags, Project, Providers, Trust, and Workspace. Rows are lowercase
@@ -408,7 +417,9 @@ interactive wizard.
 `aidlc config models` records model policy in the selected settings layer
 (`aidlc.settings.json` for `--project`) and applies it through the normal config
 plan, confirmation, refresh guard, and transaction. It never contacts a model
-provider.
+provider. On Kiro CLI, choosing a session model asks Kiro CLI for your account's
+model list and that model's effort levels; with `--yes`, only `--session-model`
+does.
 
 The public groups are:
 
@@ -430,7 +441,7 @@ moves to a larger model. The framework never raises an agent above the session
 on its own. With no recorded policy, Deciding and Writing up inherit; only the
 measured reviewing tier baseline ships a step-down. The first-run wizard's
 default choice records the `balanced` preset, which sets all three groups to
-medium effort.
+medium effort; on Kiro IDE, Cursor, and GitHub Copilot it records no preset.
 
 ```bash
 aidlc config models --show
@@ -438,6 +449,7 @@ aidlc config models --reviewing-effort xhigh --project --yes
 aidlc config models --agent architect --effort xhigh --model provider/raw-id --project --yes
 aidlc config models --check
 aidlc config models --reset --project --yes
+aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal session model
 ```
 
 `--show --json` prints every agent's effective model, effort, and provenance.
@@ -481,7 +493,10 @@ Three immutable effort-only presets ship:
 | `minimal` | `medium` | `medium` | `low` |
 
 Presets never set model IDs. Explicit group dials and per-agent exceptions can
-override the preset's efforts.
+override the preset's efforts. On Kiro CLI, which runs each session on one
+model, each preset is one session effort instead: `minimal` low, `balanced`
+medium, `thorough` xhigh, or the model's next level down
+([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort)).
 
 On upgrade, an install that recorded `preset: balanced` or `preset: minimal`
 picks up these efforts the next time its projections are regenerated. After
@@ -505,14 +520,19 @@ policy. Without decisive flags, a TTY opens the model policy wizard; a non-TTY
 run fails with usage guidance.
 
 Harnesses receive only settings they can read. Codex clamps `max` effort down
-to `xhigh`. opencode clamps `xhigh` down to `high`. Kiro CLI cannot express
-group effort dials, but a per-agent model exception can carry effort through
-`chat.modelDefaults`. Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
-agent models or effort, so the command records the policy and reports the
-unsupported fields instead of writing inert keys. On those three, every agent
-uses the session's model and effort: the setup check and `aidlc doctor` say so
-instead of asking for a policy, and doctor warns only about an agent model
-recorded for that harness by name.
+to `xhigh`. opencode clamps `xhigh` down to `high`. On Kiro CLI a preset sets
+one effort for the whole session, saved with the session model in your personal
+Kiro settings
+([Session model and effort](harnesses/kiro-cli.md#session-model-and-effort));
+explicit group dials have no Kiro surface, and a per-agent model exception
+carries its effort through the project's `chat.modelDefaults`, which then
+replaces your personal effort map in that project. Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
+agent models or effort, so setup records no preset there; a policy you record
+anyway is kept, and the command reports the unsupported fields instead of
+writing inert keys. On those three, every agent uses the session's model and
+effort: the setup check and `aidlc doctor` say so instead of asking for a
+policy, and doctor warns only about an agent model recorded for that harness
+by name.
 
 Model policy is agent-scoped. Stage files never carry model or effort keys;
 scopes continue to own stage criticality.
@@ -532,8 +552,11 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
   drive the conductor and every agent that inherits; `aidlc config models`
   can set agent efforts (the `balanced` preset sets them to medium) and
   per-agent exceptions.
-- **Kiro CLI:** the session model (`/model`) and effort (`/effort`); see
-  [Kiro CLI](harnesses/kiro-cli.md).
+- **Kiro CLI:** the session model and its one effort. `aidlc config models`
+  saves them in your personal Kiro settings (a preset sets the effort:
+  `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
+  `/effort` change them inside Kiro. See
+  [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
 
 If your organization offers only a mid-tier model, such as a Claude Sonnet
 model, without Opus:
@@ -674,8 +697,9 @@ the two paths that actually exist for it:
 
 
 Kiro CLI and Kiro IDE provide their own model access, so AI-DLC configures no
-model provider for them. Both the first-run wizard and `aidlc config providers`
-state that model access comes with Kiro and ask nothing. Provider flags are
+model provider for them. `aidlc config providers` states that model access
+comes with Kiro and asks nothing; so does the first-run wizard on Kiro IDE, while
+on Kiro CLI its step 2 chooses the session model instead. Provider flags are
 refused, and the Providers row reads `[ok]` regardless of a legacy record.
 `aidlc config providers --reset --yes` clears a record left by an earlier build.
 `builtin` records from the previous build still load and read as harness-managed,
@@ -833,9 +857,10 @@ aidlc config project --reset --yes
 
 On a copy-channel projection, `config project` applies plugin, MCP, and
 completion choices from the project's own files at the release it already
-has, so it needs no download. It needs the release only when the project is
-pinned to another one, or when MCP is turned back on after the shipped server
-list was removed; it then asks at a terminal, and scripts add `--download`.
+has, so it needs no download. Turning MCP back on reads the shipped server list
+the harness folder keeps. It needs the release only when the project is pinned
+to another one, or when that list is missing from the harness folder; it then
+asks at a terminal, and scripts add `--download`.
 `--from <path>` instead uses files you downloaded: `aidlc-copy-runtime-X.Y.Z.tar.gz`,
 its extracted `runtime/` folder, or one harness root. Servers you added to
 `.mcp.json` yourself are never recorded or removed.
@@ -850,8 +875,10 @@ project or settings files. The preview remains available during an active
 workflow; applying the change still requires completing that workflow.
 
 MCP consent remains `defaults` or `none`. A non-interactive project mutation
-with no earlier consent records `none`; `--yes` only confirms the mutation and
-never adds MCP entries.
+with no earlier consent records `none`, unless `.mcp.json` already holds a
+shipped server as shipped: then it records `defaults` and keeps the servers
+there, adding none. `--yes` only confirms the mutation and never adds MCP
+entries.
 
 On Claude Code, `.mcp.json` is the consent-managed surface: `--check` verifies
 both `defaults` and `none`, and later plain config refreshes reapply the answer.
@@ -1529,7 +1556,10 @@ out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
 copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
 names the one setting to add yourself. It leaves out your `.gitignore` and
 `AGENTS.md` too: AI-DLC adds its own lines to them, after everything already
-there, or creates them when the project has none. It also leaves out the team's memory
+there, or creates them when the project has none. Claude Code's `.mcp.json` is
+left out as well, so a copy starts with no MCP servers, as `aidlc config` does
+by default; to turn the shipped servers on, run
+`bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes`. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
 learnings go) and your chosen space (`aidlc/active-space`). Copying a newer

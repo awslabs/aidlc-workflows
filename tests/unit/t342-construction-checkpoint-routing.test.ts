@@ -2,7 +2,7 @@
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
-// covers: function:hasPendingDecision
+// covers: function:hasPendingDecision, function:presenceFloorHolds
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
@@ -24,7 +24,8 @@ import {
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField,
+  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds,
+  _resetStageGraphForTests,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -124,6 +125,20 @@ function next(p: string) {
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
     artifact_reuse?: { decision: string; unit: string };
     ask_type?: string; narration?: string; plan_approval?: { status?: string; feedback?: string };
+    protocol_modules?: string[];
+  };
+}
+
+// `learnings surface` against the fixture. A compiled graph also lists the
+// stages, whose diary paths surface reads.
+function learningsSurface(p: string) {
+  const graphPath = join(seededRecordDir(p), "runtime-graph.json");
+  return (slug: string) => {
+    const graph = JSON.parse(readFileSync(graphPath, "utf-8"));
+    if (!Array.isArray(graph.stages)) writeFileSync(graphPath, JSON.stringify({ stages: [], ...graph }));
+    return spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-learnings.ts"), "surface", "--slug", slug, "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   };
 }
 
@@ -248,6 +263,87 @@ describe("t342 Construction checkpoint routing", () => {
     expect(following.stage).toBe("functional-design");
     expect(following.unit).toBe("beta");
     expect(following.construction_checkpoint).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A live run built two Units one at a time with checkpoints and learnings
+  // on: the checkpoint offered no learnings, and the agent's own try at each
+  // stage was refused because Current Stage waits on the first one.
+  test("a Unit's checkpoint offers one learnings ritual for the stages it covers", () => {
+    const p = fixture();
+    const surface = learningsSurface(p);
+    // Before alpha's checkpoint, a later stage is not the stage that just ran.
+    cover(p, "alpha", stages.slice(0, 2));
+    expect(surface("nfr-requirements").stderr).toContain('slug mismatch: requested "nfr-requirements"');
+    cover(p, "alpha", stages.slice(2));
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
+    expect(directive.protocol_modules).toEqual(["construction", "learnings"]);
+    for (const slug of stages) {
+      const surfaced = surface(slug);
+      expect(surfaced.status, `${slug}: ${surfaced.stderr}`).toBe(0);
+    }
+    expect(surface("requirements-analysis").status).toBe(1);
+    // Approved, the checkpoint's stages no longer wait on the person.
+    approve(p, "alpha");
+    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+  });
+
+  test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
+    const p = fixture({ stance: "on", iteration: "stage-major" });
+    seedBoltDag(p, [{ name: "beta", depends_on: ["alpha"] }, "alpha"], [["alpha"], ["beta"]]);
+    const surface = learningsSurface(p);
+    cover(p, "alpha");
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.kind, JSON.stringify(directive)).toBe("skeleton");
+    expect(directive.protocol_modules).toEqual(["construction", "learnings"]);
+    for (const slug of stages) expect(surface(slug).status, slug).toBe(0);
+    approve(p, "alpha", "skeleton");
+    expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // At a Unit's checkpoint Current Stage still names the Unit's first stage,
+  // while the checkpoint's questions are logged under its last one. The Stop
+  // hook read Current Stage and pushed the agent past the learnings question
+  // and the approval. Both now end the turn; an answered one does not.
+  test("the turn ends at a checkpoint's learnings question and at its approval", () => {
+    const p = fixture();
+    cpSync(AIDLC_SRC, join(p, ".claude"), { recursive: true });
+    cover(p, "alpha");
+    recordCommand(p);
+    const run = (args: string[], input?: Record<string, unknown>) => spawnSync(process.execPath, args, {
+      encoding: "utf-8", cwd: p,
+      env: { ...process.env, AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p, AIDLC_HARNESS_DIR: ".claude" },
+      input: input ? JSON.stringify({ session_id: "t342-stop", ...input }) : undefined,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const hook = (name: string, input: Record<string, unknown>) =>
+      run([join(p, ".claude/tools/aidlc.ts"), "engine", "hook", name], input);
+    const stop = () => {
+      // Each stop stands for a new turn, so the hook's repeat count starts over.
+      rmSync(join(seededRecordDir(p), ".aidlc-engine", "stop-hook"), { recursive: true, force: true });
+      const result = run([join(p, ".claude/hooks/aidlc-continue-workflow.ts")], { hook_event_name: "Stop", stop_hook_active: false });
+      return result.stdout.includes('"decision":"block"') ? "pushed on" : "ends";
+    };
+    expect(hook("session-start", { hook_event_name: "SessionStart", source: "startup" }).status).toBe(0);
+    expect(hook("record-human-turn", { hook_event_name: "UserPromptSubmit", prompt: "go on" }).status).toBe(0);
+    Bun.sleepSync(20);
+    const directive = next(p);
+    expect(directive.construction_checkpoint?.unit, JSON.stringify(directive)).toBe("alpha");
+    expect(directive.stage).toBe("code-generation");
+    expect(stop()).toBe("pushed on");
+    const log = (...args: string[]) => {
+      const result = run([join(AIDLC_SRC, "tools/aidlc-log.ts"), ...args, "--stage", directive.stage, "--project-dir", p]);
+      expect(result.status, result.stderr).toBe(0);
+    };
+    log("decision", "--decision", "Anything to add for next time?", "--options", "Nothing to add,Add a note");
+    expect(stop()).toBe("ends");
+    log("answer", "--details", "Nothing to add");
+    expect(stop()).toBe("pushed on");
+    for (const args of [["--action", "verify"], ["--action", "ask", "--session", "t342-stop"]]) {
+      const result = run([join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", "alpha", "--kind", "unit", ...args, "--project-dir", p]);
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    }
+    expect(stop()).toBe("ends");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major reviews alpha before starting beta", () => {
@@ -409,6 +505,51 @@ describe("t342 Construction checkpoint routing", () => {
     expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
     expect(JSON.parse(report.stdout).kind, report.stdout).not.toBe("error");
   }
+
+  // The Kiro presence floors read the engine's own approval rule: a stage gate
+  // the engine records itself once every Unit's checkpoint is approved never
+  // waits for the person's turn, and a gate that needs them still does.
+  test("the presence floor stands aside only for a gate the engine approves itself", () => {
+    const p = fixture();
+    for (const unit of ["alpha", "beta"]) {
+      cover(p, unit);
+      approve(p, unit);
+    }
+    const gate = next(p);
+    expect(gate.construction_policy?.completion_only, JSON.stringify(gate)).toBe(true);
+    reportStage(p, "functional-design", "awaiting-approval");
+    const approveCommand =
+      `bun .kiro/tools/aidlc.ts engine orchestrate report --stage functional-design --result approved`;
+    const state = () => readFileSync(seededStateFile(p), "utf-8");
+    expect(state()).toMatch(/^- \[\?\] functional-design /m);
+    // The person's last turn went to beta's checkpoint approval.
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
+    // beta's code changes, so its checkpoint needs the person again, and so
+    // does the stage gate.
+    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(true);
+    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 1;\n");
+    // The engine agrees: it records the gate without the person.
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
+    // A stage graph the floor cannot read leaves the gate to the person.
+    const graph = process.env.AIDLC_STAGE_GRAPH;
+    writeFileSync(join(p, "not-json-graph.json"), "{");
+    writeFileSync(join(p, "object-graph.json"), "{}");
+    try {
+      for (const broken of ["missing-graph.json", "not-json-graph.json", "object-graph.json"]) {
+        process.env.AIDLC_STAGE_GRAPH = join(p, broken);
+        _resetStageGraphForTests();
+        expect(presenceFloorHolds(p, state(), approveCommand), broken).toBe(true);
+      }
+    } finally {
+      if (graph === undefined) delete process.env.AIDLC_STAGE_GRAPH;
+      else process.env.AIDLC_STAGE_GRAPH = graph;
+      _resetStageGraphForTests();
+    }
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
+    reportStage(p, "functional-design", "approved");
+    expect(state()).toMatch(/^- \[x\] functional-design /m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Both Units are approved, so the stage gates run and functional-design is
   // approved and marked [x]. beta's code then changes, so its checkpoint is

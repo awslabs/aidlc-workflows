@@ -8,6 +8,7 @@ keywords:
   - bugfix
 description: Fix a specific bug
 skeleton: off
+existing_code: true
 runner: true
 review_cap: advisory
 guard_policy: off

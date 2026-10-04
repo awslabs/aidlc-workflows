@@ -97,7 +97,7 @@ import {
 import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
+import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -341,9 +341,9 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
 // Merge the tier-derived chat.modelDefaults entries into an authored Kiro
 // settings/cli.json: one entry per distinct pinned Kiro model, carrying the
 // highest sharing tier's effort (the collapse rule - kiroModelDefaults()).
-// Authored entries (the orchestrator's opus-4.8 -> xhigh) are preserved and
-// join the same higher-effort collapse on collision. CLI-only: the Kiro IDE
-// ignores cli.json.
+// Authored entries are preserved and join the same higher-effort collapse on
+// collision; none ship today, because a project map replaces the person's
+// personal one. CLI-only: the Kiro IDE ignores cli.json.
 function projectKiroCliJson(content: Buffer): Buffer {
   return Buffer.from(
     writeKiroCliSurface(content.toString("utf-8"), [], TIER_CAP),
@@ -645,6 +645,14 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     throw new Error(`[${m.name}] unclassified projection entries: ${unclassified.join(", ")}`);
   }
   const rootIntegrations = m.rootIntegrations.map((integration) => {
+    if (copyStartsWithout(integration)) {
+      // A copy starts without this file; its shipped list rides along so
+      // config can turn it on without a download.
+      const dst = join(treeRoot, "tools", "data", "root-blocks", basename(integration.path));
+      mkdirSync(dirname(dst), { recursive: true });
+      writeFileSync(dst, readFileSync(join(outRoot, integration.path)));
+      return integration;
+    }
     if (integration.policy !== "managed-block") return integration;
     const bytes = readFileSync(join(outRoot, integration.path));
     // Every managed block ships a copy inside the harness folder: siblings
@@ -1027,12 +1035,18 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
   for (const file of walk(agentsDir)) {
     if (file.endsWith(".md")) {
       // Kiro IDE persona surfaces carry a YAML shell allowlist; the native
-      // channel replaces the bun tool glob with the aidlc command prefix.
+      // channel replaces the bun tool glob with the aidlc command prefix. The
+      // copy channel's dispatcher line (`{{INVOKE}} engine *` on the conductor,
+      // `bun <dir>/tools/aidlc.ts engine *` on a persona, which the tool
+      // rewrite above turned into `aidlc engine engine *`) is that same
+      // prefix, so the pair collapses to one entry. A persona's ask lines get
+      // the same doubled prefix and lose it the same way.
       const value = readFileSync(file, "utf-8");
-      const rewritten = value.replaceAll(
-        `- "bun ${m.harnessDir}/tools/aidlc-*"`,
-        `- "${trustedCommand("*")}"`,
-      );
+      const trusted = `- "${trustedCommand("*")}"`;
+      const rewritten = value
+        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, trusted)
+        .replaceAll(`- "${trustedCommand("engine ")}`, `- "${trustedCommand("")} `)
+        .replaceAll(`${trusted}\n        ${trusted}`, trusted);
       if (rewritten !== value) writeFileSync(file, rewritten);
       continue;
     }
@@ -1576,13 +1590,15 @@ if (argv[0] === "codex" && argv[1] === "trust") {
       trustedNamespace: string,
     ) => string;
   };
+  // The checkout's dist/codex runs its hooks as `bun .codex/tools/aidlc.ts ...`,
+  // so hash those commands: a native `aidlc ...` hash trusts none of them.
   console.log(
     trustEntries(
       resolvedProject,
       hooksJson ?? undefined,
       ".codex",
       "codex",
-      "aidlc",
+      substituteInvocationTokens("{{INVOKE}}", ".codex"),
       TRUSTED_ROUTE_NAMESPACE,
     ),
   );

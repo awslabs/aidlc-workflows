@@ -382,7 +382,7 @@ export const ROUTES: readonly Route[] = [
     all: [
       "config [--harness <name>] [--from <path>|--download [--release-base-url <url>] [--ca-bundle <path>]] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
-      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> --effort <e> [--model <raw-id>]] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config trust [--show [--json]|--check|--acknowledge|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
@@ -1399,7 +1399,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${cmd(`${invoke} config <section> [flags]`, out)}`,
       "",
       heading("SECTIONS", out),
-      sectionRow("models", "Which model and effort each agent uses (presets: thorough, balanced, minimal)"),
+      sectionRow("models", "Which model and effort each agent uses, or the Kiro CLI session model (presets: thorough, balanced, minimal)"),
       sectionRow("runtime", "Whether hooks can find bun, aidlc, and the selected harness"),
       sectionRow("providers", "Provider, AWS region/profile, and manual provider actions"),
       sectionRow("trust", "Host trust and command allowlist acknowledgement"),
@@ -1619,12 +1619,12 @@ function publicCommandError(command: string): Action {
   };
 }
 
-function nounError(noun: string, verb: string | undefined): Action {
+function nounError(noun: string, verb: string | undefined, namespace: "engine" | "system" = "engine"): Action {
   const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     type: "error",
     code: 2,
-    message: `aidlc: ${detail} for engine noun '${noun}'; try 'aidlc engine --help'\n`,
+    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
   };
 }
 
@@ -1867,7 +1867,7 @@ function resolveNoun(argv: string[], namespace: Exclude<RouteNamespace, "public"
 
   const custom = routes.find((route) => route.kind === "custom");
   if (custom) return handleCustom(custom, argv);
-  return nounError(noun, argv[1]);
+  return nounError(noun, argv[1], namespace);
 }
 
 function resolveEngine(argv: string[]): Action {

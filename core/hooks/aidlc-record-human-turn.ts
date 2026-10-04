@@ -60,6 +60,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   clearSessionIntentHandoff,
+  emptyPickerResult,
   enterHookWorkflow,
   hookStandsOutside,
   clearPlanApprovalChallenge,
@@ -219,6 +220,14 @@ function carriesSeveralPicks(toolInput: unknown, toolResponse: unknown): boolean
   });
 }
 
+// What the agent does after an empty question box (emptyPickerResult).
+// Codex's own instruction says to "continue with best judgment"; asking in
+// the box again would only run out again.
+const QUESTION_UNANSWERED_NOTICE =
+  "The question box closed with no answer, so nothing was answered or recorded. " +
+  "Ask the same question again in your reply as numbered options, not in the question box, " +
+  "and end the turn; never pick an answer for the person.";
+
 // The words a person typed into a single-choice picker's free-text field. A
 // pick of one of the offered labels is the conductor's wording, not theirs.
 function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
@@ -258,6 +267,7 @@ try {
   // Set when the reply is a picker selection: the question and labels the
   // harness reports it under, so it pairs only with the recorded question.
   let pickerQuestion: PlanApprovalPickerQuestion | undefined;
+  let pickerUnanswered = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -297,6 +307,7 @@ try {
             typeof value === "string" && value.trim().length > 0,
         ) ?? "";
     } else if (parsed.tool_response !== undefined || parsed.toolResponse !== undefined) {
+      pickerUnanswered = emptyPickerResult(parsed.tool_response ?? parsed.toolResponse);
       pickerQuestion = {
         question: questionText,
         options: extractOptionLabels(parsed.tool_input ?? parsed.toolInput),
@@ -361,6 +372,21 @@ try {
     }
   }
   if (existsSync(stateFilePath(projectDir))) {
+    if (pickerUnanswered) {
+      // No turn and no answer: the row spends any earlier turn, so a remark
+      // typed before the box never carries an answer the person did not give.
+      try {
+        withAuditLock(projectDir, () => {
+          appendAuditEntryUnlocked("QUESTION_UNANSWERED", sessionId ? { Session: sessionId } : {}, projectDir);
+        });
+      } catch {
+        // The question is asked again either way.
+      }
+      process.stdout.write(`${JSON.stringify({
+        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: QUESTION_UNANSWERED_NOTICE },
+      })}\n`);
+      return 0;
+    }
     if (mintAllowed) {
       // A typed guard switch or break-glass request is an instruction to the
       // framework, not an answer to the pending Plan Approval question; a

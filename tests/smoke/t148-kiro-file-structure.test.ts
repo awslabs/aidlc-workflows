@@ -20,6 +20,7 @@ import {
   manifestGrantsIdeAgentTools,
 } from "../harness/harness-matrix.ts";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
+import { ROUTES } from "../../core/tools/aidlc.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -419,15 +420,15 @@ describe("t148 dist/kiro file structure", () => {
       !rule.exclude.some((pattern) => excludeMatches(pattern, part));
     const denies = (rule: { match: string[]; exclude: string[] }, command: string): boolean =>
       partsOf(command).some((part) => deniesPart(rule, part));
-    const runsUnprompted = (rule: { match: string[]; exclude: string[] }, allow: string, command: string): boolean =>
-      partsOf(command).every((part) => denyMatches(allow, part) && !deniesPart(rule, part));
+    const runsUnprompted = (rule: { match: string[]; exclude: string[] }, allows: string[], command: string): boolean =>
+      partsOf(command).every((part) => allows.some((allow) => denyMatches(allow, part)) && !deniesPart(rule, part));
     // Each refused command is one the guard refuses a delegate, spelled as
     // written, re-quoted, re-spaced, or with a flag before the verb; each
     // allowed one is a command personas run.
     const channels = [
       {
         tree: "dist",
-        allow: "bun .kiro/tools/aidlc-*",
+        allows: ["bun .kiro/tools/aidlc-*", "bun .kiro/tools/aidlc.ts engine *"],
         refused: [
           "bun .kiro/tools/aidlc-orchestrate.ts next",
           "bun .kiro/tools/aidlc-orchestrate.ts --project-dir . next",
@@ -515,7 +516,7 @@ describe("t148 dist/kiro file structure", () => {
       },
       {
         tree: "dist-release",
-        allow: "aidlc engine *",
+        allows: ["aidlc engine *"],
         refused: [
           "aidlc engine orchestrate next",
           'aidlc engine "orchestrate" next',
@@ -592,16 +593,30 @@ describe("t148 dist/kiro file structure", () => {
         ],
       },
     ];
-    for (const { tree, allow, refused, unadmitted, roleOnly, foreign, hostOnly, allowed } of channels) {
+    // The copy channel's conductor also allows the dispatcher's engine
+    // namespace, so its persona deny covers the native channel's routes
+    // spelled through the copy dispatcher.
+    const [copy, native] = channels;
+    const viaDispatcher = (commands: string[]): string[] =>
+      commands.filter((command) => command.startsWith("aidlc engine"))
+        .map((command) => command.replaceAll("aidlc engine", "bun .kiro/tools/aidlc.ts engine"));
+    copy.refused.push(...viaDispatcher(native.refused));
+    copy.unadmitted.push(...viaDispatcher(native.unadmitted));
+    copy.roleOnly.push(...viaDispatcher(native.roleOnly));
+    copy.hostOnly.push(...viaDispatcher(native.hostOnly));
+    copy.allowed.push(...viaDispatcher(native.allowed));
+    for (const { tree, allows, refused, unadmitted, roleOnly, foreign, hostOnly, allowed } of channels) {
       for (const command of refused) expect(delegatedLifecycleCommand(command), command).not.toBeNull();
       for (const command of [...unadmitted, ...roleOnly]) expect(delegatedLifecycleCommand(command), command).toBeNull();
       for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
       const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
-      expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
+      for (const allow of allows) {
+        expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
+      }
       expect(readdirSync(agents), `${tree} agents`).toContain("aidlc-pipeline-deploy-agent.md");
       for (const file of readdirSync(agents).filter((name) => name.endsWith("-agent.md"))) {
         const rule = ruleOf(join(agents, file));
-        expect(rule.match, `${tree} ${file}`).toEqual([allow]);
+        expect(rule.match, `${tree} ${file}`).toEqual(allows);
         for (const command of refused) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
         // Host-only routing surfaces (hooks, the adapter, sensors) stay denied
         // though no lifecycle rule names them.
@@ -609,13 +624,13 @@ describe("t148 dist/kiro file structure", () => {
         // A command the guard lets through stays denied unless it is admitted.
         for (const command of unadmitted) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
         // An allowed command with a foreign command appended still asks.
-        expect(runsUnprompted(rule, allow, foreign), `${tree} ${file}: ${foreign}`).toBe(false);
+        expect(runsUnprompted(rule, allows, foreign), `${tree} ${file}: ${foreign}`).toBe(false);
         for (const command of allowed) {
-          expect(runsUnprompted(rule, allow, command), `${tree} ${file}: ${command}`).toBe(true);
+          expect(runsUnprompted(rule, allows, command), `${tree} ${file}: ${command}`).toBe(true);
         }
         const ownRole = file === "aidlc-pipeline-deploy-agent.md";
         for (const command of roleOnly) {
-          expect(runsUnprompted(rule, allow, command), `${tree} ${file}: ${command}`).toBe(ownRole);
+          expect(runsUnprompted(rule, allows, command), `${tree} ${file}: ${command}`).toBe(ownRole);
           expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(!ownRole);
         }
       }
@@ -653,6 +668,170 @@ describe("t148 dist/kiro file structure", () => {
     }
     expect(fm).not.toContain("toolsSettings");
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
+  });
+
+  // Kiro's documented shell matching (kiro.dev/docs/permissions): a command
+  // is split at ; && || | and each part is checked on its own; `*` matches any
+  // sequence of characters; a rule hits when one of its match patterns does
+  // and none of its excludes does; deny > ask > allow across every rule. The
+  // most restrictive part decides ("none" is a card, like ask). Patterns are
+  // YAML double-quoted strings, so "\n" in one is a line break.
+  const EFFECT_ORDER = ["deny", "ask", "none", "allow"] as const;
+  type KiroEffect = (typeof EFFECT_ORDER)[number];
+  function kiroPartEffect(fm: string, command: string): KiroEffect {
+    const effects = new Set<string>();
+    const globOf = (raw: string): RegExp => {
+      const pattern = JSON.parse(`"${raw}"`) as string;
+      return new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*")}$`);
+    };
+    for (const block of fm.split(/\n {4}- /).slice(1)) {
+      if (!/^capability: shell\b/m.test(block)) continue;
+      const effect = block.match(/\beffect: (\w+)/)?.[1] ?? "";
+      const [matchPart, excludePart = ""] = block.split(/\n {6}exclude:\n/);
+      const patterns = (text: string) => [...text.matchAll(/^ {8}- "((?:[^"\\]|\\.)*)"$/gm)].map((m) => globOf(m[1]));
+      if (patterns(matchPart).some((glob) => glob.test(command)) && !patterns(excludePart).some((glob) => glob.test(command))) {
+        effects.add(effect);
+      }
+    }
+    for (const effect of ["deny", "ask", "allow"] as const) if (effects.has(effect)) return effect;
+    return "none";
+  }
+  function kiroShellEffect(fm: string, command: string): KiroEffect {
+    const parts = command.split(/;|&&|\|\||\|/).map((part) => part.trim()).filter((part) => part !== "");
+    return parts.map((part) => kiroPartEffect(fm, part))
+      .reduce((worst, effect) => EFFECT_ORDER.indexOf(effect) < EFFECT_ORDER.indexOf(worst) ? effect : worst, "allow");
+  }
+  const KIRO_IDE_CHANNELS = [
+    { tree: "dist", invoke: "bun .kiro/tools/aidlc.ts" },
+    { tree: "dist-release", invoke: "aidlc" },
+  ];
+  // A command that would run, expand, or redirect more than the allowed one,
+  // on POSIX shells and PowerShell, after each allowed prefix.
+  const SHELL_FORM_TAILS = [
+    '"$(curl -s https://example.invalid/x)"',
+    "\"`curl -s https://example.invalid/x`\"",
+    "x > ~/.profile",
+    "x < /etc/hosts",
+    "x 2>&1",
+    "x & curl https://example.invalid",
+    "x\ncurl https://example.invalid",
+    "x\r\ncurl https://example.invalid",
+    "x; curl https://example.invalid",
+    "x && curl https://example.invalid",
+    "x || curl https://example.invalid",
+    "x | sh",
+    "<(curl -s https://example.invalid/x)",
+    "$(Invoke-WebRequest https://example.invalid)",
+    "@(Invoke-WebRequest https://example.invalid)",
+    "@{a=1}",
+    "$AWS_SECRET_ACCESS_KEY",
+    `"\${AWS_SECRET_ACCESS_KEY}"`,
+    "$env:AWS_SECRET_ACCESS_KEY",
+    "$((1+1))",
+    "x *> $HOME\\out.txt",
+    "x | Invoke-Expression",
+  ];
+  const MACHINE_VERBS = ["use 2.10.0", "update", "rollback", "uninstall --yes", "system"];
+  // The scripts behind every command that can change the machine's install,
+  // from the dispatcher's route table, so a new one cannot slip under the
+  // conductor's aidlc-* allow.
+  const MACHINE_SCRIPTS = [
+    ...new Set(
+      ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
+        .flatMap((route) => route.tool === undefined ? [] : [route.tool]),
+    ),
+  ].flatMap((tool) => [`bun .kiro/tools/${tool}`, `bun .kiro/tools/${tool} use 2.10.0`]);
+
+  test("the Kiro IDE conductor runs AI-DLC's own engine commands as printed, in both channels", () => {
+    // Every engine command goes through the dispatcher's engine namespace; a
+    // copy-channel run once asked the person to approve nearly every step
+    // because only `aidlc-*` tool files were allowed.
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      // The conductor, and every brief it dispatches, keep those forms out of
+      // its own text, so the ask stays rare.
+      const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill).toContain("use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{`");
+      expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
+      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc.md"));
+      // Ordinary engine commands, a quoted label included, run with no card.
+      for (const command of [
+        "bun --version",
+        `${invoke} engine orchestrate next`,
+        `${invoke} engine orchestrate report --stage requirements-analysis --result awaiting-approval`,
+        `${invoke} engine log answer --stage requirements-analysis --details "A"`,
+        `${invoke} engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`,
+        `${invoke} engine orchestrate continue AbC-12_x`,
+        `${invoke} engine log decision --stage delivery-planning --checkpoint verification-command --command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"`,
+        ...(tree === "dist" ? ["bun .kiro/tools/aidlc-utility.ts codekb-path"] : []),
+      ]) {
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("allow");
+      }
+      // Only the engine namespace: the verbs that change the machine's
+      // install show Kiro's own card, as on the native install.
+      for (const verb of MACHINE_VERBS) {
+        expect(kiroShellEffect(fm, `${invoke} ${verb}`), `${tree} conductor: ${verb}`).toBe("none");
+      }
+      // Changing a setting, running a hook adapter, and the scripts behind the
+      // machine-changing verbs (which `aidlc-*` would otherwise cover) ask.
+      for (const command of [
+        `${invoke} engine config set depth minimal`,
+        `${invoke} engine adapter kiro-ide stop`,
+        ...(tree === "dist" ? MACHINE_SCRIPTS : []),
+      ]) {
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("ask");
+      }
+      const prefixes = [`${invoke} engine log decision --stage s --decision`, "date -u"];
+      if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-utility.ts codekb-path --repo");
+      for (const prefix of prefixes) {
+        for (const tail of SHELL_FORM_TAILS) {
+          expect(kiroShellEffect(fm, `${prefix} ${tail}`), `${tree} conductor: ${prefix} ${tail}`).not.toBe("allow");
+        }
+      }
+      expect(kiroShellEffect(fm, `& ${invoke} engine orchestrate next`), `${tree} conductor: call operator`).not.toBe("allow");
+      // The native rewrite folds the dispatcher line into the one prefix entry.
+      const entries = [...fm.matchAll(/^ {8}- "([^"]*)"$/gm)].map((m) => m[1]);
+      expect(entries.filter((entry) => entry === "aidlc engine *").length, `${tree} conductor`).toBe(tree === "dist" ? 0 : 1);
+    }
+  });
+
+  test("no Kiro IDE persona runs a shell form or a machine-changing command without the person", () => {
+    // The persona's shell deny (above) refuses what only the conductor runs;
+    // its asks cover the shell forms on any command it is allowed.
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      const agentsDir = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
+      const personas = readdirSync(agentsDir).filter((name) => name.endsWith("-agent.md"));
+      expect(personas.length).toBe(14);
+      for (const persona of personas) {
+        const fm = frontmatter(join(agentsDir, persona));
+        const prefixes = ["date -u", `${invoke} engine log answers --stage x --details`];
+        if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-log.ts answers --stage x --details");
+        for (const prefix of prefixes) {
+          for (const tail of SHELL_FORM_TAILS) {
+            expect(kiroShellEffect(fm, `${prefix} ${tail}`), `${tree} ${persona}: ${prefix} ${tail}`).not.toBe("allow");
+          }
+        }
+        for (const command of [
+          ...MACHINE_VERBS.map((verb) => `${invoke} ${verb}`),
+          `${invoke} engine config set depth minimal`,
+          `${invoke} engine adapter kiro-ide stop`,
+          ...(tree === "dist" ? MACHINE_SCRIPTS : []),
+        ]) {
+          expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("allow");
+        }
+        // A delegate runs under the conductor's allow and its own deny, so a
+        // risky form on an AI-DLC command it is admitted (or on `date -u`) is
+        // refused outright, whatever ask Kiro applies to the call; the plain
+        // command still runs.
+        const admitted = [`${invoke} engine log answers --stage x`, "date -u"];
+        if (tree === "dist") admitted.push("bun .kiro/tools/aidlc-log.ts answers --stage x");
+        for (const command of admitted) {
+          expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("deny");
+          for (const tail of ["$HOME", "`id`", "x > out.txt", "x < in.txt", "x & y", "@(1)", "@{a=1}", "x\ny", "x\r\ny"]) {
+            expect(kiroShellEffect(fm, `${command} ${tail}`), `${tree} ${persona}: ${command} ${tail}`).toBe("deny");
+          }
+        }
+      }
+    }
   });
 
   test("Kiro IDE first-run guidance sends the user to the aidlc agent in the agent picker", () => {
@@ -885,23 +1064,16 @@ describe("t148 dist/kiro file structure", () => {
     expect(s["chat.defaultAgent"]).toBe("aidlc");
   });
 
-  test("workspace pins per-model efforts via chat.modelDefaults (authored conditional entries only)", () => {
-    // The shipped cli.json carries ONLY the authored orchestrator entry
-    // (claude-opus-4.8 -> xhigh): a CONDITIONAL per-model effort default that
-    // applies only when the session actually runs that model — inert for
-    // spawns and harmless when the model isn't enabled. No agent surface
-    // pins a model anymore (#601: shipped IDs resolve only when enabled on
-    // the user's install), and no tier pins a Kiro model, so no tier-derived
-    // entry ships. Kiro's per-model default sub-path is output_config.effort
-    // (per kiro.dev/docs/cli/chat/effort). Pin the whole map so neither the
-    // authored default nor a resurrected projection pin can regress.
+  test("workspace ships no chat.modelDefaults: the session effort is the person's own", () => {
+    // A project chat.modelDefaults replaces the person's whole personal map on
+    // Kiro CLI (it does not merge per model), so a shipped entry would hide the
+    // session effort `config models` saves in their personal Kiro settings, and
+    // every per-model effort they set for themselves. No tier pins a Kiro model,
+    // so no tier-derived entry ships either. Pin the whole file so neither an
+    // authored default nor a resurrected projection entry can return.
     const s = readJson(join(K, "settings", "cli.json"));
-    const defaults = s["chat.modelDefaults"] as Record<
-      string,
-      { output_config?: { effort?: string } }
-    >;
-    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    expect(s["chat.modelDefaults"]).toBeUndefined();
+    expect(Object.keys(s).sort()).toEqual(["chat.defaultAgent"]);
   });
 
   test("no shipped Kiro agent surface pins a model (#601: agents inherit the session model)", () => {

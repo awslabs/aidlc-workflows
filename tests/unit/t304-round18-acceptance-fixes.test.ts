@@ -486,7 +486,19 @@ describe("t304 copied projection configuration", () => {
     const later = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
     expect(later.status, later.stdout + later.stderr).toBe(0);
 
-    // The shipped list is gone now, so turning MCP back on needs the release.
+    // The shipped list still travels in the harness folder, so turning MCP
+    // back on needs no download and keeps the user's server.
+    const again = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(servers()).toContain("mine");
+    expect(servers().length).toBeGreaterThan(1);
+    expect(runCopied(project, ["config", "project", "--mcp", "none", "--yes"]).status).toBe(0);
+    expect(servers()).toEqual(["mine"]);
+
+    // With that copy gone too, turning MCP back on needs the release.
+    rmSync(join(project, ".claude", "tools", "data", "root-blocks", ".mcp.json"));
     const back = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"]);
     expect(back.status).toBe(4);
     expect(back.stdout).toContain(
@@ -499,6 +511,116 @@ describe("t304 copied projection configuration", () => {
       "bun .claude/tools/aidlc.ts config project --mcp defaults --yes --download",
     );
     expectCopyChannelPurity(back.stdout);
+  }, 120_000);
+
+  // The copy runtime leaves .mcp.json out, so a copy starts with no servers,
+  // as config does by default; the shipped list rides in the harness folder,
+  // so turning them on needs no download.
+  test("a copy starts with no MCP servers and turns the shipped ones on offline", () => {
+    const project = fullCopyProject();
+    rmSync(join(project, ".mcp.json"));
+    expect(existsSync(join(project, ".claude", "tools", "data", "root-blocks", ".mcp.json"))).toBe(true);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    const written = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(Object.keys(written.mcpServers).sort()).toEqual(Object.keys(shipped.mcpServers).sort());
+  }, 120_000);
+
+  // A copy leaves a team's own .mcp.json as it is; turning the shipped servers
+  // on adds them beside the team's and never drops one of theirs.
+  test("turning the shipped servers on keeps the team's own server", () => {
+    const project = fullCopyProject();
+    const team = { command: "team-db-mcp", args: ["--read-only"] };
+    writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: { "team-db": team } }, null, 2)}\n`);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    const written = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(written.mcpServers["team-db"]).toEqual(team);
+    expect(Object.keys(written.mcpServers).sort()).toEqual(["team-db", ...Object.keys(shipped.mcpServers)].sort());
+    // Turning them off again leaves the team's server.
+    const off = runCopied(project, ["config", "project", "--mcp", "none", "--yes"]);
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers).toEqual({ "team-db": team });
+  }, 120_000);
+
+  // A region recorded before the servers are turned on reaches them: the copy
+  // in the harness folder is kept in step with the provider choice.
+  test("servers turned on in a copy use the region recorded before", () => {
+    const project = readmeCopyProject();
+    const first = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const region = runCopied(project, [
+      "config", "providers", "--provider", "amazon-bedrock", "--region", "eu-west-1", "--yes",
+    ]);
+    expect(region.status, region.stdout + region.stderr).toBe(0);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const aws = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers["aws-mcp"] as { args: string[] };
+    expect(aws.args).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
+    expect(aws.args).toContain("AWS_REGION=eu-west-1");
+    // The copy in the harness folder keeps no provider choice of its own.
+    expect(readFileSync(join(project, ".claude", "tools", "data", "root-blocks", ".mcp.json"), "utf-8")).not.toContain("eu-west-1");
+  }, 120_000);
+
+  // After the person goes back to their session's own provider, servers turned
+  // on again use the shipped region, not the one they cleared.
+  test("servers turned on after a provider reset use the shipped region", () => {
+    const project = readmeCopyProject();
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")).mcpServers["aws-mcp"];
+    const steps = [
+      ["config", "project", "--completions", "zsh", "--yes"],
+      ["config", "providers", "--provider", "amazon-bedrock", "--region", "eu-west-1", "--yes"],
+      ["config", "providers", "--provider", "current", "--yes"],
+    ];
+    for (const step of steps) {
+      const result = runCopied(project, step);
+      expect(result.status, `${step.join(" ")}: ${result.stdout}${result.stderr}`).toBe(0);
+    }
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers["aws-mcp"]).toEqual(shipped);
+  }, 120_000);
+
+  // A project copied before copies left .mcp.json out already has the shipped
+  // servers. Config with no MCP choice keeps them; only turning MCP off removes
+  // them, and never the team's own.
+  test("servers a project already has stay on until the person turns them off", () => {
+    const project = fullCopyProject();
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    const team = { command: "team-db-mcp", args: ["--read-only"] };
+    const both = { ...shipped.mcpServers, "team-db": team };
+    writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: both }, null, 2)}\n`);
+    const mcpServers = () => JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers;
+    // Another project choice, made from the copy's own files.
+    const own = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
+    expect(own.status, own.stdout + own.stderr).toBe(0);
+    expect(mcpServers()).toEqual(both);
+    const fromRelease = runCopied(project, ["config", "--harness", "claude", "--yes", "--from", join(DIST, "claude")]);
+    expect(fromRelease.status, fromRelease.stdout + fromRelease.stderr).toBe(0);
+    expect(mcpServers()).toEqual(both);
+    const off = runCopied(project, ["config", "project", "--mcp", "none", "--yes"]);
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(mcpServers()).toEqual({ "team-db": team });
   }, 120_000);
 
   test("own files never adopt a user's edit to a shipped server", () => {
@@ -1371,8 +1493,10 @@ describe("t304 first-run prompt and detection safety", () => {
     const toKiro = runWizard("1\n2\n\n\n\n\n\n\n1\n5\n\n");
     expect(toKiro.status, toKiro.stdout + toKiro.stderr).toBe(0);
     expect(toKiro.stdout).toContain("2. Provider     keep current");
+    // On Kiro CLI the row is the session model (personal Kiro settings); Kiro
+    // is not readable in this test, so nothing is chosen or written for it.
     expect(toKiro.stdout).toContain(
-      "2. Provider     comes with Kiro CLI",
+      "2. Model        unchanged (Kiro settings not read)",
     );
     expect(toKiro.stdout).not.toContain("Verify Amazon Bedrock model access");
     const kiro = JSON.parse(
@@ -1381,7 +1505,8 @@ describe("t304 first-run prompt and detection safety", () => {
     expect(kiro.providers).toBeUndefined();
 
     // Kiro CLI first (5), customize (2), accept every step (step 2 asks nothing
-    // on Kiro), then edit step 1 to Claude Code (1) and apply.
+    // when Kiro's settings cannot be read), then edit step 1 to Claude Code (1)
+    // and apply.
     const toClaude = runWizard("5\n2\n\n\n\n\n\n1\n1\n\n");
     expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
     expect(toClaude.stdout).not.toContain("Claude Code provides its own model access");
@@ -1391,6 +1516,32 @@ describe("t304 first-run prompt and detection safety", () => {
     );
     expect(claude.providers.provider).toBe("current");
     expect(claude.providers.pendingActions).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The default preset follows the harness the same way: a preset changes
+  // nothing on Cursor, so setup records none there.
+  test("changing the harness at the summary re-derives the default preset", () => {
+    const recordedModels = (project: string) => {
+      const path = join(project, "aidlc.settings.json");
+      return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")).models : undefined;
+    };
+    // Claude Code first (1), customize (2), accept every step, then edit step 1
+    // to Cursor (4) and apply.
+    const toCursor = runWizard("1\n2\n\n\n\n\n\n\n1\n4\n\n");
+    expect(toCursor.status, toCursor.stdout + toCursor.stderr).toBe(0);
+    expect(toCursor.stdout).toContain("1. Harness      Cursor");
+    expect(toCursor.stdout).toContain("3. Preset       none (unchanged)");
+    expect(toCursor.stdout).toContain("6. Preset in    n/a (no preset recorded)");
+    expect(recordedModels(toCursor.project)).toBeUndefined();
+
+    // Cursor first (4), customize (2), accept every step (step 3 defaults to
+    // unchanged there, so step 6 asks nothing), then edit step 1 to Claude Code
+    // (1) and apply.
+    const toClaude = runWizard("4\n2\n\n\n\n\n\n1\n1\n\n");
+    expect(toClaude.status, toClaude.stdout + toClaude.stderr).toBe(0);
+    expect(toClaude.stdout).toContain("4. unchanged   records no preset (recommended, default)");
+    expect(toClaude.stdout).toContain("3. Preset       balanced");
+    expect(recordedModels(toClaude.project)?.preset).toBe("balanced");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

@@ -22,7 +22,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { customPlanBase, customPlanStart, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
@@ -195,6 +196,49 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     const def = loadScopeMapping()[scope];
     return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === depth);
   };
+
+  test("a new project's plan runs on a scope meant for new work when one fits", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const grid = composedGrid();
+      const nearest = [
+        { scope: "security-patch", diff: 1, differs: [] },
+        { scope: "bugfix", diff: 2, differs: [] },
+        { scope: "express", diff: 3, differs: [] },
+      ];
+      // A new kiosk app is not labelled a security patch or a bug fix.
+      expect(customPlanBase(grid, "off", nearest, "minimal", "greenfield")).toEqual({
+        scope: "express",
+        changes: planChangesBetween(stockGrid("express"), grid),
+      });
+      // Existing code, or no type given, keeps the nearest.
+      expect(customPlanBase(grid, "off", nearest, "minimal", "brownfield")).toMatchObject({ scope: "security-patch" });
+      expect(customPlanBase(grid, "off", nearest, "minimal")).toMatchObject({ scope: "security-patch" });
+      // With only scopes for existing code to choose from, the nearest still serves.
+      expect(customPlanBase(grid, "off", nearest.slice(0, 2), "minimal", "greenfield")).toMatchObject({ scope: "security-patch" });
+      // The stock scopes for existing code say so in their own frontmatter.
+      const existing = Object.entries(loadScopeMapping()).filter(([, def]) => def.existingCode === true).map(([name]) => name);
+      expect(existing.sort()).toEqual(["bugfix", "refactor", "security-patch"]);
+    });
+  });
+
+  test("a scope a team adds for existing code is passed over for a new project too", () => {
+    const scopes = mkdtempSync(join(tmpdir(), "aidlc-t351-scopes-"));
+    tempDirs.push(scopes);
+    cpSync(join(REPO_ROOT, "core", "scopes"), scopes, { recursive: true });
+    const bugfix = readFileSync(join(scopes, "aidlc-bugfix.md"), "utf-8");
+    expect(bugfix).toContain("existing_code: true");
+    writeFileSync(join(scopes, "aidlc-hotfix.md"), bugfix.replace("name: bugfix", "name: hotfix"));
+    const grid = composedGrid();
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
+      expect(loadScopeMapping().hotfix?.existingCode).toBe(true);
+      const nearest = [
+        { scope: "hotfix", diff: 1, differs: [] },
+        { scope: "express", diff: 3, differs: [] },
+      ];
+      expect(customPlanBase(grid, "off", nearest, "minimal", "greenfield")).toMatchObject({ scope: "express" });
+      expect(customPlanBase(grid, "off", nearest, "minimal", "brownfield")).toMatchObject({ scope: "hotfix" });
+    });
+  });
 
   test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's or lower", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {

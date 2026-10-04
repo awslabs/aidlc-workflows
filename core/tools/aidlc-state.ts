@@ -110,13 +110,13 @@ import {
   isAutonomousMode,
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
-  unitScopedLifecycleFloors,
   isNonAnswer,
   isRequestChangesChoice,
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
-  latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
+  unitScopedLifecycleFloors,
   loadScopeMapping,
   loadStageGraph,
   nextInScopeStage,
@@ -194,7 +194,7 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -711,7 +711,7 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
     `Workflow is Archived, so ${operation} is refused. Bring it back first with ` +
-      "`/aidlc intent unarchive <name>`.",
+      `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
   );
 }
 
@@ -2060,7 +2060,7 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
     if (status === "Archived") {
       error(
         "Workflow is Archived - nothing to park. Bring it back first with " +
-          "`/aidlc intent unarchive <name>`.",
+          `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
       );
     }
     const currentSlug = getField(content, "Current Stage") ?? "";
@@ -2374,12 +2374,14 @@ function handleUnit(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Unit: unit,
-      "Run floor": latestMainWorkflowStageRunFloorForProject(
+      "Run floor": unitLifecycleRunFloorForProject(
         pd,
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major" ||
           getField(content, "Construction Checkpoints") === "enabled",
-        unitScopedLifecycleFloors(content) ? unit : undefined,
+        unit,
+        undefined,
+        unitScopedLifecycleFloors(content),
       ),
       ...claimAttemptFields(pd, unit),
       ...(waveMode
@@ -4579,12 +4581,14 @@ function reviewerPreconditionError(
       receipts,
     });
   }
+  // A request that can never finish is requested again at its own pass.
+  const ordinal = pending?.state === "outstanding" ? String(pending.iteration) : "<next ordinal>";
   if (action === "present-approval-gate") {
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
-        `<next ordinal>\` and record its verdict with the same command plus ` +
+        `${ordinal}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
         `approval summary instead.`;
@@ -4599,7 +4603,7 @@ function reviewerPreconditionError(
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
       `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --iteration <next ordinal>\` and record its verdict ` +
+      `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
       `READY review in the approval summary instead.`;
@@ -6647,7 +6651,7 @@ function handleSkip(args: string[]): void {
       error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
     }
     // Floored per Unit wherever its other lifecycle rows are (solo unit-major
-    // too, #1411); team-owned Units keep their own rule.
+    // too); team-owned Units keep their own rule.
     const checkpoints = getField(content, "Construction Checkpoints") === "enabled" ||
       (!isTeamUnitOwnership(content) && getField(content, "Construction Iteration")?.trim() === "unit-major");
     try {
@@ -6655,11 +6659,13 @@ function handleSkip(args: string[]): void {
         Stage: slug,
         Unit: unit,
         Reason: reason,
-        "Run floor": latestMainWorkflowStageRunFloorForProject(
+        "Run floor": unitLifecycleRunFloorForProject(
           pd,
           slug,
           true,
-          checkpoints ? unit : undefined,
+          unit,
+          undefined,
+          checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
       });

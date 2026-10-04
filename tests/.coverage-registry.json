@@ -602,6 +602,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "QUESTION_UNANSWERED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t149-codex-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "RECOMPOSED",
       "minMechanism": "none",
       "coveredBy": [
@@ -3548,6 +3560,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:emptyPickerResult",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t149-codex-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:ENGINE_DIR",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6208,6 +6232,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:markPersonLinesHeard",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markProtectedQuestionReplied",
       "minMechanism": "none",
       "coveredBy": [
@@ -7118,6 +7154,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:pendingRequestCurrency",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:pendingReviewRequestStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -7134,6 +7177,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:personLineHeard",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -7346,6 +7401,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t224-plugin-selection.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:presenceFloorHolds",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -8557,6 +8624,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:renderReviewRequestCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t271-review-iteration-ceiling.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:renderReviewVerdictCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -9396,6 +9475,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:reviewRequestReplaces",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:reviewSectionVerdict",
       "minMechanism": "none",
       "coveredBy": [
@@ -10215,6 +10301,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:staleStageLine",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t352-workspace-reclassify.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stateDigest",
       "minMechanism": "none",
       "coveredBy": [
@@ -10900,6 +10998,18 @@
     {
       "unitClass": "function",
       "unitId": "function:unitLifecycleReceiptsInUse",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitLifecycleRunFloorForProject",
       "minMechanism": "none",
       "coveredBy": [
         {

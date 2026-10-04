@@ -83,6 +83,7 @@ import {
   worktreeStateFilePath,
   writeFileAtomic,
   REPO_NAME_REGEX,
+  entrySkillInvocation,
 } from "./aidlc-lib.js";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -2596,7 +2597,7 @@ function handleMerge(args: string[]): void {
       errorWithSlug(
         slug,
         "Cannot merge a Bolt for an Archived workflow. Bring it back first with " +
-          `\`/aidlc intent unarchive ${selection.intent}\`.`,
+          `\`${entrySkillInvocation()} intent unarchive ${selection.intent}\`.`,
       );
     }
   }

@@ -73,11 +73,13 @@ For an air-gapped package, use
 `& $installer -From <release-directory> -Offline` on Windows.
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
-`aidlc engine *` trust grant ships inside the conductor's permissions
-(`.kiro/agents/aidlc.md`). Two command families are held back from it:
-`aidlc engine config set *` changes a setting of your piece of work, and
-`aidlc engine adapter *` is the entry the IDE's own hooks run. When the agent
-runs either one, Kiro IDE asks you first. Earlier releases also merged it into
+`aidlc engine *` trust grant ships inside the permissions of the conductor
+(`.kiro/agents/aidlc.md`) and of every agent it hands work to. Some commands are
+held back from it: `aidlc engine config set *` changes a setting of your piece
+of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and a
+command holding `$`, a backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break can
+run, expand, or redirect more than the one command. When an agent runs one of these, Kiro IDE
+asks you first. Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
 reads that key, so the entry can be removed. Before the first workflow, follow
 [First run](#first-run): open `your-project/` in Kiro IDE, trust the folder and
@@ -365,7 +367,7 @@ host shares it and is judged by the gates of the workflow it is bound to.
 | `aidlc-terminal-command` | `UserPromptSubmit` | Runs status, doctor, help, navigation, and other terminal utilities before the model when prompt text is available, for the chat that typed the command |
 | `aidlc-terminal-command-guard` | `PreToolUse` (`execute_bash\|execute_pwsh\|shell`) | Fallback for empty-prompt IDE versions: runs the classified utility once and refuses the duplicate Windows shell call. On Windows it also refuses an `aidlc` command with a value that cmd.exe would split (see the Windows quotes row below) |
 | `aidlc-continue-workflow` | `Stop` | Forwarding-loop audit (advisory-only; the Stop trigger cannot block on the IDE - enforcement relies on the conductor's own Stop protocol) |
-| `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
+| `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate the person must answer is open and no human has acted since (human-presence floor). A gate AI-DLC approves itself, such as a Construction stage gate once every Unit's checkpoint is approved, does not hold it, and neither does the one Construction setting the person just chose |
 | `aidlc-write-audit-log` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
 | `aidlc-plan-approval-guard` | `PreToolUse` | Enforces Code Generation Plan Approval with exact target classification when arguments are present. The shell tool is recognised under all three IDE names, `execute_bash`, `execute_pwsh` (Windows), and `shell`: each is forwarded to the shared guard as `Bash` and routed to legacy recovery identically, and with no active workflow no shell call is denied. `execute_pwsh` is marked as PowerShell, so while a plan waits for approval read-only cmdlets (`Get-Content`, `Select-Object`, `ConvertFrom-Json`, ...), `2>$null`, and `aidlc.cmd` or the full path of the installed engine still run; `Out-File`, `Set-Content`, `Add-Content`, `Tee-Object`, and `>` into a file do not. Legacy argument-less payloads permit only measured `fs_write`/`str_replace` plan-question writes. PostToolUse stays silent because 0.12 discards that output; the invoking Code Generation `next`/final `continue` directive carries one protected choice capability. Recovery first requires an exact human `Recover Plan Approval` response; another live window cannot initiate it, while a replacement window can recover after the owner PID exits or an IPC-only endpoint disappears. Takeover clears old response evidence before rotating the challenge. An interrupted pre-write window remains a recovery latch even when PostToolUse never runs; definitive `toolSuccess:false` or recognized failure prose clears it because no mutation occurred, while unknown outcomes remain latched. Adapter-owned recovery preserves the human ask while clearing only violation/window state after successful reissue. `UserPromptSubmit` can submit exact recovery/approval labels but cannot reveal or transfer them. Unknown mutators fail closed and shared files/audit retain no plaintext secret. |
 | `aidlc-log-subagent` | `PostToolUse` (`^(subagent_.+\|invoke_sub_agent\|orchestrate_subagent)$`) | Records `SUBAGENT_COMPLETED` with the delegate's identity — one row per stage of an `orchestrate_subagent` pipeline. The matcher is broad so any delegate name reaches the adapter; the adapter drops the auxiliary `subagent_response` shell |

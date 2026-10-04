@@ -15,6 +15,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,7 @@ import {
   collectPluginStatus,
   comparePluginState,
   discoverPluginInventory,
+  main as pluginMain,
   normalizeInstalledPlugin,
   pluginSourceHash,
   renderPluginStatuses,
@@ -972,8 +974,36 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     );
     await syncPlugins(project, [], ".claude");
     expect(existsSync(stage)).toBe(true);
+    // The plugin's record of the files it composed goes with it, so a pruned
+    // plugin no longer claims them.
+    const filesRecord = join(project, ".claude", "tools", "data", "plugin-files-test-pro.json");
+    expect(existsSync(filesRecord)).toBe(true);
+    // Without a terminal or --yes the command is used the wrong way, which
+    // exits 2 like every other usage refusal, and removes nothing.
+    const saved = { exitCode: process.exitCode, harness: process.env.AIDLC_HARNESS_DIR, write: process.stdout.write };
+    process.env.AIDLC_HARNESS_DIR = ".claude";
+    let printed = "";
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      printed += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await pluginMain(["sync", "--prune-missing", "--project-dir", project, "--json"]);
+      process.stdout.write = saved.write;
+      expect(process.exitCode).toBe(2);
+      // Its JSON says so too.
+      expect(JSON.parse(printed)).toMatchObject({ ok: false, code: 2, status: "usage" });
+    } finally {
+      process.stdout.write = saved.write;
+      // Bun keeps a set exit code when it is assigned undefined.
+      process.exitCode = saved.exitCode ?? 0;
+      if (saved.harness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = saved.harness;
+    }
+    expect(existsSync(stage)).toBe(true);
     const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
     expect(result.pruned).toEqual(["test-pro"]);
+    expect(existsSync(filesRecord)).toBe(false);
     expect(existsSync(stage)).toBe(false);
     expect(readFileSync(
       join(project, ".claude", "skills", "aidlc", "SKILL.md"),
@@ -995,6 +1025,52 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       join(project, ".claude", "skills", "aidlc", "SKILL.md"),
       "utf-8",
     )).toContain("| test-pro-integration |");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A data folder that links elsewhere would take the removal of the plugin's
+  // records outside this project, so prune leaves them there, prunes the
+  // rest, and says what it left and why.
+  test("prune leaves the records in a linked data folder alone and prunes the rest", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    await syncPlugins(project, [], ".claude");
+    const data = join(project, ".claude", "tools", "data");
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-t242-linked-data-"));
+    TEMP.push(outside);
+    cpSync(data, outside, { recursive: true });
+    rmSync(data, { recursive: true, force: true });
+    symlinkSync(outside, data, process.platform === "win32" ? "junction" : "dir");
+    const outsideRecord = join(outside, "plugin-files-test-pro.json");
+    const before = readFileSync(outsideRecord, "utf-8");
+    // Every record of the plugin's outside the project.
+    const snapshot = () =>
+      readdirSync(outside).filter((name) => /^plugin-[a-z]+-test-pro\.json$/.test(name)).sort()
+        .map((name) => `${name}\n${readFileSync(join(outside, name), "utf-8")}`);
+    const outsideBefore = snapshot();
+    expect(outsideBefore.some((entry) => entry.startsWith("plugin-contrib-test-pro.json\n"))).toBe(true);
+    writeFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "{\"version\":2,\"plugins\":{}}\n");
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
+    expect(existsSync(stage)).toBe(true);
+    const saved = { exitCode: process.exitCode, write: process.stdout.write };
+    let printed = "";
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      printed += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      await pluginMain(["sync", "--prune-missing", "--yes", "--project-dir", project]);
+    } finally {
+      process.stdout.write = saved.write;
+      process.exitCode = saved.exitCode ?? 0;
+    }
+    expect(printed).toContain("pruned 1 missing plugin(s)");
+    expect(printed).toContain(
+      `Left plugin files in ${join(".claude", "tools", "data")} alone: that folder links outside this project.`,
+    );
+    // None of them was removed or changed, and the rest of the prune happened.
+    expect(readFileSync(outsideRecord, "utf-8")).toBe(before);
+    expect(snapshot()).toEqual(outsideBefore);
+    expect(existsSync(stage)).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("prune strips object-form consumes a plugin contributed to a core stage", async () => {
@@ -1060,8 +1136,8 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       announcePrune(["--prune-missing"], ["test-pro", "other"], { isTTY: true }, output);
       const said = output.read()?.toString() ?? "";
       expect(said).toBe(
-        "Pruning missing plugin(s) test-pro, other: removing the files they added to this project, " +
-          "their additions to stage files, and their composition records. To get them back, reinstall " +
+        "Pruning missing plugin(s) test-pro, other: removing the files they added to this project " +
+          "and their additions to stage files. To get them back, reinstall " +
           `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
       );
       expect(said).not.toContain("[y/N]");

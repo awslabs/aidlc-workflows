@@ -141,8 +141,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
    The command prints ready-to-paste `[hooks.state]` entries for
    `$CODEX_HOME/config.toml`
-   (the hash covers the hook identity, not the path — the printed entries are
-   exact for the shipped `hooks.json`). The command serializes the complete
+   (each hash covers the hook's event, its matcher, its command, and its
+   timeout, as Codex hashes them, not the path: the printed entries are exact
+   for the copied `hooks.json`). The command serializes the complete
    output as TOML, so quoted paths, spaces, and Windows backslashes are
    preserved. If the hook manifest is not at `<project>/.codex/hooks.json`,
    pass its exact path explicitly:
@@ -220,6 +221,9 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `codex -c features.default_mode_request_user_input=false`.
 - **No custom statusline** — workflow position rides the `update_plan` tool
   (the `task-progress` statusline item) and `$aidlc --status`.
+- **A question box that runs out**: Codex closes its question box after
+  about two minutes with no answer. Nothing is answered for you: when you
+  come back, the same question is waiting in the chat.
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only
   in-sandbox by design. Interactive sessions auto-escalate, and the shipped
   `.codex/rules/default.rules` pre-allows `git worktree`/`commit`/`add`.

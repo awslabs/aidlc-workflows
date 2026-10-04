@@ -73,6 +73,10 @@ Map the spec fields 1:1:
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).
+- **No answer**: the box runs out after about two minutes and returns no
+  answers. Nothing was answered: ask the same question again in your reply as
+  numbered prose, not in the box, and end the turn; never pick an answer for
+  the person.
 
 ### Track 2 — numbered prose (the floor)
 
@@ -149,8 +153,10 @@ checkpoint with the later reviewer, learnings, or approval steps.
 Rules (both tracks):
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **No emergent options**: render exactly the spec's options (+ the escape).
   The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.

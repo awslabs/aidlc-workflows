@@ -301,11 +301,44 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(problems).toEqual([]);
   });
 
+  test("every shipped conductor SKILL sends --help through the loop's first step, not the command-line help", () => {
+    // A live agent sometimes answered /aidlc --help with `aidlc --help`, the
+    // terminal tool's help. The clause sits on step 1 itself, so a harness's
+    // own steps before the loop (opencode's bare-invocation resume probe) still
+    // come first.
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      const step = body.split("\n").find((line) => line.trimStart().startsWith("1. directive = the JSON printed by running"));
+      if (!step?.includes("`--help` goes here too, like every other argument: `{{INVOKE}} --help` is the command-line tool's own help")) {
+        missing.push(rel);
+      }
+      if (body.includes("Every invocation starts here")) missing.push(`${rel}  still overrides the steps before the loop`);
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("every shipped conductor SKILL relays engine-authored narration", () => {
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const tok of NARRATION_TOKENS) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  // The agent passes a step and goes on: the line it carries is said before
+  // the step's own work, or the person sees a long wait with no word.
+  test("every shipped conductor SKILL says a print's and a run-stage's narration first", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "| `print` | When the directive carries `narration`, say it first.",
+        "When the directive carries `narration`, say it first, in the same message as those reads.",
+      ]) {
         if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
       }
     }

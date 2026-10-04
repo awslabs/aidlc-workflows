@@ -565,6 +565,12 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain(`**Review outcome:** ${verdict}`);
       if (verdict === "NOT-READY") expect(rendered).toContain("R-01");
+      // Approve accepts open findings only when there are some.
+      expect(rendered).toContain(
+        verdict === "READY"
+          ? "- **Approve** - continue; no findings are open."
+          : "- **Approve** - continue with the open findings accepted.",
+      );
     }
   });
 

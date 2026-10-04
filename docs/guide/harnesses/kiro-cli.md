@@ -110,16 +110,45 @@ have configured**; if you prefer your own default, remove that setting and use
 
 No shipped agent pins a model: a pinned ID resolves only when that
 model is enabled on the user's Kiro install, so the conductor and all 14
-personas inherit your session model (`/model`). The same `cli.json` also
-ships one CONDITIONAL per-model reasoning-effort default via
-`chat.modelDefaults`: `xhigh` for `claude-opus-4.8`, applied only when your
-session actually runs that model (the recommended setup) — inert otherwise.
-Kiro has no per-agent effort surface, so effort can only ride on the model
-this way. This file is read by the Kiro CLI only — the Kiro IDE ignores
-`cli.json` and applies its extension's per-model defaults instead. Override
-per session with `/effort <level>` in chat or `kiro-cli chat --effort
-<level>` (low|medium|high|xhigh|max) — a session flag and your user-level
-`~/.kiro/settings/cli.json` both take precedence over the workspace default.
+personas inherit your session model (`/model`).
+
+### Session model and effort
+
+Kiro CLI runs each AI-DLC session on one model and has no per-agent effort
+surface, so AI-DLC keeps the session's model and effort in your **personal**
+Kiro settings (`~/.kiro/settings/cli.json`, the file Kiro's own
+`/model set-current-as-default` writes), never in the project. Model lists
+differ per Kiro account, and a project model a teammate's account lacks fails
+every prompt they send. A project `chat.modelDefaults` would also replace your
+whole personal map inside the project, so the shipped `cli.json` carries none.
+
+First-run setup's step 2, "Session model", lists the models your Kiro account
+offers, in Kiro's order, with each model's credit multiplier and a `preview` or
+`internal` tag. Under Kiro auto (Kiro's own default, where Kiro picks the model
+for each task), AI-DLC recommends choosing a model, so your effort preset
+applies to it. The preset then sets one effort for the whole session:
+
+| Preset | Session effort |
+|--------|----------------|
+| `minimal` | `low` |
+| `balanced` | `medium` |
+| `thorough` | `xhigh` (extra-high) |
+
+A model without that level gets its next level down, and a model with no
+effort setting keeps only the model. `aidlc config models` offers the same
+choice later ("1 session model, 2 preset"), and
+`aidlc config models --session-model <id>` saves a model from your account's
+list without prompts. A saved model your account no longer offers fails every
+prompt, so setup asks for another instead of keeping it. `--dry-run` shows the
+personal Kiro settings change too and writes nothing. When Kiro refuses a write,
+AI-DLC says exactly what was saved and `config models` exits 5 (action needed).
+`aidlc doctor` checks the live setting: the model is still offered, the effort
+matches the preset, and no project file overrides it. Refreshing a project set
+up by an earlier release removes AI-DLC's old effort map (`claude-opus-4.8` at
+extra-high) from `.kiro/settings/cli.json` and says so; run
+`aidlc config models` to choose the session model.
+Override one session with `/effort <level>` in chat or `kiro-cli chat --effort
+<level>` (low|medium|high|xhigh|max). The Kiro IDE does not read `cli.json`.
 
 ## Refresh and version skew
 
