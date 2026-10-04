@@ -95,8 +95,8 @@ The optional `existing_code: true` field marks a scope that changes code that
 already exists (`bugfix`, `refactor`, and `security-patch` ship with it). A
 plan the composer tailors for a new project does not run on such a scope when
 a scope meant for new work fits, so new work is not recorded as a fix; and
-creating work on one in a folder that scans as a new project prints a note that
-the scope usually targets existing code. Absence means the scope suits new
+creating work on one in a folder that scans as a new project, which drops its
+Reverse Engineering, prints a note that the scope usually targets existing code. Absence means the scope suits new
 work too.
 
 ### Guard Policy default
