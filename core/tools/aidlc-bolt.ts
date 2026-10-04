@@ -77,6 +77,7 @@ import {
   VERIFICATION_COMMAND_RECOVERY,
   type BoltIdentity,
   legacyParkedRefPrefix,
+  resolveInvokingSessionId,
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
@@ -1286,6 +1287,29 @@ function handleSetAutonomy(args: string[]): void {
 
 // --- CLI entry point ---
 
+// The session a checkpoint question and its answer belong to. The tool finds
+// the session it runs in, the same way the engine does; `--session` is only an
+// override, so an agent never has to look its own session up.
+function checkpointSession(pd: string, flagged: string | undefined, required: boolean): string {
+  let resolved: string | null = null;
+  if (!flagged?.trim()) {
+    try {
+      resolved = resolveInvokingSessionId(pd);
+    } catch {
+      // Two sessions claim this process: not one the tool can pick for the person.
+      resolved = null;
+    }
+  }
+  const session = flagged?.trim() || resolved || "";
+  if (required && !session) {
+    error(
+      "Could not tell which session this is. Run the command again with " +
+        "--session set to the Runtime Session shown in this session's AI-DLC context.",
+    );
+  }
+  return session;
+}
+
 function handleCheckpoint(args: string[]): void {
   const flags = parseFlags(args);
   if (flags["check-cmd"] !== undefined) {
@@ -1304,7 +1328,7 @@ function handleCheckpoint(args: string[]): void {
       result = resolveConstructionCheckpoint(pd, flags.unit, checkpointKind);
       break;
     case "ask":
-      result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, flags.session?.trim() ?? "");
+      result = askConstructionCheckpoint(pd, flags.unit, checkpointKind, checkpointSession(pd, flags.session, true));
       break;
     case "verify":
       result = verifyConstructionCheckpoint(
@@ -1313,12 +1337,12 @@ function handleCheckpoint(args: string[]): void {
       break;
     case "approve":
       result = approveConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"], flags.session?.trim(),
+        pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, false),
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim(),
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, false),
       );
       break;
     default:
@@ -1341,13 +1365,13 @@ function handleSwarmCheckpoint(args: string[]): void {
       result = resolveSwarmCheckpoint(pd, batch, units);
       break;
     case "ask":
-      result = askSwarmCheckpoint(pd, batch, units, flags.session?.trim() ?? "");
+      result = askSwarmCheckpoint(pd, batch, units, checkpointSession(pd, flags.session, true));
       break;
     case "approve":
-      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"], flags.session?.trim());
+      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, false));
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", flags.session?.trim());
+      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, false));
       break;
     default:
       error("swarm-checkpoint --action must be status, ask, approve or reject");

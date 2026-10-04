@@ -1589,3 +1589,41 @@ describe("t341 protected question interleaving", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
+
+describe("t341 a checkpoint finds the session it runs in", () => {
+  const own = "t341-own-session";
+  const inSession = { ...process.env, AIDLC_SESSION_OVERRIDE: own, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+  const route = (action: string, ...extra: string[]) =>
+    ["checkpoint", "--action", action, "--unit", "alpha", "--kind", "unit", ...extra];
+
+  test("asking and approving need no --session", () => {
+    const pd = project();
+    pass(pd);
+    const asked = cli(pd, "bolt", route("ask"), inSession);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, own)).not.toBeNull();
+    submitCommandChoice(pd, own, "Approve");
+    const approved = cli(pd, "bolt", route("approve", "--user-input", "Approve"), inSession);
+    expect(approved.code, approved.out).toBe(0);
+    expect(approvals(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a blank --session is the same as none", () => {
+    const pd = project();
+    pass(pd);
+    const asked = cli(pd, "bolt", route("ask", "--session", " "), inSession);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, own)).not.toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a session that cannot be found is named in one line, and nothing is asked", () => {
+    const pd = project();
+    pass(pd);
+    const { AIDLC_SESSION_OVERRIDE: _session, AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...outside } = process.env;
+    const asked = cli(pd, "bolt", route("ask"), outside);
+    expect(asked.code).not.toBe(0);
+    expect(asked.out).toContain("Could not tell which session this is.");
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval")).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
