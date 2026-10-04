@@ -263,7 +263,9 @@ policy or verification-command question, a Construction checkpoint, Plan
 Approval, or a recovery question, you read the person's reply and record the
 choice they made. The human-turn hook keeps that they replied and their exact
 words; the receipt carries those words beside your choice, so never paraphrase
-them in a record and never choose for them.
+them in a record and never choose for them. A reply that asks to redo the whole
+stage, jump to a stage, or start fresh is not a gate answer: report it as the
+recovery protocol's Session resume says, never as Request Changes.
 
 - **They chose:** record that choice by its label (`--user-input "Approve"`,
   `--details "Request Changes"`, `--details "Approve Plan"`). A number, a letter,

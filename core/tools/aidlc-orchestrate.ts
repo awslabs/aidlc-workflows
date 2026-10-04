@@ -12247,6 +12247,18 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     }
   }
 
+  // The typed re-entry flags are refused on every other report before any
+  // branch below commits something with them dropped.
+  if (
+    (flags.choice !== undefined || flags.target !== undefined) &&
+    !(flags.result && RESUME_RESULTS.has(flags.result))
+  ) {
+    emit(errorDirective(
+      "--choice and --target go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
+    ));
+    return;
+  }
+
   // Branch -1 — the --single stage-runner completion. A stage-runner reports
   // its lone stage via `report --single --stage <slug> --result <outcome>`; the
   // engine closes the synthetic attempt opened by `next --single` (audit only)
@@ -12274,13 +12286,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   // A resume ask has no stage and commits no lifecycle outcome. Accept the
   // natural verdict used by conductors, then return to next without mutation.
-  const resumeRequest = flags.choice !== undefined || flags.target !== undefined;
-  if (resumeRequest && !(flags.result && RESUME_RESULTS.has(flags.result))) {
-    emit(errorDirective(
-      "--choice and --target go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
-    ));
-    return;
-  }
   if (flags.result && RESUME_RESULTS.has(flags.result)) {
     handleResumeReport(flags, projectDir);
     return;

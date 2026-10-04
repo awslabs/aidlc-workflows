@@ -59,7 +59,8 @@ Redo, a jump, or a fresh start happens only when the person asks for one. Read
 which one they mean from their words and report it with
 `{{INVOKE}} engine orchestrate report --result resumed --choice <redo|jump|fresh>`,
 adding `--target <stage slug>` for the stage they named, then follow the print
-it returns.
+it returns. At an approval gate such a request is not the gate's answer: report
+it this way, never as Request Changes.
 
 **Build-and-Test failure loop-back, logged-but-not-jumped detection**: if
 `<record>/construction/build-and-test/test-results.md` contains a

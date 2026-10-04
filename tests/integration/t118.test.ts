@@ -459,9 +459,53 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]));
     expect(misplaced.kind).toBe("error");
     expect(misplaced.message).toContain("go only with --result resumed");
+    // Nor does a single-stage completion or a stance report run with them dropped.
+    for (const extra of [
+      ["--single", "--stage", "requirements-analysis", "--result", "completed", "--choice", "redo"],
+      ["--skeleton-stance", "on", "--choice", "jump", "--target", "requirements-analysis"],
+    ]) {
+      const dropped = directive(run(ORCHESTRATE, ["report", ...extra, "--project-dir", p]));
+      expect(dropped.kind, extra.join(" ")).toBe("error");
+      expect(dropped.message, extra.join(" ")).toContain("go only with --result resumed");
+    }
 
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
+
+  test("SP4f: a redo, jump, or fresh request at an open gate is that request, never a rejection", () => {
+    const p = projWithState("state-mid-ideation.md");
+    run(ORCHESTRATE, [
+      "report", "--stage", "feasibility", "--result", "awaiting-approval", "--project-dir", p,
+    ]);
+    const atGate = readFileSync(statePath(p), "utf-8");
+    expect(atGate).toContain("- [?] feasibility");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+
+    const jump = report("--choice", "jump", "--target", "requirements-analysis");
+    expect(jump.kind).toBe("print");
+    expect(jump.message).toContain("Run `next --stage requirements-analysis`");
+    const fresh = report("--choice", "fresh");
+    expect(fresh.kind).toBe("print");
+    expect(fresh.message).toContain("next --new-intent");
+    const redo = report("--choice", "redo");
+    expect(redo.kind).toBe("print");
+    const command = /(execute --target feasibility --direction redo --scope [^`\s]+)`/
+      .exec(redo.message)?.[1];
+    expect(command, redo.message).toBeDefined();
+    // The answers change nothing by themselves, and none is a gate answer.
+    expect(readFileSync(statePath(p), "utf-8")).toBe(atGate);
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+
+    // The redo it names starts the stage over from the open gate, with no rejection.
+    const reset = run(JUMP, [...(command as string).split(" "), "--project-dir", p]);
+    expect(reset.status, reset.out).toBe(0);
+    const after = readFileSync(statePath(p), "utf-8");
+    expect(after).toContain("- [-] feasibility");
+    expect(after).not.toContain("- [?] feasibility");
+    expect(eventCount(p, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(p, "STAGE_REVISING")).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================
   // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean

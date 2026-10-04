@@ -1393,4 +1393,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(recovery).toContain("at an approval gate too");
     expect(recovery).not.toContain("Offer to resume from the last incomplete stage");
   });
+
+  test("at an approval gate a redo, jump, or fresh request is that request, not the gate's answer", () => {
+    // The SAY line invites these requests at a gate too, so every place that
+    // reads a gate reply gives them precedence over Request Changes.
+    const gateToo = "start fresh (at an approval gate too, where it is that request and not the gate's answer), call `report --result resumed";
+    const missing = skills.filter((rel) => !readFileSync(join(REPO_ROOT, rel), "utf-8").includes(gateToo));
+    expect(missing).toEqual([]);
+    const protocol = (name: string) =>
+      readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols", name), "utf-8").replace(/\s+/g, " ");
+    expect(protocol("stage-protocol-recovery.md")).toContain(
+      "At an approval gate such a request is not the gate's answer: report it this way, never as Request Changes.",
+    );
+    expect(protocol("stage-protocol.md")).toContain(
+      "A reply that asks to redo the whole stage, jump to a stage, or start fresh is not a gate answer",
+    );
+    expect(
+      readFileSync(join(REPO_ROOT, "core/hooks/aidlc-session-start.ts"), "utf-8"),
+    ).toContain("(at an approval gate too, where it is that request and not the gate's answer)");
+  });
 });
