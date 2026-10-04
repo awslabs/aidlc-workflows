@@ -472,6 +472,12 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       }
       const skill = readFileSync(join(REPO_ROOT, "dist", harness, ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
       expect(skill).toContain("Run every AI-DLC command exactly as printed, as a command of its own");
+      // Both install channels tell the person which project writes need no click.
+      for (const tree of ["dist", "dist-release"]) {
+        const onboarding = readFileSync(join(REPO_ROOT, tree, harness, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
+        expect(onboarding, tree).toContain("- **Project writes**: apart from those commands");
+        expect(onboarding, tree).toContain("`.kiro/sensors/`");
+      }
     });
 
     test(`${harness}: the developer and the conductor write project files, not dot entries or outside paths`, () => {
