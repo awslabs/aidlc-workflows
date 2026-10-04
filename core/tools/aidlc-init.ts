@@ -3711,6 +3711,29 @@ function scanUnownedHooks(
   return { redirected: false, unreadable: false, entries };
 }
 
+// The release a native refresh would use is the project's pin, else the active
+// one. When that is not the release the row was installed from, the steps pin
+// the installed release for the refresh. A copied projection refreshes from
+// the release its own files name, so it needs no step.
+function switchRefreshPin(
+  installedFrom: string | undefined,
+  native: boolean,
+  active: string | undefined,
+  projectPin: string | undefined,
+): string | undefined {
+  if (!installedFrom || !native) return undefined;
+  return (projectPin ?? active) === installedFrom ? undefined : installedFrom;
+}
+
+export function _switchRefreshPinForTests(
+  installedFrom: string | undefined,
+  native: boolean,
+  active: string | undefined,
+  projectPin: string | undefined,
+): string | undefined {
+  return switchRefreshPin(installedFrom, native, active, projectPin);
+}
+
 // The steps that record a usable baseline, as one line: move a damaged file
 // aside, pin the release the row was installed from when the active one
 // differs, refresh the row, then put the project's own pin back. With nothing before it the line is the
@@ -3827,17 +3850,15 @@ function assertSwitchBaseline(projectDir: string, occupant: ProjectHarness, requ
   const projectPin = regularFile(join(projectDir, ".aidlc-version"))
     ? readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim()
     : undefined;
-  const pinFirst = installedFrom && aidlcInvocation() === "aidlc" && activeVersion() !== installedFrom &&
-      projectPin !== installedFrom
-    ? installedFrom
-    : undefined;
+  const validPin = projectPin && VERSION_ID.test(projectPin) ? projectPin : undefined;
+  const pinFirst = switchRefreshPin(installedFrom, aidlcInvocation() === "aidlc", activeVersion() ?? undefined, validPin);
   const remedy = (moveAside?: string): SwitchRemedy => ({
     kind: "refresh",
     harness: occupant.distribution,
     // The pin is only for the refresh: the steps put the project's own pin
     // back (or remove it) afterwards.
     ...(pinFirst
-      ? { pin: pinFirst, restorePin: projectPin && VERSION_ID.test(projectPin) ? projectPin : null }
+      ? { pin: pinFirst, restorePin: validPin ?? null }
       : {}),
     ...(moveAside ? { moveAside } : {}),
   });

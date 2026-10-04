@@ -39,7 +39,11 @@ import {
   readTarGz,
   type ArchiveEntry,
 } from "../../core/tools/aidlc-archive.ts";
-import { _installedSourcesForTests, _switchRefreshStepsForTests } from "../../core/tools/aidlc-init.ts";
+import {
+  _installedSourcesForTests,
+  _switchRefreshPinForTests,
+  _switchRefreshStepsForTests,
+} from "../../core/tools/aidlc-init.ts";
 import { compiledExecutable, quoteCommandArgument } from "../../core/tools/aidlc-runtime-paths.ts";
 import {
   insertJsoncSetting,
@@ -1470,6 +1474,17 @@ describe("t243 project initialization", () => {
       expect(refused.stdout + refused.stderr).not.toContain("touch pwned");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a baseline refusal pins the installed release when the release a native refresh would use differs", () => {
+    // Natively the project's pin, else the active release, is what a refresh uses.
+    expect(_switchRefreshPinForTests("2.9.0", true, "2.10.0", undefined)).toBe("2.9.0");
+    expect(_switchRefreshPinForTests("2.9.0", true, "2.9.0", "2.10.0")).toBe("2.9.0");
+    expect(_switchRefreshPinForTests("2.9.0", true, "2.10.0", "2.9.0")).toBeUndefined();
+    expect(_switchRefreshPinForTests("2.9.0", true, "2.9.0", undefined)).toBeUndefined();
+    // A copied projection refreshes from its own release; no recorded version, no step.
+    expect(_switchRefreshPinForTests("2.9.0", false, "2.10.0", undefined)).toBeUndefined();
+    expect(_switchRefreshPinForTests(undefined, true, "2.10.0", undefined)).toBeUndefined();
+  });
 
   test("a baseline refusal's pin step is quoted as a command argument", () => {
     const steps = _switchRefreshStepsForTests(temp("aidlc-t243-kiro-switch-steps-quoted-"), {
