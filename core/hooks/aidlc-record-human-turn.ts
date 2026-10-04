@@ -95,6 +95,7 @@ import {
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply } from "../tools/aidlc-plan-approval-ask.ts";
+import { isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
@@ -387,7 +388,7 @@ try {
       // question about a switch ("skip plan approval?") is for the agent.
       const switchQuestion = typedPrompt.length > 0 && isTypedGuardSwitchQuestion(typedPrompt);
       const notAReply = typedPrompt.length > 0 && (
-        typedPrompt.trim().startsWith("/") ||
+        isAidlcCommandPrompt(typedPrompt) ||
         isTypedGuardSwitchPrompt(typedPrompt) ||
         switchQuestion ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())

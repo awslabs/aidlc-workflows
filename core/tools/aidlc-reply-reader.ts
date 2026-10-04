@@ -81,5 +81,19 @@ export function exactOptionPick(text: string | undefined | null, labels: readonl
 // --- The questions the engine asks -------------------------------------------
 
 export const APPROVAL_GATE_CHOICES = ["Approve", "Request Changes"] as const;
+
+// A picker offers only these choices ("(Recommended)" stripped, any case): its
+// reply is then the person's pick of one of them, or words they typed in.
+export function pickerOffersOnly(options: readonly string[], choices: readonly string[]): boolean {
+  const own = choices.map((choice) => choice.toLowerCase());
+  return options.length > 0 && options.every((option) => own.includes(stripRecommendedDecorator(option).trim().toLowerCase()));
+}
+
+// A prompt that is a command to AIDLC: its slash or Codex entry
+// (`/aidlc ...`, `/aidlc-<runner> ...`, `$aidlc ...`). Other text that starts
+// with a slash ("/api/users returns 500") is the person's own words.
+export function isAidlcCommandPrompt(prompt: string): boolean {
+  return /^[/$]aidlc(?:[-\s]|$)/i.test(prompt.trim());
+}
 export const ACCEPT_AS_IS_CHOICE = "Accept as-is";
 export const SUMMARY_CONFIRMATION_CHOICES = ["Looks correct", "Request changes"] as const;

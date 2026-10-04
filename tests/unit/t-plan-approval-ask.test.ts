@@ -526,6 +526,10 @@ describe("the engine asks for Plan Approval", () => {
     };
     pick("Ready to build?", ["Yes", "No"], "Yes");
     pick("Which of these?", ["Approve Plan", "Request Changes"], "Approve Plan, Request Changes", true);
+    // A picker sharing a label with the question, or adding one of its own, is
+    // some other question, whichever option the person picked there.
+    pick("Rename the module first?", ["Request Changes", "Something else"], "Something else");
+    pick("Shall I build this plan?", ["Approve Plan", "Show me the plan first"], "Approve Plan");
     expect(answer(proj, "Approve Plan").message).toContain("has not replied to the plan question");
     pick("Shall I build this plan for slugify?", ["Approve Plan (Recommended)", "Request Changes", "I'll edit the files"],
       "Approve Plan (Recommended)");
@@ -713,6 +717,16 @@ describe("the engine asks for Plan Approval", () => {
   // was taken as Request Changes, and the approval that followed was lost.
   const BEFORE_DECIDING = "before I decide, run the AI-DLC doctor and the version check and show me what they say";
   const APPROVE_AND_STOP = "approve the plan, but let's stop there for today";
+
+  // A reply that starts with a path is the person's own words, not a command.
+  test("a reply that starts with a slash path is a reply: the agent's Approve Plan records it", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/src/slugify.ts looks right, approve the plan");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(auditText(proj)).toContain("**Person Reply**: /src/slugify.ts looks right, approve the plan");
+  });
 
   test("a request to run checks before deciding records only the turn and the words; the question stays open", () => {
     const proj = project();

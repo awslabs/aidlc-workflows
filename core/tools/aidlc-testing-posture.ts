@@ -129,7 +129,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer } from "./aidlc-reply-reader.ts";
+import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, pickerOffersOnly } from "./aidlc-reply-reader.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -3100,21 +3100,20 @@ export function recordPlanApprovalHumanResponse(
   });
 }
 
-// A picker reply answers the protected question when it is a single pick and
-// the picker asked it: its recorded text, or, however the conductor worded it,
-// a picker offering only its choices ("(Recommended)" stripped) with one of
-// them picked. Several picks are no one choice, whatever the question; a picker
-// offering anything else, or a pick outside its choices, answers some other
-// question.
+// A picker reply answers the protected question when it is a single pick from
+// a picker offering only its choices ("(Recommended)" stripped), and the picker
+// asked it: its recorded text, or, however the conductor worded it, a pick of
+// one of those choices. Several picks are no one choice, whatever the question;
+// a picker offering any other option, even under the recorded text, answers
+// some other question.
 function pickerAsksProtectedQuestion(
   question: ProtectedQuestion, questionText: string, picker: PlanApprovalPickerQuestion | undefined, picked: string,
 ): boolean {
   if (picker?.severalPicks) return false;
+  if (picker?.options?.length && !pickerOffersOnly(picker.options, APPROVAL_GATE_CHOICES)) return false;
   if (createHash("sha256").update(questionText, "utf-8").digest("hex") === question.promptDigest) return true;
   if (!picker?.options?.length) return false;
-  const own = APPROVAL_GATE_CHOICES.map((choice) => choice.toLowerCase());
-  const label = (text: string) => stripRecommendedDecorator(text).trim().toLowerCase();
-  return picker.options.every((option) => own.includes(label(option))) && own.includes(label(picked));
+  return pickerOffersOnly([picked], APPROVAL_GATE_CHOICES);
 }
 
 // The person's reply to a construction policy, verification command, or
