@@ -417,6 +417,10 @@ re-checked.`).
 > **SAY:** "I restored the previous attempt at [returned restored path]."
 > Restoration does not resume the old attempt or make its review current.
 
+### Files and commands
+
+Read, list, search, create, and edit files with your file tools, never through the shell (no `cat`, `ls`, `Get-ChildItem`, `find`, `grep`, `rg`, `sed`, `echo`, `python3`, heredoc, or `mkdir`; the file-write tool creates any missing folder), and run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): a shell line can stop and ask the person to approve it. The review file's folder already exists: the review request creates it.
+
 ### What the reviewer does NOT do
 
 - Does not modify the artifact, or any other declared output, at all: its only write is the review file the request named

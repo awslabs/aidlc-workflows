@@ -343,6 +343,8 @@ import {
   legacyParkedRefPrefix,
   parkedRefPrefix,
   normalizeDriveLetter,
+  recordDir,
+  removeRecordFileNoFollow,
   toPosix,
   UTILITY_COMMANDS,
 } from "./aidlc-lib.ts";
@@ -9819,7 +9821,18 @@ function handleCodekbPublish(
 //
 // Always exits 0 with the verdict in the output (read-only query - mirrors
 // codekb-path; refusals are for lifecycle verbs). No mkdir, no state write,
-// no audit.
+// no audit. The one write: a compared `scope-draft-<repo>.md` in the active
+// record's `inception/reverse-engineering/` is the stage's temporary input,
+// written only for this compare, so the compare removes it (no shell delete).
+function comparedScopeDraft(projectDir: string, incomingPath: string): string | null {
+  const name = basename(incomingPath);
+  if (!/^scope-draft-[^/\\]+\.md$/.test(name)) return null;
+  const record = recordDir(projectDir);
+  if (record === null || !existsSync(record)) return null;
+  const rel = toPosix(relative(realpathSync(record), realpathSync(resolve(incomingPath))));
+  return rel === `inception/reverse-engineering/${name}` ? rel : null;
+}
+
 function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const selection = resolveWorkflowSelection(projectDir);
@@ -9923,11 +9936,16 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     if (!incomingPath || !existsSync(incomingPath)) {
       die(`codekb-scope-diff --compare: file not found: ${incomingPath || "(missing path)"}`);
     }
-    const incomingParsed = parseReScope(readFileSync(incomingPath, "utf-8"));
+    const incomingText = readFileSync(incomingPath, "utf-8");
+    const draft = comparedScopeDraft(projectDir, incomingPath);
+    if (draft !== null) removeRecordFileNoFollow(recordDir(projectDir) as string, draft);
+    const removed = draft === null ? {} : { draft_removed: true };
+    const removedLine = draft === null ? "" : "\nThe scope draft has been removed.";
+    const incomingParsed = parseReScope(incomingText);
     if (!incomingParsed.ok) {
       emit(
-        { verdict: "UNKNOWN_SCOPE", reason: incomingParsed.reason, detail: `incoming: ${incomingParsed.detail}` },
-        `UNKNOWN_SCOPE (incoming ${incomingParsed.reason}): ${incomingParsed.detail}.`,
+        { verdict: "UNKNOWN_SCOPE", reason: incomingParsed.reason, detail: `incoming: ${incomingParsed.detail}`, ...removed },
+        `UNKNOWN_SCOPE (incoming ${incomingParsed.reason}): ${incomingParsed.detail}.${removedLine}`,
       );
       return;
     }
@@ -9950,6 +9968,7 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
       incoming_intent: incoming.intent,
       discarded_paths: discardedPaths,
       discarded_components: discardedComponents,
+      ...removed,
     };
     if (narrower) {
       emit(
@@ -9959,10 +9978,11 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
           (discardedComponents.length > 0
             ? `\n  components: ${discardedComponents.join(", ")}`
             : "") +
-          `\n(store intent: ${store.intent || "unrecorded"}; incoming intent: ${incoming.intent || "unrecorded"})`,
+          `\n(store intent: ${store.intent || "unrecorded"}; incoming intent: ${incoming.intent || "unrecorded"})` +
+          removedLine,
       );
     } else {
-      emit(payload, `COVERS: the incoming scan covers everything the store analyzed.`);
+      emit(payload, `COVERS: the incoming scan covers everything the store analyzed.${removedLine}`);
     }
     return;
   }

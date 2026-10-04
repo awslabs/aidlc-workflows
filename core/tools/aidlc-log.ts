@@ -7,8 +7,8 @@
 // because they fire per-question / per-review, not per state transition.
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   assertNoSymlinkInChainOrThrow,
@@ -2630,6 +2630,11 @@ function handleReview(args: string[]): void {
       // outside the intent record.
       try {
         removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        // The slot's folder exists before the reviewer runs, so the review is
+        // one plain file write with no folder to make first.
+        const draftTarget = recordFileTargetOrThrow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        mkdirSync(dirname(draftTarget), { recursive: true });
+        recordFileTargetOrThrow(recordDir(pd) as string, slot.draftRelativeToRecord);
       } catch (e) {
         refuseReview(
           `Cannot start review for "${flags.stage}": the review slot ` +

@@ -30,13 +30,15 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seededRecordDir,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 import {
   aidlcRootIntegrations,
@@ -489,6 +491,30 @@ describe("t248 codekb-scope-diff verb — status mode", () => {
 });
 
 describe("t248 codekb-scope-diff verb — compare mode", () => {
+  test("a compared scope draft in the active record is removed; any other file is only read", () => {
+    const proj = freshProject();
+    seedStore(proj, timestampBody({ fingerprint: "abc" }));
+    // A live record, as during Reverse Engineering: its state file selects it.
+    writeFileSync(seededStateFile(proj), "# AI-DLC State\n\n**Current Stage**: reverse-engineering\n");
+    const reDir = join(seededRecordDir(proj), "inception", "reverse-engineering");
+    mkdirSync(reDir, { recursive: true });
+    const draft = join(reDir, `scope-draft-${basename(proj)}.md`);
+    writeFileSync(draft, timestampBody({ fingerprint: "abc" }));
+    const res = runVerb(proj, "--compare", draft, "--json");
+    expect(res.status, res.stderr).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.verdict).toBe("COVERS");
+    expect(parsed.draft_removed).toBe(true);
+    expect(existsSync(draft)).toBe(false);
+    // A file anywhere else, even one named like a draft, stays.
+    const elsewhere = join(proj, `scope-draft-${basename(proj)}.md`);
+    writeFileSync(elsewhere, timestampBody({ fingerprint: "abc" }));
+    const kept = runVerb(proj, "--compare", elsewhere);
+    expect(kept.stdout).toContain("COVERS");
+    expect(kept.stdout).not.toContain("removed");
+    expect(existsSync(elsewhere)).toBe(true);
+  });
+
   test("disjoint incoming scope → NARROWER with the exact discard list", () => {
     const proj = freshProject();
     seedStore(proj, timestampBody({ fingerprint: "abc" }));

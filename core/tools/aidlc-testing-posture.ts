@@ -1439,6 +1439,7 @@ export function workerBrief(
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
+    `\n## Files and commands\n\n${FILE_TOOLS_RULE}\n` +
     (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
     `${projectedPlan}\n` +
     (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +
@@ -1980,12 +1981,26 @@ export function codeGenerationIssuance(
 }
 
 /**
- * How every command a Code Generation refusal names is to be run: as printed
- * and alone. A `cd`, a pipe, or a second command around an admitted command
- * makes the whole line a shell the plan-approval guard cannot read.
+ * How every command AI-DLC names is to be run: as printed and alone. A `cd`, a
+ * pipe, or a second command around an admitted command makes the whole line a
+ * shell the plan-approval guard cannot read.
  */
 export const AS_ITS_OWN_COMMAND =
   "exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it)";
+
+/**
+ * How every AI-DLC agent does file work and runs AI-DLC's commands. The one
+ * owner of the wording: the worker brief renders it, and the conductor
+ * persona, the subagent dispatch protocol, and the reviewer protocol carry it
+ * verbatim (t-agent-conduct). Inside the project the file tools run without a
+ * prompt on every harness; a shell line that reads, lists, or writes files can
+ * stop and ask the person.
+ */
+export const FILE_TOOLS_RULE =
+  "Read, list, search, create, and edit files with your file tools, never through the shell " +
+  "(no `cat`, `ls`, `Get-ChildItem`, `find`, `grep`, `rg`, `sed`, `echo`, `python3`, heredoc, or `mkdir`; " +
+  "the file-write tool creates any missing folder), and run every AI-DLC command " +
+  `${AS_ITS_OWN_COMMAND}: a shell line can stop and ask the person to approve it.`;
 
 // A rules part's receipt as the engine mints it: 8 base64url characters
 // (`steeringReceipt` in aidlc-orchestrate.ts).

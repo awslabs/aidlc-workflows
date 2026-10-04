@@ -2324,7 +2324,11 @@ new knowledge into it cumulatively, so the stage checks first:
   needs no store, so a first scan can check its candidate before publishing.
 
 Add `--json` for the structured shape. Always exits 0 with the verdict in the
-output (except usage errors); writes nothing, no audit event. The fingerprint
+output (except usage errors); writes nothing and records no audit event, with
+one exception: when the compared file is the stage's own
+`scope-draft-<repo>.md` in the active intent record's
+`inception/reverse-engineering/`, the compare removes it and says so ("The
+scope draft has been removed.", or `"draft_removed": true` with `--json`). The fingerprint
 is a `git write-tree` over a temporary index restricted to the analyzed paths.
 When the workspace root is the repository root it leaves out AI-DLC's own
 files, which the scan never reads: the `aidlc/` workspace, the harness

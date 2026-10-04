@@ -54,6 +54,10 @@ stage that does not apply reports
   completing it. Surface ambiguity early rather than carrying an unresolved
   contradiction forward.
 
+## Files and commands
+
+Read, list, search, create, and edit files with your file tools, never through the shell (no `cat`, `ls`, `Get-ChildItem`, `find`, `grep`, `rg`, `sed`, `echo`, `python3`, heredoc, or `mkdir`; the file-write tool creates any missing folder), and run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): a shell line can stop and ask the person to approve it.
+
 ## Keeping the diary (memory.md)
 
 Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
@@ -63,9 +67,10 @@ directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diar
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
    directive. NEVER probe for `memory.md`, or any other maybe-absent file, with a
    read tool: reading an absent path is a failed tool call. In the rare case an
-   append finds the diary missing, bootstrap it with exactly one idempotent POSIX
-   command: `mkdir -p "$(dirname "<memory_path>")" && { [ -f "<memory_path>" ] || cp "{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md" "<memory_path>"; }`.
-   Never overwrite; re-entry or resume must keep accumulated entries.
+   append finds the diary missing, create it with your file-write tool, writing
+   the text of `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` to
+   `<memory_path>` (the write tool creates the folder). Never overwrite an
+   existing diary; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
    question. This is your diary-keeping (see `stage-protocol-learnings.md` §13); the four

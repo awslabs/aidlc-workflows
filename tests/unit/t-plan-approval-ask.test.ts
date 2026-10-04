@@ -82,6 +82,7 @@ import {
   writeSessionPidEntry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { FILE_TOOLS_RULE } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
 
@@ -750,6 +751,9 @@ describe("when the stage rules arrive in parts", () => {
       const brief = posture(proj, "brief", unit);
       expect(brief.status, brief.stderr).toBe(0);
       expect(brief.stdout).toContain("## Approved plan");
+      // The worker is told to do file work with its file tools, before the approved content.
+      expect(brief.stdout).toContain(`## Files and commands\n\n${FILE_TOOLS_RULE}\n`);
+      expect(brief.stdout.indexOf("## Files and commands")).toBeLessThan(brief.stdout.indexOf("## Approved plan"));
       expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
     });
   }
