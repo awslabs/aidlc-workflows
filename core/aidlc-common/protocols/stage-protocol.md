@@ -784,7 +784,7 @@ unit owes it; otherwise it completes through its normal approval, which names
 the skipped units. A unit whose files for the stage are already written cannot
 be skipped.
 
-**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`; a one-unit skip (`UNIT_SKIPPED`) is the state tool's, reached through `aidlc-orchestrate.ts report --result skipped --unit` or the forward jump's `aidlc-jump.ts execute --units` the engine prints. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact` (and `aidlc-jump.ts reopen --via redo` for a Redo the person chose on the resume menu); approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch for events without a specific owning path; it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, and the Bolt, fork and worktree lifecycle rows `BOLT_*`, `AUDIT_FORKED`/`AUDIT_MERGED`, `STATE_FORKED`/`STATE_MERGED`, `WORKTREE_*`) and the commit-provenance anchor `SOURCE_COMMITTED`; those are emitted only by their owning tool or hook through the library path.
+**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`; a one-unit skip (`UNIT_SKIPPED`) is the state tool's, reached through `aidlc-orchestrate.ts report --result skipped --unit` or the forward jump's `aidlc-jump.ts execute --units` the engine prints. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact` (and `aidlc-jump.ts reopen --via redo` for a Redo the person asked for on re-entry); approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch for events without a specific owning path; it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, and the Bolt, fork and worktree lifecycle rows `BOLT_*`, `AUDIT_FORKED`/`AUDIT_MERGED`, `STATE_FORKED`/`STATE_MERGED`, `WORKTREE_*`) and the commit-provenance anchor `SOURCE_COMMITTED`; those are emitted only by their owning tool or hook through the library path.
 
 **Stage graph lookups** (no state file needed):
 ```bash
@@ -1123,7 +1123,7 @@ Loaded as the `learnings` protocol module when the directive lists it. When the 
 
 ### Artifact Re-use (backward jump / redo)
 
-When the directive carries `artifact_reuse` (the person chose Redo on the resume menu for this Unit's step, and the engine recorded that answer), do not ask: redo the stage from scratch for `directive.unit`, ignoring its existing artifacts, and do not record the choice again. It covers that Unit and step only; any other step or Unit, and any later jump, asks as below.
+When the directive carries `artifact_reuse` (the person asked to redo this Unit's step on re-entry, and the engine recorded that answer), do not ask: redo the stage from scratch for `directive.unit`, ignoring its existing artifacts, and do not record the choice again. It covers that Unit and step only; any other step or Unit, and any later jump, asks as below.
 
 When a stage detects existing output artifacts in its artifact directory:
 
@@ -1145,8 +1145,8 @@ When a stage detects existing output artifacts in its artifact directory:
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
 fields, optional `Repo`, and isolated `Workflow` when `--single` is used —
 never hand-write `**Event**:` markdown blocks. (`aidlc-jump.ts reopen --via redo`
-also emits it, with `Unit` and `Source`, when the person chose Redo on the
-resume menu; that is the `artifact_reuse` answer above.)
+also emits it, with `Unit` and `Source`, when the person asked to redo the step
+on re-entry; that is the `artifact_reuse` answer above.)
 For a reviewer-backed stage, Keep and Modify retain the engine-owned findings
 list and every human decision. Redo from scratch starts a fresh list for that
 stage scope, resets numbering to `R-01`, and inherits no earlier decision.

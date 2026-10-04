@@ -294,7 +294,7 @@ export interface RunStageDirective {
     errors: string[];
   };
   // The person's answer to the artifact re-use question for this Unit's step,
-  // recorded by the engine when they chose Redo on the resume menu: the
+  // recorded by the engine when they asked to redo it on re-entry: the
   // conductor redoes the step without asking it again (#1411).
   artifact_reuse?: {
     decision: "redo";

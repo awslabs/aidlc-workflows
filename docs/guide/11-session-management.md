@@ -69,7 +69,7 @@ Bare `/aidlc` resumes from the last checkpoint. Ask for one of the others in you
 |--------|-------------|-------------------|-------------|
 | **Resume from last checkpoint** | Continue from the in-progress or next pending stage. Task sidebar is rebuilt from the state file when the session has task tools. | All artifacts, state, audit trail | In-memory conversation context from the prior session |
 | **Redo current stage** | Reset the current stage's checkbox (via `aidlc-jump.ts execute --direction redo`) and re-execute it from scratch. When Construction runs one Unit at a time and a Unit has finished work, Redo instead redoes only the active Unit's step from the start, also when that Unit is paused or waiting for its summary confirmation or checkpoint approval. For Code Generation that includes the plan, so the new plan comes back to you for approval (unless plan approval is off). | All other artifacts and state (and, one Unit at a time, the other Units' finished work) | Current stage's completion status and partial work (one Unit at a time: that Unit's step) |
-| **Jump to stage** | Skip to a specific stage (via `next --stage <slug>`). Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
+| **Jump to stage** | Skip to a specific stage (via `next --stage <slug>`). After a forward jump, AI-DLC tells you in one line which stages it skipped and how to go back. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
 | **Start fresh** | Start a new intent alongside the existing one (via `next --new-intent`, after confirming scope and description). | The existing workflow's artifacts, state, and audit trail (it stays in place) | Nothing - the prior intent remains resumable |
 
 `/aidlc --resume --stage <slug>` treats the explicit stage as the target and takes the normal jump path.
@@ -120,9 +120,9 @@ Claude Code automatically summarizes earlier conversation context when the conte
 
 ### How to recover after compaction
 
-1. Run `/aidlc` — AI-DLC reads the state file and offers resume options
-2. If the recovery breadcrumb warns about a mismatch, choose **Redo current stage** to re-execute the stage that was in progress during compaction. When Construction runs one Unit at a time, the resume context names the step the active Unit is on (for example `Current Step: code-generation for unit beta`), and Redo redoes only that Unit's step; the other Units' finished work stays approved
-3. If no warning appears, choose **Resume from last checkpoint** to continue normally
+1. Run `/aidlc`. AI-DLC reads the state file and carries on where the work stopped
+2. If the recovery breadcrumb warns about a mismatch, ask to redo the current stage to re-execute the stage that was in progress during compaction. When Construction runs one Unit at a time, the resume context names the step the active Unit is on (for example `Current Step: code-generation for unit beta`), and Redo redoes only that Unit's step; the other Units' finished work stays approved
+3. If no warning appears, there is nothing else to do: the work continues normally
 
 Compaction is a normal part of long sessions. The state file and artifacts on disk ensure no completed work is lost.
 
@@ -169,11 +169,7 @@ You can jump forward or backward in the workflow using utility commands.
 /aidlc --stage 3.5
 ```
 
-When jumping forward, stages between the current position and the target are marked `[S]` (skipped). The orchestrator warns you about:
-
-- Stages that will be skipped
-- Artifacts that downstream stages may expect but will not find
-- Potential impact on traceability
+When jumping forward, stages between the current position and the target are marked `[S]` (skipped), and AI-DLC tells you in one line which stages it skipped and how to go back, for example "Moved to Code Generation; skipped User Stories. To go back, type `/aidlc --stage requirements-analysis`." Later stages may expect files that the skipped stages would have written.
 
 When Construction runs one Unit at a time (unit-major, the default for new work), a jump goes through when you ask for it. Jumping to the step the active Unit is on simply continues it. Jumping back to a step the active Unit already finished, for example `/aidlc --stage nfr-design` while unit beta is on Code Generation, reopens it and the steps after it for that Unit only (each reopened step that finds its earlier files offers Keep, Modify, or Redo), and the assistant says so in one line: "Reopened NFR Design for unit beta. alpha keeps its finished work. Say 'for every unit' to redo it for alpha too." Saying "for every unit", or naming a Unit, reopens it for those Units instead, also after the stage approvals have moved on to a later per-unit step. Naming another Unit while beta is in the middle of a step pauses beta's step first, and the assistant says: "Paused unit beta at Code Generation and reopened NFR Design for unit alpha. Say 'back to beta' to pick beta up again." Nothing is lost: alpha redoes its steps, then beta picks up where it stopped, or earlier when you say 'back to beta'. Naming a Unit where that cannot apply (a step that is not done per Unit, or, with Construction checkpoints off, a step already approved for every Unit) is said plainly and nothing changes; saying "for every unit" then reopens it for every Unit. Once a Unit has finished work, jumping ahead to a later step, for example `/aidlc --stage code-generation` while unit beta is on NFR Requirements ("stop the design, build it"), moves only beta on: beta's steps up to Code Generation are skipped for beta (their files stay), every other Unit keeps its finished work and approvals, and a Unit that has not started does its own steps when it gets there. `/aidlc --stage <skipped step> --unit beta` reopens what was skipped for beta. Before any Unit has finished work, a jump ahead skips those steps for every Unit. Jumping further, for example `/aidlc --phase operation` to leave Construction early, skips the steps Units have not finished (their files stay). Either way the assistant tells you in one line what was skipped and that `/aidlc --stage <earliest skipped step>` reopens it.
 
@@ -186,7 +182,7 @@ When jumping backward, the target stage and every later stage in your plan are r
 /aidlc --phase 3
 ```
 
-This jumps to the first stage of the specified phase. The same warnings about skipped stages and artifact invalidation apply.
+This jumps to the first stage of the specified phase. As with a stage jump, AI-DLC tells you which stages it skipped and how to go back.
 
 ### Combining jumps with scope
 

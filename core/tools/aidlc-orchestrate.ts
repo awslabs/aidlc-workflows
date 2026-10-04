@@ -140,6 +140,7 @@ import {
   attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
+  REDO_REUSE_SOURCE,
   boltSlugForUnit,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
@@ -9738,7 +9739,7 @@ function unitNames(units: string[]): string {
 const OTHER_UNITS_KEPT =
   "The other units keep their finished work, reviews, Plan Approvals and checkpoint approvals.";
 
-// The Redo answer to the resume menu while a solo unit-major walk is on a
+// The person's Redo on re-entry while a solo unit-major walk is on a
 // Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
 // starts a new attempt for every Unit's finished steps, so once any Unit has
 // finished work Redo stays with the Unit the walk is on (#1411): it reopens
@@ -9795,7 +9796,7 @@ function unitMajorRedo(
     `for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
 }
 
-// Whether the person's Redo on the resume menu answered the re-use question for
+// Whether the person's Redo on re-entry answered the re-use question for
 // this Unit's step (`jump reopen --via redo` records it). The answer is spent
 // once the Unit starts the step, and a later reopen or jump asks again. Rows are
 // read in the audit's time order across shards, and an answer whose order
@@ -9805,7 +9806,7 @@ function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): 
     row.event === "ARTIFACT_REUSED" &&
     auditBlockField(row.block, "Stage") === slug && auditBlockField(row.block, "Unit") === unit &&
     auditBlockField(row.block, "Decision") === "redo" &&
-    auditBlockField(row.block, "Source") === "Redo on the resume menu";
+    auditBlockField(row.block, "Source") === REDO_REUSE_SOURCE;
   const spends = (row: AuditShardEvent): boolean => {
     if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") return true;
     if (auditBlockField(row.block, "Unit") !== unit) return false;

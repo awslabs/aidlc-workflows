@@ -1341,7 +1341,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/hooks/aidlc-session-start.ts",
       "core/tools/aidlc-runner-gen.ts",
       "core/tools/aidlc-orchestrate.ts",
+      "core/tools/aidlc-jump.ts",
+      "core/tools/aidlc-directive.ts",
       "core/aidlc-common/protocols/stage-protocol.md",
+      "core/knowledge/aidlc-shared/audit-format.md",
+      "README.md",
+      ...[...new Bun.Glob("docs/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
     ];
     const stale: string[] = [];
     for (const rel of surfaces) {
@@ -1354,6 +1359,11 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /on the resume menu/i,
         /answer to the resume menu/i,
         /resume menu is prompt-rendered/i,
+        /offers resume options/i,
+        /four-option menu/i,
+        /presents four options/i,
+        /skips this menu/i,
+        /Redo menu/,
       ]) {
         if (old.test(text)) stale.push(`${rel}  ${old.source}`);
       }

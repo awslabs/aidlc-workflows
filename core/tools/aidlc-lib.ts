@@ -31746,6 +31746,10 @@ function pipelineReceiptArtifactIsCurrent(
   }
 }
 
+// The Source of the ARTIFACT_REUSED row `jump reopen --via redo` writes: the
+// person asked to redo a Unit's step, which answers that step's re-use question.
+export const REDO_REUSE_SOURCE = "Redo on re-entry";
+
 function currentPipelineReuseEvidence(
   projectDir: string,
   stageSlug: string,

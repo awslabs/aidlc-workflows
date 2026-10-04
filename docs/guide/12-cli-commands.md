@@ -163,7 +163,7 @@ Start a new workflow with one of the enabled scopes. Core ships 11 named scopes;
 /aidlc express
 ```
 
-**Behavior:** The framework recognizes the scope keyword, asks what you want to build, then runs the Initialization phase and begins the first domain stage. If a state file already exists, it offers resume options instead. See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
+**Behavior:** The framework recognizes the scope keyword, asks what you want to build, then runs the Initialization phase and begins the first domain stage. If a workflow is already active, a scope keyword on its own carries on with that work, and one followed by a description asks whether the description is new work. See [Workflow Profiles](workflow-profiles.md) for a practical comparison of all 11 choices.
 
 **Example:**
 

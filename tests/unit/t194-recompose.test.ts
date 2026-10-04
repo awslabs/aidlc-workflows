@@ -480,6 +480,24 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect((JSON.parse(back.out) as { notice?: string }).notice).toBeUndefined();
   });
 
+  test("only a forward jump's instruction asks for its notice; a backward one is unchanged", () => {
+    const proj = createdProject("bugfix");
+    const message = (args: string[]): string => {
+      const out = run(proj, "aidlc-orchestrate.ts", ["next", ...args]).out;
+      return (JSON.parse(out.split("\n").find((line) => line.startsWith("{")) ?? "{}") as { message?: string }).message ?? "";
+    };
+    const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
+    const forward = message(["--stage", "code-generation"]);
+    expect(forward).toContain("--direction forward");
+    expect(forward).toContain("When its output carries `notice`, tell the person that line once, as written.");
+    run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]);
+    // The guard recovery recognizes this exact backward line, so it stays as it was.
+    const backward = message(["--stage", String(before)]);
+    expect(backward).toContain("--direction backward");
+    expect(backward).toMatch(/` to perform the jump, then re-run `next` to continue from the jump target\.$/);
+    expect(backward).not.toContain("notice");
+  });
+
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
     const proj = createdProject("bugfix");
     run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);

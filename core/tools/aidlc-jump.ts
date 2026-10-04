@@ -39,6 +39,7 @@ import {
   UNIT_NAME_REGEX,
   writeStateFile,
   entrySkillInvocation,
+  REDO_REUSE_SOURCE,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -196,7 +197,7 @@ function handleReopen(args: string[]): void {
   if (!targetSlug || units.length === 0) {
     error("Usage: reopen --target <slug> [--stages <slug[,slug...]>] --units <unit[,unit...]> [--via redo] [--scope <scope>]");
   }
-  // `--via redo`: the person chose Redo on the resume menu, not a jump.
+  // `--via redo`: the person asked to redo the step on re-entry, not a jump.
   if (flags.via !== undefined && flags.via !== "redo") error(`Unknown --via: ${flags.via} (only "redo")`);
   const targetStage = findStageBySlug(targetSlug);
   if (!targetStage || !isPerUnitStage(targetStage)) error(`Not a per-unit stage: ${targetSlug}`);
@@ -218,7 +219,7 @@ function handleReopen(args: string[]): void {
       "Gate Scope": "unit-end",
       Unit: unit,
       Feedback: flags.via === "redo"
-        ? `Redid ${stageName} for unit ${unit} at the person's request (Redo on the resume menu).`
+        ? `Redid ${stageName} for unit ${unit} at the person's request (redo on re-entry).`
         : `Reopened ${stageName} for unit ${unit} at the person's request (/aidlc --stage ${targetSlug}).`,
     });
     // Redo is the person's answer to the re-use question for this Unit's step
@@ -229,7 +230,7 @@ function handleReopen(args: string[]): void {
         Decision: "redo",
         Artifacts: `construction/${unit}/${targetSlug}/`,
         Unit: unit,
-        Source: "Redo on the resume menu",
+        Source: REDO_REUSE_SOURCE,
       });
     }
   }
