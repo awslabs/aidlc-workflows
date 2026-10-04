@@ -362,6 +362,16 @@ function auditBlocks(proj: string, event: string): string[] {
     .filter((block) => auditBlockField(block, "Event") === event);
 }
 
+// A request row as a release before per-request review files wrote it: the
+// same row without its Review File field.
+function asRecordedBeforeOwnReviewFiles(proj: string): void {
+  const dir = seededAuditDir(proj);
+  for (const name of readdirSync(dir).filter((file) => file.endsWith(".md"))) {
+    const path = join(dir, name);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/^\*\*Review File\*\*: .*\r?\n/gm, ""));
+  }
+}
+
 function reviewAppendix(
   reviewer: string,
   iteration: number,
@@ -1955,6 +1965,10 @@ describe("t271 review iteration ceiling", () => {
     const requested = runReview(proj, request);
     expect(requested.status, requested.stderr).toBe(0);
     const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    expect(auditBlockField(auditBlocks(proj, "REVIEW_REQUESTED")[0], "Review File")).toBe(
+      toPosix(relative(seededRecordDir(proj), join(proj, reviewFile))),
+    );
+    asRecordedBeforeOwnReviewFiles(proj);
     // The reviewer, dispatched by the earlier release, wrote the shared file.
     const shared = join(proj, dirname(reviewFile), "1.review.md");
     mkdirSync(dirname(shared), { recursive: true });
@@ -1977,11 +1991,35 @@ describe("t271 review iteration ceiling", () => {
     const retried = runReview(proj, [...request, "--retry-pending"]);
     expect(retried.status, retried.stderr).toBe(0);
     const { reviewFile } = JSON.parse(retried.stdout) as { reviewFile: string };
+    asRecordedBeforeOwnReviewFiles(proj);
     const shared = join(proj, dirname(reviewFile), "1.review.md");
     mkdirSync(dirname(shared), { recursive: true });
     writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
     const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
     expect(recorded.status, recorded.stderr).toBe(0);
+  });
+
+  test("a shared file left in the pass never completes a request that names its own review file", () => {
+    const proj = seedProject("bugfix");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    for (const extra of [[], ["--retry-pending"]]) {
+      const requested = runReview(proj, [...request, ...extra]);
+      expect(requested.status, requested.stderr).toBe(0);
+      const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+      const shared = join(proj, dirname(reviewFile), "1.review.md");
+      mkdirSync(dirname(shared), { recursive: true });
+      writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+      const refused = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+      expect(refused.status, extra.join(" ")).not.toBe(0);
+      expect(refused.stderr, extra.join(" ")).toContain("no review was written for iteration 1");
+      expect(refused.stderr).toContain(reviewFile);
+    }
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
   });
 
   test("a verdict after the outputs changed asks for the same pass again, never a restore", () => {

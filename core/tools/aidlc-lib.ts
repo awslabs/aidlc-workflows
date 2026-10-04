@@ -17053,8 +17053,9 @@ export interface ReviewAttemptAccounting {
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
-      // An earlier request at this pass was dispatched on other bytes.
-      replaced: boolean;
+      // The request row names its own review file (rows recorded before
+      // per-request review files do not).
+      ownReviewFile: boolean;
     }
   >;
   recoveryIteration: number | null;
@@ -17331,7 +17332,7 @@ export function reviewAttemptAccounting(
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
-      replaced: boolean;
+      ownReviewFile: boolean;
     }
   >();
   for (let i = floor + 1; i < events.length; i++) {
@@ -17387,7 +17388,7 @@ export function reviewAttemptAccounting(
           (previous?.retried === true ||
             (auditBlockField(entry.block, "Retry") === "pending-request" &&
               modernBinding)),
-        replaced: replacement || previous?.replaced === true,
+        ownReviewFile: auditBlockField(entry.block, "Review File") !== null,
       });
     } else {
       const pending = pendingRequests.get(iteration);

@@ -2637,6 +2637,9 @@ function handleReview(args: string[]): void {
         );
       }
       reviewFile = slot.draftRelative;
+      // The request names its own review file, so its verdict reads that file
+      // only; a request recorded without one predates per-request files.
+      fields["Review File"] = slot.draftRelativeToRecord;
     };
     try {
       withAuditLock(pd, () => {
@@ -3254,10 +3257,10 @@ function handleReview(args: string[]): void {
       // symlinked container or leaf, no hardlink, no oversize file. A slot
       // draft that is absent is an incomplete review; one that is anything but
       // a plain file is refused, never silently treated as missing. A request
-      // with an id is reviewed in its own file only; one never replaced may
-      // still find its review in the pass's shared file, where a release
-      // before per-request files had its reviewer write it.
-      const sharedSlot = requestBinding.requestId !== null && !pendingRequest.replaced
+      // that names its own review file is reviewed in that file only; one
+      // recorded before per-request files finds its review in the pass's
+      // shared file, where its reviewer was told to write it.
+      const sharedSlot = requestBinding.requestId !== null && !pendingRequest.ownReviewFile
         ? reviewSlot(attempt.floor, iteration, null)
         : null;
       let readFrom = slot;
