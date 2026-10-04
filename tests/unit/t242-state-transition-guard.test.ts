@@ -16,6 +16,7 @@ import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
   DELEGATE_ADMITTED_VERBS,
+  DELEGATE_ROLE_ADMITTED_VERBS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
   directStateTransition,
@@ -429,7 +430,7 @@ describe("t242 state-transition ownership guard", () => {
     for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
     expect(delegatedLifecycleCommand(nested)).not.toBeNull();
     expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
-    // What the kiro-ide personas are admitted is a real verb of its script and
+    // What the kiro-ide personas are admitted, all or one role, is a real verb of its script and
     // never one this guard refuses with arguments (select-plugins is admitted
     // as its bare query only). A script the dispatcher routes is checked
     // against the verbs it hands that script; the utility against its command
@@ -447,7 +448,13 @@ describe("t242 state-transition ownership guard", () => {
         routed.get(action.tool)?.add(action.args[0] ?? "");
       }
     }
-    for (const [file, verbs] of Object.entries(DELEGATE_ADMITTED_VERBS)) {
+    for (const agent of Object.keys(DELEGATE_ROLE_ADMITTED_VERBS)) {
+      expect(existsSync(join(REPO_ROOT, "core", "agents", `${agent}.md`)), agent).toBe(true);
+    }
+    for (const [file, verbs] of [
+      ...Object.entries(DELEGATE_ADMITTED_VERBS),
+      ...Object.values(DELEGATE_ROLE_ADMITTED_VERBS).flatMap((own) => Object.entries(own)),
+    ]) {
       const source = readFileSync(join(REPO_ROOT, "core", "tools", file), "utf-8");
       for (const verb of verbs) {
         if (file === "aidlc-utility.ts") expect([...UTILITY_COMMANDS] as string[], verb).toContain(verb);

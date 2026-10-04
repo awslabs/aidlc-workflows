@@ -63,7 +63,7 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
 // status or routing, record an authority-bearing receipt, or apply the
 // person's choice, and their verbs (state's are DELEGATED_STATE_MUTATIONS, the
 // utility's DELEGATED_UTILITY_VERBS). The kiro-ide row, whose calls carry no
-// agent identity, builds each persona's shell deny from DELEGATE_ADMITTED_VERBS
+// agent identity, builds each persona's shell deny from delegateAdmittedVerbs
 // below, filtered by these refusals.
 const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
 const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
@@ -120,16 +120,17 @@ export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
   ...Object.keys(DELEGATED_SCRIPT_VERBS),
 ];
 
-// What a delegated agent may run, by script and verb: reads, and the work a
-// persona is dispatched to do (worktree create, merge and discard for
-// pipeline-deploy and restore on the person's request, CodeKB snapshot and
-// publish for reverse engineering, sensor fire to rerun the author's check,
-// testing-posture brief, and document-input with its onboarding forms, which
-// Intent Capture and Requirements Analysis require when a project runs them as
-// a subagent). The kiro-ide row, whose calls carry no agent
+// What every delegated agent may run, by script and verb: reads, and the work
+// a persona is dispatched to do (CodeKB snapshot and publish for reverse
+// engineering, sensor fire to rerun the author's check, testing-posture brief,
+// and document-input with its onboarding forms, which Intent Capture and
+// Requirements Analysis require when a project runs them as a subagent).
+// DELEGATE_ROLE_ADMITTED_VERBS adds what only one persona is dispatched to do.
+// The kiro-ide row, whose calls carry no agent
 // identity, excludes only these from each persona's deny, and only where the
-// refusals above do not refuse them; a verb not listed here (a new one, or a
-// writer no persona is given, such as knowledge sync or runtime compile)
+// refusals above do not refuse them; a verb not listed here (a new one, a
+// writer no persona is given, such as knowledge sync or runtime compile, or
+// worktree restore, which the main session runs on the person's request)
 // stays denied there. `select-plugins` is admitted as its bare query only.
 // The refusals above stay what the guard enforces where a call names its agent.
 export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>> = {
@@ -146,7 +147,7 @@ export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>
   "aidlc-learnings.ts": ["surface"],
   "aidlc-runtime.ts": ["read", "summary"],
   "aidlc-testing-posture.ts": ["resolve", "render", "verify", "reply", "brief"],
-  "aidlc-worktree.ts": ["create", "merge", "discard", "restore", "list", "verify", "info"],
+  "aidlc-worktree.ts": ["list", "verify", "info"],
   "aidlc-audit.ts": ["history"],
   "aidlc-plugin.ts": ["list"],
   "aidlc-graph.ts": [
@@ -159,6 +160,25 @@ export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>
   "aidlc-attest.ts": ["resolve"],
   "aidlc-knowledge.ts": ["list", "show"],
 };
+
+// The work only one persona is dispatched to do, by persona: the Bolt worktree
+// create, merge and discard belong to pipeline-deploy
+// (agents/aidlc-pipeline-deploy-agent.md, Worktree Branch Lifecycle). The
+// kiro-ide row excludes these from that persona's deny only.
+export const DELEGATE_ROLE_ADMITTED_VERBS: Readonly<
+  Record<string, Readonly<Record<string, readonly string[]>>>
+> = {
+  "aidlc-pipeline-deploy-agent": { "aidlc-worktree.ts": ["create", "merge", "discard"] },
+};
+
+// The verbs one persona is admitted: everyone's, then its own.
+export function delegateAdmittedVerbs(agent: string): Readonly<Record<string, readonly string[]>> {
+  const own = DELEGATE_ROLE_ADMITTED_VERBS[agent] ?? {};
+  const files = [...new Set([...Object.keys(DELEGATE_ADMITTED_VERBS), ...Object.keys(own)])];
+  return Object.fromEntries(
+    files.map((file) => [file, [...(DELEGATE_ADMITTED_VERBS[file] ?? []), ...(own[file] ?? [])]]),
+  );
+}
 
 // Bare, these print the current selection instead of changing it.
 const SELECTION_QUERIES = ["select-plugins"];

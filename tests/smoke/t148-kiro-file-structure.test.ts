@@ -479,6 +479,13 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-audit.ts append ERROR_LOGGED --field Details=x",
           "bun .kiro/tools/aidlc-audit.ts append PRACTICES_SECTION_EMPTY --field Details=x",
           "bun .kiro/tools/aidlc-audit.ts append-raw Note body",
+          "bun .kiro/tools/aidlc-worktree.ts restore --slug u1",
+        ],
+        // The guard does not refuse these, and only pipeline-deploy is admitted them.
+        roleOnly: [
+          "bun .kiro/tools/aidlc-worktree.ts create --slug u1 --base main",
+          "bun .kiro/tools/aidlc-worktree.ts merge --slug u1 --target main --strategy squash",
+          "bun .kiro/tools/aidlc-worktree.ts discard --slug u1",
         ],
         foreign: "bun .kiro/tools/aidlc-log.ts answers --stage x && rm -rf docs",
         hostOnly: ["bun .kiro/tools/aidlc-sensor-linter.ts --stage code-generation"],
@@ -488,7 +495,6 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-utility.ts version",
           "bun .kiro/tools/aidlc-log.ts answers --stage x",
           "bun .kiro/tools/aidlc-testing-posture.ts brief --unit u1",
-          "bun .kiro/tools/aidlc-worktree.ts merge u1",
           "bun .kiro/tools/aidlc-state.ts get Status",
           "bun .kiro/tools/aidlc-state.ts lookup phase-of code-generation",
           "bun .kiro/tools/aidlc-jump.ts resolve --to code-generation",
@@ -500,11 +506,8 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-utility.ts select-plugins --json",
           "bun .kiro/tools/aidlc-utility.ts intent --all --json",
           "bun .kiro/tools/aidlc-unit.ts merge-status u1",
-          "bun .kiro/tools/aidlc-worktree.ts create --slug u1 --base main",
           "bun .kiro/tools/aidlc-utility.ts document-input --onboard --include-ignored",
           "bun .kiro/tools/aidlc-worktree.ts info --slug u1",
-          "bun .kiro/tools/aidlc-worktree.ts discard --slug u1",
-          "bun .kiro/tools/aidlc-worktree.ts restore --slug u1",
           "bun .kiro/tools/aidlc-audit.ts history",
           "bun .kiro/tools/aidlc-utility.ts select-plugins --no-color",
           "bun .kiro/tools/aidlc-utility.ts intent --quiet",
@@ -556,6 +559,12 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine scope detect",
           "aidlc engine audit append ERROR_LOGGED --field Details=x",
           "aidlc engine audit append PRACTICES_SECTION_EMPTY --field Details=x",
+          "aidlc engine worktree restore --slug u1",
+        ],
+        roleOnly: [
+          "aidlc engine worktree create --slug u1 --base main",
+          "aidlc engine worktree merge --slug u1 --target main --strategy squash",
+          "aidlc engine worktree discard --slug u1",
         ],
         foreign: "aidlc engine log answers --stage x && rm -rf docs",
         hostOnly: [
@@ -567,7 +576,6 @@ describe("t148 dist/kiro file structure", () => {
         allowed: [
           "aidlc engine workspace project-description",
           "aidlc engine config get depth",
-          "aidlc engine worktree merge u1",
           "aidlc engine state lookup phase-of code-generation",
           "aidlc engine intent list",
           "aidlc engine intent",
@@ -576,23 +584,21 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine plugin select",
           "aidlc engine plugin select --json",
           "aidlc engine testing-posture brief --unit u1",
-          "aidlc engine worktree create --slug u1 --base main",
           "aidlc engine workspace document-input --onboard",
           "aidlc engine worktree info --slug u1",
-          "aidlc engine worktree discard --slug u1",
-          "aidlc engine worktree restore --slug u1",
           "aidlc engine audit history",
           "aidlc engine plugin select --no-color",
           "aidlc engine gen stage-table",
         ],
       },
     ];
-    for (const { tree, allow, refused, unadmitted, foreign, hostOnly, allowed } of channels) {
+    for (const { tree, allow, refused, unadmitted, roleOnly, foreign, hostOnly, allowed } of channels) {
       for (const command of refused) expect(delegatedLifecycleCommand(command), command).not.toBeNull();
-      for (const command of unadmitted) expect(delegatedLifecycleCommand(command), command).toBeNull();
+      for (const command of [...unadmitted, ...roleOnly]) expect(delegatedLifecycleCommand(command), command).toBeNull();
       for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
       const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
       expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
+      expect(readdirSync(agents), `${tree} agents`).toContain("aidlc-pipeline-deploy-agent.md");
       for (const file of readdirSync(agents).filter((name) => name.endsWith("-agent.md"))) {
         const rule = ruleOf(join(agents, file));
         expect(rule.match, `${tree} ${file}`).toEqual([allow]);
@@ -606,6 +612,11 @@ describe("t148 dist/kiro file structure", () => {
         expect(runsUnprompted(rule, allow, foreign), `${tree} ${file}: ${foreign}`).toBe(false);
         for (const command of allowed) {
           expect(runsUnprompted(rule, allow, command), `${tree} ${file}: ${command}`).toBe(true);
+        }
+        const ownRole = file === "aidlc-pipeline-deploy-agent.md";
+        for (const command of roleOnly) {
+          expect(runsUnprompted(rule, allow, command), `${tree} ${file}: ${command}`).toBe(ownRole);
+          expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(!ownRole);
         }
       }
     }

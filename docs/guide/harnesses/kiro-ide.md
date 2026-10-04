@@ -162,7 +162,8 @@ The install ships:
   persona's deny rules but runs its commands under the conductor's allow, so
   each persona denies that allow except the AI-DLC commands a delegate may run.
   A delegate cannot move the workflow, change stage state, or switch or create
-  an intent or space, however it quotes or spaces the command.
+  an intent or space, however it quotes or spaces the command. Only the
+  pipeline-deploy persona creates, merges, and discards Bolt worktrees.
   No agent-v1 JSON ships. Their shell
   rules run AI-DLC's own commands, `date -u`, and `bun --version` without
   asking; the project's own test and build commands still ask.

@@ -10,8 +10,8 @@
 // Kiro matches the command text as written, so a deny that lists forbidden
 // spellings misses a quoted or re-spaced one. The persona therefore denies the
 // conductor's whole allow and excludes, in their canonical spelling, only the
-// commands the guard admits a delegate (DELEGATE_ADMITTED_VERBS) and does not
-// refuse. A tool or verb not admitted there, host-only routing
+// commands the guard admits that persona (delegateAdmittedVerbs: everyone's,
+// plus its own role's) and does not refuse. A tool or verb not admitted there, host-only routing
 // surfaces included, is never excluded. Any other spelling under the allow is
 // denied; one outside it asks the person. Kiro judges each part of a
 // command joined by &&, ||, ;, |, &, a newline, $( ), backticks or <( ) on its
@@ -21,7 +21,7 @@
 // bare X, so each command is excluded both ways.
 
 import {
-  DELEGATE_ADMITTED_VERBS,
+  delegateAdmittedVerbs,
   delegatedLifecycleCommand,
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { resolveAction, ROUTES } from "../../core/tools/aidlc.ts";
@@ -49,9 +49,9 @@ const exclusionsFor = (command: string): string[] =>
 
 // An engine route verb is admitted when the script and verb the dispatcher
 // runs for it are.
-const admittedRoute = (words: string[]): boolean => {
+const admittedRoute = (admitted: Readonly<Record<string, readonly string[]>>, words: string[]): boolean => {
   const action = resolveAction(["engine", ...words]);
-  return action.type === "delegate" && (DELEGATE_ADMITTED_VERBS[action.tool] ?? []).includes(action.args[0] ?? "");
+  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
 };
 
 // A workspace noun's reads, as the workspace parser reads them: the bare noun
@@ -65,20 +65,22 @@ const workspaceExclusions = (prefix: string, noun: string): string[] => [
   ...workspaceReads(noun).flatMap((read) => exclusionsFor(`${prefix} ${read}`)),
 ];
 
-export function copyChannelDelegateShellDeny(harnessDir: string): ShellDeny {
+export function copyChannelDelegateShellDeny(harnessDir: string, agent: string): ShellDeny {
   const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
+  const admitted = delegateAdmittedVerbs(agent);
   return {
     match: [tool("aidlc-*")],
     exclude: [
-      ...Object.keys(DELEGATE_ADMITTED_VERBS).sort().flatMap((file) =>
-        DELEGATE_ADMITTED_VERBS[file].flatMap((verb) => exclusionsFor(`${tool(file)} ${verb}`))
+      ...Object.keys(admitted).sort().flatMap((file) =>
+        admitted[file].flatMap((verb) => exclusionsFor(`${tool(file)} ${verb}`))
       ),
       ...WORKSPACE_NOUNS.flatMap((noun) => workspaceExclusions(tool("aidlc-utility.ts"), noun)),
     ],
   };
 }
 
-export function nativeDelegateShellDeny(): ShellDeny {
+export function nativeDelegateShellDeny(agent: string): ShellDeny {
+  const admitted = delegateAdmittedVerbs(agent);
   const routes = ROUTES.filter(
     (route) => route.namespace === TRUSTED_ROUTE_NAMESPACE && route.classification !== "routing-only",
   );
@@ -90,7 +92,7 @@ export function nativeDelegateShellDeny(): ShellDeny {
     const prefix = route.group === "top" ? "" : `${route.group} `;
     for (const verb of route.verbs.filter((verb) => !verb.startsWith("<"))) {
       const words = [...(route.group === "top" ? [] : [route.group]), ...verb.split(" ")];
-      if (admittedRoute(words)) exclude.push(...exclusionsFor(trustedCommand(`${prefix}${verb}`)));
+      if (admittedRoute(admitted, words)) exclude.push(...exclusionsFor(trustedCommand(`${prefix}${verb}`)));
     }
   }
   return { match: [trustedCommand("*")], exclude };
