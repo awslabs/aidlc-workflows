@@ -31510,7 +31510,9 @@ export function latestMainWorkflowStageRunFloorForProject(
 // The floor a Unit's lifecycle receipt carries and is read against. Unlike the
 // stage's other attempt floors, stage-major flooring here leaves out a stage
 // start recorded while unit-major flooring was in force, so a switch back to
-// stage-major keeps the Units finished before it.
+// stage-major keeps the Units finished before it. Writers and readers pass the
+// Unit, so a Unit reopened before the switch (its own Unit-tagged rejection)
+// still owes the work after it.
 export function unitLifecycleRunFloorForProject(
   projectDir: string,
   slug: string,
@@ -32276,7 +32278,6 @@ function currentUnitLifecycleRows(
   slug: string,
   unitMajor: boolean,
   auditRows?: readonly AuditShardEvent[],
-  stateContent?: string,
 ): UnitLifecycleRow[] {
   const sourceRows = auditRows ?? readAuditShardEvents(projectDir);
   const startedAt = auditRows
@@ -32307,26 +32308,14 @@ function currentUnitLifecycleRows(
         auditBlockField(row.block, "Stage") === slug &&
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
         !ignoredStarts.has(row))).at(-1)?.timestamp ?? "";
-  let unitScoped = false;
-  try {
-    const state = stateContent ?? readStateFile(projectDir);
-    unitScoped = unitScopedLifecycleFloors(state);
-  } catch {
-    // No readable state means legacy stage-scoped flooring.
-  }
+  // Each Unit's receipts are read against its own floor, which keeps a reopen
+  // of that Unit (a Unit-tagged rejection) as a boundary in every mode.
   const floorByUnit = new Map<string, string>();
   const floorFor = (unit: string): string => {
-    const key = unitScoped ? unit : "";
-    const existing = floorByUnit.get(key);
+    const existing = floorByUnit.get(unit);
     if (existing) return existing;
-    const floor = unitLifecycleRunFloorForProject(
-      projectDir,
-      slug,
-      unitMajor,
-      unitScoped ? unit : undefined,
-      sourceRows,
-    );
-    floorByUnit.set(key, floor);
+    const floor = unitLifecycleRunFloorForProject(projectDir, slug, unitMajor, unit, sourceRows);
+    floorByUnit.set(unit, floor);
     return floor;
   };
   const unitEvents = new Set([
@@ -32499,7 +32488,6 @@ export function unitLifecycleSnapshot(
     slug,
     unitMajor,
     auditRows,
-    stateContent,
   );
   const stage = resolveStage(slug);
   const receipts = new Set<string>();
@@ -32619,7 +32607,7 @@ export function unitSkippedUnits(
       getField(stateContent, "Construction Checkpoints") === "enabled"
     : unitMajorLifecycleMode(projectDir);
   const skipped = new Map<string, string>();
-  for (const row of currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows ?? readAuditShardEvents(projectDir), stateContent)) {
+  for (const row of currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows ?? readAuditShardEvents(projectDir))) {
     if (row.event === "UNIT_SKIPPED") {
       skipped.set(row.unit, auditBlockField(row.block, "Reason") ?? "");
     } else {
