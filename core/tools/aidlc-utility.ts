@@ -358,6 +358,7 @@ import {
   captureStageValidationBasis,
   codeArrivedStageLine,
   inspectStageValidity,
+  stageLabel,
   staleStageNote,
 } from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
@@ -1761,14 +1762,6 @@ function agentDisplayName(slug: string): string | null {
   return /^[a-z0-9][a-z0-9-]{0,79}$/.test(slug) ? "a custom agent" : null;
 }
 
-// A stage as status names it. A plugin's display name is the plugin's own
-// text, so its stage is named by its slug, the name the person types to go
-// there; a slug of any other shape is not shown.
-function stageDisplayName(stage: StageEntry): string | null {
-  if (stage.plugin === undefined) return stage.name;
-  return /^[a-z0-9][a-z0-9-]{0,79}$/.test(stage.slug) ? stage.slug : null;
-}
-
 // An engine timestamp as a person reads it: the date and the minute, in UTC.
 function plainUtc(timestamp: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp)
@@ -1840,8 +1833,8 @@ To get started:
     : agentDisplayName(agentSlug);
   const lastStage = findStageBySlug((getField(content, "Last Completed Stage") ?? "").trim());
   const nextNode = findStageBySlug((getField(content, "Next Stage") ?? "").trim());
-  const lastName = lastStage === undefined || lastStage.phase === "initialization" ? null : stageDisplayName(lastStage);
-  const nextName = nextNode === undefined ? null : stageDisplayName(nextNode);
+  const lastName = lastStage === undefined || lastStage.phase === "initialization" ? null : stageLabel(lastStage, lastStage.slug);
+  const nextName = nextNode === undefined ? null : stageLabel(nextNode, nextNode.slug);
   const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
   const lastLine = lastName === null ? "" : `Last Completed: ${lastName}\n`;
   const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
@@ -1882,8 +1875,11 @@ To get started:
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
+  const currentName = currentEntry === undefined
+    ? currentStage
+    : stageLabel(currentEntry, currentEntry.slug) ?? "this stage";
   const stageDisplay = currentEntry
-    ? `${currentEntry.name} (${currentEntry.number})`
+    ? `${currentName} (${currentEntry.number})`
     : currentStage;
 
   // Gate awareness — when the current stage's checkbox is [?] or [R], the
@@ -1893,7 +1889,7 @@ To get started:
   const currentCheckbox = checkboxesAll.find((c) => c.slug === currentStage);
   let statusLine = status;
   if (currentCheckbox?.state === "awaiting-approval") {
-    const displayName = currentEntry?.name ?? currentStage;
+    const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
     try {
       const pending = pendingOrganicGate(
@@ -1909,7 +1905,7 @@ To get started:
       // Status remains useful when the ledger is absent, unreadable, or stale.
     }
   } else if (currentCheckbox?.state === "revising") {
-    const displayName = currentEntry?.name ?? currentStage;
+    const displayName = currentName;
     const revisionCount = getField(content, "Revision Count");
     // If the Revision Count field is missing, omit the count rather than
     // render a literal "?" — state files authored before the field existed
@@ -1921,7 +1917,7 @@ To get started:
     // Post-approve window: the stage was approved (→ [x]) but the orchestrator
     // hasn't called `advance` yet, so Current Stage still points here. Tell
     // the user honestly rather than showing "Running" on a completed stage.
-    const displayName = currentEntry?.name ?? currentStage;
+    const displayName = currentName;
     statusLine = `${displayName} approved - ready to advance`;
   }
 
@@ -2007,11 +2003,13 @@ To get started:
       .map((issue) => issue.stage);
     const earliest = directlyStale[0] ?? validity.issues[0]?.stage ?? null;
     const earliestIssue = validity.issues.find((issue) => issue.stage === earliest);
-    if (earliest !== null && earliestIssue) {
+    const earliestName = earliest === null ? null : stageLabel(findStageBySlug(earliest), earliest);
+    if (earliestName !== null && earliestIssue) {
       // The same line the next step says, and the same way to act on it.
       const others = [...directlyStale, ...needsRevalidation].filter((slug) => slug !== earliest);
-      validityOutput = staleStageNote(stageNames([earliest]), earliestIssue, content) +
-        `${others.length > 0 ? ` Also affected: ${stageNames(others)}.` : ""}\n`;
+      const otherNames = stageNames(others);
+      validityOutput = staleStageNote(earliestName, earliestIssue, content) +
+        `${otherNames ? ` Also affected: ${otherNames}.` : ""}\n`;
     }
   } catch {
     // Unreadable receipts change nothing the person can act on here.
@@ -10183,7 +10181,10 @@ export function scanSummary(scan: ScanResult): string {
 }
 
 function stageNames(slugs: readonly string[]): string {
-  return slugs.map((slug) => findStageBySlug(slug)?.name ?? slug).join(", ");
+  return slugs
+    .map((slug) => stageLabel(findStageBySlug(slug), slug))
+    .filter((name): name is string => name !== null)
+    .join(", ");
 }
 
 // Record repos found later the way creation records them, on the work's

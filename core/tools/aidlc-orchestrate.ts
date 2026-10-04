@@ -407,7 +407,7 @@ import {
   guardPreflight as stateGuardPreflight,
   parkWorkflow,
 } from "./aidlc-state.ts";
-import { inspectStageValidity, staleStageNote } from "./aidlc-validity.ts";
+import { inspectStageValidity, stageLabel, staleStageNote } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import {
@@ -519,7 +519,7 @@ function projectStageValidityAdvisory(
     const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
     // What the person hears, for any kind of change: which finished stage is
     // behind and what to say to redo it. The details stay in the fields.
-    const name = earliest ? nodeForSlug(earliest)?.name ?? earliest : null;
+    const name = earliest ? stageLabel(nodeForSlug(earliest), earliest) : null;
     const earliestIssue = validity.issues.find((issue) => issue.stage === earliest);
     const warning = state === "drifted"
       ? name && earliestIssue
