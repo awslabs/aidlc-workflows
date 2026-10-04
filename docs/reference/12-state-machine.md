@@ -353,7 +353,12 @@ add `Unit Source Fingerprint`, which binds the raw bytes of the unit's strict
 Receipts are evaluated newest-first, so a newer validated claimant may shield
 an older receipt for an intentional shared path. An uncovered edit, deletion,
 or new path in an exact/directory claim invalidates only the owning unit and
-enters that unit's one bounded `stale-receipt` recovery.
+enters that unit's one bounded `stale-receipt` recovery. A Construction
+checkpoint reads the same receipts: when every claimed path that moved since a
+Unit's review now holds exactly the bytes a newer review in the attempt recorded
+for a path it claims (`unitSourceAttributed`), the checkpoint binds that Unit's
+reviewed source, so another Unit's own reviewed build keeps an approved
+checkpoint approved, and any other change asks again.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every

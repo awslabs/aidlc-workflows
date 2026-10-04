@@ -411,6 +411,13 @@ function snapshot(
         eventMatchesClaimAttempt(projectDir, row.block, unit),
       ));
       const binding = request ? reviewRequestBindingFromBlock(request.block) : null;
+      // Another Unit's own reviewed build of a path this Unit claims is not a
+      // change to this Unit's approved work: its review's binding still holds.
+      const reviewedSource = review ? auditBlockField(review.block, "Unit Source Fingerprint") : null;
+      if (
+        stage.workspace_requires && source !== null && reviewedSource !== null &&
+        reviewedSource !== source && receipts.unitSourceAttributed.has(unit)
+      ) source = reviewedSource;
       if (
         !review || !receipts.unitVerdicts.has(unit) ||
         !binding || !completionCarriesVerifiedReview(projectDir, binding, review.block) ||

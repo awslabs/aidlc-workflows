@@ -13909,6 +13909,10 @@ export interface FreshReviewReceipts {
   unitStale: Set<string>;
   /** Validated modern claim model for every unit whose receipt remains fresh. */
   freshUnitClaims: Map<string, SourceClaimModel>;
+  /** Units whose reviewed source moved only to bytes a newer review in this
+   *  attempt recorded for paths it claims: another Unit's own reviewed build,
+   *  not an edit after the review. Their review's source binding still holds. */
+  unitSourceAttributed: Set<string>;
   /** Effective stage-entry source baseline for unclaimed-path verification. */
   sourceBaseline: SourceBaselineResult;
   /** Current source listing from the guard's single workspace walk, when needed. */
@@ -17832,6 +17836,7 @@ export function freshReviewReceipts(
     sourceRecoverySpent: false,
     unitStale: new Set(),
     freshUnitClaims: new Map(),
+    unitSourceAttributed: new Set(),
     sourceBaseline: { state: "legacy" },
     currentSourceListing: null,
     stageStaleProgress: null,
@@ -18423,8 +18428,16 @@ export function freshReviewReceipts(
   }
 
   const freshUnitClaims = new Map<string, SourceClaimModel>();
+  const unitSourceAttributed = new Set<string>();
   if (sourceFreshnessApplies && currentSourceListing !== null) {
     const newerFreshClaims: SourceClaimModel[] = [];
+    // What each newer validated review recorded, newest first: a path it claims
+    // that now holds exactly those bytes is its own reviewed build.
+    const newerReviewedSources: { claims: SourceClaimModel; listing: WorkspaceSourceListing }[] = [];
+    const reviewedByNewer = (pathKey: string): boolean =>
+      newerReviewedSources.some((newer) =>
+        sourceClaimCovers(pathKey, newer.claims) &&
+        sourceListingEntriesEqual(currentSourceListing.get(pathKey), newer.listing.get(pathKey)));
     const receiptsNewestFirst = [...modernUnitReceipts.entries()]
       .filter(([unit]) => unitVerdicts.has(unit))
       .sort((a, b) => b[1].order - a[1].order);
@@ -18480,14 +18493,21 @@ export function freshReviewReceipts(
           // invalidates more receipts, never fewer. A newer validated claimant
           // may still shield a path.
           const movedPathKeys: string[] = [];
+          let movedAtAll = false;
+          let allReviewedByNewer = true;
+          const moved = (pathKey: string): void => {
+            movedAtAll = true;
+            if (!reviewedByNewer(pathKey)) allReviewedByNewer = false;
+          };
           for (const [pathKey, reviewedOid] of reviewedListing) {
-            if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
             if (
               !sourceListingEntriesEqual(
                 currentSourceListing.get(pathKey),
                 reviewedOid,
               )
             ) {
+              moved(pathKey);
+              if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
               movedPathKeys.push(pathKey);
             }
           }
@@ -18497,9 +18517,12 @@ export function freshReviewReceipts(
               manifest.prefixes.some((prefix) => pathKey.startsWith(prefix)) &&
               !reviewedListing.has(pathKey);
             if (!newlyPresentExact && !newlyPresentUnderPrefix) continue;
+            moved(pathKey);
             if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
             movedPathKeys.push(pathKey);
           }
+          if (movedAtAll && allReviewedByNewer) unitSourceAttributed.add(unit);
+          newerReviewedSources.push({ claims: claimModel, listing: reviewedListing });
           if (movedPathKeys.length > 0) {
             if (isRelaxed()) {
               // Reviewed source moved: the verdict stands, the change is carried
@@ -18645,6 +18668,7 @@ export function freshReviewReceipts(
     sourceRecoverySpent,
     unitStale,
     freshUnitClaims,
+    unitSourceAttributed,
     sourceBaseline,
     currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
     stageStaleProgress,
