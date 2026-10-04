@@ -137,6 +137,8 @@ const DELEGATED_DISPATCHER_GROUPS = [
   ...DELEGATED_ORCHESTRATE_VERBS,
   "--resume",
   "--scope",
+  "--claim",
+  "--release",
   "scope-change",
   "scope-save",
   "config-change",

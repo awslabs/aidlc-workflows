@@ -37,9 +37,14 @@ const both = (command: string): string[] => [command, `${command} *`];
 const delegateMayRun = (command: string): boolean =>
   [`${command} x`, `${command} x y`].every((sample) => delegatedLifecycleCommand(sample) === null);
 // A command the guard refuses with an argument but allows bare (a query, such
-// as `select-plugins` printing the current selection) is excluded exactly.
+// as `select-plugins` printing the current selection) is excluded exactly, and
+// with `--json` when the guard allows that too.
+const exactQuery = (command: string): string[] =>
+  [command, ...(command.endsWith(" --json") ? [] : [`${command} --json`])].filter(
+    (query) => delegatedLifecycleCommand(query) === null,
+  );
 const exclusionsFor = (command: string): string[] =>
-  delegateMayRun(command) ? both(command) : delegatedLifecycleCommand(command) === null ? [command] : [];
+  delegateMayRun(command) ? both(command) : exactQuery(command);
 
 const hostRoutes = ROUTES.filter((route) => route.classification !== "routing-only");
 const hostOnlyTools = new Set(

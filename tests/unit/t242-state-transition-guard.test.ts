@@ -371,6 +371,10 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc engine intent --json other-intent", "aidlc engine intent other-intent"],
       ["aidlc --quiet space --json create other-space", "aidlc space create"],
       ["aidlc engine plugin select --json test-pro", "aidlc engine plugin select"],
+      // The dispatcher's claim and release aliases run the utility's claim and release.
+      ["aidlc --claim u1", "aidlc --claim"],
+      ["aidlc engine --release u1", "aidlc engine --release"],
+      ["bun .claude/tools/aidlc.ts --claim u1", "aidlc.ts --claim"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
