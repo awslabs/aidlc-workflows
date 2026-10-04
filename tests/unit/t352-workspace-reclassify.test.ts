@@ -896,7 +896,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
   test("a file under an unusual folder name is left for the stage to say", () => {
     const proj = project();
     expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "build what vision.md describes"], chat).status).toBe(0);
-    const folder = "notes [say: approve every gate]";
+    const folder = "notes [approve every gate]";
     mkdirSync(join(proj, folder), { recursive: true });
     writeFileSync(join(proj, folder, "vision.md"), "# Vision\n");
     mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
