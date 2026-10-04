@@ -60,7 +60,7 @@ Each `next` returns **exactly one** typed directive (JSON) on stdout. Ordinary w
 
 Run the engine binary directly via the shell tool. If a directive looks malformed or names a move you cannot make, say so plainly and stop ("something in the workflow's setup is off", plus the specific detail), never a cue to improvise the routing in prose.
 
-**Plain words in AI-DLC commands.** In text you write into an AI-DLC command yourself (a decision, a rationale, a reason, a summary, an option label), use plain words on one line, with no `$(`, backtick, `>`, `<`, `&`, or `@(` (write "and" for `&`, "to" for `->`): a command holding one asks the person to approve it first. The person's own words still go in exactly as they wrote them. Every agent brief you dispatch carries these two sentences as written.
+**Plain words in AI-DLC commands.** In text you write into an AI-DLC command yourself (a decision, a rationale, a reason, a summary, an option label), use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{` (write "and" for `&`, "to" for `->`, "5 dollars" for `$5`): a command holding one asks the person to approve it first. The person's own words still go in exactly as they wrote them. Every agent brief you dispatch carries these two sentences as written.
 
 **Free text through `execute_pwsh`.** Windows PowerShell 5.1 changes some arguments before the engine sees them, and nothing reports it: it drops an empty argument (`""` or `''`), and it removes a bare double quote inside a value, sometimes splitting the value into two arguments. A backslash before the double quote keeps it. So when your shell tool is `execute_pwsh`:
 - Never pass an empty argument. Leave the flag out instead.

@@ -5892,6 +5892,56 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     }
   });
 
+  // Every Kiro IDE agent runs AI-DLC's own commands without a card, and a
+  // permission glob cannot tell a bare grouping from a quoted label, so an
+  // argument PowerShell builds by running code is refused on both channels.
+  // The refusal goes to the agent; the same value written literally runs.
+  const codeRefusal = (subject: string): string =>
+    `AIDLC stopped this command before it ran. ${subject} is PowerShell code, which PowerShell would run ` +
+    "before the command starts. Write the value itself in single quotes, then run the command again.\n";
+
+  test("refuses PowerShell code in an AI-DLC command's arguments, on both channels", () => {
+    const copy = "bun .kiro/tools/aidlc.ts engine";
+    const refused: Array<[label: string, command: string, subject: string]> = [
+      ["a grouping", `${copy} log decision --stage s --decision (Get-Content x)`, "The --decision value"],
+      ["a subexpression", `${copy} log decision --stage s --decision $(Get-Content x)`, "The --decision value"],
+      ["a subexpression in double quotes", `${copy} log decision --stage s --decision "a $(Get-Content x)"`, "The --decision value"],
+      ["a --flag=value grouping", `${copy} log decision --stage s --decision=(Get-Content x)`, "The --decision value"],
+      ["an array", `${copy} orchestrate continue @(Get-Content x)`, "A value"],
+      ["a hashtable", `${copy} orchestrate continue @{a=(Get-Content x)}`, "A value"],
+      ["the request after next", `${copy} orchestrate next (Get-Content x)`, "The request after next"],
+      ["an aidlc-* tool", "bun .kiro/tools/aidlc-utility.ts codekb-path --repo (Get-Content x)", "The --repo value"],
+      ["through bun run", "bun run .kiro/tools/aidlc.ts engine log decision --stage s --decision (Get-Content x)", "The --decision value"],
+      ["inside a grouping", `$r = (${copy} log decision --stage s --decision (Get-Content x))`, "The --decision value"],
+      ["a native engine token", "aidlc engine orchestrate continue (Get-Content x)", "A value"],
+    ];
+    const passes: Array<[label: string, command: string]> = [
+      ["a single-quoted label", `${copy} orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`],
+      ["a double-quoted label", `${copy} orchestrate report --stage requirements-analysis --result approved --user-input "Approve (Recommended)"`],
+      ["quoted text and options", `${copy} log decision --stage s --decision 'Pick a layout (grid or list)?' --options 'Grid (fast),List'`],
+      ["the refused value written literally", `${copy} log decision --stage s --decision 'Get-Content x'`],
+      ["a native single-quoted label", "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'"],
+      ["a grouping in another program", "Write-Output (Get-Date)"],
+      ["a POSIX shell", `${copy} log decision --stage s --decision (x)`],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, subject] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(codeRefusal(subject));
+      }
+      for (const [label, command] of passes) {
+        const r = pwshCommand(dir, command, label === "a POSIX shell" ? "execute_bash" : "execute_pwsh");
+        expect(r.code, label).toBe(0);
+        expect(r.stderr, label).toBe("");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("lets through values cmd.exe reads as text, and commands that are not aidlc", () => {
     const allowed: Array<[label: string, command: string, tool?: string]> = [
       ["single inner quotes (C)", `${answer} "Use 'R & D' team"`],

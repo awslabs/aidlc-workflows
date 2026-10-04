@@ -74,8 +74,8 @@ For an air-gapped package, use
 (`.kiro/agents/aidlc.md`) and of every agent it hands work to. Some commands are
 held back from it: `aidlc engine config set *` changes a setting of your piece
 of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and a
-command holding `$(`, a backtick, `>`, `<`, `&`, `@(`, or a line break can run or
-redirect more than the one command. When an agent runs one of these, Kiro IDE
+command holding `$`, a backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break can
+run, expand, or redirect more than the one command. When an agent runs one of these, Kiro IDE
 asks you first. Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
 reads that key, so the entry can be removed. Before the first workflow, follow

@@ -58,7 +58,9 @@
 //     & | < > ^ outside cmd.exe's quotes on the way through aidlc.cmd, that
 //     holds a %NAME% pair cmd.exe would expand, that passes a value through a
 //     PowerShell variable or expression, or that it cannot read far enough to
-//     check.
+//     check. Then it refuses an AI-DLC command, on either channel, with an
+//     argument PowerShell builds by running code (a grouping, $(...), @(...),
+//     @{...} or {...}).
 //   - guard-switch capability: an empty-prompt turn notes the limitation once
 //     per session and refuses lowering (summary confirmation off included)
 //     before a shell command runs. Non-empty
@@ -725,7 +727,8 @@ function processLegacyPlanApprovalWrite(
 // before it runs. It also refuses an aidlc argument PowerShell resolves first
 // (a variable or expression, whose result it cannot see) and an aidlc command
 // it cannot read far enough to check. `bun .kiro/tools/...` invocations never
-// pass through cmd.exe and are not checked.
+// pass through cmd.exe and are not checked for it (aidlcCodeArgumentHazard
+// below checks both channels for PowerShell code).
 
 // What cmd.exe does with each character it acts on outside its quotes.
 const CMD_OPERATOR_EFFECTS: Record<string, string> = {
@@ -740,6 +743,7 @@ interface PowerShellWord {
   source: string; // the word as written in the command
   value: string; // the argument PowerShell passes, when `opaque` is false
   opaque: boolean; // PowerShell would expand or evaluate part of it
+  code: boolean; // PowerShell runs code to build it: a grouping, $(...), @(...), @{...} or {...}
   redirect: boolean; // a PowerShell redirection, not an argument
 }
 
@@ -875,12 +879,13 @@ function powerShellStatements(command: string): PowerShellReading {
           while (i < command.length && !/[ \t;|\n\r]/.test(command[i])) i++;
         }
       }
-      words.push({ source: redirect[0], value: "", opaque: false, redirect: true });
+      words.push({ source: redirect[0], value: "", opaque: false, code: false, redirect: true });
       continue;
     }
     const start = i;
     let value = "";
     let opaque = false;
+    let code = false;
     while (i < command.length && !/[ \t;|\n\r>]/.test(command[i])) {
       const c = command[i];
       if (c === "'") {
@@ -909,6 +914,8 @@ function powerShellStatements(command: string): PowerShellReading {
             continue;
           }
           if (d === "$") opaque = true;
+          // A $(...) inside double quotes runs too.
+          if (d === "$" && command[j + 1] === "(") code = true;
           if (d === '"') {
             if (command[j + 1] === '"') {
               value += '"';
@@ -941,6 +948,7 @@ function powerShellStatements(command: string): PowerShellReading {
         statements.push(...inner.statements);
         unreadable.push(...inner.unreadable);
         opaque = true;
+        code = true;
         i = close + 1;
       } else {
         // A backtick before a line break ends the word and continues the
@@ -963,7 +971,7 @@ function powerShellStatements(command: string): PowerShellReading {
       skipNextWord = false;
       continue;
     }
-    words.push({ source, value, opaque, redirect: false });
+    words.push({ source, value, opaque, code, redirect: false });
   }
   endStatement();
   return { statements, unreadable };
@@ -1125,6 +1133,74 @@ function cmdMetacharacterRefusal(hazard: CmdHazard): string {
     `${CMD_OPERATOR_EFFECTS[hazard.char]} instead of passing it as text. Write that value's inner double ` +
     "quotes as single quotes (for example --details 'Use ''R & D'' team'), or leave the character out of " +
     "a label you wrote, then run the command again.\n"
+  );
+}
+
+// --- PowerShell code in an AI-DLC command's arguments ---
+//
+// Every Kiro IDE agent's permissions run AI-DLC's own commands without a card
+// (the engine namespace and AI-DLC's tool scripts, on both channels). Their
+// ask rules catch `$`,
+// a backtick, `@(`, `@{`, redirects, `&` and line breaks, but a glob cannot
+// tell a bare grouping such as `--decision (Get-Content x)` from a quoted label
+// such as 'Approve (Recommended)'. PowerShell runs the grouping before the
+// command starts, so this adapter refuses an argument PowerShell builds by
+// running code (a grouping, $(...), @(...), @{...} or {...}, bare or inside
+// double quotes) on either channel's AI-DLC command. A quoted value passes.
+
+// The arguments of a statement in which bun runs one of the copy channel's
+// AI-DLC scripts, the dispatcher `aidlc.ts` or a tool `aidlc-<tool>.ts` in
+// the harness tools folder (also through `run`, and after a leading `$x =`).
+// Null for any other program.
+function copyChannelCommandArgs(words: PowerShellWord[]): PowerShellWord[] | null {
+  const start = words.length > 2 && words[0].source.startsWith("$") && words[1].source === "=" ? 2 : 0;
+  const program = words[start];
+  if (program === undefined || program.opaque || !/(?:^|[\\/])bun(?:\.exe)?$/i.test(program.value)) return null;
+  let at = start + 1;
+  if (words[at] !== undefined && !words[at].opaque && words[at].value === "run") at++;
+  const script = words[at];
+  if (
+    script === undefined || script.opaque ||
+    !/^(?:\.[\\/])?\.kiro[\\/]tools[\\/]aidlc(?:-[a-z0-9-]+)?\.ts$/i.test(script.value)
+  ) {
+    return null;
+  }
+  return words.slice(at + 1);
+}
+
+interface CodeArgumentHazard {
+  flag: string | null;
+  request: boolean;
+}
+
+// The first argument of an AI-DLC command (either channel), in any statement,
+// that PowerShell builds by running code. Null when there is none.
+function aidlcCodeArgumentHazard(command: string): CodeArgumentHazard | null {
+  for (const words of powerShellStatements(command).statements) {
+    const found = aidlcCommandArgs(words) ?? copyChannelCommandArgs(words);
+    if (found === null) continue;
+    const args = found.filter((word) => !word.redirect);
+    const index = args.findIndex((word) => word.code);
+    if (index < 0) continue;
+    const flag = valueFlag(args, index);
+    const next = args.findIndex(
+      (word, at) => at > 0 && !word.opaque && word.value === "next" && args[at - 1].value === "orchestrate",
+    );
+    return { flag, request: flag === null && next >= 0 && index > next };
+  }
+  return null;
+}
+
+// A fixed template: only a plain flag name is filled in, never the value.
+function aidlcCodeArgumentRefusal(hazard: CodeArgumentHazard): string {
+  const subject = hazard.request
+    ? "The request after next"
+    : hazard.flag === null
+    ? "A value"
+    : `The ${hazard.flag} value`;
+  return (
+    `AIDLC stopped this command before it ran. ${subject} is PowerShell code, which PowerShell would run ` +
+    "before the command starts. Write the value itself in single quotes, then run the command again.\n"
   );
 }
 
@@ -1671,6 +1747,11 @@ if (target === "terminal-command-guard") {
   const cmdHazard = tool === "execute_pwsh" ? cmdMetacharacterHazard(rawCommand) : null;
   if (cmdHazard !== null) {
     process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
+    return 2;
+  }
+  const codeHazard = tool === "execute_pwsh" ? aidlcCodeArgumentHazard(rawCommand) : null;
+  if (codeHazard !== null) {
+    process.stderr.write(aidlcCodeArgumentRefusal(codeHazard));
     return 2;
   }
   const invocation = toolTerminalInvocation(rawCommand);

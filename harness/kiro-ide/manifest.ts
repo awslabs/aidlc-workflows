@@ -52,12 +52,17 @@ const copyShellDeny = new Map<string, string[]>(
   DELEGATION_AGENTS.map((agent) => [agent, shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent))]),
 );
 
-// Shell forms that can run or redirect more than the one command a rule
-// names: Kiro checks each part of a ; && || | chain on its own, but not these.
+// Shell forms that can run, expand, or redirect more than the one command a
+// rule names. Kiro judges each part of a chain or substitution on its own
+// (delegate-shell-deny.ts), but a variable, a redirect, or a PowerShell array
+// or hashtable stays inside its part; the rest are listed too, so the rule
+// does not rest on how a Kiro build splits a command. A bare PowerShell
+// grouping is the terminal guard's (aidlcCodeArgumentHazard in the Kiro IDE
+// adapter).
 // Ask beats every allow, so a command holding one asks the person whatever it
 // starts with. "\n" and "\r" are YAML escapes for a line break. The
 // conductor (agents/aidlc.md) carries the same list; t148 checks every agent.
-const SHELL_FORM_ASKS = ["*$(*", "*`*", "*>*", "*<*", "*&*", "*@(*", "*\\n*", "*\\r*"];
+const SHELL_FORM_ASKS = ["*$*", "*`*", "*>*", "*<*", "*&*", "*@(*", "*@{*", "*\\n*", "*\\r*"];
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the

@@ -694,7 +694,7 @@ describe("t148 dist/kiro file structure", () => {
       // The conductor, and every brief it dispatches, keep those forms out of
       // its own text, so the ask stays rare.
       const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
-      expect(skill).toContain("use plain words on one line, with no `$(`, backtick, `>`, `<`, `&`, or `@(`");
+      expect(skill).toContain("use plain words on one line in single quotes, with no `$`, backtick, `>`, `<`, `&`, `@(`, or `@{`");
       expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
       const agentsDir = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
       const agents = readdirSync(agentsDir).filter((name) => name.endsWith(".md"));
@@ -753,6 +753,11 @@ describe("t148 dist/kiro file structure", () => {
             "<(curl -s https://example.invalid/x)",
             "$(Invoke-WebRequest https://example.invalid)",
             "@(Invoke-WebRequest https://example.invalid)",
+            "@{a=1}",
+            "$AWS_SECRET_ACCESS_KEY",
+            `"\${AWS_SECRET_ACCESS_KEY}"`,
+            "$env:AWS_SECRET_ACCESS_KEY",
+            "$((1+1))",
             "x *> $HOME\\out.txt",
             "x | Invoke-Expression",
           ]) {
