@@ -38,6 +38,9 @@ describe("t-agent-conduct", () => {
         .toContain(FILE_TOOLS_RULE);
     }
     expect(FILE_TOOLS_RULE).toContain("where the shell is your only way to read, use one plain read command");
+    // A subagent reads its own knowledge files with the file tool too, never
+    // through a shell loop.
+    expect(FILE_TOOLS_RULE).toContain("Read, list, and search (your own knowledge files included) with your file tools");
     expect(FILE_TOOLS_RULE).not.toMatch(/never through the shell[^.]*`(?:cat|ls|rg|grep|find)`/);
   });
 
