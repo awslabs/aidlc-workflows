@@ -375,6 +375,11 @@ describe("t148 dist/kiro file structure", () => {
     const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n+/, "").trim();
     expect(typeof cliConductor.prompt).toBe("string");
     expect(body).toBe(cliConductor.prompt as string);
+    // Kiro's / menu turns a bare /aidlc + Enter into a specialist's name; the
+    // conductor reads that whole message as /aidlc.
+    expect(body).toContain(
+      "when their whole message is one of those, treat it as `/aidlc` with nothing after it, and say nothing about it.",
+    );
     const fm = frontmatter(join(KI, "agents", "aidlc.md"));
     expect(fm).toContain(`tools: ["read", "write", "shell", "invoke_sub_agent", "orchestrate_subagent"]`);
     expect(fm).toContain("    - capability: shell");

@@ -243,11 +243,10 @@ and Kiro IDE does not read that file. So in each new Kiro IDE chat:
    allow** and keep **Apply to: This workspace**, and Kiro stops asking in
    new chats for this project. **Allow** covers only the current chat.
 2. Type the whole request, then press Enter: for example `/aidlc --doctor` or
-   `/aidlc build a to-do app`. Do not press Enter straight after typing
-   `/aidlc`. The `/` menu is still open at that point, and Enter picks its
-   first entry, which is a specialist such as `aidlc-architect-agent` rather
-   than AI-DLC itself. Typing the space after `/aidlc` closes the menu; Esc
-   does not.
+   `/aidlc build a to-do app`. A bare `/aidlc` works too. While the `/` menu
+   is open, Enter puts its first entry in the chat, a specialist such as
+   `aidlc-architect-agent`, and the next Enter sends it. AI-DLC reads that as
+   `/aidlc` and carries on.
 3. Picking `aidlc` from the `/` menu does not change which agent the chat
    uses. If the chat is still on **Default**, Kiro asks you to approve
    loading AI-DLC and then each command it runs. To avoid that, choose
