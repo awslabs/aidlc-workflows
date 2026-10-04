@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -23,6 +22,7 @@ import {
 import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { posixShellPath } from "../harness/git-bash.ts";
 import { writeReleaseFixture } from "../harness/release-fixture.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -30,11 +30,10 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 
-// Behavioral tests below run wherever a POSIX /bin/sh exists — Linux + macOS
-// runners AND the Windows merge queue (Git Bash provides /bin/sh). Gating on
-// existsSync("/bin/sh") rather than a !win32 carve-out is what lets the one
-// platform the launcher targets actually exercise the launch path in CI.
-const HAS_POSIX_SH = existsSync("/bin/sh");
+// Behavioral tests below run on every runner: /bin/sh on Linux and macOS, Git
+// Bash's sh on Windows. Bun on Windows cannot see Git Bash's /bin, so an
+// existsSync("/bin/sh") gate skipped these cases on the one platform the
+// launcher targets; posixShellPath() finds the shell where Git installs it.
 
 // The Windows extensionless launcher exists so a bare `aidlc` resolves in Git
 // Bash / MSYS shells, which use execvp PATH lookup and ignore PATHEXT (so they
@@ -94,14 +93,13 @@ describe("windows extensionless git bash launcher", () => {
   // Finding-closing behavioral test: the assertions above pin the SHAPE of the
   // forwarder, but nothing proved it actually LAUNCHES. The Windows-gated tests
   // run only in the merge queue (PR CI is Linux-only), so the launch path was
-  // unexercised on the PR gate. This test runs the forwarder through /bin/sh —
-  // available on macOS and Linux — against a stub aidlc.cmd, proving sibling
+  // unexercised on the PR gate. This test runs the forwarder through a POSIX sh
+  // (Git Bash's on Windows) against a stub aidlc.cmd, proving sibling
   // resolution, verbatim arg forwarding, and exit-code passthrough on EVERY
-  // runner, including the Linux PR gate. The only Windows-specific link it does
-  // not cover (MSYS executing the .cmd via the Windows loader) is validated
-  // manually on a real Windows box.
-  test("the forwarder resolves its sibling and round-trips args + exit code via /bin/sh", () => {
-    if (!HAS_POSIX_SH) return;
+  // runner, including the Linux PR gate and the Windows merge queue. Git Bash
+  // running the real aidlc.cmd through the Windows loader is covered by
+  // t-native-install-hooks.
+  test("the forwarder resolves its sibling and round-trips args + exit code via sh", () => {
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-"));
     try {
       const forwarder = join(dir, "aidlc");
@@ -111,11 +109,16 @@ describe("windows extensionless git bash launcher", () => {
       // COUNT ($#) and each "$@" element on its own line, so a dropped-quoting
       // regression (forwarding $* or unquoted $@, which would split "two words"
       // into two args) is DETECTED — a $*-flattened assertion would pass either
-      // way. Exits 7 to prove exit-code passthrough.
+      // way. Exits 7 to prove exit-code passthrough. On Windows Git Bash hands
+      // a .cmd to cmd.exe, so there the stub is a batch file that prints the
+      // command line it received and each of its three args.
+      const windows = process.platform === "win32";
       const cmd = join(dir, "aidlc.cmd");
       writeFileSync(
         cmd,
-        '#!/bin/sh\necho "argc=$#"\nfor a in "$@"; do echo "arg=[$a]"; done\nexit 7\n',
+        windows
+          ? "@echo off\r\necho line=[%*]\r\necho arg=[%~1]\r\necho arg=[%~2]\r\necho arg=[%~3]\r\nexit /b 7\r\n"
+          : '#!/bin/sh\necho "argc=$#"\nfor a in "$@"; do echo "arg=[$a]"; done\nexit 7\n',
         { encoding: "utf-8" },
       );
       chmodSync(cmd, 0o755);
@@ -123,13 +126,13 @@ describe("windows extensionless git bash launcher", () => {
       // Run the forwarder as $0 = its own path (what a PATH lookup yields), so
       // the sibling-resolution branch is exercised, not the fail-loud branch.
       // Args include a spaces arg and an empty-string arg — both must survive.
-      const run = spawnSync("/bin/sh", [forwarder, "hello", "two words", ""], {
+      const run = spawnSync(posixShellPath(), [forwarder, "hello", "two words", ""], {
         encoding: "utf-8",
       });
 
       expect(run.status).toBe(7);
       // Exactly three args survived as distinct, boundaries intact.
-      expect(run.stdout).toContain("argc=3");
+      expect(run.stdout).toContain(windows ? 'line=[hello "two words" ""]' : "argc=3");
       expect(run.stdout).toContain("arg=[hello]");
       expect(run.stdout).toContain("arg=[two words]");
       expect(run.stdout).toContain("arg=[]");
@@ -141,7 +144,6 @@ describe("windows extensionless git bash launcher", () => {
   });
 
   test("the forwarder normalises a backslash $0 to slashes (v3 loop)", () => {
-    if (!HAS_POSIX_SH) return;
     // Exercises the v3 parameter-expansion normalisation loop — the whole
     // reason for this revision — as a standalone shell snippet, so a
     // backslash-separated $0 (what a Windows resolved path looks like) is
@@ -159,10 +161,18 @@ describe("windows extensionless git bash launcher", () => {
     expect(end).toBeGreaterThan(start);
     const loop = lines.slice(start, end + 1).join("\n");
     const script = `self='C:\\Users\\me\\bin\\aidlc'\n${loop}\nprintf %s "$self"\n`;
-    const run = spawnSync("/bin/sh", ["-c", script], { encoding: "utf-8" });
-    expect(run.status).toBe(0);
-    expect(run.stdout).toBe("C:/Users/me/bin/aidlc");
-    expect(run.stderr ?? "").not.toContain("backslash");
+    // Run it from a file: Windows would requote a multi-line `sh -c` argument.
+    const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-loop-"));
+    try {
+      const file = join(dir, "loop.sh");
+      writeFileSync(file, script, { encoding: "utf-8" });
+      const run = spawnSync(posixShellPath(), [file], { encoding: "utf-8" });
+      expect(run.status).toBe(0);
+      expect(run.stdout).toBe("C:/Users/me/bin/aidlc");
+      expect(run.stderr ?? "").not.toContain("backslash");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("windowsPosixLauncherBodyIsOwned recognises current + previous bodies, rejects foreign", () => {
@@ -214,7 +224,6 @@ describe("windows extensionless git bash launcher", () => {
   });
 
   test("a slash-less $0 fails loud instead of exec'ing a CWD-relative launcher", () => {
-    if (!HAS_POSIX_SH) return;
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-noslash-"));
     try {
       const forwarder = join(dir, "aidlc");
@@ -231,7 +240,7 @@ describe("windows extensionless git bash launcher", () => {
       // which is what a mis-resolved invocation looks like. Invoking `sh aidlc`
       // from the forwarder's own directory sets $0 to the bare "aidlc" — no
       // separator — portably (no bash-only `exec -a`). CWD holds the decoy.
-      const run = spawnSync("/bin/sh", ["aidlc"], {
+      const run = spawnSync(posixShellPath(), ["aidlc"], {
         encoding: "utf-8",
         cwd: dir,
       });
