@@ -177,11 +177,11 @@ interface ExportRun {
 }
 
 /** Spawn `doctor --export` and locate the produced report dir + archive. */
-function runExport(proj: string): ExportRun {
+function runExport(proj: string, tool: string = UTIL): ExportRun {
   const outDir = join(proj, "out");
   const res = spawnSync(
     BUN,
-    [UTIL, "doctor", "--export", "--project-dir", proj, "--output", outDir],
+    [tool, "doctor", "--export", "--project-dir", proj, "--output", outDir],
     { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
   );
   let bundleDir: string | null = null;
@@ -384,6 +384,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     const gate = report.findings.find((f: { id: string }) => f.id === "gate-unresolved");
     expect(gate).toBeDefined();
     expect(gate.severity).toBe("error");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The remedy names the command this install's person types: $aidlc on Codex.
+  test("3b: the gate remedy names the install's own entry command", () => {
+    for (const [tool, entry] of [
+      [UTIL, "/aidlc"],
+      [join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts"), "$aidlc"],
+    ] as const) {
+      const proj = freshProject();
+      seedCanaryIntent(proj);
+      const { bundleDir, out } = runExport(proj, tool);
+      expect(bundleDir, out).not.toBeNull();
+      const report = JSON.parse(readFileSync(join(bundleDir!, "report.json"), "utf-8"));
+      const gate = report.findings.find((f: { id: string }) => f.id === "gate-unresolved");
+      expect(gate.remedy).toContain(`Resolve it with \`${entry}\``);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("4: manifest.json carries real sha256 checksums, versions, hashed intent id, excluded + files", () => {

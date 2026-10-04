@@ -198,7 +198,7 @@ After config, complete any action named in its output:
 
 | Harness | Typical action |
 | --- | --- |
-| Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
+| Claude Code | If Claude Code is already open in this folder, exit it and start it again |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
