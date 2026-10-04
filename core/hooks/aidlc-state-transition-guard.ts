@@ -17,8 +17,10 @@ import {
   parseWorkspaceCommand,
   recordGuardStoodAside,
   resolveProjectDirFromHook,
+  TESTING_POSTURE_SUBCOMMANDS,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const BLOCKED_STATE_TRANSITIONS = new Set([
@@ -871,6 +873,17 @@ function withoutProjectDir(args: string[]): string[] {
   return out;
 }
 
+// The words a lifecycle script may take as its verb: the first word, or the
+// first after `--flag value` pairs (how aidlc-swarm.ts and aidlc-plugin.ts read
+// it), or for aidlc-testing-posture.ts the first of its verbs anywhere.
+function scriptVerbCandidates(script: string, args: string[]): string[] {
+  if (script === "aidlc-testing-posture.ts") {
+    const verb = args.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
+    return verb === undefined ? [] : [verb];
+  }
+  return [args[0] ?? "", parseArgs(args).positional[0] ?? ""];
+}
+
 function workspaceMutation(prefix: string, args: string[]): string | null {
   if (args[1] === "--help") return null;
   const workspace = parseWorkspaceCommand(args);
@@ -887,11 +900,18 @@ function workspaceMutation(prefix: string, args: string[]): string | null {
   return null;
 }
 
+// The dispatcher drops its global flags before routing (`intent --json other`
+// switches intent), so the guard reads the same words.
+function withoutDispatcherFlags(args: string[]): string[] {
+  const literal = args.indexOf("--");
+  return args.filter((arg, i) => (literal >= 0 && i >= literal) || !LAUNCHER_GLOBAL_FLAGS.has(arg));
+}
+
 function delegatedDispatcherCommand(
   prefix: string,
   rawArgs: string[],
 ): string | null {
-  const raw = withoutProjectDir(rawArgs);
+  const raw = withoutDispatcherFlags(withoutProjectDir(rawArgs));
   const namespace = raw[0] === "engine" || raw[0] === "system"
     ? raw[0]
     : null;
@@ -1037,14 +1057,11 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       args = invocation.args;
     }
     if (isOneOf(DELEGATED_LIFECYCLE_SCRIPTS, script)) {
-      const positional = withoutProjectDir(args);
-      const verb = positional[0] ?? "";
-      if (
+      const refused = scriptVerbCandidates(script, withoutProjectDir(args)).find((verb) =>
         (script === "aidlc-state.ts" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
         (Object.hasOwn(DELEGATED_SCRIPT_VERBS, script) && isOneOf(DELEGATED_SCRIPT_VERBS[script], verb))
-      ) {
-        return `${script} ${verb}`;
-      }
+      );
+      if (refused !== undefined) return `${script} ${refused}`;
       if (script === "aidlc-utility.ts") {
         const utility = delegatedUtilityCommand("aidlc-utility.ts", args);
         if (utility !== null) return utility;

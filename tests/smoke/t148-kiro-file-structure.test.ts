@@ -404,7 +404,7 @@ describe("t148 dist/kiro file structure", () => {
       return { match, exclude: rest[0] === "      exclude:" ? list(rest.slice(1)) : [] };
     };
     const partsOf = (command: string): string[] => {
-      const substitution = /\$\(([^()]*)\)|`([^`]*)`/g;
+      const substitution = /[$<]\(([^()]*)\)|`([^`]*)`/g;
       const inner = [...command.matchAll(substitution)].map((match) => match[1] ?? match[2]);
       return [command.replace(substitution, ""), ...inner]
         .flatMap((part) => part.split(/&&|\|\||;|\||&|\n/))
@@ -452,6 +452,10 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-bolt.ts set-autonomy --mode gated",
           "bun .kiro/tools/aidlc-log.ts answer --question q1 --answer yes",
           "bun .kiro/tools/aidlc-testing-posture.ts fingerprint --unit u1",
+          "bun .kiro/tools/aidlc-utility.ts intent --json true other-intent",
+          "bun .kiro/tools/aidlc-utility.ts intent --all true archive other-intent",
+          "bun .kiro/tools/aidlc-utility.ts space --json true other",
+          "bun .kiro/tools/aidlc-log.ts link --stage x <(bun .kiro/tools/aidlc-orchestrate.ts next)",
         ],
         foreign: "bun .kiro/tools/aidlc-log.ts link --stage x && rm -rf docs",
         hostOnly: ["bun .kiro/tools/aidlc-sensor-linter.ts --stage code-generation"],
@@ -500,6 +504,9 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine learnings persist",
           "aidlc engine state set-construction-checkpoints disabled",
           "aidlc engine state unit pause --stage code-generation --unit u1",
+          "aidlc engine intent --json other-intent",
+          "aidlc engine space --json create other",
+          "aidlc engine plugin select --json test-pro",
         ],
         foreign: "aidlc engine log link --stage x && rm -rf docs",
         hostOnly: [

@@ -26,21 +26,21 @@ import {
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { ROUTES, TOOLS } from "../../core/tools/aidlc.ts";
 import { trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
-import { parseWorkspaceCommand, UTILITY_COMMANDS, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
+import { isWorkspaceNoun, parseWorkspaceCommand, UTILITY_COMMANDS, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
 export type ShellDeny = { match: string[]; exclude: string[] };
 
 const both = (command: string): string[] => [command, `${command} *`];
-// A sample argument, so a verb that needs a name (a switch, an archive) is
-// read as the mutation it is.
+// Sample arguments, so a verb that needs a name (a switch, an archive) is read
+// as the mutation it is, also after a flag that takes the first one as its
+// value (`intent --json true other` switches intent).
 const delegateMayRun = (command: string): boolean =>
-  delegatedLifecycleCommand(`${command} x`) === null;
+  [`${command} x`, `${command} x y`].every((sample) => delegatedLifecycleCommand(sample) === null);
 // A command the guard refuses with an argument but allows bare (a query, such
 // as `select-plugins` printing the current selection) is excluded exactly.
 const exclusionsFor = (command: string): string[] =>
   delegateMayRun(command) ? both(command) : delegatedLifecycleCommand(command) === null ? [command] : [];
 
-const isWorkspaceNoun = (word: string): boolean => (WORKSPACE_NOUNS as readonly string[]).includes(word);
 const hostRoutes = ROUTES.filter((route) => route.classification !== "routing-only");
 const hostOnlyTools = new Set(
   ROUTES.filter((route) => route.classification === "routing-only" && route.tool).map((route) => route.tool),
@@ -54,7 +54,7 @@ const workspaceReads = (noun: string): string[] =>
     .map((token) => `${noun} ${token}`);
 const workspaceExclusions = (prefix: string, noun: string): string[] => [
   `${prefix} ${noun}`,
-  ...workspaceReads(noun).map((read) => `${prefix} ${read}`).filter(delegateMayRun).flatMap(both),
+  ...workspaceReads(noun).flatMap((read) => exclusionsFor(`${prefix} ${read}`)),
 ];
 
 // A lifecycle script's verbs: the utility's commands, or for the other scripts

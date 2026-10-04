@@ -125,6 +125,7 @@ import {
   type WorkspaceSourceListing,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
+  TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -4645,9 +4646,7 @@ function replySession(projectDir: string, argv: string[]): string {
 }
 
 export function main(argv: string[]): void {
-  const subcommand = argv.find((arg) =>
-    ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"].includes(arg)
-  );
+  const subcommand = argv.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
   const projectDir = resolveProjectDir(flagValue(argv, "--project-dir"));
   try {
     switch (subcommand) {

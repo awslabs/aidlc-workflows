@@ -1023,6 +1023,9 @@ export function stripOrchestratorLauncherOptions(args: readonly string[]): strin
 export const WORKSPACE_NOUNS = ["intent", "space"] as const;
 export type WorkspaceNoun = (typeof WORKSPACE_NOUNS)[number];
 
+// aidlc-testing-posture.ts runs the first of these it finds anywhere in argv.
+export const TESTING_POSTURE_SUBCOMMANDS = ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"] as const;
+
 // The commands aidlc-utility.ts dispatches, as its unknown-command error lists them.
 export const UTILITY_COMMANDS = [
   "help", "version", "status", "doctor", "intent-create", "intent", "space",
@@ -1132,7 +1135,7 @@ function reservedFutureWorkspaceVerb(
   };
 }
 
-function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
+export function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
   return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
 }
 

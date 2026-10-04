@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   dispatcherWorkspaceUtilityArgv,
   HUMAN_PRESENCE_NO_SWITCH,
+  LAUNCHER_GLOBAL_FLAGS,
   launcherRouteUsesPin,
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
@@ -2006,7 +2007,7 @@ export function resolveAction(
     }
     if (
       !literalArgs &&
-      ["--json", "--quiet", "--no-color", "--yes", "--offline", "--verbose"].includes(argv[i])
+      LAUNCHER_GLOBAL_FLAGS.has(argv[i])
     ) {
       globalFlags.push(argv[i]);
       continue;
