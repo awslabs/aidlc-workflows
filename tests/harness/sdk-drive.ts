@@ -75,6 +75,7 @@ import {
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
+import { PersonTurnLedger } from "./person-turns.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -179,6 +180,8 @@ export interface DriveResult {
   turns?: DriveTurnEnd[];
   /** Stop hook verdicts, when captureStopHooks was set. */
   stopHooks?: CapturedStopHook[];
+  /** Decisions recorded as the person's that no turn this drive sent backs. */
+  unbackedDecisions?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +721,9 @@ export async function driveAidlc(
   let turn = 1;
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
+  // The person's turns: the opening prompt now, each menu answer as it is given.
+  const personTurns = new PersonTurnLedger(projectDir);
+  personTurns.sent(prompt);
   let stopAfterAskUserQuestionToolUseId: string | undefined;
   writeSdkTrace(tracePath, "start", {
     prompt,
@@ -838,6 +844,7 @@ export async function driveAidlc(
             const chat = opts.chatAboutQuestionWhen?.({ questions, answers: {} }) === true;
             const answers = chat ? {} : buildAnswers(questions, answerScript, askMenuIndex);
             askMenuIndex++;
+            personTurns.sent(JSON.stringify(answers));
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
             if (chat) {
@@ -1144,7 +1151,11 @@ export async function driveAidlc(
     stoppedWhen,
     turns,
     stopHooks,
+    unbackedDecisions: personTurns.unbacked(),
   };
+  if (result.unbackedDecisions?.length) {
+    writeSdkTrace(tracePath, "unbacked_decision", { decisions: result.unbackedDecisions });
+  }
 
   // Attach post-run file reads when they exist (read straight off disk so the
   // assertions are deterministic, not paraphrased).
