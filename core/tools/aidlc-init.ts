@@ -41,6 +41,7 @@ import {
 } from "./aidlc-color.ts";
 import {
   assertProjectionPathHasNoSymlinks,
+  hostToolPath,
   insertJsoncSetting,
   jsoncRootMembers,
   jsoncSettingValue,
@@ -5535,9 +5536,17 @@ function copiedProjectSource(
       rmSync(cleanup, { recursive: true, force: true });
       throw new Error(`copied projection is missing managed directory ${directory}`);
     }
+    // The project's own copy of the release is its regular files. A link or
+    // what a host tool installed for itself is never release content, so it
+    // stays where it is and out of the source.
     cpSync(source, join(root, directory), {
       recursive: true,
       preserveTimestamps: true,
+      filter: (path) => {
+        const stat = lstatSync(path);
+        return (stat.isDirectory() || stat.isFile()) &&
+          !hostToolPath(relative(projectDir, path).replaceAll("\\", "/"));
+      },
     });
   }
   for (const integration of descriptor.rootIntegrations) {
@@ -6909,9 +6918,12 @@ function planManagedFiles(
     }
   }
   for (const [rel, priorHash] of Object.entries(prior?.files ?? {})) {
+    // An earlier manifest may have taken over a host tool's own files; they
+    // stay the tool's.
     if (
       shipped.has(rel) ||
       workspaceState(rel) ||
+      hostToolPath(rel) ||
       rel.endsWith("/tools/data/aidlc-manifest.json")
     ) continue;
     const target = join(projectDir, rel);
