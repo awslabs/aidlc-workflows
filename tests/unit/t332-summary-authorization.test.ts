@@ -788,6 +788,11 @@ describe("t332 authorization scope resolution", () => {
     expect(reviewDraftRelativePath("functional-design", "Unit.Name_1", "0123456789abcdef", 2)).toBe(
       ".aidlc-engine/reviews/functional-design/units/Unit.Name_1/0123456789abcdef/2.review.md",
     );
+    // A request with an id has a draft slot of its own.
+    expect(reviewDraftRelativePath("functional-design", undefined, "0123456789abcdef", 2, `review:${"a".repeat(32)}`)).toBe(
+      `.aidlc-engine/reviews/functional-design/stage/0123456789abcdef/2.${"a".repeat(32)}.review.md`,
+    );
+    expect(() => reviewDraftRelativePath("functional-design", undefined, "0123456789abcdef", 2, "review:../x")).toThrow();
     for (const path of [
       ".aidlc-engine/reviews/functional-design/stage/0123456789abcdef/1.json",
       ".aidlc-engine/reviews/functional-design/units/stage-level/0123456789abcdef/1.json",

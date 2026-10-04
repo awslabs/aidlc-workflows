@@ -1094,9 +1094,11 @@ describe("t271 review iteration ceiling", () => {
       reviewFile: string;
     };
     expect(requestOutput.requestId).toMatch(/^review:[0-9a-f]{32}$/);
+    // The request's own slot, named by its id.
     expect(requestOutput.reviewFile).toMatch(
-      /\/\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.review\.md$/,
+      /\/\.aidlc-engine\/reviews\/requirements-analysis\/stage\/[0-9a-f]{16}\/1\.[0-9a-f]{32}\.review\.md$/,
     );
+    expect(requestOutput.reviewFile).toContain(`/1.${requestOutput.requestId.slice("review:".length)}.review.md`);
     const requested = auditBlocks(proj, "REVIEW_REQUESTED")[0];
     const requestFingerprint = auditBlockField(
       requested,
@@ -1874,6 +1876,37 @@ describe("t271 review iteration ceiling", () => {
     expect(reviewRequestReplaces("**Event**: REVIEW_REQUESTED\n", pending)).toBe(false);
     const legacy = { binding: { requestId: null } as unknown as typeof binding };
     expect(reviewRequestReplaces(row("none"), legacy)).toBe(true);
+  });
+
+  test("a late review of the replaced request cannot complete the replacement", () => {
+    const proj = seedProject("bugfix");
+    const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const first = runReview(proj, request);
+    expect(first.status, first.stderr).toBe(0);
+    const firstSlot = (JSON.parse(first.stdout) as { reviewFile: string }).reviewFile;
+    writeFileSync(artifact, "requirements rewritten after the request\n", "utf-8");
+    const again = runReview(proj, request);
+    expect(again.status, again.stderr).toBe(0);
+    const secondSlot = (JSON.parse(again.stdout) as { reviewFile: string }).reviewFile;
+    expect(secondSlot).not.toBe(firstSlot);
+
+    // The first reviewer, cut off earlier, writes its review of the old bytes late.
+    const late = join(proj, firstSlot);
+    mkdirSync(dirname(late), { recursive: true });
+    writeFileSync(late, "## Review\n\n**Verdict:** READY\n\nReviewed the old requirements.\n", "utf-8");
+    const stale = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(stale.status).not.toBe(0);
+    expect(stale.stderr).toContain("no review was written for iteration 1");
+    expect(stale.stderr).toContain(secondSlot);
+
+    // The replacement's own review records.
+    const recorded = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(recorded.status, recorded.stderr).toBe(0);
   });
 
   test("a review interrupted twice is requested again at the same pass each time", () => {

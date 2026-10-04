@@ -2510,6 +2510,7 @@ function handleReview(args: string[]): void {
   const reviewSlot = (
     floor: string,
     iteration: number,
+    requestId: string | null,
   ): {
     draftRelative: string;
     draftRelativeToRecord: string;
@@ -2518,7 +2519,7 @@ function handleReview(args: string[]): void {
     const record = recordDir(pd);
     if (record === null) refuseReview("Cannot resolve the active intent record.");
     const attemptId = reviewAttemptId(floor);
-    const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration);
+    const draft = reviewDraftRelativePath(flags.stage as string, flags.unit, attemptId, iteration, requestId);
     return {
       draftRelative: toPosix(relative(pd, join(record, ...draft.split("/")))),
       draftRelativeToRecord: draft,
@@ -2621,7 +2622,7 @@ function handleReview(args: string[]): void {
     // Open the reviewer's slot for this request: any draft an earlier dispatch of
     // the same iteration left behind is not this dispatch's review.
     const openReviewDraftSlot = (floor: string): void => {
-      const slot = reviewSlot(floor, iteration);
+      const slot = reviewSlot(floor, iteration, requestId);
       // Never through a symlinked `.aidlc-engine/reviews`: a redirected slot is not
       // this record's, so the request refuses instead of clearing a path
       // outside the intent record.
@@ -3195,7 +3196,9 @@ function handleReview(args: string[]): void {
         );
       }
 
-      const slot = reviewSlot(attempt.floor, iteration);
+      // This request's own slot: a review left in another request's slot (one
+      // it replaced) is never this one's.
+      const slot = reviewSlot(attempt.floor, iteration, requestBinding.requestId);
       const legacy = requestBinding.legacyAppendix;
 
       // Deprecated input path: a reviewer that still appends `## Review` to

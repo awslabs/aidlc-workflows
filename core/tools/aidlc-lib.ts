@@ -15779,19 +15779,29 @@ export function reviewRecordRelativePath(
  * Where the reviewer writes its review for one request: the scratch slot the
  * request opens (deleting any earlier draft) and the verdict consumes. The
  * record beside it is the review; the draft is the reviewer's input to it.
+ * A request with an id has a slot of its own, so a reviewer of a replaced
+ * request that writes late never fills the replacement's slot; a request
+ * recorded before request ids keeps the pass's shared slot.
  */
 export function reviewDraftRelativePath(
   stage: string,
   unit: string | undefined,
   attemptId: string,
   iteration: number,
+  requestId: string | null = null,
 ): string {
   if (!REVIEW_RECORD_SEGMENT_RE.test(stage)) throw new Error(`Invalid stage slug "${stage}".`);
   const unitProblem = unit === undefined ? null : validateUnitName(unit);
   if (unitProblem !== null) throw new Error(unitProblem);
+  if (requestId !== null && !REVIEW_REQUEST_ID_RE.test(requestId)) {
+    throw new Error(`Invalid review request id "${requestId}".`);
+  }
+  const name = requestId === null
+    ? `${iteration}.review.md`
+    : `${iteration}.${requestId.slice("review:".length)}.review.md`;
   return unit === undefined
-    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${iteration}.review.md`
-    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${iteration}.review.md`;
+    ? `${REVIEW_RECORDS_DIR}/${stage}/stage/${attemptId}/${name}`
+    : `${REVIEW_RECORDS_DIR}/${stage}/units/${unit}/${attemptId}/${name}`;
 }
 
 /** Whether `path` has exactly one supported stage or Unit record shape. */
