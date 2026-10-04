@@ -23,12 +23,29 @@ function gitForWindowsRoots(): string[] {
   return [...new Set(roots)];
 }
 
-function gitForWindowsTool(name: string): string {
+function findGitForWindowsTool(name: string): string | null {
   for (const root of gitForWindowsRoots()) {
     const tool = join(root, "bin", name);
     if (existsSync(tool)) return tool;
   }
-  throw new Error(MISSING);
+  return null;
+}
+
+function gitForWindowsTool(name: string): string {
+  const tool = findGitForWindowsTool(name);
+  if (tool === null) throw new Error(MISSING);
+  return tool;
+}
+
+/**
+ * Why a case that runs Git Bash cannot run on this machine, or null. Git for
+ * Windows is a prerequisite of the full suite there, not of the native runner
+ * (docs/reference/09-testing.md), so a local run without it skips these cases;
+ * in GitHub Actions they always run, and fail if Git Bash is missing.
+ */
+export function gitBashSkipReason(): string | null {
+  if (process.platform !== "win32" || process.env.GITHUB_ACTIONS === "true") return null;
+  return findGitForWindowsTool("bash.exe") === null ? "Git for Windows is not installed" : null;
 }
 
 /** The bash Claude Code runs hook commands with on Windows. */

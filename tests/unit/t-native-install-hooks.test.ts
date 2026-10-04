@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { gitBashPath } from "../harness/git-bash.ts";
+import { gitBashPath, gitBashSkipReason } from "../harness/git-bash.ts";
 import { writeReleaseFixture } from "../harness/release-fixture.ts";
 import { testGuardEnvironment } from "../harness/runner-profile.ts";
 import {
@@ -25,6 +25,8 @@ import {
 } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const SKIP_REASON = gitBashSkipReason();
 
 interface HookCommand {
   event: string;
@@ -100,6 +102,7 @@ function tracedRuns(directory: string): Array<{ hook: string; code: unknown }> {
 }
 
 beforeAll(() => {
+  if (SKIP_REASON !== null) return;
   shell = process.platform === "win32" ? gitBashPath() : "/bin/sh";
   root = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-native-hooks-")));
   const release = join(root, "release");
@@ -148,6 +151,16 @@ beforeAll(() => {
   expect(existsSync(active), `no installed binary at ${active}`).toBe(true);
   copyFileSync(engine, active);
 
+  // The shell must find this install's launcher: another `aidlc` later on PATH,
+  // such as the developer's own install, would hide a missing one.
+  const found = sh(process.platform === "win32" ? 'cygpath -w "$(command -v aidlc)"' : "command -v aidlc");
+  const launcher = join(bin, "aidlc");
+  expect(found.status, `aidlc: command not found in ${shell}: ${found.stderr}`).toBe(0);
+  const same = process.platform === "win32"
+    ? found.stdout.trim().toLowerCase() === launcher.toLowerCase()
+    : found.stdout.trim() === launcher;
+  expect(same, `${shell} runs ${found.stdout.trim()} for aidlc, not ${launcher}`).toBe(true);
+
   // As a person does after installing: configure the project with `aidlc`.
   const configured = sh('aidlc config --project-dir "$NATIVE_HOOKS_PROJECT" --harness claude --mcp none --quiet', "", {
     NATIVE_HOOKS_PROJECT: project,
@@ -174,7 +187,7 @@ afterAll(() => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
-describe("a native install runs every Claude Code hook through the shell Claude Code uses", () => {
+describe.skipIf(SKIP_REASON !== null)("a native install runs every Claude Code hook through the shell Claude Code uses", () => {
   test("the project's hooks call the installed aidlc command", () => {
     expect(hooks.length).toBeGreaterThan(0);
     for (const hook of hooks) expect(hook.command).toMatch(/^aidlc engine hook [a-z-]+$/);

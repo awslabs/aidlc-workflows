@@ -22,7 +22,7 @@ import {
 import { windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { posixShellPath } from "../harness/git-bash.ts";
+import { gitBashSkipReason, posixShellPath } from "../harness/git-bash.ts";
 import { writeReleaseFixture } from "../harness/release-fixture.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -34,6 +34,7 @@ import {
 // Bash's sh on Windows. Bun on Windows cannot see Git Bash's /bin, so an
 // existsSync("/bin/sh") gate skipped these cases on the one platform the
 // launcher targets; posixShellPath() finds the shell where Git installs it.
+const NO_POSIX_SH = gitBashSkipReason() !== null;
 
 // The Windows extensionless launcher exists so a bare `aidlc` resolves in Git
 // Bash / MSYS shells, which use execvp PATH lookup and ignore PATHEXT (so they
@@ -99,7 +100,7 @@ describe("windows extensionless git bash launcher", () => {
   // runner, including the Linux PR gate and the Windows merge queue. Git Bash
   // running the real aidlc.cmd through the Windows loader is covered by
   // t-native-install-hooks.
-  test("the forwarder resolves its sibling and round-trips args + exit code via sh", () => {
+  test.skipIf(NO_POSIX_SH)("the forwarder resolves its sibling and round-trips args + exit code via sh", () => {
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-"));
     try {
       const forwarder = join(dir, "aidlc");
@@ -143,7 +144,7 @@ describe("windows extensionless git bash launcher", () => {
     }
   });
 
-  test("the forwarder normalises a backslash $0 to slashes (v3 loop)", () => {
+  test.skipIf(NO_POSIX_SH)("the forwarder normalises a backslash $0 to slashes (v3 loop)", () => {
     // Exercises the v3 parameter-expansion normalisation loop — the whole
     // reason for this revision — as a standalone shell snippet, so a
     // backslash-separated $0 (what a Windows resolved path looks like) is
@@ -223,7 +224,7 @@ describe("windows extensionless git bash launcher", () => {
     }
   });
 
-  test("a slash-less $0 fails loud instead of exec'ing a CWD-relative launcher", () => {
+  test.skipIf(NO_POSIX_SH)("a slash-less $0 fails loud instead of exec'ing a CWD-relative launcher", () => {
     const dir = mkdtempSync(join(tmpdir(), "aidlc-forwarder-noslash-"));
     try {
       const forwarder = join(dir, "aidlc");
