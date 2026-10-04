@@ -11,6 +11,14 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalWriteTool,
+  isKiroDelegationTool,
+  isKiroShellTool,
+  isPlanApprovalSafeReadTool,
+  KIRO_HOOK_MATCHERS,
+  mutationCapableTool,
+} from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AUTHORED_HOOKS = join(REPO_ROOT, "harness", "kiro-ide", "hooks");
@@ -40,7 +48,9 @@ interface HookFile {
 
 // The pinned contract: every v2 hook JSON that MUST ship, with its expected
 // trigger, optional matcher regex, and the adapter target embedded in its
-// command string.
+// command string. Each matcher is built from the adapter's tool-name table
+// (harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts), so a name the adapter
+// routes and the registration that delivers it cannot drift apart.
 const EXPECTED_V2_REGISTRATIONS: Array<{
   file: string;
   trigger: string;
@@ -50,13 +60,13 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
   { file: "aidlc-terminal-command.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "verb-intercept" },
-  { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: "^(execute_bash|execute_pwsh|shell)$", adapterTarget: "terminal-command-guard" },
+  { file: "aidlc-terminal-command-guard.json", trigger: "PreToolUse", matcher: KIRO_HOOK_MATCHERS.shellPreToolUse, adapterTarget: "terminal-command-guard" },
   { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
   { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
-  { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
-  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "rebuild-stage-graph" },
-  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "execute_bash|execute_pwsh|shell", adapterTarget: "sync-workflow-state" },
-  { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "^(subagent_.+|invoke_sub_agent|orchestrate_subagent)$", adapterTarget: "log-subagent" },
+  { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.auditedWrite, adapterTarget: "audit-and-sensors" },
+  { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse, adapterTarget: "rebuild-stage-graph" },
+  { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.shellPostToolUse, adapterTarget: "sync-workflow-state" },
+  { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: KIRO_HOOK_MATCHERS.delegateCompletion, adapterTarget: "log-subagent" },
   { file: "aidlc-continue-workflow.json", trigger: "Stop", matcher: null, adapterTarget: "continue-workflow" },
 ];
 
@@ -126,6 +136,12 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         // Unrelated tools must not.
         expect(matcher.test("fs_write")).toBe(false);
         expect(matcher.test("execute_bash")).toBe(false);
+      });
+
+      test("the tool-name table ships beside the adapter, which reads it", () => {
+        expect(existsSync(join(tree.dir, "aidlc-kiro-tool-names.ts"))).toBe(true);
+        expect(readFileSync(join(tree.dir, "aidlc-kiro-adapter.ts"), "utf-8"))
+          .toContain('from "./aidlc-kiro-tool-names.ts"');
       });
 
       test("session-end has NO v2 registration (Stop is turn-scoped, not session-scoped)", () => {
@@ -254,5 +270,29 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
       );
       expect(row.model.followup.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// The names measured at PreToolUse on Kiro CLI 2.27.1 (v3) and Kiro IDE 1.2.4:
+// the same mutating tools on both surfaces, a different dispatch tool on each.
+describe("t245 Kiro tool-name table classifies the measured names", () => {
+  test("writes, shells and delegations on both surfaces", () => {
+    expect(canonicalWriteTool("fs_write")).toBe("Write");
+    expect(canonicalWriteTool("str_replace")).toBe("Edit");
+    expect(isKiroShellTool("execute_bash")).toBe(true);
+    for (const name of ["invoke_sub_agent", "orchestrate_subagent", "subagent_aidlc-developer-agent"]) {
+      expect(isKiroDelegationTool(name), name).toBe(true);
+    }
+    // The completion shell is not a dispatch.
+    expect(isKiroDelegationTool("subagent_response")).toBe(false);
+  });
+
+  test("Kiro CLI reads are safe reads; a name the table does not know may mutate", () => {
+    for (const name of ["read_file", "file_search", "fs_read"]) {
+      expect(isPlanApprovalSafeReadTool(name), name).toBe(true);
+      expect(mutationCapableTool(name), name).toBe(false);
+    }
+    expect(mutationCapableTool("some_future_tool")).toBe(true);
+    expect(mutationCapableTool("")).toBe(false);
   });
 });

@@ -146,6 +146,19 @@ import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import {
+  canonicalWriteTool,
+  isKiroAppendTool,
+  isKiroDelegationTool,
+  isKiroGenericDelegationTool,
+  isKiroPipelineDelegationTool,
+  isKiroPowerShellTool,
+  isKiroShellTool,
+  isLegacyPlanningWriteTool,
+  isPlanApprovalSafeReadTool,
+  kiroNamedDelegate,
+  mutationCapableTool,
+} from "./aidlc-kiro-tool-names.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
@@ -194,63 +207,6 @@ const INPUT_TARGETS = new Set([
 ]);
 const LEGACY_SESSION_ID = "kiro-ide-legacy-current";
 const KIRO_IDE_SESSION_FILE = ".kiro-ide-current-session";
-const LEGACY_PLANNING_WRITE_TOOLS = new Set([
-  "fs_write",
-  "str_replace",
-]);
-const PLAN_APPROVAL_SAFE_READ_TOOLS = new Set([
-  "read",
-  "fs_read",
-  "read_file",
-  "read_files",
-  "read_code",
-  "list_directory",
-  "file_search",
-  "glob",
-  "grep_search",
-  "grep",
-  "web_fetch",
-  "web_search",
-  // `disclose_context` activates skills or steering files into context. Kiro
-  // documents it under Context tools beside `introspect` and `knowledge` and
-  // gives it no write surface; anything an activated skill then asks for is
-  // still gated by its own PreToolUse call, and approval authority comes from
-  // the active directive and disk receipts, never from activated context. So it
-  // cannot mutate the workspace during a Plan Approval window, while denying it
-  // stopped a Windows customer mid-workflow (#1039).
-  "disclose_context",
-  "thinking",
-  "todo_list",
-]);
-
-// Kiro IDE names its shell tool `execute_bash` on POSIX hosts, `execute_pwsh`
-// on Windows, and `shell` in some IDE generations. Every shell decision in this
-// adapter (terminal guard, Plan Approval recovery routing, the forward to the
-// core guard as `Bash`) goes through this one predicate so the three names
-// cannot drift apart again.
-function isKiroShellTool(toolName: string): boolean {
-  return toolName === "execute_bash" || toolName === "execute_pwsh" || toolName === "shell";
-}
-
-// Kiro's delegation surface has three dispatch tools. `subagent_<agent>` is the
-// named dispatch an agent gets from the `subagent` tool category; the conductor's
-// tools list selects the other two instead, `invoke_sub_agent` on Kiro IDE and
-// `orchestrate_subagent` (a pipeline of stages) on Kiro CLI, because only those
-// two run a delegate under its own permissions. `subagent_response` is excluded
-// because it is the completion shell, not a dispatch — the same exclusion the
-// SUBAGENT_COMPLETED matcher makes, for the same reason.
-//
-// A delegation call carries an agent + prompt and no file path, so the opaque-mutation
-// test below reads it as unattributable and refuses it. It is not: the target agent IS
-// the attribution, and the forward further down translates the call into a synthetic
-// `Task` payload for the core guard, which consults approval state properly. Naming the
-// shape here is what lets control reach that forward (#1175).
-function isKiroDelegationTool(toolName: string): boolean {
-  return toolName === "invoke_sub_agent" ||
-    toolName === "orchestrate_subagent" ||
-    (toolName.startsWith("subagent_") && toolName !== "subagent_response");
-}
-
 function firstNonBlank(values: unknown[]): string {
   return values.find((value): value is string =>
     typeof value === "string" && value.trim().length > 0
@@ -292,7 +248,7 @@ function kiroDelegationTargets(
   toolName: string,
   toolArgs: Record<string, unknown>,
 ): KiroDelegationTarget[] {
-  if (toolName === "orchestrate_subagent") {
+  if (isKiroPipelineDelegationTool(toolName)) {
     const stages = Array.isArray(toolArgs.stages) ? toolArgs.stages : [];
     return stages.filter(isRecord).map((stage) => ({
       agent: firstNonBlank([stage.role, stage.name]),
@@ -300,10 +256,7 @@ function kiroDelegationTargets(
       stage: firstNonBlank([stage.name]),
     }));
   }
-  const suffix =
-    toolName.startsWith("subagent_") && toolName !== "subagent_response"
-      ? toolName.slice("subagent_".length).trim()
-      : "";
+  const suffix = kiroNamedDelegate(toolName);
   return [{
     agent: suffix ||
       firstNonBlank([
@@ -1668,7 +1621,7 @@ if (target === "terminal-command-guard") {
     : "";
   // Before anything below runs a command: this call would not reach the
   // engine as written (see cmdMetacharacterHazard).
-  const cmdHazard = tool === "execute_pwsh" ? cmdMetacharacterHazard(rawCommand) : null;
+  const cmdHazard = isKiroPowerShellTool(tool) ? cmdMetacharacterHazard(rawCommand) : null;
   if (cmdHazard !== null) {
     process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
     return 2;
@@ -1829,25 +1782,6 @@ function isFailedWriteResult(toolResult: string): boolean {
     /^Failed to /i.test(s) ||
     /^An error occurred/i.test(s)
   );
-}
-
-// Map the IDE tool name to the canonical name the core hooks match on. Write
-// creates a (possibly new) file; str_replace/fs_append always target an
-// existing file → Edit (forces ARTIFACT_UPDATED in the core write-audit-log).
-function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
-  if (name === "fs_write" || name === "create_file") return "Write";
-  if (
-    name === "str_replace" ||
-    name === "fs_append" ||
-    name === "delete_file" ||
-    name === "apply_patch" ||
-    name === "edit_file"
-  ) return "Edit";
-  return "";
-}
-
-function mutationCapableTool(name: string): boolean {
-  return name.length > 0 && !PLAN_APPROVAL_SAFE_READ_TOOLS.has(name);
 }
 
 function inputPaths(input: Record<string, unknown>): string[] {
@@ -2198,7 +2132,7 @@ function buildForward(): Forward {
           state.active &&
           !state.approved &&
           !state.sourceFloorValid &&
-          !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+          !isLegacyPlanningWriteTool(toolName)
         ) {
           // The canonical planning writes stay open: re-presenting the plan is
           // the remedy, and it is a questions-file write. Blocking it here made
@@ -2251,7 +2185,7 @@ function buildForward(): Forward {
           (
             toolName === "" ||
             isKiroShellTool(toolName) ||
-            toolName === "fs_append"
+            isKiroAppendTool(toolName)
           )
         ) {
           return {
@@ -2269,7 +2203,7 @@ function buildForward(): Forward {
           if (
             state.active &&
             !state.approved &&
-            !LEGACY_PLANNING_WRITE_TOOLS.has(toolName)
+            !isLegacyPlanningWriteTool(toolName)
           ) {
             return {
               hook: "__legacy_plan_approval_block__",
@@ -2280,7 +2214,7 @@ function buildForward(): Forward {
             };
           }
           if (
-            LEGACY_PLANNING_WRITE_TOOLS.has(toolName) &&
+            isLegacyPlanningWriteTool(toolName) &&
             state.target !== null
           ) {
             try {
@@ -2329,7 +2263,7 @@ function buildForward(): Forward {
         }
       }
       if (toolName === "") return null;
-      if (PLAN_APPROVAL_SAFE_READ_TOOLS.has(toolName)) return null;
+      if (isPlanApprovalSafeReadTool(toolName)) return null;
       if (writeTool) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
@@ -2356,13 +2290,12 @@ function buildForward(): Forward {
             },
             cwd: projectDir,
             // The guard reads a PowerShell command the way PowerShell runs it.
-            ...(toolName === "execute_pwsh" ? { aidlc_shell: "powershell" } : {}),
+            ...(isKiroPowerShellTool(toolName) ? { aidlc_shell: "powershell" } : {}),
           },
         };
       }
       if (isKiroDelegationTool(toolName)) {
-        const generic =
-          toolName === "invoke_sub_agent" || toolName === "orchestrate_subagent";
+        const generic = isKiroGenericDelegationTool(toolName);
         const named = kiroDelegationTargets(toolName, toolArgs);
         // A generic dispatch that names no delegate (or a pipeline with no
         // stage) is treated as guarded generation rather than letting an
@@ -2624,7 +2557,7 @@ function buildForward(): Forward {
       }
       const sessionId = ide.sessionId?.trim() || rememberedKiroIdeSessionId();
       const completion = (t: KiroDelegationTarget | undefined) => {
-        const output = toolName === "orchestrate_subagent"
+        const output = isKiroPipelineDelegationTool(toolName)
           ? orchestrateStageOutput(result, t?.stage ?? "")
           : result;
         return {

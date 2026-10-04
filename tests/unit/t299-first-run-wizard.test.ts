@@ -92,10 +92,12 @@ function detection(
     claude: { found: true, version: "claude 2.1.220" },
   },
   runtimeIssue = false,
+  // Harnesses left to the real `--version` probe of the stubs on PATH.
+  probed: readonly string[] = [],
 ): string {
   return JSON.stringify({
     harnesses: Object.fromEntries(
-      HARNESS_NAMES.map((name) => {
+      HARNESS_NAMES.filter((name) => !probed.includes(name)).map((name) => {
         const value = harnesses[name] ?? {
           found: false,
           probed: name !== "kiro-ide",
@@ -388,6 +390,7 @@ function runWizard(
     preload?: string;
     // More `config` arguments, such as a `--harness ... --yes` setup.
     configArgs?: string[];
+    probed?: readonly string[];
   } = {},
 ): CliContext & CliResult {
   const project = realpathSync(options.project ?? temp("aidlc-t299-project-"));
@@ -418,6 +421,7 @@ function runWizard(
         bin,
         options.harnesses,
         options.runtimeIssue,
+        options.probed,
       ),
       ...options.env,
       AIDLC_T299_PROJECT_DIR: project,
@@ -793,6 +797,26 @@ describe("t299 first-run setup wizard", () => {
       .toBeLessThan(result.stdout.indexOf("AI-DLC setup - first run"));
     expect(result.stdout).toContain("Using Codex CLI.");
     expect(existsSync(join(result.project, ".codex"))).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Both Kiro rows probe `kiro-cli`. The kiro-ide row counts it only from
+  // 2.24.1, the oldest Kiro CLI it has been checked on; below that, the kiro
+  // row is the one detected, so setup takes it without asking.
+  test("a Kiro CLI below the kiro-ide floor detects only the kiro row", () => {
+    const old = runWizard("\n", {
+      harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.24.0" } },
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(old.stdout).not.toContain("Choose the harness for this project first.");
+    expect(old.status, old.stdout + old.stderr).toBe(0);
+    expect(existsSync(join(old.project, ".kiro", "agents", "aidlc.json"))).toBe(true);
+
+    const supported = runWizard("\n\n", {
+      harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.24.1" } },
+      probed: ["kiro", "kiro-ide"],
+    });
+    expect(supported.status, supported.stdout + supported.stderr).toBe(0);
+    expect(supported.stdout).toContain("Choose the harness for this project first.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro IDE's terminal selects Kiro IDE and ends with trust, reload, and agent steps", () => {

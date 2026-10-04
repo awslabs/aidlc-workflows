@@ -241,6 +241,7 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc.md", dst: "agents/aidlc.md" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
+    { src: "hooks/aidlc-kiro-tool-names.ts", dst: "hooks/aidlc-kiro-tool-names.ts" },
     { src: "hooks/aidlc-write-audit-log.json", dst: "hooks/aidlc-write-audit-log.json" },
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
     { src: "hooks/aidlc-terminal-command.json", dst: "hooks/aidlc-terminal-command.json" },

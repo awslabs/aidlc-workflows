@@ -24,7 +24,10 @@ engine directories must still differ (the `kiro` and `kiro-ide` distributions ca
 
 ## Prerequisites
 
-- **Kiro IDE**, signed in, or **Kiro CLI** (`kiro-cli`), signed in
+- **Kiro IDE 1.1.70 or later**, signed in, or **Kiro CLI 2.24.1 or later**
+  (`kiro-cli --version`), signed in. These are the oldest builds this
+  distribution has been checked on. `/aidlc --doctor` warns when the
+  `kiro-cli` on the PATH is older; it cannot read the Kiro IDE version.
 - **Claude Opus 4.8** selected as the chat model (see the note above)
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes are
@@ -309,7 +312,10 @@ triggers) under `.kiro/hooks/` (a different mechanism from the `kiro` CLI
 distribution, which carries a `hooks` block inside the agent JSON). Native hook commands route through
 `aidlc engine adapter kiro-ide`; source/development copies route through the projected
 `aidlc-kiro-adapter.ts` shim. Both normalize the IDE event into the shape the
-shared core hooks expect.
+shared core hooks expect. Which Kiro tools are writes, shells, delegations, and
+reads is set in one table, `aidlc-kiro-tool-names.ts` beside the adapter. The
+adapter reads it; the hook registrations are hand-written JSON whose matchers
+list the same shell, delegation, and audited write names.
 
 Kiro IDE 1.x and Kiro CLI v3 deliver hook context as **JSON on stdin** (snake_case:
 `{ session_id, tool_name, tool_input, tool_response }`; the older 0.12 builds instead set

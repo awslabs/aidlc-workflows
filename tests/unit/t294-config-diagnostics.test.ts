@@ -721,6 +721,21 @@ describe("t294 runtime diagnostics", () => {
       command: "kiro-cli",
       status: "found",
     }));
+    // 2.24.1 is the oldest Kiro CLI this row has been checked on; an older one
+    // still serves the kiro row, which has no floor.
+    const oldKiro = {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: () => ({ status: 0, stdout: "kiro-cli 2.24.0\n" }),
+    };
+    expect(probeHarnessCli("kiro-ide", oldKiro)).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "too-old",
+      minimumVersion: "2.24.1",
+    }));
+    expect(probeHarnessCli("kiro", oldKiro)).toEqual(expect.objectContaining({
+      command: "kiro-cli",
+      status: "found",
+    }));
   });
 
   // A `copilot` whose --version reply has no version number, like the line
@@ -1027,6 +1042,25 @@ describe("t294 runtime diagnostics", () => {
     expect(cliRow(copilot, ".aidlc", printsVersion("1.0.80\n"))).toEqual(expect.objectContaining({
       pass: true,
       label: `Harness CLI: copilot 1.0.80 at ${NO_VERSION.which()}`,
+    }));
+
+    // Kiro CLI is optional on the kiro-ide row too: absent passes, older than
+    // the floor warns.
+    const kiroIde = temp("aidlc-t294-doctor-kiro-ide-cli-");
+    cpSync(join(DIST, "kiro-ide"), kiroIde, { recursive: true });
+    expect(cliRow(kiroIde, ".kiro", { which: () => null })).toEqual(expect.objectContaining({
+      pass: true,
+      label: "Harness CLI: optional kiro-cli is not installed",
+    }));
+    expect(cliRow(kiroIde, ".kiro", {
+      which: () => "/opt/kiro/bin/kiro-cli",
+      run: (command) => command.includes("kiro-cli")
+        ? { status: 0, stdout: "kiro-cli 2.24.0\n" }
+        : { status: 0, stdout: "/usr/bin:/bin\n" },
+    })).toEqual(expect.objectContaining({
+      pass: false,
+      severity: "warn",
+      label: "Harness CLI: optional kiro-cli kiro-cli 2.24.0 is below 2.24.1",
     }));
 
     // Required CLIs are unchanged: missing or too old is a warning.
