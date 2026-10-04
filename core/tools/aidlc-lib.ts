@@ -27457,14 +27457,18 @@ export function fenceSwitchSentence(
   }
 }
 
-export function renderReviewVerdictCommand(input: {
+interface ReviewCommandInput {
   projectDir: string;
   stage: string;
   reviewer: string;
   unit?: string;
   single?: boolean;
   iteration: number;
-}): string {
+}
+
+// The review request and its verdict, rendered once: the same scope selectors
+// and the project the request belongs to (a Bolt worktree included).
+function renderReviewCommand(input: ReviewCommandInput, verdict: boolean): string {
   return renderEngineInvocation({
     route: "log",
     args: [
@@ -27477,12 +27481,19 @@ export function renderReviewVerdictCommand(input: {
       ...(input.single ? ["--single"] : []),
       "--iteration",
       String(input.iteration),
-      "--verdict",
-      "<READY|NOT-READY>",
+      ...(verdict ? ["--verdict", "<READY|NOT-READY>"] : []),
       "--project-dir",
       input.projectDir,
     ],
   }, { harnessDir: harnessDir() });
+}
+
+export function renderReviewVerdictCommand(input: ReviewCommandInput): string {
+  return renderReviewCommand(input, true);
+}
+
+export function renderReviewRequestCommand(input: ReviewCommandInput): string {
+  return renderReviewCommand(input, false);
 }
 
 function restartStageRemedy(stage: string): GuardRemedy {

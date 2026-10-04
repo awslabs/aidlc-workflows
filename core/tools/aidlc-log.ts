@@ -112,6 +112,7 @@ import {
   reviewRecordDigest,
   reviewRecordRelativePath,
   reviewRequestArtifactsCurrent,
+  renderReviewRequestCommand,
   renderReviewVerdictCommand,
   REVIEW_RECORD_MAX_BYTES,
   resolveBoltDag,
@@ -2714,12 +2715,14 @@ function handleReview(args: string[]): void {
         // The one request that still works when a pending review can never
         // finish (see replaceIteration below): named in every refusal that would
         // otherwise leave the conductor restoring bytes it cannot restore.
-        const requestAgain = (n: number): string => {
-          const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
-          const singleArg = flags.single === "true" ? " --single" : "";
-          return `aidlc-log.ts review --stage "${flags.stage}" --reviewer "${flags.reviewer}"` +
-            `${unitArg}${singleArg} --iteration ${n}`;
-        };
+        const requestAgain = (n: number): string => renderReviewRequestCommand({
+          projectDir: pd,
+          stage: flags.stage,
+          reviewer: flags.reviewer,
+          ...(flags.unit ? { unit: flags.unit } : {}),
+          ...(flags.single === "true" ? { single: true } : {}),
+          iteration: n,
+        });
         const startAgain = (n: number): string =>
           pendingStatus?.iteration === n && pendingStatus.replaceable
             ? ` It never got a verdict, so request it again instead: \`${requestAgain(n)}\`.`
@@ -2759,12 +2762,10 @@ function handleReview(args: string[]): void {
                   message,
                 );
               }
-              const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
               refuseReview(
                 `Cannot retry the prior review for "${flags.stage}" because it completed ` +
                   "before the stage output or project source changed. Start the one recovery " +
-                  `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
-                  `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
+                  `pass with \`${requestAgain(expected)}\`.`,
               );
             }
             if (recoverySpent) {
@@ -2922,7 +2923,7 @@ function handleReview(args: string[]): void {
           if (iteration !== replaceIteration) {
             refuseReview(
               `Cannot start review iteration ${iteration} for "${flags.stage}": iteration ` +
-                `${replaceIteration} never got a verdict and its outputs changed since, so it ` +
+                `${replaceIteration} never got a verdict and its outputs or source changed since, so it ` +
                 `is requested again as iteration ${replaceIteration}: ` +
                 `\`${requestAgain(replaceIteration)}\`.`,
             );

@@ -1,4 +1,4 @@
-// covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot,
+// covers: function:isAutonomousSwarmStage, function:reviewArtifactSnapshot, function:renderReviewRequestCommand,
 // function:validateReviewAppendix, function:reviewCompletionMatchesRequest,
 // function:reviewRequestBindingFromBlock, function:reviewAppendedAfterRequest,
 // function:reviewRequestArtifactsCurrent, function:reviewRequestBindingIsModern,
@@ -49,7 +49,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -1715,10 +1715,14 @@ describe("t271 review iteration ceiling", () => {
     expect(retry.status).not.toBe(0);
     expect(retry.stderr).toContain("cannot rebaseline changed content");
     expect(retry.stderr).toContain("request it again instead");
-    expect(retry.stderr).toContain("--iteration 1`");
+    // The command names the project the request belongs to, so it also works
+    // when the review runs against a Bolt worktree from the main workspace.
+    expect(retry.stderr).toMatch(/--iteration 1 --project-dir \S/);
+    expect(retry.stderr).toContain(basename(proj));
     const second = runReview(proj, [...request, "--iteration", "2"]);
     expect(second.status).not.toBe(0);
     expect(second.stderr).toContain("is requested again as iteration 1");
+    expect(second.stderr).toMatch(/--iteration 1 --project-dir \S/);
     expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(1);
 
     // The gate's recovery offers that same request.
