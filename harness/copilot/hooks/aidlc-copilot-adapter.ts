@@ -797,6 +797,22 @@ export async function run(
     return `This project has no \`${script}\`, so this did not run. Run the same command with \`${direct ? "aidlc engine orchestrate" : "aidlc"}\` in place of \`bun ${script}\`.`;
   }
 
+  // The same words with the installed `aidlc` in place of a missing copied
+  // script, or null when a word cannot be written back plainly.
+  function installedForm(command: string, direct: boolean): string | null {
+    const parsed = simpleCommand(command);
+    if (!parsed || parsed.expansionActive) return null;
+    let cursor = 1;
+    if (parsed.words[cursor] === "run") cursor++;
+    const words: string[] = [];
+    for (const word of parsed.words.slice(cursor + 1)) {
+      if (/^[A-Za-z0-9_.:=+/@%,-]+$/.test(word)) words.push(word);
+      else if (!/["$`\\]/.test(word)) words.push(`"${word}"`);
+      else return null;
+    }
+    return ["aidlc", ...(direct ? ["engine", "orchestrate"] : []), ...words].join(" ");
+  }
+
   function orchestrationCommand(command: unknown = nativeToolInput?.command, lead = ""): ParsedOrchestration {
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
     // After a cd to the project, only a command claimed or vouched for alone
@@ -825,7 +841,16 @@ export async function run(
       } catch {
         const typed = resolve(projectDir, terminalPath(script));
         if (typed === resolve(directPath) || typed === resolve(dispatcherPath)) {
-          return existsSync(typed) ? { status: "unsupported" } : { status: "unsupported", reason: noScript(typed === resolve(directPath)) };
+          if (existsSync(typed)) return { status: "unsupported" };
+          const direct = typed === resolve(directPath);
+          // Read the rest as the installed command would, so a refusal of that
+          // too names one command that runs.
+          const installed = installedForm(command, direct);
+          const inner = installed === null ? null : orchestrationCommand(installed);
+          if (inner?.status === "unsupported" && inner.reason) {
+            return { status: "unsupported", reason: `This project has no \`${[".aidlc", "tools", direct ? "aidlc-orchestrate.ts" : "aidlc.ts"].join("/")}\`. ${inner.reason}` };
+          }
+          return { status: "unsupported", reason: noScript(direct) };
         }
       }
     } else if (prefixFirst === "aidlc") {

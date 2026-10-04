@@ -925,6 +925,18 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       expect(out.hookSpecificOutput?.permissionDecisionReason).toContain(
         "Run the same command with `aidlc engine orchestrate` in place of `bun .aidlc/tools/aidlc-orchestrate.ts`",
       );
+      // A second thing it would not accept is named too, with the command that runs.
+      for (const [command, form] of [
+        ["bun .aidlc/tools/aidlc-orchestrate.ts park --help", "aidlc engine orchestrate park"],
+        ['bun .aidlc/tools/aidlc-orchestrate.ts park --stage code-generation --note "stopping for today"', "aidlc engine orchestrate park"],
+        ["bun .aidlc/tools/aidlc-orchestrate.ts continue ABCD1234 EFGH5678", "aidlc engine orchestrate next"],
+      ]) {
+        const text = shellDecision(runAdapter(bare, "guard-tool-call", shellCall(command))).hookSpecificOutput?.permissionDecisionReason ?? "";
+        expect(text, command).toContain(`Run \`${form}\``);
+        expect(text, command).not.toContain("chaining");
+        const named = shellDecision(runAdapter(bare, "guard-tool-call", shellCall(form)));
+        expect(named.hookSpecificOutput?.permissionDecision, form).not.toBe("deny");
+      }
     } finally {
       bare.cleanup();
     }
