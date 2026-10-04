@@ -294,6 +294,7 @@ import {
   unitMajorConstructionStageSlugs,
   validateLiveUnitScope,
   validScopes,
+  validSessionId,
   shellArg,
   authoritativeProjectDescription,
   harnessDir,
@@ -1798,9 +1799,12 @@ function selectCommands(
   }));
 }
 
+// `commands` replaces each record's select command with the one a chosen
+// route runs for it (a routing question's reshape), keyed the same way.
 function intentPickAskDirective(
   question: string,
   availableIntents: string[],
+  commands: Array<{ selector: string; command: string }> = selectCommands(availableIntents),
 ): AskDirective {
   return {
     kind: "ask",
@@ -1808,7 +1812,7 @@ function intentPickAskDirective(
     response_route: "next",
     question,
     available_intents: availableIntents,
-    select_commands: selectCommands(availableIntents),
+    select_commands: commands,
   };
 }
 
@@ -1906,12 +1910,15 @@ function routingOptionReply(
 }
 
 // The routing question a reply that only names one of its options answers: the
-// question stored most recently, about work that has not moved since: the one
-// workflow it was asked about, or, asked while none was selected, the same
-// records, still unselected (`records`). A bare number also needs nothing
-// asked after it: no question logged since, and no turn of the person's
-// besides this reply. Anything else is the person's own words, asked about as
-// usual.
+// question stored most recently, asked in this conversation, about work that
+// has not moved since: the one workflow it was asked about. Asked while none
+// was selected, separate new work acts on none of its records, so it answers
+// whatever happened to them; continue and reshape get `records` only while the
+// same records are still unselected and unchanged, and otherwise run the
+// question's own late answer, which asks again about the work there is now,
+// with the request kept. A bare number also needs nothing asked after it: no
+// question logged since, and no turn of the person's besides this reply.
+// Anything else is the person's own words, asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
@@ -1920,6 +1927,7 @@ function routingQuestionAnswer(
     const question = latestQuestion(projectDir);
     const askedAbout = question?.askedAbout;
     if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
+    if ((askedAbout.session ?? null) !== validSessionId(engineSessionId)) return null;
     const pick = askedAbout.pick === true;
     const option = routingOptionReply(
       text,
@@ -1933,13 +1941,11 @@ function routingQuestionAnswer(
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     let records: UnselectedRecords | null = null;
     if (pick) {
-      records = unselectedRecords(projectDir);
-      if (
-        records === null || records.space !== askedAbout.space ||
-        unselectedRecordsDigest(records.selectable) !== question.stateSha256
-      ) {
-        return null;
-      }
+      const now = option.route === "separate" ? null : unselectedRecords(projectDir);
+      records = now !== null && now.space === askedAbout.space &&
+          unselectedRecordsDigest(now.selectable) === question.stateSha256
+        ? now
+        : null;
     } else {
       const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
       if (!target) return null;
@@ -1969,26 +1975,23 @@ function routingQuestionAnswer(
 
 // "Part of existing work" or "Reshape existing work" said back while the
 // question listed more than one record: the person chose the option, not yet
-// which work. Ask only that, and run the chosen record's own command, which
-// the question's would have been.
-function pickedRouteRecordDirective(
+// which work. Ask only that, as the typed record picker: each record a choice,
+// and its command the one the question would have run for it. Record names
+// stay data in the choices, never in an instruction.
+function pickedRouteRecordAsk(
   question: StoredQuestion,
   route: "continue" | "reshape",
   records: UnselectedRecords,
-): PrintDirective {
+): AskDirective {
   const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
-  const option = EXISTING_WORK_ROUTING_OPTIONS.find((entry) => entry.route === route)!;
   const selectors = records.selectable.map(({ selector }) => selector);
-  const commands = (route === "continue"
-    ? selectCommands(selectors)
-    : selectors.map((selector) => ({ selector, command: routingReshapeCommand(question.id, selector, existingWork) })))
-    .map(({ selector, command }) => `- ${JSON.stringify(selector)}: \`${command}\``)
-    .join("\n");
-  return printDirective(
-    `The person chose "${option.label}" on the new-work routing question, but not which piece of work. ` +
-      `Ask them which one, in one short question naming these: ${records.list}. Then run that record's command ` +
-      `exactly as given and follow what it returns:\n${commands}\n` +
-      `If their answer is something else, pass their words unchanged to \`${aidlcToolInvocation("orchestrate")} next\`.`,
+  if (route === "continue") {
+    return intentPickAskDirective(`Which piece of work is this part of: ${records.list}?`, selectors);
+  }
+  return intentPickAskDirective(
+    `Which piece of work should I reshape: ${records.list}?`,
+    selectors,
+    selectors.map((selector) => ({ selector, command: routingReshapeCommand(question.id, selector, existingWork) })),
   );
 }
 
@@ -2065,7 +2068,11 @@ function newWorkRoutingAskDirective(
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
   const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256, {
+  const session = validSessionId(engineSessionId);
+  const stored = saveQuestion(projectDir, description, proposedScope, "routing", {
+    ...askedAbout,
+    ...(session ? { session } : {}),
+  }, false, undefined, stateSha256, {
     newWork: tokens(`${carried.newWork}${carried.planChanges}`),
     existingWork: tokens(carried.existingWork),
   }, approvedRequest);
@@ -3574,11 +3581,14 @@ function unselectedRecords(projectDir: string): UnselectedRecords | null {
 }
 
 // What the routing question's records looked like when it was asked: each
-// selectable record and its state. A reply naming one of its options answers
-// it only while this is unchanged.
+// selectable record, its identity, and its state. A reply naming continue or
+// reshape acts on the records listed only while this is unchanged.
 function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): string {
   return createHash("sha256")
-    .update(selectable.map(({ selector, state }) => `${selector}\n${stateDigest(state)}`).join("\n"), "utf-8")
+    .update(
+      selectable.map(({ intent, selector, state }) => `${selector}\n${intent.uuid ?? ""}\n${stateDigest(state)}`).join("\n"),
+      "utf-8",
+    )
     .digest("hex");
 }
 
@@ -5742,10 +5752,12 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
   // Asked while no work was selected, continue and reshape act on a record the
   // person picks: with one listed, that is the one; with more, only which one
-  // is left to ask.
+  // is left to ask. Once its records moved, they run the question's own late
+  // answer below (`--continue` / `compose --request`), which asks again about
+  // the work there is now.
   const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
   if (routingAnswer && pickedRecords && pickedRecords.selectable.length > 1) {
-    emit(pickedRouteRecordDirective(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
+    emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
     return;
   }
   if (routingAnswer && pickedRecords && routingAnswer.route === "continue") {

@@ -719,6 +719,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         text.startsWith("<line ") ? numberedLine(ask, Number(text[6])) : text;
       const directive = (text: string) => JSON.parse(next([text]).stdout.trim());
       const emitted = (command: string) => JSON.parse(runEmittedCommand(command).stdout.trim());
+      // A command as one conversation runs it.
+      const emittedIn = (session: string, command: string) =>
+        JSON.parse(runEmittedCommand(command, proj, { AIDLC_SESSION_OVERRIDE: session }).stdout.trim());
+      const inSession = (session: string, text: string) => emittedIn(session, `${ORCH_SH} next '${text}'`);
       const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions")).length;
       const seedOneIntentNoCursor = (): string => {
         expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
@@ -749,17 +753,15 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         ["reshape", "reshape_commands", ["3", "Reshape existing work", "<line 3>"]],
       ] as const) {
         for (const text of texts) {
-          test(`the ${route} option (${JSON.stringify(text)}) with two records asks only which one, with each record's own command`, () => {
+          test(`the ${route} option (${JSON.stringify(text)}) with two records asks only which one, each record's own command a typed choice`, () => {
             seedTwoIntentsNoCursor();
             const ask = routingAsk();
             const before = questionCount();
             const d = directive(reply(ask, text));
-            expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
-            expect(d.message).toContain("but not which piece of work");
-            for (const row of ask[field] as Array<{ selector: string; command: string }>) {
-              expect(d.message).toContain(`\`${row.command}\``);
-            }
-            expect(d.message).not.toContain("New work routing");
+            expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+            expect(d.question).toContain(route === "continue" ? "Which piece of work is this part of" : "Which piece of work should I reshape");
+            expect(d.available_intents).toEqual(ask.available_intents);
+            expect(d.select_commands).toEqual(ask[field]);
             expect(questionCount(), "no new question is asked").toBe(before);
             if (route === "continue") {
               const [target] = ask.select_commands;
@@ -796,23 +798,59 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d).not.toEqual(emitted(ask.new_intent_command));
       });
 
-      test("an option is asked about once a listed record has moved", () => {
-        const records = seedTwoIntentsNoCursor();
-        const ask = routingAsk();
-        const statePath = join(intentsDir(proj), records[0], "aidlc-state.md");
+      // Separate new work acts on none of the listed records, so what happened
+      // to them changes nothing; continue and reshape run the question's own
+      // late answer, which asks again about the work there is now, keeping the
+      // request.
+      const moveRecord = (record: string): void => {
+        const statePath = join(intentsDir(proj), record, "aidlc-state.md");
         writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Revision Count**: 1\n`, "utf-8");
-        const d = directive("2");
-        expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
-        expect(d).not.toEqual(emitted(ask.new_intent_command));
-      });
+      };
+      for (const text of ["2", "Separate new piece of work"]) {
+        test(`the separate-work option (${JSON.stringify(text)}) still starts the new work after a listed record moved`, () => {
+          const records = seedTwoIntentsNoCursor();
+          const ask = routingAsk();
+          moveRecord(records[0]);
+          expect(directive(text)).toEqual(emitted(ask.new_intent_command));
+        });
+      }
 
-      test("an option is asked about once work was selected meanwhile", () => {
-        const records = seedTwoIntentsNoCursor();
+      for (const text of ["1", "Part of existing work", "3", "Reshape existing work"]) {
+        test(`${JSON.stringify(text)} after a listed record moved asks again about the work there is now, keeping the request`, () => {
+          const records = seedTwoIntentsNoCursor();
+          routingAsk();
+          moveRecord(records[0]);
+          const d = directive(text);
+          expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
+          expect(d.new_work_description).toBe(DESCRIPTION);
+        });
+      }
+
+      test("the continue option after the sole listed record was replaced asks again, never selects the replacement", () => {
+        const record = seedOneIntentNoCursor();
         routingAsk();
-        writeFileSync(cursorPath(proj), `${records[0]}\n`, "utf-8");
+        const registryPath = join(intentsDir(proj), "intents.json");
+        const registry = readFileSync(registryPath, "utf-8");
+        const [uuid] = registry.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/) ?? [];
+        expect(uuid).toBeDefined();
+        writeFileSync(registryPath, registry.replaceAll(uuid!, "01a10000-0000-7000-8000-000000000000"), "utf-8");
         const d = directive("Part of existing work");
         expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
-        expect(d.new_work_description).toBe("Part of existing work");
+        expect(d.new_work_description).toBe(DESCRIPTION);
+        expect(existsSync(cursorPath(proj)) ? readFileSync(cursorPath(proj), "utf-8").trim() : "").not.toBe(record);
+      });
+
+      test("an option answers only the conversation that was asked", () => {
+        seedTwoIntentsNoCursor();
+        const first = inSession("chat-a", DESCRIPTION);
+        const ask = emittedIn("chat-a", first.confirm_command);
+        expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+        expect(inSession("chat-a", "Separate new piece of work")).toEqual(emittedIn("chat-a", ask.new_intent_command));
+        // Another conversation saying the same words is asked about them.
+        const elsewhere = inSession("chat-b", "Separate new piece of work");
+        expect(elsewhere.kind, JSON.stringify(elsewhere).slice(0, 300)).toBe("ask");
+        expect(JSON.stringify(elsewhere)).not.toContain(DESCRIPTION);
+        expect(recordDirs(proj)).toHaveLength(2);
       });
 
       // The follow-up question after a plan composed and approved in a fresh
