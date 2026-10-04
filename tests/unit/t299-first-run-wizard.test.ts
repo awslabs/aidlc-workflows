@@ -718,8 +718,9 @@ describe("t299 first-run setup wizard", () => {
     expect(result.stdout.indexOf("Recording model preset ... done")).toBeLessThan(
       result.stdout.indexOf("Saved in your personal Kiro settings"),
     );
-    // A blank line parts the saved block from the closing next steps.
-    expect(result.stdout).toMatch(/\/model\.\n\n {2}Setup complete\./);
+    // A blank line parts the saved block from whatever follows it (the next
+    // steps, or a machine's own runtime item such as a hooks PATH on Windows).
+    expect(result.stdout).toMatch(/\/model\.\n\n {2}\S/);
     const writes = kiroWrites(seam.writes);
     expect(writes[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
     expect(JSON.parse(writes[1][2])).toEqual({ "claude-opus-5": { output_config: { effort: "medium" } } });
@@ -771,7 +772,8 @@ describe("t299 first-run setup wizard", () => {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).not.toContain("Saved in your personal Kiro settings");
-    expect(result.stdout).toContain("One thing needs you");
+    // The machine may add its own runtime item (a hooks PATH on Windows).
+    expect(result.stdout).toMatch(/(?:One thing needs|\d+ things need) you/);
     expect(result.stdout).toMatch(
       /Kiro did not save the effort, so your personal Kiro settings are unchanged\.\n\s+fix: \S.* config models\n/,
     );
