@@ -171,11 +171,12 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
 // opencode runs bash-tool commands with its `shell` setting, else /bin/sh on
 // POSIX and COMSPEC (cmd.exe) on Windows. The boundary reads a command the way
 // that shell would: "posix" for sh, bash, dash, zsh and ksh, "powershell" for
-// pwsh and powershell ("windows-powershell" on Windows, which hands a program
-// one command line and runs the aidlc launcher through cmd.exe), and "cmd" for
-// cmd.exe. Any other shell, or one it cannot learn, is "strict": no AIDLC
-// command passes there.
-export type ShellDialect = "posix" | "powershell" | "windows-powershell" | "cmd" | "strict";
+// pwsh and powershell on Linux and macOS, "windows-powershell" for Windows
+// PowerShell 5.1 (which hands a program one command line), "windows-pwsh" for
+// PowerShell 7 on Windows (which hands a program its arguments as written, and
+// a .cmd file one command line), and "cmd" for cmd.exe. Any other shell, or
+// one it cannot learn, is "strict": no AIDLC command passes there.
+export type ShellDialect = "posix" | "powershell" | "windows-powershell" | "windows-pwsh" | "cmd" | "strict";
 
 const POSIX_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
 const POWERSHELLS = new Set(["pwsh", "powershell"]);
@@ -190,7 +191,10 @@ function shellDialect(configured: string | null | false, platform: NodeJS.Platfo
   }
   const name = shell.replaceAll("\\", "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
   if (POSIX_SHELLS.has(name)) return "posix";
-  if (POWERSHELLS.has(name)) return platform === "win32" ? "windows-powershell" : "powershell";
+  if (POWERSHELLS.has(name)) {
+    if (platform !== "win32") return "powershell";
+    return name === "pwsh" ? "windows-pwsh" : "windows-powershell";
+  }
   return name === "cmd" ? "cmd" : "strict";
 }
 
@@ -209,7 +213,7 @@ function shellDialect(configured: string | null | false, platform: NodeJS.Platfo
 function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
   if (dialect === "strict") return null;
   const posix = dialect === "posix";
-  const powerShell = dialect === "powershell" || dialect === "windows-powershell";
+  const powerShell = dialect === "powershell" || dialect === "windows-powershell" || dialect === "windows-pwsh";
   // Windows PowerShell builds one command line for the program to split again.
   const windowsPs = dialect === "windows-powershell";
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
@@ -333,9 +337,10 @@ const UNKNOWN_SHELL =
   "and could not confirm that here. Run the command again; if it is refused again, set \"shell\" in " +
   "opencode's settings to one of these, or remove that setting.";
 
-// On Windows `aidlc` is the aidlc.cmd launcher. PowerShell hands it a word with
-// no space unquoted, and cmd.exe reads & | < > ^, a line break, a %NAME% pair
-// and, with delayed expansion on, a !NAME! pair in what it is handed.
+// On Windows `aidlc` is the aidlc.cmd launcher. PowerShell hands it one command
+// line with a word that has no space unquoted (PowerShell 7 too, for a .cmd
+// file), and cmd.exe reads & | < > ^, a line break, a %NAME% pair and, with
+// delayed expansion on, a !NAME! pair in what it is handed.
 const LAUNCHER_REREAD =
   "When PowerShell runs the aidlc launcher, cmd.exe reads its arguments again, so &, |, <, >, ^, " +
   "line breaks and %NAME% or !NAME! pairs cannot reach AI-DLC as written. Set \"shell\" in opencode's settings " +
@@ -344,6 +349,12 @@ const LAUNCHER_REREAD =
 function launcherRereads(args: string[]): boolean {
   const line = args.join(" ");
   return args.some((arg) => /[&|<>^\r\n]/.test(arg)) || /%[^%]*%/.test(line) || /![^!]*!/.test(line);
+}
+
+// Windows PowerShell's command line drops an empty argument, hands a " inside
+// a word on unescaped, and lets a trailing backslash escape the closing quote.
+function commandLineLoses(args: string[]): boolean {
+  return args.some((arg) => arg === "" || arg.includes('"') || arg.endsWith("\\"));
 }
 
 /** Return a denial reason only when the static AIDLC allow-prefix would match. */
@@ -356,7 +367,18 @@ function aidlcBashBoundaryViolation(
     if (dialect === "strict") return UNKNOWN_SHELL;
     const words = directShellWords(command, dialect);
     if (words?.[0] === "aidlc") {
-      return dialect === "windows-powershell" && launcherRereads(words.slice(1)) ? LAUNCHER_REREAD : null;
+      if (dialect !== "windows-powershell" && dialect !== "windows-pwsh") return null;
+      const args = words.slice(1);
+      if (launcherRereads(args)) return LAUNCHER_REREAD;
+      if (dialect === "windows-pwsh" && commandLineLoses(args)) {
+        return (
+          "When PowerShell runs the aidlc launcher it hands it one command line, so an empty argument, " +
+          "a \" inside a word, or a trailing backslash cannot reach AI-DLC as written. Leave out the empty " +
+          "argument, or set \"shell\" in opencode's settings to cmd.exe, or remove that setting, and run the " +
+          "command again."
+        );
+      }
+      return null;
     }
     return (
       "AIDLC bash permission allows one direct invocation of a framework tool only. " +

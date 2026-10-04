@@ -456,6 +456,14 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ["bun .aidlc/tools/aidlc.ts engine orchestrate next 'R&D books rooms | QA\nat 50% of %TEMP%'", ["R&D books rooms | QA\nat 50% of %TEMP%"]],
     [START_DOUBLE, ["--scope", "feature", SPEC]],
   ];
+  // PowerShell 7 hands Bun an empty argument, a " inside a word and a trailing
+  // backslash as written.
+  const PWSH7_OK: Array<[string, string[]]> = [
+    [
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next 'Rename \"Tasks\" to \"Todos\"' '' 'C:\\dir\\'",
+      ['Rename "Tasks" to "Todos"', "", "C:\\dir\\"],
+    ],
+  ];
   const CMD_OK: Array<[string, string[]]> = [
     ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
     ['aidlc engine orchestrate next "Rename \u201cTasks\u201d, R&D | QA"', ["Rename \u201cTasks\u201d, R&D | QA"]],
@@ -476,8 +484,8 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       return (callID: string, command: string) =>
         adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
     };
-    // Windows PowerShell and cmd.exe, wherever the tests run.
-    const pwsh = await adapterWith("pwsh");
+    // Windows PowerShell 5.1 and cmd.exe, wherever the tests run.
+    const pwsh = await adapterWith("powershell");
     const cmd = await adapterWith("cmd.exe");
     for (const [i, [command]] of PWSH_OK.entries()) await expect(pwsh(`ps-ok-${i}`, command)).resolves.toBeUndefined();
     for (const [i, [command]] of CMD_OK.entries()) await expect(cmd(`cmd-ok-${i}`, command)).resolves.toBeUndefined();
@@ -520,6 +528,21 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       'aidlc engine orchestrate next R^&D',
     ].entries()) {
       await expect(cmd(`cmd-no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // PowerShell 7 on Windows hands Bun its arguments as written, and the aidlc
+    // launcher one command line read again by cmd.exe.
+    const pwsh7 = await adapterWith("pwsh");
+    for (const [i, [command]] of [...PWSH_OK, ...PWSH7_OK].entries()) {
+      await expect(pwsh7(`ps7-ok-${i}`, command)).resolves.toBeUndefined();
+    }
+    for (const [i, [command, refusal]] of [
+      ["aidlc engine orchestrate next 'Rename \"Tasks\"'", "hands it one command line"],
+      ["aidlc engine orchestrate next ''", "hands it one command line"],
+      ["aidlc engine orchestrate next 'C:\\dir\\'", "hands it one command line"],
+      ["aidlc engine orchestrate next 'R&D'", "reads its arguments again"],
+      ['bun .aidlc/tools/aidlc.ts engine orchestrate next "fix \u201d; New-Item x; \u201c"', "one direct invocation"],
+    ].entries()) {
+      await expect(pwsh7(`ps7-no-${i}`, command)).rejects.toThrow(refusal);
     }
     // PowerShell on Linux or macOS hands a program its arguments one by one, and
     // `aidlc` there is no cmd.exe launcher: the person's text passes as written.
@@ -574,7 +597,13 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     // Windows names the variable Path; a second PATH key would be ignored.
     const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
     const env = { ...process.env, [pathKey]: `${bin};${process.env[pathKey] ?? ""}` };
-    for (const [shell, cases] of [["cmd.exe", CMD_OK], ["powershell.exe", PWSH_OK]] as const) {
+    // PowerShell 7 runs where it is installed (GitHub's Windows runners have it).
+    const pwsh7 = Bun.which("pwsh", { PATH: env[pathKey] ?? "" });
+    for (const [shell, cases] of [
+      ["cmd.exe", CMD_OK],
+      ["powershell.exe", PWSH_OK],
+      ...(pwsh7 ? [[pwsh7, [...PWSH_OK, ...PWSH7_OK]] as const] : []),
+    ] as const) {
       for (const [command, tail] of cases) {
         const run = spawnSync(command, { cwd: root, env, shell, encoding: "utf-8" });
         expect(run.status, `${shell}: ${command}\n${run.stderr}`).toBe(0);
