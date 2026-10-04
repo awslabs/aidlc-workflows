@@ -41,6 +41,7 @@ import {
   previousWindowsShimHelpers,
   previousWindowsShimHelperState,
   replacePreviousWindowsShimHelper,
+  windowsPosixShim,
 } from "../../core/tools/aidlc-lifecycle.ts";
 import {
   channelPath,
@@ -2326,11 +2327,17 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
         rmSync(lock);
 
+        // A release from before the Git Bash launcher, updating this machine,
+        // wrote none; the first command of this one writes it with the helper,
+        // so hooks run through Git Bash find a bare `aidlc`.
+        const gitBashLauncher = join(dirname(commandPath()), "aidlc");
+        rmSync(gitBashLauncher, { force: true });
         const replaced = launch("version");
         expect(replaced.exitCode, replaced.stderr).toBe(0);
         expect(replaced.stdout).toBe(versionLine);
         expect(replaced.stderr).toBe("");
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
+        expect(readFileSync(gitBashLauncher, "utf-8")).toBe(windowsPosixShim());
         expect(existsSync(lock)).toBe(false);
         expect(launcherRows()).toEqual([]);
 

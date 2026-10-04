@@ -1604,7 +1604,8 @@ export function previousWindowsShimHelperState(): PreviousShimHelperState {
 export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
-    const helper = olderReleaseHelperRepair() ??
+    const repair = olderReleaseHelperRepair();
+    const helper = repair ??
       (previousWindowsShimHelperState()?.kind === "replace" ? windowsShimHelper() : null);
     if (helper === null) return;
     const root = machineTransactionRoot();
@@ -1613,11 +1614,24 @@ export function replacePreviousWindowsShimHelper(): void {
       root,
       operations: [
         writeOperation(relative(root, windowsShimPath()), helper, expected, 0o700),
+        ...(repair === null ? gitBashLauncherCatchUp(root) : []),
       ],
     });
   } catch {
     // The previous helper still starts aidlc; a later command retries.
   }
+}
+
+// An older release that updated this machine wrote no Git Bash launcher, so
+// hooks run through Git Bash could not find `aidlc`. The first command of this
+// release writes it with the helper, when it is missing or one an earlier
+// release wrote; a file of anyone else's stays, and doctor names it.
+function gitBashLauncherCatchUp(root: string): ReturnType<typeof writeOperation>[] {
+  const path = windowsPosixCommandPath();
+  if (path === null || !windowsPosixLauncherOwnedByInstaller()) return [];
+  const body = windowsPosixShim();
+  if (existsSync(path) && readFileSync(path, "utf-8") === body) return [];
+  return [writeOperation(relative(root, path), body, transactionState(path), 0o700)];
 }
 
 // While a release from before the current helper is active, it needs the
