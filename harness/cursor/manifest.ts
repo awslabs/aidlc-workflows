@@ -56,6 +56,8 @@ const manifest: HarnessManifest = {
           "sha256:a87496436cb23f303dee533322bd0896e981e14be1a7abd18e76aa5e113be02c",
           // The variant shipped with a generic template above the AI-DLC lines.
           "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
+          // The variant shipped with notes above each group of lines.
+          "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
         ],
       },
     },

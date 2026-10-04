@@ -881,7 +881,7 @@ workflow selection is session-bound across spaces, while simultaneous
 multi-space ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
-The split (`harness/claude/dot-gitignore:34-54`): the two cursors
+The split (`harness/claude/dot-gitignore`): the two cursors
 (`active-space`, `active-intent`), per-clone runtime (`.aidlc-clone-id`,
 `.aidlc-sessions/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
 record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,

@@ -41,6 +41,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { addRootBlocks, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -649,7 +650,14 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
       "# Editor directories and files", ".vscode/*", "!.vscode/extensions.json", ".idea", ".DS_Store",
       "*.suo", "*.ntvs*", "*.njsproj", "*.sln", "*.sw?",
     ].join("\n");
-    writeFileSync(join(root, ".gitignore"), `${template}\n\n${readFileSync(join(blocks, "gitignore"), "utf-8")}`);
+    const earlier = `${template}\n\n${readFileSync(join(blocks, "gitignore"), "utf-8")}`;
+    // The release that shipped it lists it among the files it recognises.
+    const descriptorPath = join(root, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    descriptor.rootIntegrations.find((integration: { path: string }) => integration.path === ".gitignore")
+      .legacySignatures.wholeFileHashes.push(sha256Bytes(earlier));
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor)}\n`);
+    writeFileSync(join(root, ".gitignore"), earlier);
     expect(addRootBlocks(root)).toContain(".gitignore");
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`${template}\n\n${gitignorePart()}`);
   });
