@@ -364,6 +364,7 @@ describe("t242 state-transition ownership guard", () => {
       // A flag before the verb, read the way each script reads it.
       ["bun .claude/tools/aidlc-swarm.ts --batch 1 finalize", "aidlc-swarm.ts finalize"],
       ["bun .claude/tools/aidlc-testing-posture.ts --json begin", "aidlc-testing-posture.ts begin"],
+      ["bun .claude/tools/aidlc-testing-posture.ts --project-dir begin brief", "aidlc-testing-posture.ts begin"],
       ["bun .claude/tools/aidlc-plugin.ts --json x sync", "aidlc-plugin.ts sync"],
       ["bun .claude/tools/aidlc-state.ts --json x unpark", "aidlc-state.ts unpark"],
       // The dispatcher drops its global flags before routing.

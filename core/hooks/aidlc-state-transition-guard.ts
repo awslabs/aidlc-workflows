@@ -873,15 +873,17 @@ function withoutProjectDir(args: string[]): string[] {
   return out;
 }
 
-// The words a lifecycle script may take as its verb: the first word, or the
-// first after `--flag value` pairs (how aidlc-swarm.ts and aidlc-plugin.ts read
-// it), or for aidlc-testing-posture.ts the first of its verbs anywhere.
+// The words a lifecycle script may take as its verb: the first word after
+// --project-dir, or the first after `--flag value` pairs (how aidlc-swarm.ts and
+// aidlc-plugin.ts read it), or for aidlc-testing-posture.ts the first of its
+// verbs anywhere in argv, as that tool reads it.
 function scriptVerbCandidates(script: string, args: string[]): string[] {
   if (script === "aidlc-testing-posture.ts") {
     const verb = args.find((arg) => (TESTING_POSTURE_SUBCOMMANDS as readonly string[]).includes(arg));
     return verb === undefined ? [] : [verb];
   }
-  return [args[0] ?? "", parseArgs(args).positional[0] ?? ""];
+  const positional = withoutProjectDir(args);
+  return [positional[0] ?? "", parseArgs(positional).positional[0] ?? ""];
 }
 
 function workspaceMutation(prefix: string, args: string[]): string | null {
@@ -1057,7 +1059,7 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       args = invocation.args;
     }
     if (isOneOf(DELEGATED_LIFECYCLE_SCRIPTS, script)) {
-      const refused = scriptVerbCandidates(script, withoutProjectDir(args)).find((verb) =>
+      const refused = scriptVerbCandidates(script, args).find((verb) =>
         (script === "aidlc-state.ts" && DELEGATED_STATE_MUTATIONS.has(verb)) ||
         (Object.hasOwn(DELEGATED_SCRIPT_VERBS, script) && isOneOf(DELEGATED_SCRIPT_VERBS[script], verb))
       );

@@ -1399,9 +1399,10 @@ selection and sync (a bare selection query stays open), upgrade, the team Unit
 commands that claim, publish, pin, gate, land, or release a Unit, Bolt and swarm
 lifecycle and checkpoint decisions, question, review, and pipeline-link
 receipts, learnings persistence, runtime fragment fork and merge, and the Code
-Generation boundary and plan-approval fingerprint. It reads each command's verb
-the way the tool does, past a flag placed before it and past the `aidlc`
-dispatcher's global flags (`--json`, `--quiet`, ...). Delegated agents retain ordinary shell
+Generation boundary and plan-approval fingerprint. It reads a script's verb
+also after `--flag value` pairs placed before it (for testing-posture, the first
+of its verbs anywhere), and an `aidlc` command past the dispatcher's global
+flags (`--json`, `--quiet`, ...), which the dispatcher drops before routing. Delegated agents retain ordinary shell
 access for artifact work, builds, validation, and read-only state inspection;
 they return their result to the main conductor, which alone owns workflow
 lifecycle and gates. Kiro IDE and Kiro CLI v3 supply no such identity, so the
