@@ -115,11 +115,13 @@ import {
 } from "./aidlc-unit.ts";
 import {
   isBindableIntentRecordName,
+  isSafeIntentRecordName,
   activeIntent,
   addPendingPersonLines,
   markPersonLinesHeard,
   staleStageLine,
   activeWorkflowDescriptions,
+  runningWorkflows,
   readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
@@ -1734,6 +1736,19 @@ function pendingDuration(ageMs: number): string {
   return words(Math.floor(hours / 24), "day");
 }
 
+// A persona's display name for status. Persona files are repository text, so
+// a name outside plain words, or a persona set that fails to load, leaves the
+// stored name.
+function agentDisplayName(slug: string): string {
+  try {
+    const display = loadAgents().find((agent) => agent.slug === slug)?.display_name;
+    if (display && /^[A-Za-z0-9][A-Za-z0-9 &/()'.,+-]{0,63}$/.test(display)) return display;
+  } catch {
+    // A malformed or duplicate persona file is doctor's to report.
+  }
+  return slug;
+}
+
 // An engine timestamp as a person reads it: the date and the minute, in UTC.
 function plainUtc(timestamp: string): string {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp)
@@ -1746,7 +1761,12 @@ function plainUtc(timestamp: string): string {
 // completion in the work's audit trail; nothing when it never ran.
 function codeScannedClause(projectDir: string, intent: string | undefined, space: string): string {
   try {
-    const last = readAuditShardEvents(projectDir, intent, space)
+    // A part of the trail that cannot be read could hold the latest scan, so
+    // no time is said then.
+    const unreadable: string[] = [];
+    const events = readAuditShardEvents(projectDir, intent, space, unreadable);
+    if (unreadable.length > 0) return "";
+    const last = events
       .filter((row) => row.event === "STAGE_COMPLETED" && auditBlockField(row.block, "Stage") === "reverse-engineering")
       .map((row) => row.timestamp)
       .filter((timestamp) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp))
@@ -1797,7 +1817,7 @@ To get started:
   const agentSlug = (getField(content, "Active Agent") ?? "").trim();
   const agentName = agentSlug === "" || agentSlug === "None" || agentSlug === "orchestrator"
     ? null
-    : loadAgents().find((agent) => agent.slug === agentSlug)?.display_name ?? agentSlug;
+    : agentDisplayName(agentSlug);
   const lastStage = findStageBySlug((getField(content, "Last Completed Stage") ?? "").trim());
   const nextNode = findStageBySlug((getField(content, "Next Stage") ?? "").trim());
   const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
@@ -2005,13 +2025,14 @@ To get started:
     currentNode !== undefined && isPerUnitStage(currentNode)
       ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
       : "";
-  // Other work still in flight in this space, so the person sees it and how to
-  // reach it; archived and finished work stays out.
+  // Other work still running in this space, so the person sees it and how to
+  // reach it: the same list config and doctor use, so archived and finished
+  // work stays out. A record named outside the record-name shape is not listed.
   const others = selection.intent === null
     ? []
-    : listIntents(projectDir, selection.space, selection.intent)
-      .filter((entry) => entry.dirName !== null && !entry.active && entry.status.trim().toLowerCase() === "in-flight")
-      .map((entry) => entry.dirName as string);
+    : runningWorkflows(projectDir)
+      .filter((run) => run.space === selection.space && run.dirName !== selection.intent && isSafeIntentRecordName(run.dirName))
+      .map((run) => run.dirName);
   const alsoOpen = others.length === 0
     ? ""
     : `Also open:      ${others.join(", ")} (type \`${entrySkillInvocation()} intent ${others.length === 1 ? others[0] : "<name>"}\` to switch)\n`;

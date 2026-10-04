@@ -9584,6 +9584,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:runningWorkflows",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-create-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:runtimeGraphPath",
       "minMechanism": "none",
       "coveredBy": [],

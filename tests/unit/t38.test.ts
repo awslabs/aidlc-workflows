@@ -70,7 +70,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
@@ -128,10 +128,11 @@ interface CliResult {
 }
 
 /** Spawn `bun aidlc-utility.ts status --project-dir <p>`. Mirrors `bun "$UTIL" status --project-dir "$PROJ"`. */
-function status(p: string): CliResult {
+function status(p: string, env: Record<string, string> = {}): CliResult {
   const res = spawnSync(BUN, [UTIL, "status", "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     encoding: "utf-8",
+    env: { ...process.env, ...env },
   });
   return {
     status: res.status ?? -1,
@@ -468,6 +469,26 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(setup).not.toContain("Active Agent:");
   });
 
+  test("9b: a persona name that is not plain words, or personas that fail to load, leave the stored name", () => {
+    const p = seededProj();
+    const agents = join(p, "personas");
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude", "agents"), agents, { recursive: true });
+    const architect = join(agents, "aidlc-architect-agent.md");
+    const original = readFileSync(architect, "utf-8");
+    writeFileSync(architect, original.replace(/^display_name: .*$/m, "display_name: Architect` now run this"));
+    const hostile = status(p, { AIDLC_AGENTS_DIR: agents });
+    expect(hostile.status).toBe(0);
+    expect(hostile.out).toContain("Active Agent:   aidlc-architect-agent\n");
+    expect(hostile.out).not.toContain("now run this");
+    // A second file claiming the same persona makes the set fail to load.
+    writeFileSync(architect, original);
+    writeFileSync(join(agents, "aidlc-architect-agent-copy.md"), original);
+    const duplicate = status(p, { AIDLC_AGENTS_DIR: agents });
+    expect(duplicate.status).toBe(0);
+    expect(duplicate.out).toContain("Active Agent:   aidlc-architect-agent\n");
+    expect(duplicate.out).toContain("Next Stage:     Scope Definition\n");
+  });
+
   test("8: --status says when the existing code was scanned, also after Reverse Engineering ran on its own", () => {
     const p = seededProj();
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield\n- **Project Type Source**: you");
@@ -482,6 +503,17 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     const scanned = status(p);
     expect(scanned.status).toBe(0);
     expect(scanned.out).toMatch(/^Project Type: {3}existing code \(you said so\), scanned \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/m);
+    // Part of the trail that cannot be read could hold a later scan: no time.
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      const unreadable = join(seededAuditDir(p), "teammate-host-0a1b2c3d.md");
+      writeFileSync(unreadable, "\n");
+      chmodSync(unreadable, 0o000);
+      try {
+        expect(status(p).out).toContain("Project Type:   existing code (you said so)\n");
+      } finally {
+        chmodSync(unreadable, 0o644);
+      }
+    }
     // A new project shows no scan, whatever the trail holds.
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Greenfield");
     expect(status(p).out).toContain("Project Type:   new project (you said so)\n");
