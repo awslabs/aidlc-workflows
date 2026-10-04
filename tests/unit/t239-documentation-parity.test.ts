@@ -147,6 +147,7 @@ const harnessNames = readdirSync(harnessRoot)
   .sort();
 
 const harnessLabels: Record<string, string> = {
+  antigravity: "Google Antigravity",
   claude: "Claude Code",
   codex: "Codex CLI",
   copilot: "GitHub Copilot",
@@ -291,6 +292,7 @@ describe("documentation parity derives current behavior from authored implementa
 
   test("documented harness roster matches every implementation manifest", () => {
     expect(harnessNames).toEqual([
+      "antigravity",
       "claude",
       "codex",
       "copilot",
