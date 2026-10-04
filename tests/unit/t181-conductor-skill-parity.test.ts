@@ -270,6 +270,32 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every shipped conductor SKILL changes named stages at once, with no question first", () => {
+    // A person who names the stages to skip or add has decided: the engine's
+    // `next --skip` / `--add` changes the plan and names the undo. The old
+    // rule had the agent ask Approve / Edit / Reject first on some harnesses.
+    const problems: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "**Named stage changes are done at once.**",
+        "`{{INVOKE}} engine orchestrate next --skip <slugs>` or `--add <slugs>`",
+        "Ask nothing first: the person named the change",
+      ]) {
+        if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
+      }
+      for (const stale of [
+        "**The fast path:**",
+        "gate yourself",
+        "goes straight to marker, gate, verb",
+        "fast means skipping the composer subagent, never the human approval",
+      ]) {
+        if (body.includes(stale)) problems.push(`${rel}  still says: ${stale}`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
   test("every shipped conductor SKILL relays engine-authored narration", () => {
     const missing: string[] = [];
     for (const rel of skills) {
