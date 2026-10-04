@@ -451,8 +451,8 @@ describe("t304 copied projection configuration", () => {
     expect(harness.trust.reviewed).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // A setup question with its input closed gets no answer: config says so and
-  // how to run without questions, never an empty error.
+  // A setup question with its input closed gets no answer: config says it
+  // stopped and what to run again, never an empty error.
   test("a setup question with no possible answer says so plainly", () => {
     const project = readmeCopyProject();
     const result = runCopied(project, ["config"], {
@@ -461,7 +461,7 @@ describe("t304 copied projection configuration", () => {
     });
     expect(result.stdout).toMatch(/Fix the \d+ sections? that needs? you now\? \[Y\/n\]:/);
     expect(result.stdout).toContain(
-      "Nothing written: this needs an answer, and the input is closed. Run bun .claude/tools/aidlc.ts config again where you can answer.",
+      "Stopped: this needs an answer, and the input is closed. Run bun .claude/tools/aidlc.ts config again where you can answer.",
     );
     expect(result.stdout + result.stderr).not.toContain('{"error"');
   });
@@ -476,7 +476,7 @@ describe("t304 copied projection configuration", () => {
     expect(result.status).toBe(4);
     expect(result.stdout).toContain(`error: ${JSON.stringify(empty)} holds no AI-DLC release files\n`);
     expect(fixLine(result.stdout)).toBe(
-      "pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/claude/; or fetch them with bun .claude/tools/aidlc.ts config --download",
+      "pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/claude/; or fetch them with bun .claude/tools/aidlc.ts config --harness claude --yes --download",
     );
     expect(result.stdout).not.toContain("valid-release-data");
   });

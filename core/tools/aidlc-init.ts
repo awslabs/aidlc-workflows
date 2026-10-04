@@ -188,6 +188,7 @@ import {
   ownedModelAccessFact,
   pendingProviderIssues,
   postApplyOutstandingActions,
+  shellOnlyRuntimes,
   preserveKiroMcpRegion,
   probeHarnessCli,
   probeRuntime,
@@ -2323,6 +2324,7 @@ function setupMapRows(
     modelHarness(distribution),
   );
   const runtime = outstanding.filter((action) => action.section === "runtime");
+  const shellOnly = runtime.length > 0 ? [] : shellOnlyRuntimes(projectDir, harnessDir, modelHarness(distribution));
   const trust = outstanding.filter((action) => action.section === "trust");
   const providers = outstanding.filter((action) => action.section === "providers");
   const workspace = outstanding.filter((action) => action.section === "workspace");
@@ -2402,6 +2404,8 @@ function setupMapRows(
       label: "Runtime",
       detail: runtime.length > 0
         ? runtime[0].message
+        : shellOnly.length > 0
+        ? `${shellOnly.join(" and ")} on this shell's PATH only: start ${projectionProductName(root, distribution)} from a terminal`
         : "hook PATH ready",
       section: "runtime",
       needs: runtime.length > 0,
@@ -2621,7 +2625,7 @@ async function runSetupWalk(
     );
   } catch (error) {
     if (!(error instanceof FirstRunCancelled)) throw error;
-    process.stdout.write(noAnswerLines(error, projectDir));
+    process.stdout.write(noAnswerLines(error, configCommand(projectTarget(projectDir))));
     process.exitCode = EXIT.usage;
     return;
   }
@@ -5950,17 +5954,14 @@ function firstRunPromptValue(value: string | null): string {
   return normalized;
 }
 
-// What the person reads when a question got no answer: nothing changed, and,
-// when no answer could come, what to run instead (the command that goes ahead
-// without questions, when there is one, or this one again where they can
-// answer).
-function noAnswerLines(error: FirstRunCancelled, projectDir: string, withoutQuestions?: string): string {
-  if (!error.inputClosed) return "\n  Nothing written.\n";
-  return `\n  Nothing written: this needs an answer, and the input is closed. ${
-    withoutQuestions
-      ? `To go ahead without questions, run ${withoutQuestions}.`
-      : `Run ${configCommand(projectTarget(projectDir))} again where you can answer.`
-  }\n`;
+// What the person reads when a question got no answer: that config stopped
+// (the first-run wizard writes nothing before its last answer, so it says
+// nothing was written; elsewhere part of the work may already be done), and,
+// when no answer could come, the command to run again where they can answer.
+function noAnswerLines(error: FirstRunCancelled, rerun: string, nothingWritten = false): string {
+  const stopped = nothingWritten ? "Nothing written" : "Stopped";
+  if (!error.inputClosed) return `\n  ${stopped}.\n`;
+  return `\n  ${stopped}: this needs an answer, and the input is closed. Run ${rerun} again where you can answer.\n`;
 }
 
 // First-run rows are a lead (the number and label, or the spaces under them)
@@ -7096,7 +7097,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   return true;
   } catch (error) {
     if (error instanceof FirstRunCancelled) {
-      process.stdout.write(noAnswerLines(error, projectDir, configCommand(`--yes${projectTarget(projectDir)}`)));
+      process.stdout.write(noAnswerLines(error, configCommand(projectTarget(projectDir)), true));
       process.exitCode = EXIT.usage;
       return true;
     }
@@ -10184,7 +10185,7 @@ export async function main(
   } catch (error) {
     // A question with no answer is not a failure to report as one.
     if (error instanceof FirstRunCancelled) {
-      process.stdout.write(noAnswerLines(error, projectDir));
+      process.stdout.write(noAnswerLines(error, configRerunWith(input, projectDir, []) ?? configCommand(projectTarget(projectDir))));
       process.exitCode = EXIT.usage;
       return;
     }
@@ -10322,7 +10323,7 @@ export async function main(
           }${projectTarget(projectDir)}`
         : from
         ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${
-          configCommand("--download")
+          configRerunWith(input, projectDir, ["--download"], ["--from"]) ?? configCommand(`--download${projectTarget(projectDir)}`)
         }`
         : selected?.projectProjection && copiedHarness
         ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`
