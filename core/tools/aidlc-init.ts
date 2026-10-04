@@ -105,10 +105,12 @@ import {
   _resetStageGraphForTests,
   activeWorkflowDescriptions,
   DEFAULT_SPACE,
+  fileIdentity,
   normalizeProjectFlagsRecord,
   RECORDABLE_PROJECT_BYPASSES,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -123,6 +125,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  projectedDispatcher,
   type ProjectHarness,
   hasControlCharacters,
   quoteCommandArgument,
@@ -887,7 +890,7 @@ export function validatePublicConfigArgs(input: readonly string[]): string | nul
 }
 
 function modelPolicyHelp(): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   return [
     "Choose model and effort policy for each agent",
@@ -984,6 +987,14 @@ function modelStateData(
   };
 }
 
+// A `config models` command about one harness of the project, run as shown
+// from where the user is: it names that harness when the project has more
+// than one, since config would otherwise ask which.
+function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
+  const named = discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+  return `${configInvocationFor(projectDir)} config models ${args}${named}${projectTarget(projectDir)}`;
+}
+
 function showModels(
   policy: ModelPolicyRecord | null,
   tiers: AgentTiers,
@@ -1054,13 +1065,13 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
-      : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
+      : `nothing yet - run '${modelsCommand(projectDir, harness, "--preset balanced --project --yes")}'`
   }\n`;
   writeMenuText(output);
   for (
     const line of commandRowLines(
       "Full per-agent list: ",
-      `${aidlcInvocation()} config models --show --json`,
+      modelsCommand(projectDir, harness, "--show --json"),
       menuWidth(),
     )
   ) {
@@ -1374,7 +1385,7 @@ function validateDiagnosticArgs(
 }
 
 function diagnosticHelp(section: DiagnosticSection): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   const common = [
     heading("Inspection:", out),
@@ -2162,7 +2173,7 @@ function configInputIsTty(): boolean {
 }
 
 function configCommand(args = ""): string {
-  return `${aidlcInvocation()} config${args ? ` ${args}` : ""}`;
+  return `${configInvocationFor()} config${args ? ` ${args}` : ""}`;
 }
 
 function commandToken(value: string): string {
@@ -2183,19 +2194,42 @@ function projectTarget(projectDir: string): string {
     : ` --project-dir ${quoteCommandArgument(projectDir)}`;
 }
 
+// Whether two paths reach one file. File identity settles it, since one file
+// has several spellings (a link, or a Windows 8.3 short name Bun's realpath
+// keeps) and two files can differ only in case. A missing path reaches none.
+function sameFile(left: string, right: string): boolean {
+  try {
+    const identity = fileIdentity(left);
+    return identity.ino !== 0n && sameFileIdentity(identity, fileIdentity(right));
+  } catch {
+    return false;
+  }
+}
+
 // How a printed command starts so it runs from where the user is: `aidlc`, or
-// a Bun projection's tool path, rooted at the project when not run from it.
-function configInvocationFor(projectDir: string): string {
-  return aidlcInvocation() === "aidlc"
-    ? "aidlc"
-    : ranFromProject(projectDir)
-    ? aidlcInvocation()
-    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
+// the Bun tool that ran this command. The project's own tool is named from the
+// project when run there and by its path in the project when not. Any other
+// tool (a runtime unpacked elsewhere, which may be adding a harness the project
+// does not have yet) is named by its own path, unless it is the one under the
+// working directory. In the source tree the project's own tool stands in.
+function configInvocationFor(projectDir = process.cwd()): string {
+  const invocation = aidlcInvocation();
+  if (invocation === "aidlc") return invocation;
+  const ran = projectedDispatcher();
+  // A projection's relative invocation names the harness directory it was
+  // built for, whatever the environment says the harness is.
+  const harnessDir = ran === null ? runtimeHarnessDir() : basename(dirname(dirname(ran)));
+  const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
+  if (ran === null || sameFile(ran, toolIn(projectDir))) {
+    return ranFromProject(projectDir)
+      ? invocation
+      : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+  }
+  return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
-// it runs as shown from where they are. A Bun projection's tool path is
-// relative to the project, so from elsewhere it is rooted there instead.
+// it runs as shown from where they are.
 function configRerunWith(
   input: readonly string[],
   projectDir: string,
@@ -2828,7 +2862,7 @@ function validateChoiceArgs(
 }
 
 function choiceHelp(section: ChoiceSection): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   const specific = section === "flags"
     ? [
@@ -4203,10 +4237,19 @@ function runtimeGenerated(
   ].includes(normalized);
 }
 
+// Compose records a plugin's consumed artifacts as objects, so the sidecar
+// shape must match what the compose hook writes, or the readers below silently
+// match nothing. See issue #1247.
+type ConsumeContribRecord = {
+  artifact: string;
+  required: boolean;
+  conditional_on?: string;
+};
+
 type StageContribRecord = {
   produces?: string[];
   sensors?: string[];
-  consumes?: string[];
+  consumes?: Array<string | ConsumeContribRecord>;
   required_sections?: string[];
   required_sections_created?: boolean;
 };
@@ -4303,7 +4346,9 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
     value = value.replace(block, replacement);
   }
   if (record.consumes?.length) {
-    const names = new Set(record.consumes);
+    const names = new Set(
+      record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact),
+    );
     const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m.exec(value);
     if (block) {
       const kept = [...block[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
@@ -4903,7 +4948,7 @@ function prepareRefreshSource(
       throw new Error(
         `${currentHarnessData}: harness.json contains legacy policy key(s) ${policyKeys.join(", ")}. ` +
           `Remove ${policyKeys.join(", ")} from ${currentHarnessData}, then run ` +
-          `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
+          `'${configCommand()}' to record policy in aidlc.settings.json.`,
       );
     }
     // A trust acknowledgement covers the row's own allowlist and hook files.
@@ -5148,7 +5193,13 @@ function prepareRefreshSource(
         let fresh = readFileSync(stagedPath, "utf-8");
         fresh = mergeListField(fresh, "produces", record.produces ?? []);
         fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
-        fresh = mergeConsumes(fresh, consumeBlocks(current, new Set(record.consumes ?? [])));
+        fresh = mergeConsumes(
+          fresh,
+          consumeBlocks(
+            current,
+            new Set((record.consumes ?? []).map((entry) => typeof entry === "string" ? entry : entry.artifact)),
+          ),
+        );
         fresh = mergeRequiredSections(fresh, record);
         fresh = mergePluginFragments(fresh, fragments);
         writeFileSync(stagedPath, fresh);
@@ -8013,7 +8064,7 @@ function prepareModelsSection(
         : failure(
             `model policy drift: ${drift.join("; ")}`,
             EXIT.failure,
-            configCommand("models --show"),
+            modelsCommand(projectDir, harness, "--show"),
           ),
       options,
     );
