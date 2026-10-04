@@ -5417,12 +5417,17 @@ function prepareRefreshSource(
     "AIDLC_COMPOSED_SCOPES_DIR",
     "AIDLC_SENSORS_DIR",
     "AIDLC_AGENTS_DIR",
+    "AIDLC_HARNESS_NAME",
   ] as const;
   const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
     process.env.AIDLC_RUNTIME_PROJECT_DIR = root;
     process.env.AIDLC_PROJECT_DIR = root;
     process.env.AIDLC_HARNESS_DIR = descriptor.harnessDir;
+    // Copilot and opencode share the .aidlc folder, so the harness is named:
+    // the regenerated scope runners then say how to start a new chat in it,
+    // as the shipped ones do.
+    process.env.AIDLC_HARNESS_NAME = descriptor.distribution;
     process.env.AIDLC_RUNTIME_HARNESS_ROOT = stagedHarness;
     process.env.AIDLC_RULES_DIR = join(root, "aidlc", "spaces", "default", "memory");
     process.env.AIDLC_STAGE_GRAPH = join(stagedHarness, "tools", "data", "stage-graph.json");

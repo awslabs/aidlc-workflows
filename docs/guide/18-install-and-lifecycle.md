@@ -1635,8 +1635,7 @@ cd your-project && bun .claude/tools/aidlc.ts config --from "$RUNTIME_ROOT" --ha
 The last line is the copy's own setup, run once from the extracted runtime: it
 adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
 and checks the rest of the setup. Without it, AI-DLC adds them when the first
-chat starts, or at the latest when you start work. On GitHub Copilot, leave
-that line out for now: AI-DLC adds them when the first chat starts.
+chat starts, or at the latest when you start work.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,

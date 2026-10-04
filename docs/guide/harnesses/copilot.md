@@ -106,10 +106,13 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -R "$RUNTIME_ROOT/copilot/.github/." your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
    ```
 
-2. AI-DLC adds its lines to your `AGENTS.md` (including the method include)
-   and `.gitignore` when the first chat starts, after everything already there,
-   or creates them when the project has none (per-clone audit shards are
-   committed deliberately; cursors and machine-local runtime stay ignored).
+2. Run the copy's own setup once:
+   `cd your-project && bun .aidlc/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness copilot`.
+   It adds AI-DLC's lines to your `AGENTS.md` (including the method include)
+   and `.gitignore`, after everything already there, or creates them when the
+   project has none (per-clone audit shards are committed deliberately;
+   cursors and machine-local runtime stay ignored). Without it, AI-DLC adds
+   them when the first chat starts.
    For VS Code, also add `"chat.agent.maxRequests": 200` to your
    `.vscode/settings.json` if it does not set that key (see
    [VS Code request cap](#vs-code-request-cap)). The copy runtime does not

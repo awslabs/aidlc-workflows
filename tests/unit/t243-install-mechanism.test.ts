@@ -4044,6 +4044,39 @@ describe("t243 project initialization", () => {
       .toEqual(["# AI-DLC: local working files"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Copilot and opencode share the .aidlc folder; config names the harness
+  // when it regenerates the scope runners, so a fresh copy's own config finds
+  // the runners exactly as shipped and finishes.
+  test("a fresh copy's own config on GitHub Copilot and opencode keeps the shipped scope runners", () => {
+    for (const distribution of ["copilot", "opencode"]) {
+      const runtime = join(temp(`aidlc-t243-${distribution}-runtime-`), "runtime");
+      const root = join(REPO_ROOT, "dist", distribution);
+      const omitted = copyChannelOmits(projectionFiles(root).descriptor);
+      for (const rel of walkFiles(root)) {
+        if (omitted.has(rel)) continue;
+        const target = join(runtime, distribution, rel);
+        mkdirSync(dirname(target), { recursive: true });
+        cpSync(join(root, rel), target);
+      }
+      const project = temp(`aidlc-t243-${distribution}-copy-config-`);
+      mkdirSync(join(project, ".git"));
+      cpSync(join(runtime, distribution), project, { recursive: true });
+      const runners = walkFiles(project).filter((rel) =>
+        rel.endsWith("/SKILL.md") && readFileSync(join(project, rel), "utf-8").includes("generated-by: aidlc-runner-gen")
+      );
+      expect(runners.length, distribution).toBeGreaterThan(0);
+      const before = new Map(runners.map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
+      const configured = run(INIT, [
+        "config", "--project-dir", project, "--from", runtime, "--harness", distribution, "--yes",
+      ], project);
+      expect(configured.status, `${distribution}: ${configured.stdout}${configured.stderr}`).toBe(0);
+      expect(configured.stdout + configured.stderr).not.toContain("locally modified or unowned");
+      for (const [rel, text] of before) {
+        expect(readFileSync(join(project, rel), "utf-8"), `${distribution}/${rel}`).toBe(text);
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {
     const project = temp("aidlc-t243-hidden-records-");
     expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
