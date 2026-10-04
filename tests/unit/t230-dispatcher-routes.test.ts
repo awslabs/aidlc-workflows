@@ -2887,7 +2887,7 @@ describe("t230 dispatcher help and errors", () => {
     expect(text).toContain(
       "Operations on this user's aidlc installation; never a system-wide or root install:",
     );
-    expect(text).toContain("  rollback: [--version <version>|--list]");
+    expect(text).toContain("  rollback: [<version>|--version <version>|--list]");
     expect(text).toContain("  completions: <bash|zsh|fish|powershell>");
     expect(text).toContain("  lifecycle: install-apply");
     expect(text).toContain("install-profile --profile <path>");

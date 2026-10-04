@@ -1183,6 +1183,22 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     expect(directive(["2"])).toEqual(runCommand(routed.new_intent_command!));
   });
 
+  // Non-default values, so a scope's own defaults cannot hide a loss.
+  test("settings typed with new work over an open question ride on to the work it becomes", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    seedAudit(openDecision);
+    const d = directive(["--depth", "comprehensive", "--test-strategy", "minimal", "--learnings", "on", NEW_WORK]);
+    expect(d.message).toContain('Stage "feasibility" has a question you asked');
+    const routed = runCommand(requestCommand(d.message!));
+    expect(routed.ask_type, JSON.stringify(routed).slice(0, 300)).toBe("new-work-routing");
+    expect(routed.new_intent_command).toContain("--depth comprehensive --test-strategy minimal --learnings on");
+    // A bare "2" is that option's command, settings included.
+    const created = directive(["2"]);
+    expect(created.message).toContain("--depth comprehensive --test-strategy minimal");
+    expect(created.message).toContain("--learnings on");
+  });
+
   test("a bare number answers the open logged question", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);

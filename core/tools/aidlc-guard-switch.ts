@@ -374,6 +374,8 @@ export function applyIntentSettings(
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
+  // A default a scope change brings is said only when its value changes.
+  const scopeDefault = (key: ConfigKey): boolean => requested[key]?.source.startsWith("scope ") === true;
   if (depth !== undefined) {
     const previous = getField(content, "Depth");
     const updated = previous === depth ? content : setField(content, "Depth", depth);
@@ -382,7 +384,9 @@ export function applyIntentSettings(
       content = updated;
       audit.push({ eventType: "DEPTH_CHANGED", fields: { "Old Depth": previous || "unknown", "New Depth": depth } });
     }
-    lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
+    if (changed || !scopeDefault("depth")) {
+      lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
+    }
   }
   if (strategy !== undefined) {
     const previous = getField(content, "Test Strategy");
@@ -392,7 +396,9 @@ export function applyIntentSettings(
       content = updated;
       audit.push({ eventType: "TEST_STRATEGY_CHANGED", fields: { "Old Strategy": previous || "unknown", "New Strategy": strategy } });
     }
-    lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
+    if (changed || !scopeDefault("test-strategy")) {
+      lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
+    }
   }
   if (review !== undefined) {
     const target = reviewScope ?? getField(content, "Scope");
@@ -418,7 +424,7 @@ export function applyIntentSettings(
     const previous = cc.rawStateValue;
     const line = formatGuardPolicy(changeControl, ccRequest.source);
     if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
-      lines.push(`Guard Policy is already ${line}`);
+      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${line}`);
     } else {
       // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
       // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.
@@ -431,8 +437,10 @@ export function applyIntentSettings(
         });
         const oldDisplay = cc.conflict === undefined && cc.intent === null && cc.rawStateValue !== null
           ? cc.rawStateValue : formatGuardPolicy(cc.value, cc.source);
-        lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
-      } else {
+        if (oldValue !== changeControl || !scopeDefault("guard-policy")) {
+          lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
+        }
+      } else if (!scopeDefault("guard-policy")) {
         lines.push(`Guard Policy is already ${line}`);
       }
     }
@@ -482,19 +490,21 @@ export function applyIntentSettings(
     // Only the person's typed switch is `you`; an explicit setter run from a
     // shell records that a command set it, and never relabels the person's
     // own identical choice.
-    const requestedSource = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    const flag = CEREMONY_FLAGS[key].slice(2) as ConfigKey;
+    const requestedSource = requested[flag]!.source;
     const source = requestedSource === "you" && !typedByPerson ? "command" : requestedSource;
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      lines.push(`${field} is already ${previous}`);
+      if (!scopeDefault(flag)) lines.push(`${field} is already ${previous}`);
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
     content = setCeremonyField(content, key, value, source);
     const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
     audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    if (oldValue === value && scopeDefault(flag)) continue;
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);

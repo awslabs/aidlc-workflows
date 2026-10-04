@@ -131,6 +131,15 @@ tool_output_token_limit = 20000
 # .git path (linked worktrees resolve into <main>/.git/worktrees/*).
 sandbox_mode = "workspace-write"
 
+# Gates use Codex's structured question picker (request_user_input), which
+# Codex still marks as under development; [features] below turns it on. Codex
+# then warns at every start and points at ~/.codex/config.toml, so this turns
+# that warning off. It also hides the warning for any other under-development
+# feature while you work in this project. For numbered prose gates in one
+# session, start Codex with -c features.default_mode_request_user_input=false
+# (editing [features] here reads as a local change on the next aidlc config).
+suppress_unstable_features_warning = true
+
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
 # lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness
@@ -155,7 +164,8 @@ max_depth = 1
 
 # Gates (D-3 both-track): prose gates are the floor; these flags enable the
 # structured request_user_input tool (verified working at 0.137.0+; the
-# default-mode flag is under development and prints a warning banner).
+# default-mode flag is still under development at 0.160.0, and its start-up
+# warning is turned off above).
 [tools]
 experimental_request_user_input = { enabled = true }
 

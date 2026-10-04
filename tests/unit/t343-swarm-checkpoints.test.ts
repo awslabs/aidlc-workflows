@@ -186,11 +186,11 @@ function fixture(autonomous = false, repos: readonly string[] = [], authorize = 
   return pd;
 }
 
-function tool(pd: string, name: string, args: string[]) {
+function tool(pd: string, name: string, args: string[], extra: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", pd], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     cwd: pd, encoding: "utf-8",
-    env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+    env: { ...process.env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd, ...extra },
   });
   return { code: result.status, out: `${result.stdout}${result.stderr}`, stdout: result.stdout };
 }
@@ -1087,4 +1087,21 @@ describe("t343 an answered batch checkpoint is not a pending logged decision", (
       expect(hasPendingDecision(pd, STAGE, "STAGE_STARTED")).toBe(false);
     });
   }
+});
+
+describe("t343 a batch checkpoint finds the session it runs in", () => {
+  test("asking and approving need no --session", () => {
+    const pd = fixture();
+    converge(pd);
+    const own = "t343-own-session";
+    const inSession = { AIDLC_SESSION_OVERRIDE: own, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const batch = ["--batch", "1", "--units", BATCH.join(",")];
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", ...batch], inSession);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, own)).not.toBeNull();
+    choice(pd, own, "Approve");
+    const approved = tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", ...batch, "--user-input", "Approve"], inSession);
+    expect(approved.code, approved.out).toBe(0);
+    expect(gates(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
+  });
 });

@@ -107,11 +107,7 @@ if [ -f your-project/.kiro/settings/cli.json ]; then
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cp "$RUNTIME_ROOT/kiro-ide/AGENTS.md" your-project/AGENTS.md   # merge if you already have one
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp dist/kiro-ide/.gitignore your-project/.gitignore
-fi
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-ide
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
@@ -148,11 +144,9 @@ per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
 and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
 caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
 shared records — method memory, state, audit shards, artifacts — travel with
-git. The guarded command copies the complete starter file only when the project
-has no `.gitignore`. If one exists, preserve every project-owned rule and merge
-only the section from `# AI-DLC` through the end of the shipped file; do not
-copy its generic starter rules. The `## Git Integration` section of the
-installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
+git. The last line, the copy's own setup, adds those lines and AI-DLC's part of
+`AGENTS.md` after everything already in your files, or creates the files when
+the project has none, so the AI-DLC rules are in place before your first
 workflow.
 
 The install ships:
@@ -164,7 +158,9 @@ The install ships:
   `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
   under its own permissions.
 - `.kiro/agents/aidlc-*-agent.md` — all 14 delegation personas, carrying
-  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships.
+  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships. Their shell
+  rules run AI-DLC's own commands, `date -u`, and `bun --version` without
+  asking; the project's own test and build commands still ask.
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
   registrations, and a hook cannot detect that from inside. Kiro IDE does not
@@ -415,6 +411,24 @@ A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
+
+### Command cards end with "dministrator: ...powershell.exe" on Windows
+
+On Windows, a Kiro IDE command card can end with a line such as
+`dministrator: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+once or twice. That is the terminal window's title, cut short by Kiro when it
+shows the output. It does not change what the command did or what AI-DLC
+records.
+
+To stop it, add this entry inside the braces of Kiro's user settings
+(Ctrl+Shift+P, then **Preferences: Open User Settings (JSON)**), save, and
+restart Kiro:
+
+```json
+"terminal.integrated.windowsUseConptyDll": false
+```
+
+After the restart, the cards show only the command's output.
 
 ### Kiro memories carry old AI-DLC advice
 

@@ -427,7 +427,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [--version <version>|--list] [--allow-harness-loss] [--yes]"],
+    all: ["rollback [<version>|--version <version>|--list] [--allow-harness-loss] [--yes]"],
   },
   {
     id: "top-use",

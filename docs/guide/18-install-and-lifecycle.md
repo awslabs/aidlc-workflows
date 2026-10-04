@@ -570,11 +570,12 @@ model, without Opus:
   and Kiro CLI that is the session's effort. On Claude Code, Codex CLI, and
   opencode, Code Generation runs on the developer agent, which follows the
   session only while no preset or effort is recorded for it. Otherwise its
-  effort is the recorded one for every Unit of the workflow: to raise it,
-  record it before the workflow starts, for example
-  `aidlc config models --agent developer --effort high --project --yes`, and
-  it then applies to all of Code Generation, because config does not refresh
-  agent files while a workflow is active.
+  effort is the recorded one: to raise it, record it, for example
+  `aidlc config models --agent developer --effort high --project --yes`. That
+  works while a workflow is open too: config rewrites the developer agent's
+  file, and the harness uses it the next time it starts the agent (Claude Code
+  does so at the agent's next start; a step already running keeps what it
+  started with). The command prints the one that puts it back.
 - **Change model or effort between stages, in a new chat.** See
   [Changing Model Mid-Workflow](11-session-management.md#changing-model-mid-workflow).
 
@@ -933,9 +934,20 @@ the apply fails closed.
 
 ### Refresh Safety
 
-A refresh changes project engine and graph files, so config refuses while any
-workflow in any space is not complete. Parked workflows still count as
-active. Complete every workflow named in the error, then rerun config.
+A settings change is done while work is open: `config models`, `flags`,
+`runtime`, `providers`, and `trust` read the project's own files and bring in
+no release (when the project is pinned to another release, the update it needs
+first is a refresh and waits). Each prints what changed and, where one command
+puts the earlier value back, that command. A model or flag change also names
+the open workflows that pick it up: a bypass, hook debug, the sensor timeout,
+and question retention apply right away, with no restart; models and swarm
+apply from the next step (a step already running keeps what it started with);
+a default scope applies to new work only, and a saved model profile changes
+nothing until `--from` loads it. The runtime, providers, and trust answers
+print no workflow line. A refresh that brings in release files changes project
+engine and graph files, so config refuses it while any workflow in any space
+is not complete. Parked workflows still count as active. Complete every
+workflow named in the error, then rerun config.
 
 The check runs once while planning and again under the workspace audit lock
 immediately before commit. `--force`, `--yes`, and `--plan-token` do not bypass
@@ -1046,6 +1058,15 @@ recorded first takes one `--download` refresh at its own release. While a
 workflow runs, config does not refresh a tree, so the warning names the tool
 whose files are on that release to continue in, and the commands to run after
 the workflow completes.
+
+AI-DLC's `.gitignore` lines are its own entries only. Earlier releases also
+put a generic template (logs, `node_modules`, `dist`, editor files) at the top
+of that block; the first refresh after upgrading keeps those lines in your part
+of the file, above AI-DLC's, and says so once, so nothing they ignored becomes
+visible to git. A copy that config never ran in gets the same AI-DLC block, and
+an `AGENTS.md` block, from the copy's own `tools/data/root-blocks/` when its
+first chat starts or work is first created; config later treats a block that
+is exactly what a release shipped as its own.
 
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
@@ -1488,10 +1509,12 @@ run it twice.
 The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-project-root files stay together. The copy runtime leaves out files a team's
-editor owns, such as Copilot's `.vscode/settings.json`, so copying never
-replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
-names the one setting to add yourself. It also leaves out the team's memory
+any project-root files the harness needs stay together. The copy runtime leaves
+out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
+copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
+names the one setting to add yourself. It leaves out your `.gitignore` and
+`AGENTS.md` too: AI-DLC adds its own lines to them, after everything already
+there, or creates them when the project has none. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
 learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
@@ -1523,7 +1546,14 @@ gh attestation verify "$tmp/$runtime_asset" \
 tar -xzf "$tmp/$runtime_asset" -C "$tmp"
 RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
+cd your-project && bun .claude/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness claude
 ```
+
+The last line is the copy's own setup, run once from the extracted runtime: it
+adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
+and checks the rest of the setup. Without it, AI-DLC adds them when the first
+chat starts, or at the latest when you start work. On GitHub Copilot, leave
+that line out for now: AI-DLC adds them when the first chat starts.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,

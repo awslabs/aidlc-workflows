@@ -18,6 +18,11 @@ import {
   isSafeOnboardingPath,
   jsoncRootMembers,
   jsoncSettingValue,
+  managedBlockIsSafe,
+  managedBlockMarkers,
+  mergeBlock,
+  type RootIntegration,
+  rootBlockPath,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -2675,20 +2680,7 @@ export function postApplyOutstandingActions(
   return actions;
 }
 
-export function managedBlockMarkers(
-  path: string,
-  identity: string,
-): { begin: string; end: string } {
-  return path.endsWith(".md")
-    ? {
-        begin: `<!-- BEGIN AI-DLC:${identity} -->`,
-        end: `<!-- END AI-DLC:${identity} -->`,
-      }
-    : {
-        begin: `# BEGIN AI-DLC:${identity}`,
-        end: `# END AI-DLC:${identity}`,
-      };
-}
+export { managedBlockMarkers };
 
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -2705,12 +2697,49 @@ type InstructionState = {
   state: "intact" | "missing" | "conflict";
 };
 
+// AGENTS.md in a copy config never ran in: AI-DLC's part is the marked block
+// the engine adds at session start, by the same rule config uses. A file that
+// rule cannot take (unmarked AI-DLC text the team changed, broken markers) is
+// a conflict, so the person hears what to fix instead of nothing.
+function copiedAgentsState(
+  projectDir: string,
+  harnessDir: string,
+  integration: RootIntegration,
+): InstructionState {
+  const path = "AGENTS.md";
+  let shipped: string;
+  let current: string;
+  try {
+    assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${integration.marker}`);
+    shipped = readFileSync(rootBlockPath(join(projectDir, harnessDir), integration), "utf-8");
+    current = readFileSync(join(projectDir, path), "utf-8");
+  } catch {
+    return { path, kind: "whole-file", state: "intact" };
+  }
+  // The Cursor installer keeps AI-DLC's part under its own markers.
+  if (/^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) return { path, kind: "managed-block", state: "intact" };
+  const merged = mergeBlock(
+    path,
+    current,
+    shipped,
+    integration.marker ?? "agents",
+    integration.legacySignatures?.wholeFileHashes ?? [],
+  );
+  if (merged.error) return { path, kind: "managed-block", state: "conflict" };
+  return {
+    path,
+    kind: "managed-block",
+    state: merged.currentHash !== undefined || merged.adoptedLegacy ? "intact" : "missing",
+  };
+}
+
 function instructionStates(
   projectDir: string,
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
   let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  let agentsBlock: RootIntegration | undefined;
   try {
     const descriptor: unknown = JSON.parse(readFileSync(
       join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
@@ -2721,6 +2750,11 @@ function instructionStates(
       isSafeOnboardingPath(descriptor.onboarding, harnessDir)
     ) {
       onboardingPath = descriptor.onboarding;
+    }
+    if (isRecord(descriptor) && Array.isArray(descriptor.rootIntegrations)) {
+      agentsBlock = (descriptor.rootIntegrations as RootIntegration[]).find((integration) =>
+        isRecord(integration) && integration.path === "AGENTS.md" && managedBlockIsSafe(integration)
+      );
     }
   } catch {
     // Legacy installations may not have a readable onboarding descriptor.
@@ -2750,13 +2784,12 @@ function instructionStates(
         return { path, kind: "whole-file", state: "conflict" };
       }
       const target = join(projectDir, path);
-      return {
-        path,
-        kind: "whole-file",
-        state: existsSync(target) && lstatSync(target).isFile()
-          ? "intact"
-          : "missing",
-      };
+      if (!existsSync(target) || !lstatSync(target).isFile()) {
+        return { path, kind: "whole-file", state: "missing" };
+      }
+      return path === "AGENTS.md" && agentsBlock
+        ? copiedAgentsState(projectDir, harnessDir, agentsBlock)
+        : { path, kind: "whole-file", state: "intact" };
     });
   }
   const baseline = JSON.parse(

@@ -96,7 +96,8 @@ import {
   latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
-  type QuestionTarget,
+  type QuestionAskedAbout,
+  type QuestionSettings,
   questionTargetSelected,
   readComposeEntry,
   readQuestion,
@@ -827,6 +828,7 @@ function attachLegacyKiroPlanApprovalChoices(
       directive.stage === "code-generation" &&
       directive.swarm_settled !== true &&
       directive.gate_only !== true &&
+      directive.build_settled !== true &&
       directive.construction_checkpoint === undefined &&
       directive.swarm_checkpoint === undefined &&
       directive.construction_policy?.completion_only !== true
@@ -1691,6 +1693,36 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
 // it stored, read back through the same parser, never the narrower set its
 // answer command happened to carry. A stored value the parser refuses keeps
 // nothing (null), so no partial plan is asked about again.
+// What a routing question stores of the settings carried on its answers: the
+// tokens its new-work answers carry (stage changes included) and those its
+// answers about existing work carry.
+function routingSettings(carried: RoutingCarried): QuestionSettings {
+  const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
+  return {
+    newWork: tokens(`${carried.newWork}${carried.planChanges}`),
+    existingWork: tokens(carried.existingWork),
+  };
+}
+
+// An answer that names a routing question gets the settings typed with its
+// request that the answer does not set itself: those for new work, or for
+// the work it acts on when it continues or reshapes. A stored value the parser
+// refuses answers false, and nothing runs.
+function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boolean {
+  if (question.origin !== "routing" || !question.settings) return true;
+  const existing = flags.continue === true || flags.compose === true;
+  const kept = parseNextFlags(existing ? question.settings.existingWork : question.settings.newWork);
+  if (kept.parseError) return false;
+  flags.depth ??= kept.depth;
+  flags.testStrategy ??= kept.testStrategy;
+  flags.projectType ??= kept.projectType;
+  flags.review ??= kept.review;
+  flags.changeControl ??= kept.changeControl;
+  if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
+  if (!existing && !flags.planChanges && kept.planChanges) flags.planChanges = kept.planChanges;
+  return true;
+}
+
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
   if (!question.settings) return carriedRoutingFlags(flags);
   const kept = parseNextFlags(question.settings.newWork);
@@ -1799,9 +1831,12 @@ function selectCommands(
   }));
 }
 
+// `commands` replaces each record's select command with the one a chosen
+// route runs for it (a routing question's reshape), keyed the same way.
 function intentPickAskDirective(
   question: string,
   availableIntents: string[],
+  commands: Array<{ selector: string; command: string }> = selectCommands(availableIntents),
 ): AskDirective {
   return {
     kind: "ask",
@@ -1809,7 +1844,7 @@ function intentPickAskDirective(
     response_route: "next",
     question,
     available_intents: availableIntents,
-    select_commands: selectCommands(availableIntents),
+    select_commands: commands,
   };
 }
 
@@ -1846,7 +1881,9 @@ function unitPausedAskDirective(
 // The new-work routing ask's own options about an active workflow, in its
 // numbered order. The numbered rendering and routingOptionReply share them, so
 // a reply that echoes the ask's own wording is always read as that answer.
-const NEW_WORK_ROUTING_OPTIONS = [
+type NewWorkRoute = "continue" | "separate" | "reshape";
+type RoutingOption = { readonly route: NewWorkRoute; readonly label: string; readonly detail: (scope: string) => string };
+const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   { route: "continue", label: "Part of the active work", detail: (_scope: string) => "Continue the current workflow" },
   {
     route: "separate",
@@ -1854,11 +1891,29 @@ const NEW_WORK_ROUTING_OPTIONS = [
     detail: (scope: string) => `Yes, set it up alongside the current one as "${scope}" work without changing it`,
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
-] as const;
-type NewWorkRoute = (typeof NEW_WORK_ROUTING_OPTIONS)[number]["route"];
+];
+// The same ask's options while no work is selected: continue and reshape act
+// on a record the person picks from the ones it lists.
+const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
+  { route: "continue", label: "Part of existing work", detail: (_scope: string) => "Select one of the above and continue it" },
+  {
+    route: "separate",
+    label: "Separate new piece of work",
+    detail: (scope: string) => `Yes, set it up alongside the existing work as "${scope}" work without changing it`,
+  },
+  {
+    route: "reshape",
+    label: "Reshape existing work",
+    detail: (_scope: string) => "Select one of the above, then reshape its remaining plan",
+  },
+];
 
-function newWorkRoutingOptionLine(index: number, scope: string): string {
-  const option = NEW_WORK_ROUTING_OPTIONS[index];
+function newWorkRoutingOptionLine(
+  index: number,
+  scope: string,
+  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
+): string {
+  const option = options[index];
   return `${index + 1}. **${option.label}** — ${option.detail(scope)}`;
 }
 
@@ -1866,47 +1921,69 @@ function newWorkRoutingOptionLine(index: number, scope: string): string {
 // `1.`, `(1)`), its label, or its numbered line as rendered. Anything more is
 // the person's own words, never cut down to an option. `numeric` marks a bare
 // number, which could also answer some other numbered question.
-function routingOptionReply(text: string, scope: string): { route: NewWorkRoute; numeric: boolean } | null {
+function routingOptionReply(
+  text: string,
+  scope: string,
+  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
+): { route: NewWorkRoute; numeric: boolean } | null {
   const normalize = (value: string): string =>
     value.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase().replace(/[.!]$/, "");
   const reply = normalize(text);
   const numbered = reply.match(/^\(?([1-3])\)?[.):]?(?:\s+(.*))?$/);
   if (numbered && numbered[2] === undefined) {
-    return { route: NEW_WORK_ROUTING_OPTIONS[Number(numbered[1]) - 1].route, numeric: true };
+    return { route: options[Number(numbered[1]) - 1].route, numeric: true };
   }
-  const index = NEW_WORK_ROUTING_OPTIONS.findIndex((option, i) => {
+  const index = options.findIndex((option, i) => {
     const label = normalize(option.label);
-    const line = normalize(newWorkRoutingOptionLine(i, scope));
+    const line = normalize(newWorkRoutingOptionLine(i, scope, options));
     return numbered ? Number(numbered[1]) - 1 === i && (normalize(numbered[2]) === label || reply === line) : reply === label;
   });
-  return index === -1 ? null : { route: NEW_WORK_ROUTING_OPTIONS[index].route, numeric: false };
+  return index === -1 ? null : { route: options[index].route, numeric: false };
 }
 
 // The routing question a reply that only names one of its options answers: the
-// question stored most recently, asked about one workflow that has not moved
-// since. A bare number also needs nothing asked after it: no question logged
-// since, and no turn of the person's besides this reply. Anything else is the
-// person's own words, asked about as usual.
+// question stored most recently, about work that has not moved since: the one workflow it was asked about. Asked while none
+// was selected, separate new work acts on none of its records, so it answers
+// whatever happened to them; continue and reshape get the records it listed
+// that are still there with the same identity, none selected (`records`). A bare number
+// also needs nothing asked after it: no question logged since, and no turn of
+// the person's besides this reply. Anything else is the person's own words,
+// asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
-): { question: StoredQuestion; route: NewWorkRoute } | null {
+): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null } | null {
   try {
     const question = latestQuestion(projectDir);
-    const target = question?.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !target) return null;
-    const option = routingOptionReply(text, question.proposedScope);
+    const askedAbout = question?.askedAbout;
+    if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
+    const pick = askedAbout.pick === true;
+    const option = routingOptionReply(
+      text,
+      question.proposedScope,
+      pick ? EXISTING_WORK_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS,
+    );
     if (!option) return null;
     // Once the request it stopped has started work, the question is spent:
-    // the person's words are their own again.
+    // the person's words are their own again. Asked with work selected or
+    // none, the same.
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
-    const statePath = stateFilePathForSelection(projectDir, {
-      space: question.askedAbout!.space,
-      intent: target.intent || null,
-      sessionId: null,
-      binding: null,
-    });
-    if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
+    let records: UnselectedRecords | null = null;
+    if (pick) {
+      const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
+        askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
+      records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
+    } else {
+      const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
+      if (!target) return null;
+      const statePath = stateFilePathForSelection(projectDir, {
+        space: askedAbout.space,
+        intent: target.intent || null,
+        sessionId: null,
+        binding: null,
+      });
+      if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
+    }
     if (option.numeric) {
       const asked = Date.parse(question.createdAt);
       const since = readAuditShardEvents(projectDir).filter((row) => Date.parse(row.timestamp) > asked);
@@ -1917,10 +1994,33 @@ function routingQuestionAnswer(
         return null;
       }
     }
-    return { question, route: option.route };
+    return { question, route: option.route, records };
   } catch {
     return null;
   }
+}
+
+// "Part of existing work" or "Reshape existing work" said back while the
+// question listed more than one record: the person chose the option, not yet
+// which work. Ask only that, as the typed record picker: each listed record
+// still there a choice, and its command the one the question would have run
+// for it. Record names stay data in the
+// choices and in the question's list, never in an instruction.
+function pickedRouteRecordAsk(
+  question: StoredQuestion,
+  route: "continue" | "reshape",
+  records: UnselectedRecords,
+): AskDirective {
+  const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
+  const selectors = records.selectable.map(({ selector }) => selector);
+  if (route === "continue") {
+    return intentPickAskDirective(`Which piece of work is this part of: ${records.list}?`, selectors);
+  }
+  return intentPickAskDirective(
+    `Which piece of work should I reshape: ${records.list}?`,
+    selectors,
+    selectors.map((selector) => ({ selector, command: routingReshapeCommand(question.id, selector, existingWork) })),
+  );
 }
 
 // The question a person is being asked in a solo walk's current [-] stage: the
@@ -1972,13 +2072,19 @@ function openQuestionReplyDirective(stage: string, checkpoint: string | null, re
   );
 }
 
+// A routing question's reshape of one listed record: it selects that record,
+// then reshapes it, with the settings typed with the request.
+function routingReshapeCommand(questionId: string, selector: string, existingWork: string): string {
+  return `${aidlcToolInvocation("orchestrate")} next compose --request ${questionId} --record ${shellArg(selector)}${existingWork}`;
+}
+
 function newWorkRoutingAskDirective(
   question: string,
   numberedProseQuestion: string,
   description: string,
   proposedScope: string,
   projectDir: string,
-  askedAbout: { space: string; targets: QuestionTarget[] },
+  askedAbout: QuestionAskedAbout,
   availableIntents?: string[],
   stateSha256?: string,
   carried: RoutingCarried = { creation: "", newWork: "", existingWork: "", planChanges: "" },
@@ -1989,11 +2095,10 @@ function newWorkRoutingAskDirective(
   // The route commands travel as fields, never inside the human-facing text.
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
-  const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256, {
-    newWork: tokens(`${carried.newWork}${carried.planChanges}`),
-    existingWork: tokens(carried.existingWork),
-  }, approvedRequest);
+  const stored = saveQuestion(
+    projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256,
+    routingSettings(carried), approvedRequest,
+  );
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -2020,7 +2125,7 @@ function newWorkRoutingAskDirective(
         select_commands: selectCommands(availableIntents),
         reshape_commands: availableIntents.map((selector) => ({
           selector,
-          command: `${tool} next compose --request ${stored.id} --record ${shellArg(selector)}${carried.existingWork}`,
+          command: routingReshapeCommand(stored.id, selector, carried.existingWork),
         })),
       }
       : { continue_command: `${tool} next --continue --request ${stored.id}${carried.existingWork}` }),
@@ -3311,7 +3416,7 @@ function composeDispatchDirective(
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${authoritativeRequest(flags.intent)}".${pastedDocumentNote(flags.intent)}` : "."),
-      "This returned directive has selected the composer path. The named-stage fast path is available only BEFORE calling next compose, even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
+      "This returned directive has selected the composer path. Stages the person names go through next --skip or --add only BEFORE calling next compose; now dispatch the composer even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "A request to turn sensors, learnings, summary confirmation, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine (config get shows from env AIDLC_DISABLE_<NAME>), say in one line that it has to be removed outside the agent, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
@@ -3396,29 +3501,22 @@ function composeDispatchDirective(
   return directive;
 }
 
-// Guard the creation gate against a DUPLICATE intent on a fresh clone of a
-// multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
-// `!stateContent`, but stateContent is empty in TWO different worlds: a truly
-// empty workspace (zero intents → creation is correct), AND a workspace that
-// already holds intents whose active-intent CURSOR is unset. The cursor
-// (`aidlc/spaces/<sp>/intents/active-intent`) is gitignored per-user state, so a
-// fresh clone of a >1-intent workspace lands with records on disk but no cursor
-// → activeIntent() returns null (lib:357-361) → stateContent is empty → the
-// creation gate would mint a SECOND intent over the top of the existing ones
-// (violates the P4 hazard "auto-create fires only on ZERO intents").
-//
-// This consults the deterministic query layer (listIntents over the active
-// space) and, when intents EXIST but none is flagged active, NAMES the
-// disambiguation move as an `ask` directive that lists the unfinished intents and
-// asks the human to pick one via `/aidlc intent <name>` - instead of creating.
-// Returns null when creation should proceed unchanged (zero unfinished intents
-// in the space, or one already resolved active - the latter only when this is
-// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
-// read-only: it emits a directive, it does not touch the cursor.
-function intentPickPromptIfRecordsExist(
+type UnselectedRecords = {
+  space: string;
+  intents: ReturnType<typeof listIntents>;
+  presentCount: number;
+  selectable: Array<{ intent: ReturnType<typeof listIntents>[number]; state: string; selector: string }>;
+  list: string;
+};
+
+// The work a person can pick in the selected space while none is selected:
+// the unfinished records, the ones present in this checkout, the ones a
+// session can select (and `keep`), and how the questions about them list them.
+// Null when nothing here is unfinished work or a cursor already resolves.
+function unselectedRecords(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
-): AskDirective | ErrorDirective | null {
+  keep: (record: UnselectedRecords["selectable"][number]) => boolean = () => true,
+): UnselectedRecords | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived intents are retired work: they never block creation and are never
@@ -3462,22 +3560,11 @@ function intentPickPromptIfRecordsExist(
     isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
-  );
+  ).filter(keep);
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
   if (present.length === 0) return null;
-  // Records that are here but that no session can select are still work in
-  // progress, so they do not open the creation path either. Their names are
-  // repository text and stay out of the message.
-  if (selectable.length === 0) {
-    return errorDirective(
-      `This project has ${present.length} piece${present.length === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
-        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
-        "Rename the record directory (and its entry in intents.json), then run this again.",
-    );
-  }
-  const selectors = selectable.map(({ selector }) => selector);
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
     if (annotate) {
@@ -3516,6 +3603,56 @@ function intentPickPromptIfRecordsExist(
     const identity = label === selector ? record : `\`${label}\` (record: ${record})`;
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
+  return { space, intents, presentCount: present.length, selectable, list };
+}
+
+// Which records the routing question listed: each selectable record's name and
+// identity, never its progress. It marks a question asked while none was
+// selected as answerable by an option; the answer acts only on listed records
+// still there with the same name and uuid.
+function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): string {
+  return createHash("sha256")
+    .update(selectable.map(({ intent, selector }) => `${selector}\n${intent.uuid ?? ""}`).join("\n"), "utf-8")
+    .digest("hex");
+}
+
+// Guard the creation gate against a DUPLICATE intent on a fresh clone of a
+// multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
+// `!stateContent`, but stateContent is empty in TWO different worlds: a truly
+// empty workspace (zero intents → creation is correct), AND a workspace that
+// already holds intents whose active-intent CURSOR is unset. The cursor
+// (`aidlc/spaces/<sp>/intents/active-intent`) is gitignored per-user state, so a
+// fresh clone of a >1-intent workspace lands with records on disk but no cursor
+// → activeIntent() returns null (lib:357-361) → stateContent is empty → the
+// creation gate would mint a SECOND intent over the top of the existing ones
+// (violates the P4 hazard "auto-create fires only on ZERO intents").
+//
+// This consults the deterministic query layer (listIntents over the active
+// space) and, when intents EXIST but none is flagged active, NAMES the
+// disambiguation move as an `ask` directive that lists the unfinished intents and
+// asks the human to pick one via `/aidlc intent <name>` - instead of creating.
+// Returns null when creation should proceed unchanged (zero unfinished intents
+// in the space, or one already resolved active - the latter only when this is
+// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
+// read-only: it emits a directive, it does not touch the cursor.
+function intentPickPromptIfRecordsExist(
+  projectDir: string,
+  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
+): AskDirective | ErrorDirective | null {
+  const records = unselectedRecords(projectDir);
+  if (records === null) return null;
+  const { space, intents, presentCount, selectable, list } = records;
+  // Records that are here but that no session can select are still work in
+  // progress, so they do not open the creation path either. Their names are
+  // repository text and stay out of the message.
+  if (selectable.length === 0) {
+    return errorDirective(
+      `This project has ${presentCount} piece${presentCount === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
+        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
+        "Rename the record directory (and its entry in intents.json), then run this again.",
+    );
+  }
+  const selectors = selectable.map(({ selector }) => selector);
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
   if (pendingWork?.description.trim()) {
     return newWorkRoutingAskDirective(
@@ -3527,9 +3664,9 @@ function intentPickPromptIfRecordsExist(
         "existing remaining plan - select its record, then reshape it?",
       `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
         `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?\n\n` +
-        `1. **Part of existing work** — Select one of the above and continue it\n` +
-        `2. **Separate new piece of work** — Yes, set it up alongside the existing work as "${pendingWork.proposedScope}" work without changing it\n` +
-        `3. **Reshape existing work** — Select one of the above, then reshape its remaining plan\n` +
+        `${newWorkRoutingOptionLine(0, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
+        `${newWorkRoutingOptionLine(1, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
+        `${newWorkRoutingOptionLine(2, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
         "4. **Other** — describe what you want instead\n\n" +
         "Reply with a number (or just tell me).",
       pendingWork.description,
@@ -3538,9 +3675,10 @@ function intentPickPromptIfRecordsExist(
       {
         space,
         targets: selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
+        pick: true,
       },
       selectors,
-      undefined,
+      unselectedRecordsDigest(selectable),
       pendingWork.carried,
       pendingWork.approvedRequest,
     );
@@ -3786,6 +3924,8 @@ type SteeringTokenPayload = {
   y?: { batch: number; units: string[] };
   // The step carries the person's Redo answer to the re-use question.
   e?: true;
+  // Every Unit on the step was built in this attempt (build_settled).
+  t?: true;
   h: string | null;
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
@@ -5193,6 +5333,7 @@ function markerSteeringPayload(
       !p.y.units.every((unit) => typeof unit === "string")
     )) ||
     (p.e !== undefined && p.e !== true) ||
+    (p.t !== undefined && p.t !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
     (p.l !== undefined && typeof p.l !== "string")
   ) {
@@ -5241,6 +5382,7 @@ function steeringTokenPayload(
       ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
       : undefined,
     e: directive.artifact_reuse ? true : undefined,
+    t: directive.build_settled === true ? true : undefined,
     h: route.stateHash,
     l: layout,
   };
@@ -5636,34 +5778,38 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const onlyProse = flags.intent !== undefined &&
     Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
-  if (routingAnswer) {
+  // Asked while no work was selected, continue and reshape act on a record the
+  // person picks from the ones the question listed that are still there: with
+  // one listed, that is the one; with more, only which one is left to ask.
+  // With none of them left, or work selected since, they run the question's
+  // own late answer below (`--continue` / `compose --request`), which acts on
+  // the listed work selected now or asks again, keeping the request.
+  const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
+  if (
+    routingAnswer && pickedRecords &&
+    (routingAnswer.question.askedAbout?.targets.length ?? 0) > 1
+  ) {
+    emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
+    return;
+  }
+  if (routingAnswer && pickedRecords && routingAnswer.route === "continue") {
+    // Its select command, exactly as the question supplied it.
+    flags.intent = undefined;
+    flags.workspaceCommand = parseNextFlags(["intent", pickedRecords.selectable[0].selector]).workspaceCommand;
+  } else if (routingAnswer) {
     flags.intent = undefined;
     flags.request = routingAnswer.question.id;
     if (routingAnswer.route === "continue") {
       flags.continue = true;
     } else if (routingAnswer.route === "reshape") {
       flags.compose = true;
+      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
     } else {
       flags.newIntent = true;
       flags.scope = routingAnswer.question.proposedScope;
     }
     // The settings typed with the request ride this answer as they ride the
-    // option's command, read back through the same parser.
-    const settings = routingAnswer.question.settings;
-    if (settings) {
-      const replay = parseNextFlags(routingAnswer.route === "separate" ? settings.newWork : settings.existingWork);
-      if (replay.parseError) {
-        emit(errorDirective(QUESTION_UNAVAILABLE));
-        return;
-      }
-      flags.planChanges = replay.planChanges;
-      flags.depth = replay.depth;
-      flags.testStrategy = replay.testStrategy;
-      flags.projectType = replay.projectType;
-      flags.review = replay.review;
-      flags.changeControl = replay.changeControl;
-      flags.ceremony = replay.ceremony;
-    }
+    // option's command: the question it names fills them in below.
   }
 
   // An answer names its question by id. The copy is removed once the answer
@@ -5707,6 +5853,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (started) {
       pruneQuestions();
       emit(started);
+      return;
+    }
+    // An answer that arrived without its option's command (a reply naming the
+    // option, or the plain `next --request` an open stage question hands on)
+    // gets the stored settings; the ask's own commands already carry theirs.
+    const bare = routingAnswer !== null ||
+      (!flags.newIntent && !flags.continue && !flags.compose && flags.record === undefined);
+    if (bare && !fillStoredSettings(flags, found)) {
+      emit(errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
     question = found;
@@ -6790,7 +6945,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   ) {
     const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
-      const words = saveQuestion(pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() });
+      // The settings typed with these words ride on with them.
+      const words = saveQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carriedRoutingFlags(flags)),
+      );
       emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));
       return;
     }
@@ -8333,6 +8492,14 @@ function emitPerUnitRunStage(
       kinds?.get(lastUnit) ?? null,
     );
     directive.unit = lastUnit;
+    // When every Unit was built in this attempt, nothing on this beat plans or
+    // builds, so the plans they were built from are not asked about again. A
+    // beat whose Units have no completion receipt in this attempt (a loop-back
+    // over artifacts alone) may still apply a fix, so it is not marked.
+    const built = units.filter((u) => !ledger.skipped.has(u));
+    if (built.length > 0 && built.every((u) => ledger.receipts.has(u))) {
+      directive.build_settled = true;
+    }
     if (stateContent !== null) {
       const preflight = preflightDirective(
         projectDir,
@@ -9081,6 +9248,26 @@ type UnitMajorWalkStep =
     }
   | { kind: "covered" };
 
+// Where the walk stops a Unit at one block stage: its work, or the summary
+// confirmation after it. Null when the Unit is done there.
+function unitStageStop(
+  projectDir: string,
+  stateContent: string | null,
+  k: GraphStage,
+  u: string,
+  kind: string | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  ledger: UnitLedger,
+): UnitMajorWalkStep | null {
+  if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kind, ledger)) {
+    return { kind: "work", stage: k, unit: u };
+  }
+  if (unitExempt(k, u, kind, ledger)) return null;
+  const confirmation = checkSummaryConfirmationEvidence(projectDir, k, { stateContent, unit: u });
+  return confirmation.ok ? null : { kind: "summary", stage: k, unit: u, confirmation };
+}
+
 function unitMajorWalkStep(
   projectDir: string,
   stateContent: string | null,
@@ -9112,17 +9299,8 @@ function unitMajorWalkStep(
   const stopFor = (u: string): UnitMajorWalkStep | null => {
     for (const k of block) {
       const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
-      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
-        return { kind: "work", stage: k, unit: u };
-      }
-      if (unitExempt(k, u, kinds?.get(u) ?? null, ledger)) continue;
-      const confirmation = checkSummaryConfirmationEvidence(projectDir, k, {
-        stateContent,
-        unit: u,
-      });
-      if (!confirmation.ok) {
-        return { kind: "summary", stage: k, unit: u, confirmation };
-      }
+      const stop = unitStageStop(projectDir, stateContent, k, u, kinds?.get(u) ?? null, recordPrefix, codekbCtx, ledger);
+      if (stop) return stop;
     }
     if (checkpoints && stateContent) {
       const kind: ConstructionCheckpointKind =
@@ -9403,11 +9581,14 @@ function unitMajorReopen(
     : "";
   const backTo = (unit: string, stage: string): string =>
     ` If they say 'back to ${unit}', run \`next --stage ${stage} --unit ${unit}\`.`;
-  // A Unit has reached the target when it finished it, or when the walk has it
-  // on a later step of the block (or at its checkpoint, after every step).
+  // A Unit has reached the target when it finished it, skipped it in this
+  // attempt (a jump ahead moved it past), or when the walk has it on a later
+  // step of the block (or at its checkpoint, after every step).
   const pastTarget = inFlight !== null &&
     (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
-  const reached = (unit: string): boolean => finished.has(unit) || (unit === inFlight && pastTarget);
+  const skippedHere = unitLedgerFor(projectDir, targetSlug).skipped;
+  const reached = (unit: string): boolean =>
+    finished.has(unit) || skippedHere.has(unit) || (unit === inFlight && pastTarget);
   const anyFinished = (): boolean =>
     walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0);
   let reopened: string[];
@@ -9499,16 +9680,20 @@ function unitMajorReopen(
 
 // A forward jump in a solo unit-major walk. The person asked to go there, so it
 // goes through (#1411). When the target is the step the walk is already on,
-// plain routing lands there and skips nothing ("route"). Otherwise the jump runs
-// as it does anywhere, marking the steps it passes skipped for every unit, and
-// this returns the sentence naming the steps units have not finished, so the
-// agent can say what was skipped and how to reopen it. Null outside such a walk.
+// plain routing lands there and skips nothing ("route"). A target among the
+// later per-unit steps, once a unit has finished work, moves only the unit in
+// flight on: `execute --units` skips that unit's steps up to the target and
+// every other unit keeps its finished, approved work. Otherwise the jump runs
+// as it does anywhere, marking the steps it passes skipped for every unit.
+// Either way this returns the execute flags and the sentence naming what is
+// skipped, so the agent can say what was skipped and how to reopen it. Null
+// outside such a walk.
 function unitMajorForwardJump(
   projectDir: string,
   scope: string,
   stateContent: string,
   targetSlug: string,
-): "route" | string | null {
+): "route" | { before?: string; flags: string; said: string } | null {
   const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
   const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
   if (!walk) return null;
@@ -9518,6 +9703,43 @@ function unitMajorForwardJump(
     : step.kind === "paused" ? step.stage : null;
   if (liveStage === targetSlug) return "route";
   const graph = loadGraph();
+  const at = (slug: string): number => graph.findIndex((node) => node.slug === slug);
+  const blockSlugs = walk.block.map((stage) => stage.slug);
+  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  if (
+    inFlight !== null && liveStage !== null &&
+    blockSlugs.indexOf(targetSlug) > blockSlugs.indexOf(liveStage) &&
+    walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)
+  ) {
+    const kind = walk.context.kinds?.get(inFlight) ?? null;
+    const passed = walk.block
+      .slice(blockSlugs.indexOf(liveStage), blockSlugs.indexOf(targetSlug))
+      .filter((stage) => unitStageStop(
+        projectDir, stateContent, stage, inFlight, kind, walk.context.recordPrefix, walk.context.codekbCtx,
+        unitLedgerFor(projectDir, stage.slug),
+      ) !== null)
+      .map((stage) => stage.slug);
+    // A one-unit skip works on the steps at or after Current Stage, and on a
+    // step reopened behind its stage approval.
+    const approved = new Set(parseCheckboxes(stateContent).filter((row) => row.state === "completed").map((row) => row.slug));
+    if (passed.every((slug) => at(slug) >= at(currentSlug) || approved.has(slug))) {
+      // A parked workflow is unparked first: the unit moves on with Current
+      // Stage where it is, so the park would otherwise stop the next `next`.
+      const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
+        ? `\`${aidlcToolInvocation("state")} unpark\`, then `
+        : "";
+      return {
+        before: unpark,
+        flags: ` --units ${inFlight}${passed.length > 0 ? ` --stages ${passed.join(",")}` : ""}`,
+        said: ` This moves only unit "${inFlight}" on to "${targetSlug}"` +
+          (passed.length > 0 ? `, skipping the steps it has not finished: ${passed.join(", ")}. Their files stay.` : ".") +
+          ` ${OTHER_UNITS_KEPT} After the jump, tell the person in one line what was skipped for unit ${inFlight}` +
+          (passed.length > 0
+            ? ` and that \`${entrySkillInvocation()} --stage ${passed[0]} --unit ${inFlight}\` reopens it.`
+            : "."),
+      };
+    }
+  }
   const targetIndex = graph.findIndex((stage) => stage.slug === targetSlug);
   // Steps before the target that a unit has not finished are skipped; steps
   // from the target on that a unit finished start a new attempt, so the walk
@@ -9546,14 +9768,17 @@ function unitMajorForwardJump(
         `and needs its approvals again: ${named(redone)}.`,
     );
   }
-  if (said.length === 0) return "";
+  if (said.length === 0) return { flags: "", said: "" };
   // The jump back that reopens what was skipped starts at the earliest skipped step.
   const earliestSkipped = walk.block
     .find((stage) => [...skipped.values()].some((steps) => steps.includes(stage.slug)))?.slug ?? currentSlug;
-  return ` ${said.join(" ")} After the jump, tell the person in one line what was ` +
-    (skipped.size > 0
-      ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${earliestSkipped}\` reopens it.`
-      : "started over.");
+  return {
+    flags: "",
+    said: ` ${said.join(" ")} After the jump, tell the person in one line what was ` +
+      (skipped.size > 0
+        ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${earliestSkipped}\` reopens it.`
+        : "started over."),
+  };
 }
 
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
@@ -10169,8 +10394,8 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
-        (unitMajor ?? "") + everyUnitLine,
+      `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
+        (unitMajor?.said ?? "") + everyUnitLine,
     ));
     return;
   }
@@ -12639,6 +12864,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
   if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");
+  if (payload.t === true) directive.build_settled = true;
   if (payload.j !== undefined && payload.u !== null && liveState !== null) {
     applyConstructionCheckpointShape(
       directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),

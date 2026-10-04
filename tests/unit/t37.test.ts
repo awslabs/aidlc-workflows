@@ -767,6 +767,41 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(quiet.out).not.toContain("Hook failures, the latest within the last day");
   });
 
+  // A person who presses Esc to stop the turn is let go by the recursion guard;
+  // that is not a failure for them to fix, even where an earlier version wrote
+  // it to .drops.
+  test("18g2: a recursion-guard release in .drops is not reported as a failure", () => {
+    const p = track(createTestProject());
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(healthDir, { recursive: true });
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(
+      join(healthDir, "continue-workflow.drops"),
+      `${now}\trecursion guard released the stop (no-progress block cap 2 reached; stop_hook_active=false)\n`,
+      "utf-8",
+    );
+    const r = doctor(p);
+    expect(r.out).toContain("Hook drops: none recorded");
+    expect(r.out).not.toContain("Hook failures, the latest within the last day");
+  });
+
+  // No person stops an unattended run, so an autonomous run's release (cap 8)
+  // is a stall, and doctor still reports it.
+  test("18g3: an autonomous run's recursion-guard release in .drops is still reported", () => {
+    const p = track(createTestProject());
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(healthDir, { recursive: true });
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(
+      join(healthDir, "continue-workflow.drops"),
+      `${now}\trecursion guard released the stop (no-progress block cap 8 reached; stop_hook_active=false)\n`,
+      "utf-8",
+    );
+    const r = doctor(p);
+    expect(r.out).toContain("Hook failures, the latest within the last day");
+    expect(r.out).toContain("no-progress block cap 8 reached");
+  });
+
   test("18h: a reason's detail after its first colon never leaves the drops file; its summary is redacted and cleaned", () => {
     const p = track(createTestProject());
     // Built at runtime so the source carries no key-shaped literal.

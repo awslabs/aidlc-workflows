@@ -20,6 +20,7 @@ import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -1340,6 +1341,67 @@ describe("t294 provider diagnostics", () => {
     expect(providerIssues(opencode, ".aidlc", "opencode", record)).toEqual([]);
   });
 
+  test("an answer recorded while a workflow runs is done, names its file, and says how to undo it", () => {
+    const project = install("claude");
+    const dirName = "active-answers";
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000294",
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const answer = (...args: string[]) => {
+      const result = run(["config", ...args, "--project-dir", project, "--yes"], project, runtimeEnv());
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("refusing to refresh");
+      return result.stdout;
+    };
+    const file = ".claude/tools/data/harness.json";
+    const acknowledged = answer("trust", "--acknowledge");
+    expect(acknowledged).toContain(`Recorded the trust answer in ${file}. To undo: `);
+    expect(acknowledged).toContain("config trust --reset --yes");
+    const reset = answer("trust", "--reset");
+    expect(reset).toContain(`Cleared the trust answer in ${file}. To undo: `);
+    expect(reset).toContain("config trust --acknowledge --yes");
+    // --acknowledge records a review, so a record without one gets no undo.
+    const dataFile = join(project, ".claude", "tools", "data", "harness.json");
+    for (const trust of [{ schemaVersion: 1, reviewed: false }, { schemaVersion: 1 }]) {
+      writeFileSync(dataFile, `${JSON.stringify({ ...JSON.parse(readFileSync(dataFile, "utf-8")), trust }, null, 2)}\n`);
+      const unreviewed = answer("trust", "--reset");
+      expect(unreviewed).toContain(`Cleared the trust answer in ${file}.`);
+      expect(unreviewed).not.toContain("--acknowledge");
+    }
+    const provider = answer("providers", "--provider", "current");
+    expect(provider).toContain(`Recorded the providers answer in ${file}. To undo: `);
+    expect(provider).toContain("config providers --reset --yes");
+    // An answer does not change how the open work runs, so nothing claims it does.
+    expect(acknowledged + reset + provider).not.toContain("picks this up");
+    // The undo brings back the acknowledgement and the actions marked done too.
+    const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      acknowledged: true,
+      pendingActions: [{ id: "bedrock-model-access", status: "done" }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    const back = answer("providers", "--provider", "current");
+    expect(back).toContain(`Changed the providers answer in ${file}. To undo: `);
+    expect(back).toContain("config providers --provider amazon-bedrock --region us-east-1 --acknowledge --mark-done bedrock-model-access --yes");
+  });
+
   test("pending actions drive check and doctor until marked done", () => {
     const project = temp("aidlc-t294-pending-");
     cpSync(join(DIST, "claude"), project, { recursive: true });
@@ -2094,6 +2156,27 @@ describe("t294 instruction-file doctor row", () => {
     const missingOnboarding = instructionFileDoctorCheck(project, ".codex");
     expect(missingOnboarding.pass).toBe(false);
     expect(missingOnboarding.label).toContain("missing (.codex/onboarding.md)");
+  });
+
+  test("in a copy config never ran in, AGENTS.md needs AI-DLC's part where the engine can add it", () => {
+    const project = temp("aidlc-t294-copy-agents-");
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    const agentsPath = join(project, "AGENTS.md");
+    const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
+    writeFileSync(agentsPath, `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
+    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    // An earlier release's text the team changed: the session start cannot
+    // add the part, so the doctor says so instead of calling it intact.
+    writeFileSync(agentsPath, `${readFileSync(join(DIST, "codex", "AGENTS.md"), "utf-8")}\nOur own line.\n`);
+    const edited = instructionFileDoctorCheck(project, ".codex");
+    expect(edited.pass).toBe(false);
+    expect(edited.label).toContain("conflict (AGENTS.md)");
+    // The team's own file, before the session start adds the part.
+    writeFileSync(agentsPath, "# Shop\n");
+    const own = instructionFileDoctorCheck(project, ".codex");
+    expect(own.pass).toBe(false);
+    expect(own.label).toContain("missing (AGENTS.md)");
   });
 
   test("an unsafe onboarding path is ignored like an absent descriptor field", () => {
@@ -2888,6 +2971,38 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(after).sandbox_mode).toBe("workspace-write");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("release refresh adds the start-up warning switch to a Codex config installed before it", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const before = readFileSync(configPath, "utf-8")
+      .replace(/^[\t ]*suppress_unstable_features_warning[\t ]*=[^\r\n]*\r?\n/m, "");
+    expect(parseToml(before).suppress_unstable_features_warning).toBeUndefined();
+    writeFileSync(configPath, before);
+    const manifestPath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    delete manifest.entries[".codex/config.toml"].suppress_unstable_features_warning;
+    // An install from before the switch: its baseline recorded this exact file.
+    manifest.files[".codex/config.toml"] = sha256Bytes(before);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "codex"),
+      "--harness",
+      "codex",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = parseToml(readFileSync(configPath, "utf-8"));
+    expect(after.suppress_unstable_features_warning).toBe(true);
+    expect((after.features as Record<string, unknown>).default_mode_request_user_input).toBe(true);
+    expect(after.sandbox_mode).toBe("workspace-write");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("refresh treats deleted Codex developer instructions as framework drift", () => {
     const project = install("codex");
     const env = runtimeEnv();
@@ -3249,6 +3364,7 @@ describe("t294 config diagnostics CLI", () => {
       sandbox_mode: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       sandbox_workspace_write: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       shell_environment_policy: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      suppress_unstable_features_warning: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });

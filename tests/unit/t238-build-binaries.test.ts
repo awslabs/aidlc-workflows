@@ -621,11 +621,28 @@ describe("t238 build-binaries release builder", () => {
         }
         expect(existsSync(join(copyRoot, "runtime", distribution, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
       }
+      // Nor the team's .gitignore or AGENTS.md: AI-DLC's part of each ships in
+      // the harness folder, and config or the engine adds it to the team's file.
+      for (const [distribution, harnessDir, markers] of [
+        ["claude", ".claude", ["gitignore"]],
+        ["copilot", ".aidlc", ["gitignore", "agents"]],
+      ] as const) {
+        for (const path of [".gitignore", "AGENTS.md"]) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+        }
+        for (const marker of markers) {
+          const block = join("tools", "data", "root-blocks", marker);
+          expect(existsSync(join(copyRoot, "runtime", distribution, harnessDir, block)), `${distribution}/${block}`).toBe(true);
+        }
+        expect(existsSync(join(nativeRoot, "runtime", distribution, ".gitignore"))).toBe(true);
+      }
       const upgraded = join(runtimeChannels, "upgraded-project");
       const teamFiles = new Map([
         [kept[0], "# Team practices\n\n- Affirmed: trunk-based development\n"],
         [kept[1], "# Project rules\n\n- Learned: run the linter before review\n"],
         [kept[2], "payments\n"],
+        [".gitignore", "node_modules\n.env\nsecrets/\n"],
+        ["AGENTS.md", "# Shop\n\nOur own notes for agents.\n"],
       ]);
       for (const [path, body] of teamFiles) {
         mkdirSync(dirname(join(upgraded, path)), { recursive: true });
@@ -635,6 +652,39 @@ describe("t238 build-binaries release builder", () => {
       cpSync(join(copyRoot, "runtime", "copilot"), upgraded, { recursive: true });
       for (const [path, body] of teamFiles) {
         expect(readFileSync(join(upgraded, path), "utf-8"), path).toBe(body);
+      }
+      // The team's secrets file stays ignored, so `git add -A` never picks it up.
+      writeFileSync(join(upgraded, ".env"), "API_KEY=team-secret\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: upgraded }).status).toBe(0);
+      expect(spawnSync("git", ["check-ignore", "-q", ".env"], { cwd: upgraded }).status).toBe(0);
+
+      // A Kiro project that later takes the Claude copy keeps Kiro's per-machine
+      // files ignored: the copy leaves .gitignore alone, and the next session
+      // start adds Claude's lines beside Kiro's.
+      const kiroThenClaude = join(runtimeChannels, "kiro-then-claude");
+      mkdirSync(kiroThenClaude);
+      writeFileSync(join(kiroThenClaude, ".gitignore"), "node_modules\n");
+      const sessionStart = (harnessDir: string): void => {
+        const started = spawnSync(BUN, [join(kiroThenClaude, harnessDir, "hooks", "aidlc-session-start.ts")], {
+          cwd: kiroThenClaude,
+          input: "{}",
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: kiroThenClaude },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(started.status, `${harnessDir}: ${started.stdout}${started.stderr}`).toBe(0);
+      };
+      cpSync(join(copyRoot, "runtime", "kiro"), kiroThenClaude, { recursive: true });
+      sessionStart(".kiro");
+      const kiroIgnore = readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8");
+      expect(kiroIgnore).toContain("aidlc/.aidlc-turn-counter");
+      cpSync(join(copyRoot, "runtime", "claude"), kiroThenClaude, { recursive: true });
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toBe(kiroIgnore);
+      sessionStart(".claude");
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toStartWith("node_modules\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: kiroThenClaude }).status).toBe(0);
+      for (const path of ["aidlc/.aidlc-turn-counter", "aidlc/.aidlc-readonly-latch", ".claude/settings.local.json"]) {
+        expect(spawnSync("git", ["check-ignore", "-q", path], { cwd: kiroThenClaude }).status, path).toBe(0);
       }
 
       const manualProject = join(runtimeChannels, "manual-project");
