@@ -312,6 +312,22 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // The agent passes a step and goes on: the line it carries is said before
+  // the step's own work, or the person sees a long wait with no word.
+  test("every shipped conductor SKILL says a print's and a run-stage's narration first", () => {
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "| `print` | When the directive carries `narration`, say it first.",
+        "When the directive carries `narration`, say it first, in the same message as those reads.",
+      ]) {
+        if (!body.includes(tok)) missing.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("the narration rule is worded identically across every harness", () => {
     // Byte-alignment, not just presence: the rule is authored once and ported,
     // so a per-harness reword is drift. Extracted by its own anchors rather than

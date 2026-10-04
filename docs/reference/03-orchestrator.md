@@ -437,8 +437,9 @@ another chat. A line a tool gives inside a stage (`document-input`'s
 it, next to the untrusted-path notice. Without a chat to keep them for, a line
 stays on its own step.
 A line that would push a step over its size limit waits for the next one.
-Every skill says a `run-stage`'s `narration` first, in the same message as the
-stage's context reads, so the lines it carries are heard as the stage starts.
+Every skill says a `print`'s or a `run-stage`'s `narration` first (on a
+`run-stage`, in the same message as the stage's context reads), so the lines
+they carry are heard before the step's own work starts.
 When the reclassify reply names a finished stage that ran before the code was
 there, the chat counts that stage's out-of-date warning as heard on that work
 (in the same file), and the `stage_validity` advisory with that warning is
