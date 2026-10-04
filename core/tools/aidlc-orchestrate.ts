@@ -3664,10 +3664,13 @@ function unselectedRecords(
   if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  // Where each piece of work stands, in the stage names the person sees.
+  // Where each piece of work stands, in the stage names the person sees. A
+  // Unit-by-Unit stage is named by its phase: Current Stage stays on the first
+  // of them while each Unit works through the later ones.
   const standing = (state: string): string => {
     const stage = nodeForSlug((getField(state, "Current Stage") ?? "").trim());
-    return stage ? `at ${stage.name}` : "";
+    if (!stage) return "";
+    return isPerUnitStage(stage) ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
   };
   const present = intentStates.filter(({ intent }) => intent.dirName);
   const selectable = present.flatMap(({ intent, state }) =>
@@ -3800,13 +3803,16 @@ function intentPickPromptIfRecordsExist(
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
   const entry = entrySkillInvocation();
-  // Where each stands, and the other way on: new work is the person's to start.
-  const question = selectable.length === 1
-    ? `This project has one piece of work in progress${spaceLabel}: ${list}. Pick it up, or describe new work to start.`
-    : `This project has ${intents.length} pieces of work in progress${spaceLabel}, and none is selected here: ${list}. ` +
-      "Pick one to carry on, or describe new work to start.";
+  // Where each stands; work whose record cannot be selected here is counted,
+  // never named.
+  const hidden = intents.length - selectable.length;
+  const unlisted = hidden > 0 ? ` (${hidden} more ${hidden === 1 ? "has a record name that cannot" : "have record names that cannot"} be selected here)` : "";
+  const question = intents.length === 1
+    ? `This project has one piece of work in progress${spaceLabel}: ${list}. Pick it up to carry on.`
+    : `This project has ${intents.length} pieces of work in progress${spaceLabel}, and none is selected here: ${list}${unlisted}. ` +
+      "Pick one to carry on.";
   return intentPickAskDirective(
-    `${question} ${selectable.length === 1 ? "Picking it up" : "Picking one"} selects it; then \`${entry}\` carries on where it left off.`,
+    `${question} ${intents.length === 1 ? "Picking it up" : "Picking one"} selects it; then \`${entry}\` carries on where it left off.`,
     selectors,
   );
 }

@@ -353,8 +353,7 @@ annotates a mixed team workspace with statuses such as `team construction, 2
 units claimable` and `parked at code-generation`. Finished intents are left out
 of the picker in every workspace, because they have nothing left to carry on;
 `/aidlc intent list` still shows them. Every other piece of work is listed with
-where it stands (`at Requirements Analysis`), and the question offers starting
-new work instead. A bare `/aidlc` or `/aidlc --resume` there always asks; it
+where it stands (`at Requirements Analysis`). A bare `/aidlc` or `/aidlc --resume` there always asks; it
 never answers that there is no work.
 
 `/aidlc --doctor` adds local-only claim reconciliation:

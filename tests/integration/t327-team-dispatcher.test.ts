@@ -877,10 +877,10 @@ describe("t327 team construction dispatcher", () => {
       {},
       ["--scope", "feature"],
     ).question as string;
-    // Solo work says where each piece stands, in stage names.
+    // Solo work says where each piece stands; Unit-by-Unit stages by their phase.
     expect(soloQuestion).toContain(
-      "`team-work` (record: `team-work-11111111`) (at Functional Design), " +
-        "`parked-work` (record: `parked-work-22222222`) (at Code Generation). ",
+      "`team-work` (record: `team-work-11111111`) (in Construction), " +
+        "`parked-work` (record: `parked-work-22222222`) (in Construction). ",
     );
     expect(soloQuestion).not.toContain("done-work-33333333");
     expect(soloQuestion).toContain("2 pieces of work in progress");

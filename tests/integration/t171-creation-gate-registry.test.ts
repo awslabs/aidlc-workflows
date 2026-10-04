@@ -158,6 +158,20 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
 
     // A teammate's clone: committed work in progress, no per-user cursor. A bare
     // /aidlc (or --resume) names each piece and where it stands, never "no work".
+    test("work whose record cannot be selected here is counted, never named", () => {
+      const [kept, odd] = seedTwoIntentsNoCursor();
+      const unbindable = `${odd} `;
+      renameSync(join(intentsDir(proj), odd), join(intentsDir(proj), unbindable));
+      const rows = readIntentRegistry(proj).map((row) => (row.dirName === odd ? { ...row, dirName: unbindable } : row));
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      const d = JSON.parse(next([]).stdout.trim());
+      expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+      expect(d.available_intents).toEqual([kept]);
+      expect(d.question).toContain("This project has 2 pieces of work in progress");
+      expect(d.question).toContain("(1 more has a record name that cannot be selected here)");
+      expect(d.question).not.toContain(unbindable);
+    });
+
     for (const args of [[], ["--resume"]]) {
       test(`a clone with work in progress and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` names each piece and where it stands`, () => {
         const records = seedTwoIntentsNoCursor();
@@ -167,7 +181,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.available_intents).toEqual(records);
         expect(d.question).toContain("This project has 2 pieces of work in progress, and none is selected here:");
         expect(d.question.match(/\(at [A-Z][^)]*\)/g) ?? []).toHaveLength(2);
-        expect(d.question).toContain("Pick one to carry on, or describe new work to start.");
+        expect(d.question).toContain("Pick one to carry on.");
         expect(JSON.stringify(d)).not.toContain("No workflow state found");
         // Read-only: nothing created, nothing selected.
         expect(recordDirs(proj)).toEqual(records);
@@ -182,7 +196,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const d = JSON.parse(next(args).stdout.trim());
         expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
         expect(d.available_intents).toEqual([first]);
-        expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. Pick it up, or describe new work to start\./);
+        expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. Pick it up to carry on\./);
         expect(existsSync(cursorPath(proj))).toBe(false);
       });
     }
@@ -197,7 +211,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("Pick one to carry on, or describe new work to start.");
+      expect(d.question).toContain("Pick one to carry on.");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -217,7 +231,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("Pick one to carry on, or describe new work to start.");
+      expect(d.question).toContain("Pick one to carry on.");
       expect(d.available_intents).toHaveLength(2);
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
