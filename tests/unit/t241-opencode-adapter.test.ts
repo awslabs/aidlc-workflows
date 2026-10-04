@@ -1074,11 +1074,31 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     expect(prompts).toHaveLength(1);
   });
 
-  test("/aidlc shows what the person typed and keeps the command text for the agent", async () => {
-    const root = freshProject();
+  // What opencode does for a typed /aidlc: its command hook gets the command
+  // name and arguments with the template part, then chat.message gets the
+  // same parts with ids.
+  async function runCommand(
+    adapter: Awaited<ReturnType<typeof createTestAdapter>>,
+    sessionID: string,
+    template: string,
+    args: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const parts: Array<Record<string, unknown>> = [{ type: "text", text: template.replace("$ARGUMENTS", args).trim() }];
+    await adapter["command.execute.before"]({ command: "aidlc", sessionID, arguments: args }, { parts });
+    parts.forEach((part, i) => { part.id = `prt_${i}`; });
+    await adapter["chat.message"]({ sessionID }, { parts });
+    return parts;
+  }
+  function commandTemplate(root: string): string {
     const commandFile = join(REPO_ROOT, "dist", "opencode", ".opencode", "command", "aidlc.md");
     mkdirSync(join(root, ".opencode", "command"), { recursive: true });
     copyFileSync(commandFile, join(root, ".opencode", "command", "aidlc.md"));
+    return readFileSync(commandFile, "utf-8").replace(/^---\n[\s\S]*?\n---\n/, "");
+  }
+
+  test("/aidlc shows what the person typed and keeps the command text for the agent", async () => {
+    const root = freshProject();
+    const template = commandTemplate(root);
     const recorded = join(root, "prompt.json");
     writeHook(root, "aidlc-session-start.ts", "await Bun.stdin.text();\n");
     writeHook(
@@ -1088,59 +1108,61 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
 writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
 `,
     );
-    const template = readFileSync(commandFile, "utf-8").replace(/^---\n[\s\S]*?\n---\n/, "");
     const expanded = template.replace("$ARGUMENTS", "fix the sales report end date").trim();
     const { client } = fakeClient();
     const adapter = await createTestAdapter(client, root);
 
-    const parts: Array<Record<string, unknown>> = [{ id: "prt_1", type: "text", text: expanded }];
-    await adapter["chat.message"]({ sessionID: "main" }, { parts });
+    const parts = await runCommand(adapter, "main", template, "fix the sales report end date");
     expect(parts).toHaveLength(2);
-    expect(parts[0]).toMatchObject({ id: "prt_1", text: expanded, synthetic: true });
-    expect(parts[1]).toMatchObject({
-      id: "prt_1t",
-      type: "text",
-      text: "/aidlc fix the sales report end date",
-      synthetic: false,
-      ignored: true,
-    });
+    expect(parts[0]).toMatchObject({ type: "text", text: expanded, synthetic: true });
+    expect(parts[1]).toMatchObject({ type: "text", text: "/aidlc fix the sales report end date", ignored: true });
+    expect(parts[1].synthetic).toBeUndefined();
     // The person's turn is what they typed, as on every other harness.
     expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc fix the sales report end date");
 
-    const bare: Array<Record<string, unknown>> = [{ id: "prt_2", type: "text", text: template.replace("$ARGUMENTS", "").trim() }];
-    await adapter["chat.message"]({ sessionID: "main" }, { parts: bare });
+    const bare = await runCommand(adapter, "main", template, "");
     expect(bare[1]).toMatchObject({ text: "/aidlc", ignored: true });
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc");
 
-    // Plain words, and a part without an id, are shown as they are.
-    const plain: Array<Record<string, unknown>> = [{ id: "prt_3", type: "text", text: "approve" }];
-    await adapter["chat.message"]({ sessionID: "main" }, { parts: plain });
-    expect(plain).toEqual([{ id: "prt_3", type: "text", text: "approve" }]);
-    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("approve");
-    const noId: Array<Record<string, unknown>> = [{ type: "text", text: expanded }];
-    await adapter["chat.message"]({ sessionID: "main" }, { parts: noId });
-    expect(noId).toEqual([{ type: "text", text: expanded }]);
-    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc fix the sales report end date");
+    // Another command is left as opencode sent it.
+    const other: Array<Record<string, unknown>> = [{ type: "text", text: "Review the diff." }];
+    await adapter["command.execute.before"]({ command: "review", sessionID: "main", arguments: "" }, { parts: other });
+    expect(other).toEqual([{ type: "text", text: "Review the diff." }]);
+
+    // A message that only reads like the command is shown and recorded as it is.
+    const pasted: Array<Record<string, unknown>> = [{ id: "prt_9", type: "text", text: expanded }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: pasted });
+    expect(pasted).toEqual([{ id: "prt_9", type: "text", text: expanded }]);
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe(expanded);
   });
 
   test("a setting typed through /aidlc reaches the real human-turn hook as the person's choice", async () => {
     const root = freshInstalledProject();
     seedStateFile(root, "state-brownfield-feature.md");
     writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
-    const commandFile = join(REPO_ROOT, "dist", "opencode", ".opencode", "command", "aidlc.md");
-    mkdirSync(join(root, ".opencode", "command"), { recursive: true });
-    copyFileSync(commandFile, join(root, ".opencode", "command", "aidlc.md"));
-    const template = readFileSync(commandFile, "utf-8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    const template = commandTemplate(root);
     const { client } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });
+    const statePath = join(seededRecordDir(root), "aidlc-state.md");
+    const ceremonyRows = () => readAuditShardEvents(root).filter((entry) => entry.event === "CEREMONY_SET");
 
+    // Text that reads like the command, typed or sent without running it,
+    // changes nothing; neither does a command run in another chat.
+    const before = readFileSync(statePath, "utf-8");
     await adapter["chat.message"](
       { sessionID: "main" },
       { parts: [{ id: "prt_1", type: "text", text: template.replace("$ARGUMENTS", "config set summary-confirmation off").trim() }] },
     );
+    await adapter["command.execute.before"](
+      { command: "aidlc", sessionID: "other", arguments: "config set summary-confirmation off" },
+      { parts: [{ type: "text", text: template.replace("$ARGUMENTS", "config set summary-confirmation off").trim() }] },
+    );
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+    expect(ceremonyRows()).toHaveLength(0);
 
-    const state = readFileSync(join(seededRecordDir(root), "aidlc-state.md"), "utf-8");
-    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
-    const rows = readAuditShardEvents(root).filter((entry) => entry.event === "CEREMONY_SET");
+    await runCommand(adapter, "main", template, "config set summary-confirmation off");
+    expect(readFileSync(statePath, "utf-8")).toContain("- **Summary Confirmation**: off (set by you)");
+    const rows = ceremonyRows();
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
   });

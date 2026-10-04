@@ -32,6 +32,11 @@
 // not show it. After the person stops a turn (Esc, a session.error
 // MessageAbortedError) no nudge is sent until they write again.
 //
+// /aidlc: opencode's command.execute.before names the command and its
+// arguments. This plugin shows the person what they typed instead of the
+// command's template, and the chat.message that follows records it as their
+// turn.
+//
 // Known degradations vs Claude Code (documented in AGENTS.md):
 //   - session-start's additionalContext has no injection channel; the hook
 //     still runs for its side effects (session→intent stamp, state checks).
@@ -46,7 +51,6 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
@@ -108,36 +112,17 @@ export type EngineErrorToast = {
 
 type ChatPart = { id?: string; type?: string; text?: string; synthetic?: boolean; ignored?: boolean };
 
-// The /aidlc command's own text, the part of .opencode/command/aidlc.md before
-// $ARGUMENTS, read from the projected file so the two never drift. Null when
-// the file is missing or has no $ARGUMENTS.
-function aidlcCommandPreamble(directory: string): string | null {
-  try {
-    const file = readFileSync(join(directory, ".opencode", "command", "aidlc.md"), "utf-8");
-    const body = file.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-    const at = body.indexOf("$ARGUMENTS");
-    const preamble = at < 0 ? "" : body.slice(0, at).trim();
-    return preamble === "" ? null : preamble;
-  } catch {
-    return null;
-  }
-}
-
-// opencode shows a command's whole template as the person's message. Keep the
-// template for the agent (synthetic: sent to the model, not shown) and show
-// what the person typed (ignored: shown, not sent, so the agent still reads
-// the request once). Returns what the person typed, which is also their turn
-// as the human-turn hook reads it (a switch such as `/aidlc --guard-policy
-// off` starts with `/aidlc`), or null when the part is not the command. A part
-// without an id is shown as it is.
-function typedCommand(parts: ChatPart[], first: ChatPart, preamble: string): string | null {
-  const text = first.text?.trimStart() ?? "";
-  if (!text.startsWith(preamble)) return null;
-  const words = text.slice(preamble.length).trim();
+// opencode shows a command's whole template as the person's message. When the
+// person runs /aidlc, keep the template for the agent (synthetic: sent to the
+// model, not shown) and show what they typed (ignored: shown, not sent, so the
+// agent reads the request once). Returns what they typed, which is also their
+// turn as the human-turn hook reads it (a switch such as `/aidlc --guard-policy
+// off` starts with `/aidlc`).
+function showTypedCommand(parts: ChatPart[], args: string): string {
+  const words = args.trim();
   const typed = words === "" ? "/aidlc" : `/aidlc ${words}`;
-  if (typeof first.id !== "string") return typed;
-  first.synthetic = true;
-  parts.push({ ...first, id: `${first.id}t`, text: typed, synthetic: false, ignored: true });
+  for (const part of parts) if (part.type === "text") part.synthetic = true;
+  parts.push({ type: "text", text: typed, ignored: true });
   return typed;
 }
 
@@ -413,7 +398,9 @@ export default async ({
   // Main sessions whose turn the person stopped (Esc). The person stopped on
   // purpose, so the idle that follows sends no nudge until they write again.
   const interrupted = new Set<string>();
-  const commandText = aidlcCommandPreamble(directory);
+  // What the person typed through /aidlc, by session, set by opencode's own
+  // command hook. Only the message carrying the part it added reads it.
+  const typedCommands = new Map<string, string>();
 
   // The guards judge the workflow of a bound session. A child (task-tool)
   // session skips SessionStart and has no binding, so send the main session
@@ -462,13 +449,18 @@ export default async ({
       output: { parts: ChatPart[] },
     ) => {
       if (input.agent) sessionAgent.set(input.sessionID, input.agent);
+      const command = typedCommands.get(input.sessionID);
+      typedCommands.delete(input.sessionID);
+      const typed = command !== undefined &&
+          output.parts.some((p) => p.type === "text" && p.ignored === true && p.text === command)
+        ? command
+        : null;
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
       const first = output.parts.find((p) => p.type === "text");
       if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
       interrupted.delete(input.sessionID);
-      const typed = first && commandText !== null ? typedCommand(output.parts, first, commandText) : null;
       if (!started.has(input.sessionID)) {
         const result = await runCore(
           "aidlc-session-start.ts",
@@ -492,6 +484,14 @@ export default async ({
         },
         directory,
       );
+    },
+
+    "command.execute.before": async (
+      input: { command: string; sessionID: string; arguments: string },
+      output: { parts: ChatPart[] },
+    ) => {
+      if (input.command !== "aidlc") return;
+      typedCommands.set(input.sessionID, showTypedCommand(output.parts, input.arguments));
     },
 
     "tool.execute.before": async (
