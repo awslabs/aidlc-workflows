@@ -349,6 +349,21 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect([...blocks.values()].map((v) => v.sort())).toHaveLength(1);
   });
 
+  test("every shipped conductor SKILL says only the person parks", () => {
+    const failures: string[] = [];
+    for (const harness of HARNESS_MATRIX) {
+      const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const token of [
+        "Only the person parks: never park on your own to hand them a decision",
+        "Carry on with the next stage, or ask your question and wait for their answer in this conversation.",
+      ]) {
+        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   test("every shipped conductor SKILL stops after new-intent creation and names its fresh-session flow", () => {
     const failures: string[] = [];
     for (const harness of HARNESS_MATRIX) {
