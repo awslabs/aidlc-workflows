@@ -487,7 +487,19 @@ describe("t304 copied projection configuration", () => {
     const later = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
     expect(later.status, later.stdout + later.stderr).toBe(0);
 
-    // The shipped list is gone now, so turning MCP back on needs the release.
+    // The shipped list still travels in the harness folder, so turning MCP
+    // back on needs no download and keeps the user's server.
+    const again = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(servers()).toContain("mine");
+    expect(servers().length).toBeGreaterThan(1);
+    expect(runCopied(project, ["config", "project", "--mcp", "none", "--yes"]).status).toBe(0);
+    expect(servers()).toEqual(["mine"]);
+
+    // With that copy gone too, turning MCP back on needs the release.
+    rmSync(join(project, ".claude", "tools", "data", "root-blocks", ".mcp.json"));
     const back = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"]);
     expect(back.status).toBe(4);
     expect(back.stdout).toContain(
@@ -520,6 +532,30 @@ describe("t304 copied projection configuration", () => {
       mcpServers: Record<string, unknown>;
     };
     expect(Object.keys(written.mcpServers).sort()).toEqual(Object.keys(shipped.mcpServers).sort());
+  }, 120_000);
+
+  // A copy leaves a team's own .mcp.json as it is; turning the shipped servers
+  // on adds them beside the team's and never drops one of theirs.
+  test("turning the shipped servers on keeps the team's own server", () => {
+    const project = fullCopyProject();
+    const team = { command: "team-db-mcp", args: ["--read-only"] };
+    writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: { "team-db": team } }, null, 2)}\n`);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    const written = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(written.mcpServers["team-db"]).toEqual(team);
+    expect(Object.keys(written.mcpServers).sort()).toEqual(["team-db", ...Object.keys(shipped.mcpServers)].sort());
+    // Turning them off again leaves the team's server.
+    const off = runCopied(project, ["config", "project", "--mcp", "none", "--yes"]);
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers).toEqual({ "team-db": team });
   }, 120_000);
 
   test("own files never adopt a user's edit to a shipped server", () => {

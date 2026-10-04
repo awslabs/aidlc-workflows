@@ -50,6 +50,7 @@ import {
   readRootIntegrations,
   removeJsoncSetting,
   replaceJsoncSetting,
+  copyStartsWithout,
   rootBlockPath,
   sha256Bytes,
   sha256File,
@@ -5319,11 +5320,8 @@ function ownFilesCoverChoices(
   );
   const shipped = integration?.legacySignatures?.jsonEntryHashes;
   if (!integration?.jsonKey || !shipped) return true;
-  // A copy starts without the file and carries the shipped list itself.
-  if (
-    !pathPresent(join(projectDir, integration.path)) &&
-    regularFile(rootBlockPath(join(projectDir, descriptor.harnessDir), integration))
-  ) return true;
+  // A copy carries the shipped list itself, whether or not the team has the file.
+  if (regularFile(rootBlockPath(join(projectDir, descriptor.harnessDir), integration))) return true;
   let servers: unknown;
   try {
     servers = (JSON.parse(readFileSync(join(projectDir, integration.path), "utf-8")) as Record<string, unknown>)[
@@ -7029,7 +7027,15 @@ function planRootIntegrations(
     descriptor: Pick<ProjectionDescriptor, "rootIntegrations"> | null;
   }> | undefined;
   for (const integration of descriptor.rootIntegrations) {
-    const sourcePath = shippedRootIntegrationPath(sourceRoot, descriptor.harnessDir, integration);
+    // The shipped list a copy starts without travels in root-blocks; config run
+    // from the project's own files merges it into the team's file, if any.
+    const shippedCopy = ownBytes && copyStartsWithout(integration)
+      ? rootBlockPath(join(sourceRoot, descriptor.harnessDir), integration)
+      : "";
+    const fromShippedCopy = shippedCopy !== "" && regularFile(shippedCopy);
+    const sourcePath = fromShippedCopy
+      ? shippedCopy
+      : shippedRootIntegrationPath(sourceRoot, descriptor.harnessDir, integration);
     const targetPath = join(projectDir, integration.path);
     const targetExists = pathPresent(targetPath);
     const targetRegular = targetExists && lstatSync(targetPath).isFile();
@@ -7216,9 +7222,10 @@ function planRootIntegrations(
         continue;
       }
       const shippedHashes = integration.legacySignatures?.jsonEntryHashes ?? {};
-      // With no project file the source is the shipped copy in root-blocks
-      // (a copy starts without it), so its entries are added as shipped.
-      if (mcpMode === "defaults" && ownBytes && current) {
+      // From the shipped copy in root-blocks, its entries are added as shipped
+      // next to the team's own; from the project's own file, only entries a
+      // release shipped are recorded as AI-DLC's.
+      if (mcpMode === "defaults" && ownBytes && !fromShippedCopy) {
         for (const entry of Object.keys(sourceMap)) {
           const currentHash = sha256Bytes(canonical(targetMap[entry]));
           if ((shippedHashes[entry] ?? []).includes(currentHash)) nextEntries[entry] = currentHash;
