@@ -1037,10 +1037,12 @@ AskUserQuestion({
 })
 ```
 
-`[next stage]` is rendered verbatim from the run-stage directive's `next_stage`
-field (the display name of the next in-scope stage, computed by the engine at
-emit time), or `Complete workflow` when `next_stage` is null. The conductor
-never infers the next stage.
+`[next stage]` is rendered verbatim from the `next_stage` field (the display
+name of the next in-scope stage) on the reply that opened the gate (`report
+--result awaiting-approval` or `revised`, computed when the gate opens, so a
+plan change made during the stage is in it), else the run-stage directive's
+(computed at emit time), or `Complete workflow` when `next_stage` is null. The
+conductor never infers the next stage.
 
 ### Conditional 3-Option Gate (Ideation and Inception only)
 

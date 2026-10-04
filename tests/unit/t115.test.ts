@@ -2069,3 +2069,66 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "REVIEW_COMPLETED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
+
+// The reply that opens a stage's approval gate names the stage the plan runs
+// next at that moment, so a plan change made during the stage is in the
+// Approve option; and a stage skipped as not applying is said to the person.
+describe("t115 the gate and a skip say what the plan does next", () => {
+  const lastDirective = (out: string): Record<string, unknown> =>
+    JSON.parse(out.trim().split("\n").filter((line) => line.startsWith("{")).at(-1) ?? "{}");
+
+  // Feasibility's outputs are on disk and the work asks no summary
+  // confirmation, so its gate can open.
+  const feasibilityDone = (): string => {
+    const p = projWithState("state-mid-ideation.md");
+    writeFileSync(
+      statePath(p),
+      readFileSync(statePath(p), "utf-8").replace(
+        "- **Change Control**: strict (from scope feature)\n",
+        "- **Change Control**: strict (from scope feature)\n- **Summary Confirmation**: off\n",
+      ),
+    );
+    const dir = join(seededRecordDir(p), "ideation", "feasibility");
+    mkdirSync(dir, { recursive: true });
+    for (const name of ["feasibility-assessment", "constraint-register", "raid-log", "feasibility-questions"]) {
+      writeFileSync(join(dir, `${name}.md`), `# ${name}\n\nDone.\n`);
+    }
+    return p;
+  };
+  const noReview = { AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" };
+
+  test("the gate-opening reply names the next stage the plan runs now", () => {
+    const p = feasibilityDone();
+    const opened = orchestrate(["report", "--stage", "feasibility", "--result", "awaiting-approval"], p, noReview);
+    expect(opened.status, opened.out).toBe(0);
+    expect(lastDirective(opened.stdout)).toMatchObject({ kind: "print", next_stage: "Scope Definition" });
+
+    // Scope Definition is taken off the plan while Feasibility is still open.
+    const q = feasibilityDone();
+    writeFileSync(
+      statePath(q),
+      readFileSync(statePath(q), "utf-8").replace("- [ ] scope-definition \u2014 EXECUTE", "- [ ] scope-definition \u2014 SKIP"),
+    );
+    const reopened = orchestrate(["report", "--stage", "feasibility", "--result", "awaiting-approval"], q, noReview);
+    expect(reopened.status, reopened.out).toBe(0);
+    expect(lastDirective(reopened.stdout)).toMatchObject({ kind: "print", next_stage: "Team Formation" });
+  });
+
+  test("a stage skipped as not applying is said with the next step the agent speaks from", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const chat = {
+      AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000115",
+      AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+    const skipped = orchestrate([
+      "report", "--stage", "feasibility", "--result", "skipped", "--reason", "Nothing to check for a one-room office",
+    ], p, chat);
+    expect(skipped.status, skipped.out).toBe(0);
+    expect(lastDirective(skipped.stdout).narration).toBeUndefined();
+    const next = runOrchestrateNext(ORCH_TOOL, p, [], { env: { ...process.env, ...chat } });
+    expect(next.directive?.kind, next.out).toBe("run-stage");
+    expect(String(next.directive?.narration)).toMatch(
+      /^Feasibility[^.]* does not apply here, so I skipped it: Nothing to check for a one-room office/,
+    );
+  });
+});

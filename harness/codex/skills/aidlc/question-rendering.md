@@ -149,8 +149,10 @@ checkpoint with the later reviewer, learnings, or approval steps.
 Rules (both tracks):
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **No emergent options**: render exactly the spec's options (+ the escape).
   The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.

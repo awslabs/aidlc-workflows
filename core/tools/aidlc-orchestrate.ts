@@ -12093,13 +12093,22 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emit({
+    // A stage skipped because it does not apply is said, in one line with the
+    // agent's reason, with the next step the agent speaks from: the agent
+    // reports the skip and goes straight on.
+    const skippedReason = reason.trim().replace(/\s+/g, " ");
+    const skipped: Directive = {
       kind: "done",
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-    });
+      narration: `${node.name} does not apply here, so I skipped it: ${
+        skippedReason.length > 200 ? `${skippedReason.slice(0, 200)}...` : skippedReason
+      }`,
+    };
+    carriesNarration.add(skipped);
+    emit(skipped);
     return;
   }
 
@@ -12483,8 +12492,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       changeNoticesFromToolOutput(res.stdout),
     );
     // The agent shows the gate next, so lines held from inside the stage are
-    // said with it.
-    if (flags.result === "awaiting-approval" || flags.result === "revised") leadsToSpeech.add(gateReply);
+    // said with it, and its Approve option names the stage the plan runs next
+    // now: a plan change made during the stage is in it.
+    if (flags.result === "awaiting-approval" || flags.result === "revised") {
+      leadsToSpeech.add(gateReply);
+      if (gateReply.kind === "print") {
+        const next = nextInScopeStage(slug, scope, loadStateFileIfPresent(pd) ?? undefined);
+        gateReply.next_stage = next ? next.name : null;
+      }
+    }
     emit(gateReply);
     return;
   }

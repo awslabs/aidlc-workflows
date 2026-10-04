@@ -649,6 +649,11 @@ export interface PrintDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   message: string;
+  // next_stage: on the reply that opens (or re-opens) a stage's approval gate,
+  // the stage the Approve option continues to, computed when the gate opens so
+  // a plan change made during the stage is in it. null = the final in-scope
+  // stage. Same meaning as run-stage's next_stage.
+  next_stage?: string | null;
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -876,7 +881,7 @@ const ASK_FIELDS = [
   "existing_code_command",
   "new_project_command",
 ] as const;
-const PRINT_FIELDS = ["kind", "message"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
@@ -1261,6 +1266,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     }
     case "print":
       checkString(o, "message", kind, errors);
+      checkOptionalNullableString(o, "next_stage", kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);
