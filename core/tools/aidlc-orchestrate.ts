@@ -96,7 +96,7 @@ import {
   latestQuestion,
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
-  type QuestionTarget,
+  type QuestionAskedAbout,
   questionTargetSelected,
   readComposeEntry,
   readQuestion,
@@ -1799,9 +1799,12 @@ function selectCommands(
   }));
 }
 
+// `commands` replaces each record's select command with the one a chosen
+// route runs for it (a routing question's reshape), keyed the same way.
 function intentPickAskDirective(
   question: string,
   availableIntents: string[],
+  commands: Array<{ selector: string; command: string }> = selectCommands(availableIntents),
 ): AskDirective {
   return {
     kind: "ask",
@@ -1809,7 +1812,7 @@ function intentPickAskDirective(
     response_route: "next",
     question,
     available_intents: availableIntents,
-    select_commands: selectCommands(availableIntents),
+    select_commands: commands,
   };
 }
 
@@ -1846,7 +1849,9 @@ function unitPausedAskDirective(
 // The new-work routing ask's own options about an active workflow, in its
 // numbered order. The numbered rendering and routingOptionReply share them, so
 // a reply that echoes the ask's own wording is always read as that answer.
-const NEW_WORK_ROUTING_OPTIONS = [
+type NewWorkRoute = "continue" | "separate" | "reshape";
+type RoutingOption = { readonly route: NewWorkRoute; readonly label: string; readonly detail: (scope: string) => string };
+const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
   { route: "continue", label: "Part of the active work", detail: (_scope: string) => "Continue the current workflow" },
   {
     route: "separate",
@@ -1854,11 +1859,29 @@ const NEW_WORK_ROUTING_OPTIONS = [
     detail: (scope: string) => `Yes, set it up alongside the current one as "${scope}" work without changing it`,
   },
   { route: "reshape", label: "Reshape the active work", detail: (_scope: string) => "Change how the remaining plan is shaped" },
-] as const;
-type NewWorkRoute = (typeof NEW_WORK_ROUTING_OPTIONS)[number]["route"];
+];
+// The same ask's options while no work is selected: continue and reshape act
+// on a record the person picks from the ones it lists.
+const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
+  { route: "continue", label: "Part of existing work", detail: (_scope: string) => "Select one of the above and continue it" },
+  {
+    route: "separate",
+    label: "Separate new piece of work",
+    detail: (scope: string) => `Yes, set it up alongside the existing work as "${scope}" work without changing it`,
+  },
+  {
+    route: "reshape",
+    label: "Reshape existing work",
+    detail: (_scope: string) => "Select one of the above, then reshape its remaining plan",
+  },
+];
 
-function newWorkRoutingOptionLine(index: number, scope: string): string {
-  const option = NEW_WORK_ROUTING_OPTIONS[index];
+function newWorkRoutingOptionLine(
+  index: number,
+  scope: string,
+  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
+): string {
+  const option = options[index];
   return `${index + 1}. **${option.label}** — ${option.detail(scope)}`;
 }
 
@@ -1866,47 +1889,69 @@ function newWorkRoutingOptionLine(index: number, scope: string): string {
 // `1.`, `(1)`), its label, or its numbered line as rendered. Anything more is
 // the person's own words, never cut down to an option. `numeric` marks a bare
 // number, which could also answer some other numbered question.
-function routingOptionReply(text: string, scope: string): { route: NewWorkRoute; numeric: boolean } | null {
+function routingOptionReply(
+  text: string,
+  scope: string,
+  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
+): { route: NewWorkRoute; numeric: boolean } | null {
   const normalize = (value: string): string =>
     value.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase().replace(/[.!]$/, "");
   const reply = normalize(text);
   const numbered = reply.match(/^\(?([1-3])\)?[.):]?(?:\s+(.*))?$/);
   if (numbered && numbered[2] === undefined) {
-    return { route: NEW_WORK_ROUTING_OPTIONS[Number(numbered[1]) - 1].route, numeric: true };
+    return { route: options[Number(numbered[1]) - 1].route, numeric: true };
   }
-  const index = NEW_WORK_ROUTING_OPTIONS.findIndex((option, i) => {
+  const index = options.findIndex((option, i) => {
     const label = normalize(option.label);
-    const line = normalize(newWorkRoutingOptionLine(i, scope));
+    const line = normalize(newWorkRoutingOptionLine(i, scope, options));
     return numbered ? Number(numbered[1]) - 1 === i && (normalize(numbered[2]) === label || reply === line) : reply === label;
   });
-  return index === -1 ? null : { route: NEW_WORK_ROUTING_OPTIONS[index].route, numeric: false };
+  return index === -1 ? null : { route: options[index].route, numeric: false };
 }
 
 // The routing question a reply that only names one of its options answers: the
-// question stored most recently, asked about one workflow that has not moved
-// since. A bare number also needs nothing asked after it: no question logged
-// since, and no turn of the person's besides this reply. Anything else is the
-// person's own words, asked about as usual.
+// question stored most recently, about work that has not moved since: the one workflow it was asked about. Asked while none
+// was selected, separate new work acts on none of its records, so it answers
+// whatever happened to them; continue and reshape get the records it listed
+// that are still there with the same identity, none selected (`records`). A bare number
+// also needs nothing asked after it: no question logged since, and no turn of
+// the person's besides this reply. Anything else is the person's own words,
+// asked about as usual.
 function routingQuestionAnswer(
   projectDir: string,
   text: string,
-): { question: StoredQuestion; route: NewWorkRoute } | null {
+): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null } | null {
   try {
     const question = latestQuestion(projectDir);
-    const target = question?.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !target) return null;
-    const option = routingOptionReply(text, question.proposedScope);
+    const askedAbout = question?.askedAbout;
+    if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
+    const pick = askedAbout.pick === true;
+    const option = routingOptionReply(
+      text,
+      question.proposedScope,
+      pick ? EXISTING_WORK_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS,
+    );
     if (!option) return null;
     // Once the request it stopped has started work, the question is spent:
-    // the person's words are their own again.
+    // the person's words are their own again. Asked with work selected or
+    // none, the same.
     if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
-    const statePath = stateFilePathForSelection(projectDir, {
-      space: question.askedAbout!.space,
-      intent: target.intent || null,
-      sessionId: null,
-      binding: null,
-    });
-    if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
+    let records: UnselectedRecords | null = null;
+    if (pick) {
+      const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
+        askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
+      records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
+    } else {
+      const target = askedAbout.targets.length === 1 ? askedAbout.targets[0] : undefined;
+      if (!target) return null;
+      const statePath = stateFilePathForSelection(projectDir, {
+        space: askedAbout.space,
+        intent: target.intent || null,
+        sessionId: null,
+        binding: null,
+      });
+      if (stateDigest(readFileSync(statePath, "utf-8")) !== question.stateSha256) return null;
+    }
     if (option.numeric) {
       const asked = Date.parse(question.createdAt);
       const since = readAuditShardEvents(projectDir).filter((row) => Date.parse(row.timestamp) > asked);
@@ -1917,10 +1962,33 @@ function routingQuestionAnswer(
         return null;
       }
     }
-    return { question, route: option.route };
+    return { question, route: option.route, records };
   } catch {
     return null;
   }
+}
+
+// "Part of existing work" or "Reshape existing work" said back while the
+// question listed more than one record: the person chose the option, not yet
+// which work. Ask only that, as the typed record picker: each listed record
+// still there a choice, and its command the one the question would have run
+// for it. Record names stay data in the
+// choices and in the question's list, never in an instruction.
+function pickedRouteRecordAsk(
+  question: StoredQuestion,
+  route: "continue" | "reshape",
+  records: UnselectedRecords,
+): AskDirective {
+  const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
+  const selectors = records.selectable.map(({ selector }) => selector);
+  if (route === "continue") {
+    return intentPickAskDirective(`Which piece of work is this part of: ${records.list}?`, selectors);
+  }
+  return intentPickAskDirective(
+    `Which piece of work should I reshape: ${records.list}?`,
+    selectors,
+    selectors.map((selector) => ({ selector, command: routingReshapeCommand(question.id, selector, existingWork) })),
+  );
 }
 
 // The question a person is being asked in a solo walk's current [-] stage: the
@@ -1972,13 +2040,19 @@ function openQuestionReplyDirective(stage: string, checkpoint: string | null, re
   );
 }
 
+// A routing question's reshape of one listed record: it selects that record,
+// then reshapes it, with the settings typed with the request.
+function routingReshapeCommand(questionId: string, selector: string, existingWork: string): string {
+  return `${aidlcToolInvocation("orchestrate")} next compose --request ${questionId} --record ${shellArg(selector)}${existingWork}`;
+}
+
 function newWorkRoutingAskDirective(
   question: string,
   numberedProseQuestion: string,
   description: string,
   proposedScope: string,
   projectDir: string,
-  askedAbout: { space: string; targets: QuestionTarget[] },
+  askedAbout: QuestionAskedAbout,
   availableIntents?: string[],
   stateSha256?: string,
   carried: RoutingCarried = { creation: "", newWork: "", existingWork: "", planChanges: "" },
@@ -2020,7 +2094,7 @@ function newWorkRoutingAskDirective(
         select_commands: selectCommands(availableIntents),
         reshape_commands: availableIntents.map((selector) => ({
           selector,
-          command: `${tool} next compose --request ${stored.id} --record ${shellArg(selector)}${carried.existingWork}`,
+          command: routingReshapeCommand(stored.id, selector, carried.existingWork),
         })),
       }
       : { continue_command: `${tool} next --continue --request ${stored.id}${carried.existingWork}` }),
@@ -3396,29 +3470,22 @@ function composeDispatchDirective(
   return directive;
 }
 
-// Guard the creation gate against a DUPLICATE intent on a fresh clone of a
-// multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
-// `!stateContent`, but stateContent is empty in TWO different worlds: a truly
-// empty workspace (zero intents → creation is correct), AND a workspace that
-// already holds intents whose active-intent CURSOR is unset. The cursor
-// (`aidlc/spaces/<sp>/intents/active-intent`) is gitignored per-user state, so a
-// fresh clone of a >1-intent workspace lands with records on disk but no cursor
-// → activeIntent() returns null (lib:357-361) → stateContent is empty → the
-// creation gate would mint a SECOND intent over the top of the existing ones
-// (violates the P4 hazard "auto-create fires only on ZERO intents").
-//
-// This consults the deterministic query layer (listIntents over the active
-// space) and, when intents EXIST but none is flagged active, NAMES the
-// disambiguation move as an `ask` directive that lists the unfinished intents and
-// asks the human to pick one via `/aidlc intent <name>` - instead of creating.
-// Returns null when creation should proceed unchanged (zero unfinished intents
-// in the space, or one already resolved active - the latter only when this is
-// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
-// read-only: it emits a directive, it does not touch the cursor.
-function intentPickPromptIfRecordsExist(
+type UnselectedRecords = {
+  space: string;
+  intents: ReturnType<typeof listIntents>;
+  presentCount: number;
+  selectable: Array<{ intent: ReturnType<typeof listIntents>[number]; state: string; selector: string }>;
+  list: string;
+};
+
+// The work a person can pick in the selected space while none is selected:
+// the unfinished records, the ones present in this checkout, the ones a
+// session can select (and `keep`), and how the questions about them list them.
+// Null when nothing here is unfinished work or a cursor already resolves.
+function unselectedRecords(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
-): AskDirective | ErrorDirective | null {
+  keep: (record: UnselectedRecords["selectable"][number]) => boolean = () => true,
+): UnselectedRecords | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
   // Archived intents are retired work: they never block creation and are never
@@ -3462,22 +3529,11 @@ function intentPickPromptIfRecordsExist(
     isBindableIntentRecordName(intent.dirName)
       ? [{ intent, state, selector: intent.dirName }]
       : []
-  );
+  ).filter(keep);
   // Registry rows whose record folders are missing from this checkout cannot be
   // selected or continued here, so like archived work they never block creation:
   // a picker with nothing to pick would strand the request.
   if (present.length === 0) return null;
-  // Records that are here but that no session can select are still work in
-  // progress, so they do not open the creation path either. Their names are
-  // repository text and stay out of the message.
-  if (selectable.length === 0) {
-    return errorDirective(
-      `This project has ${present.length} piece${present.length === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
-        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
-        "Rename the record directory (and its entry in intents.json), then run this again.",
-    );
-  }
-  const selectors = selectable.map(({ selector }) => selector);
   const list = selectable.map(({ intent, state, selector }) => {
     let annotation = "";
     if (annotate) {
@@ -3516,6 +3572,56 @@ function intentPickPromptIfRecordsExist(
     const identity = label === selector ? record : `\`${label}\` (record: ${record})`;
     return `${identity}${annotation ? ` (${annotation})` : ""}`;
   }).join(", ");
+  return { space, intents, presentCount: present.length, selectable, list };
+}
+
+// Which records the routing question listed: each selectable record's name and
+// identity, never its progress. It marks a question asked while none was
+// selected as answerable by an option; the answer acts only on listed records
+// still there with the same name and uuid.
+function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): string {
+  return createHash("sha256")
+    .update(selectable.map(({ intent, selector }) => `${selector}\n${intent.uuid ?? ""}`).join("\n"), "utf-8")
+    .digest("hex");
+}
+
+// Guard the creation gate against a DUPLICATE intent on a fresh clone of a
+// multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
+// `!stateContent`, but stateContent is empty in TWO different worlds: a truly
+// empty workspace (zero intents → creation is correct), AND a workspace that
+// already holds intents whose active-intent CURSOR is unset. The cursor
+// (`aidlc/spaces/<sp>/intents/active-intent`) is gitignored per-user state, so a
+// fresh clone of a >1-intent workspace lands with records on disk but no cursor
+// → activeIntent() returns null (lib:357-361) → stateContent is empty → the
+// creation gate would mint a SECOND intent over the top of the existing ones
+// (violates the P4 hazard "auto-create fires only on ZERO intents").
+//
+// This consults the deterministic query layer (listIntents over the active
+// space) and, when intents EXIST but none is flagged active, NAMES the
+// disambiguation move as an `ask` directive that lists the unfinished intents and
+// asks the human to pick one via `/aidlc intent <name>` - instead of creating.
+// Returns null when creation should proceed unchanged (zero unfinished intents
+// in the space, or one already resolved active - the latter only when this is
+// reached with an explicit scope/intent that didn't load a cursor'd state). The engine stays
+// read-only: it emits a directive, it does not touch the cursor.
+function intentPickPromptIfRecordsExist(
+  projectDir: string,
+  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
+): AskDirective | ErrorDirective | null {
+  const records = unselectedRecords(projectDir);
+  if (records === null) return null;
+  const { space, intents, presentCount, selectable, list } = records;
+  // Records that are here but that no session can select are still work in
+  // progress, so they do not open the creation path either. Their names are
+  // repository text and stay out of the message.
+  if (selectable.length === 0) {
+    return errorDirective(
+      `This project has ${presentCount} piece${presentCount === 1 ? "" : "s"} of work in progress${space === "default" ? "" : ` in space "${space}"`}, ` +
+        "but no record directory can be selected here: each name has a surrounding space, a control character, or a path separator. " +
+        "Rename the record directory (and its entry in intents.json), then run this again.",
+    );
+  }
+  const selectors = selectable.map(({ selector }) => selector);
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
   if (pendingWork?.description.trim()) {
     return newWorkRoutingAskDirective(
@@ -3527,9 +3633,9 @@ function intentPickPromptIfRecordsExist(
         "existing remaining plan - select its record, then reshape it?",
       `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
         `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?\n\n` +
-        `1. **Part of existing work** — Select one of the above and continue it\n` +
-        `2. **Separate new piece of work** — Yes, set it up alongside the existing work as "${pendingWork.proposedScope}" work without changing it\n` +
-        `3. **Reshape existing work** — Select one of the above, then reshape its remaining plan\n` +
+        `${newWorkRoutingOptionLine(0, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
+        `${newWorkRoutingOptionLine(1, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
+        `${newWorkRoutingOptionLine(2, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
         "4. **Other** — describe what you want instead\n\n" +
         "Reply with a number (or just tell me).",
       pendingWork.description,
@@ -3538,9 +3644,10 @@ function intentPickPromptIfRecordsExist(
       {
         space,
         targets: selectable.map(({ intent, selector }) => ({ intent: selector, uuid: intent.uuid ?? "" })),
+        pick: true,
       },
       selectors,
-      undefined,
+      unselectedRecordsDigest(selectable),
       pendingWork.carried,
       pendingWork.approvedRequest,
     );
@@ -5636,13 +5743,32 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const onlyProse = flags.intent !== undefined &&
     Object.entries(flags).every(([key, value]) => key === "intent" || value === undefined || value === false);
   const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
-  if (routingAnswer) {
+  // Asked while no work was selected, continue and reshape act on a record the
+  // person picks from the ones the question listed that are still there: with
+  // one listed, that is the one; with more, only which one is left to ask.
+  // With none of them left, or work selected since, they run the question's
+  // own late answer below (`--continue` / `compose --request`), which acts on
+  // the listed work selected now or asks again, keeping the request.
+  const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
+  if (
+    routingAnswer && pickedRecords &&
+    (routingAnswer.question.askedAbout?.targets.length ?? 0) > 1
+  ) {
+    emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
+    return;
+  }
+  if (routingAnswer && pickedRecords && routingAnswer.route === "continue") {
+    // Its select command, exactly as the question supplied it.
+    flags.intent = undefined;
+    flags.workspaceCommand = parseNextFlags(["intent", pickedRecords.selectable[0].selector]).workspaceCommand;
+  } else if (routingAnswer) {
     flags.intent = undefined;
     flags.request = routingAnswer.question.id;
     if (routingAnswer.route === "continue") {
       flags.continue = true;
     } else if (routingAnswer.route === "reshape") {
       flags.compose = true;
+      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
     } else {
       flags.newIntent = true;
       flags.scope = routingAnswer.question.proposedScope;

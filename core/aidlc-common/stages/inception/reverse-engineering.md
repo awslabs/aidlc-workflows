@@ -215,8 +215,9 @@ and the exact handoff path below; the developer discovers the source surface.
 Brief the developer with the scan breadth chosen at the Step 1 guard (full
 rescan = the whole repo; focused scan = the intent's area, named explicitly in
 the brief) and require the scan results' Scan Coverage section (re-artifacts.md
-template) to list what was actually analyzed deeply vs skimmed. Include the
-repo's snapshot `paths`; the deeply analyzed result MUST stay within that set.
+template) to list what was actually analyzed deeply, what was skimmed, and
+what was left out unopened. Include the repo's snapshot `paths`; the deeply
+analyzed result MUST stay within that set.
 
 For each repo selected for scanning, the developer scans `<repo>`'s codebase
 (the sibling dir `<workspace>/<repo>/`; for a single-repo intent this is the

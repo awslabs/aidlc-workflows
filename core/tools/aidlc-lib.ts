@@ -3842,7 +3842,12 @@ export function activeWorkflowDescriptions(projectDir: string): string[] {
         const status = getField(readFileSync(path, "utf-8"), "Status");
         if (status === "Completed" || status === "Archived") continue;
       }
-      active.push(`${space.name}/${intent.dirName}`);
+      // Printed for the person and read by agents: committed names pass the
+      // model-facing name rules, else the intent's slug or a placeholder
+      // stands in.
+      active.push(`${SPACE_NAME_REGEX.test(space.name) ? space.name : "(unnamed space)"}/${
+        isSafeIntentRecordName(intent.dirName) ? intent.dirName : intentDisplayLabel({ slug: intent.slug })
+      }`);
     }
   }
   return active;
