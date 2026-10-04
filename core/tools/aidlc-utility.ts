@@ -348,6 +348,7 @@ import {
   maximalAttemptEvents,
   idSuffix,
   lastWorkspaceSourceFailure,
+  fillHookActivationText,
   hookActivation,
   hookExecutionRecoveryText,
   hookLiveness,
@@ -4890,7 +4891,8 @@ export async function collectDoctorReport(
   const workflowHasProgress = progressedStageCount > 0;
   const workflowStageStarted = auditAllShards.includes("**Event**: STAGE_STARTED");
   const hookExecutionRecovery = gitBashLauncherRecovery() ?? hookExecutionRecoveryText(projectDir);
-  const hooksNotRunYet = hookActivation()?.notRunYet;
+  const declaredNotRunYet = hookActivation()?.notRunYet;
+  const hooksNotRunYet = declaredNotRunYet === undefined ? undefined : fillHookActivationText(declaredNotRunYet, projectDir);
 
   // 6. Hook heartbeats
   // Three states, discriminated by health-dir presence, readable heartbeats,

@@ -623,16 +623,18 @@ function engineWorkflow(projectDir: string): { intent?: string; space: string } 
 // run in the joined workflow: the harness declares the agent's step for that
 // only when a hook on the agent's own shell command leaves a heartbeat in the
 // record before the engine runs, and the workflow has a stage or gate event
-// but no heartbeat at all. Weaker signals stay warnings. There is no stop for
-// an unattended run, for a person who switched the presence check off (the
-// notice above still says it), in a delegated worktree, whose hooks beat in
-// the parent checkout, or where a link on the way to the status files keeps
-// any heartbeat from being written. A `next` that does not move the workflow
-// (status, doctor, help, config, the intent, space, plugin and knowledge
-// commands, park, team-board, a claim or release) runs as asked. The step
-// runs the stopped command again, so what it carried goes on.
+// but no heartbeat at all. Before any workflow, a harness whose hooks beat on
+// the person's every message stops at the first `next` when none has. Weaker
+// signals stay warnings. There is no stop for an unattended run, for a person
+// who switched the presence check off (the notice above still says it), in a
+// delegated worktree, whose hooks beat in the parent checkout, or where a link
+// on the way to the status files keeps any heartbeat from being written. A
+// `next` that does not move the workflow (status, doctor, help, config, the
+// intent, space, plugin and knowledge commands, park, team-board, a claim or
+// release) runs as asked. The step runs the stopped command again, so what it
+// carried goes on.
 function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs: string[]): string | null {
-  if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled(projectDir)) return null;
+  if (!humanTurnMintAllowed() || humanPresenceGuardDisabled(projectDir)) return null;
   const flags = parseNextFlags(nextArgs);
   if (
     flags.parseError || !nextEngagesWorkflow(nextArgs, flags) || flags.orchestratorVerb !== undefined ||
@@ -643,6 +645,15 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
   if (step === null) return null;
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
+    if (selection.intent === null) {
+      // Before any workflow, a harness whose hooks beat on every message of
+      // the person's (it declares notRunYet) knows from the message that led
+      // here: with no heartbeat at all, the hooks did not run for it.
+      if (!hookActivation()?.notRunYet) return null;
+      if (hookLiveness(projectDir, [], { space: selection.space }).hasHookFiredContent) return null;
+      if (hookStatusPathLinked(projectDir, undefined, selection.space)) return null;
+      return step;
+    }
     const workflow = { intent: selection.intent, space: selection.space };
     if (!hookLiveness(projectDir, undefined, workflow).neverFired) return null;
     if (hookStatusPathLinked(projectDir, workflow.intent, workflow.space)) return null;

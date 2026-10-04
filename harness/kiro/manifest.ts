@@ -44,8 +44,8 @@ const manifest: HarnessManifest = {
   // engine` line under every reply, which tells the two apart. Its
   // execute_bash hooks (review-freeze, plan-approval-guard) beat in the record
   // before each engine command, ahead of their own off switches.
-  // No notRunYet: nothing here pins that a prompt before the first workflow
-  // leaves a heartbeat, so doctor keeps the fresh-install advisory until then.
+  // The prompt adapter runs the human-turn hook on every message, which leaves
+  // a heartbeat before the first workflow too.
   hookActivation: {
     recovery:
       "In Kiro CLI, type /agent and pick aidlc, then carry on. If Kiro says agent \"aidlc\" " +
@@ -55,6 +55,10 @@ const manifest: HarnessManifest = {
     // A session without the aidlc agent runs none of these hooks, even after
     // an earlier session did, so the person's reply can go unrecorded.
     missesReplies: true,
+    notRunYet:
+      "This is expected before your first Kiro CLI chat in this folder. If you already started one, type /agent " +
+      "and pick aidlc; if Kiro says agent \"aidlc\" needs upgrading for this agent engine, quit Kiro and start " +
+      "it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc. Then run doctor again.",
     agentStep:
       "Kiro is not running this project's aidlc agent in this session. You cannot change that " +
       "from inside it: do not approve, retry, or ask the person to answer again. If Kiro's own " +

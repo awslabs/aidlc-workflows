@@ -8447,6 +8447,10 @@
         {
           "file": "tests/unit/t-copilot-hook-health.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

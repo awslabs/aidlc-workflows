@@ -97,6 +97,15 @@ function asShippedKiro(project: string, harness: "kiro" | "kiro-ide"): Record<st
   return { AIDLC_HARNESS_NAME: harness };
 }
 
+// The fixture runs Claude's tools tree, whose shipped harness data declares its
+// own hook advice; taking it out shows what a harness without any gets.
+function withoutHookAdvice(project: string): string {
+  const path = join(project, ".claude", "tools", "data", "harness.json");
+  const { hookActivation: _shipped, ...rest } = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  writeFileSync(path, `${JSON.stringify(rest, null, 2)}\n`);
+  return project;
+}
+
 function asKiroIde(project: string): Record<string, string> {
   return asShippedKiro(project, "kiro-ide");
 }
@@ -162,7 +171,7 @@ function isoSecond(timestampMs: number): string {
 
 describe("t319 doctor detects hooks blocked before their first heartbeat", () => {
   test("zero heartbeats with no workflow progress keeps the fresh-install advisory", () => {
-    const run = runUtility(freshProject(), ["doctor", "--verbose"]);
+    const run = runUtility(withoutHookAdvice(freshProject()), ["doctor", "--verbose"]);
     expect(output(run)).toContain(
       "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
     );
@@ -181,6 +190,16 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     );
     expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
+  });
+
+  // Claude Code's human-turn hook leaves a heartbeat on every message, so with
+  // none yet doctor says it is expected before the first chat, and the step.
+  test("Claude Code with no heartbeat warns that the hooks have not run, with its settings step", () => {
+    const text = output(runUtility(freshProject(), ["doctor", "--verbose"]));
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain(
+      'fix: This is expected before your first Claude Code chat in this folder. If you already started one, set "disableAllHooks": false',
+    );
   });
 
   test("Kiro IDE with a chat message's heartbeat reports the hooks as fired", () => {
@@ -214,11 +233,11 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Only shipped hookActivation advice with a notRunYet turns "no heartbeat
-  // yet" into a warning. These runs use the fixture's own harness data, which
-  // has none, so every harness name keeps the fresh-install advisory.
+  // yet" into a warning. These runs take the hook advice out of the fixture's
+  // harness data, so every harness name keeps the fresh-install advisory.
   for (const harness of ["claude", "kiro", "codex", "cursor", "opencode", "copilot"]) {
     test(`${harness} before any heartbeat keeps the fresh-install advisory with no Kiro IDE advice`, () => {
-      const run = runUtility(freshProject(), ["doctor", "--verbose"], {
+      const run = runUtility(withoutHookAdvice(freshProject()), ["doctor", "--verbose"], {
         AIDLC_HARNESS_NAME: harness,
       });
       const text = output(run);
@@ -269,21 +288,18 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     expect(text).not.toContain("verify hooks are registered in settings.json");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The kiro tree declares no notRunYet: nothing pins a heartbeat before the
-  // first workflow there, so a fresh project keeps the passing advisory.
-  test("Kiro CLI with no heartbeat before progress keeps the fresh-install advisory", () => {
+  // Kiro CLI's prompt adapter runs the human-turn hook on every message, which
+  // leaves a heartbeat before the first workflow too, so none yet is a warning
+  // with the agent and engine steps.
+  test("Kiro CLI with no heartbeat before progress warns with its agent and engine steps", () => {
     const project = freshProject();
     const text = output(runUtility(project, ["doctor", "--verbose"], asShippedKiro(project, "kiro")));
-    expect(text).toContain("ok    Hook heartbeats: not yet fired (first workflow stage will populate)");
-    expect(text).not.toContain("AIDLC hooks have not run in this project yet");
+    expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
+    expect(text).toContain("If you already started one, type /agent and pick aidlc;");
   });
 
   test("a harness with no hookActivation keeps the generic restart advice after progress", () => {
-    const project = projectWithWorkflowProgress();
-    // The fixture runs Claude's tools tree, which declares its own; Cursor's declares none.
-    const path = join(project, ".claude", "tools", "data", "harness.json");
-    const { hookActivation: _claude, ...shipped } = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-    writeFileSync(path, `${JSON.stringify(shipped, null, 2)}\n`);
+    const project = withoutHookAdvice(projectWithWorkflowProgress());
 
     const run = runUtility(project, ["doctor", "--verbose"], { AIDLC_HARNESS_NAME: "cursor" });
     expect(run.status).toBe(1);
@@ -299,7 +315,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     mkdirSync(health, { recursive: true });
     writeFileSync(join(health, "hook-debug.log"), "debug only\n", "utf-8");
 
-    const run = runUtility(project, ["doctor", "--verbose"]);
+    const run = runUtility(withoutHookAdvice(project), ["doctor", "--verbose"]);
     expect(output(run)).toContain(
       "ok    Hook heartbeats: not yet fired (first workflow stage will populate)",
     );

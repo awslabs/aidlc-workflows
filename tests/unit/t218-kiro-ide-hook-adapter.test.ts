@@ -5650,15 +5650,16 @@ describe("t218 a chat message leaves a hook heartbeat before the first workflow"
     });
 
     // Inside an intent, heartbeats feed the Plan Approval staleness refusal, so
-    // the adapter leaves them to the core hooks.
-    test(`${target} inside an intent writes no ${hook}.last`, () => {
+    // the adapter leaves them to the core hooks: none outside the record, and
+    // only the core human-turn hook's own inside it.
+    test(`${target} inside an intent leaves ${hook}.last to the core hook`, () => {
       const dir = scratchProject(true);
       try {
         const r = runIde(dir, target, "hello");
         expect(r.code, r.stderr).toBe(0);
-        for (const root of [intentsDirOf(dir, DEFAULT_SPACE), seededRecordDir(dir)]) {
-          expect(existsSync(join(root, ".aidlc-engine", "hooks-health", `${hook}.last`)), root).toBe(false);
-        }
+        const health = (root: string) => join(root, ".aidlc-engine", "hooks-health", `${hook}.last`);
+        expect(existsSync(health(intentsDirOf(dir, DEFAULT_SPACE)))).toBe(false);
+        expect(existsSync(health(seededRecordDir(dir)))).toBe(hook === "record-human-turn");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

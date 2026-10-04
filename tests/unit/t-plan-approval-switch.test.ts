@@ -572,6 +572,11 @@ function emptyProject(): string {
   const proj = createTestProject();
   created.push(proj);
   removeWorkspaceRecord(proj);
+  // The person's chat runs AI-DLC's hooks: the human-turn hook left its
+  // heartbeat before any work.
+  const health = hooksHealthDir(proj);
+  mkdirSync(health, { recursive: true });
+  writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
   return proj;
 }
 

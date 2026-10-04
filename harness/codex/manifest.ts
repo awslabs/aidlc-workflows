@@ -28,6 +28,11 @@ const manifest: HarnessManifest = {
   // live, the trust counts for the next message in the same chat.
   hookActivation: {
     recovery: "In Codex, type /hooks, press t to trust all, then press Esc. Then carry on in the same chat.",
+    // The human-turn hook leaves a heartbeat on every message, before the
+    // first workflow too.
+    notRunYet:
+      "This is expected before your first Codex chat in this folder. If you already started one, type /hooks " +
+      "in Codex, press t to trust all, then press Esc, and run doctor again.",
     agentStep:
       "Codex has not been allowed to run this project's AI-DLC steps. Only the person can allow " +
       "it, inside Codex: do not edit any Codex config and do not restart Codex. Their next " +

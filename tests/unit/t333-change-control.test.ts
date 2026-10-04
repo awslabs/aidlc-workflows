@@ -2297,11 +2297,15 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     seedAidlcMemory(proj);
     removeWorkspaceRecord(proj);
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
-    const before = existsSync(intents) ? readdirSync(intents).sort() : null;
+    // No piece of work is created. The hook's own heartbeat, in the engine's
+    // directory, is not one.
+    const records = () =>
+      existsSync(intents) ? readdirSync(intents).filter((name) => name !== ".aidlc-engine").sort() : [];
+    const before = records();
     const context = JSON.parse(recordHumanPrompt(proj, prompt));
     expect(context.additionalContext).toContain(setting);
     expect(context.additionalContext).toContain("apply to a piece of work: create it, then type this again.");
-    expect(existsSync(intents) ? readdirSync(intents).sort() : null).toEqual(before);
+    expect(records()).toEqual(before);
     expect(readAuditShardEvents(proj)).toEqual([]);
   });
 

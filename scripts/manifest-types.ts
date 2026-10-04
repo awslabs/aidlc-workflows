@@ -161,8 +161,10 @@ export type HarnessManifest = {
     missesReplies?: true;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
-     * harness's hooks leave a heartbeat on the first chat message; doctor then
-     * warns with this text instead of passing.
+     * harness's hooks leave a heartbeat on every chat message, the first one
+     * before any workflow included; doctor then warns with this text instead
+     * of passing, and with `agentStep` the first `next` stops when there is
+     * none. `<entry>` and `<folder>` are filled in.
      */
     notRunYet?: string;
     /**
@@ -180,7 +182,9 @@ export type HarnessManifest = {
      * agent's own shell command leaves a heartbeat in the record before the
      * engine runs, even with its own check switched off, so a record with
      * stage progress and no heartbeat at all proves the hooks did not run.
-     * `<entry>`, `<folder>` and `<next>` are filled in.
+     * `<entry>`, `<folder>` and `<next>` are filled in. `<next>` is the
+     * engine's `next` command in backticks; in `next`'s stop it is fixed
+     * words saying to run the stopped command again, so its request is kept.
      */
     agentStep?: string;
     /**
