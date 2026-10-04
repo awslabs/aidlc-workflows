@@ -192,7 +192,9 @@ and passes, so it cannot tell you whether the hooks run. Restarting on the v3
 engine does not fix it. Start `kiro-cli chat --agent-engine v2 --agent aidlc`
 instead (an ACP client starts `kiro-cli acp --agent-engine v2`). To run Kiro
 CLI on its v3 engine, use the
-[Kiro IDE](kiro-ide.md) distribution instead. See
+[Kiro IDE](kiro-ide.md) distribution instead; in an existing project,
+`aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
+`aidlc/`. See
 [Kiro CLI hooks not running](../15-troubleshooting.md#kiro-cli-hooks-not-running).
 
 ## What's different on Kiro
