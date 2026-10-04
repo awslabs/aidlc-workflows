@@ -1309,6 +1309,14 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/e2e/t-exec-codex-journey-code-arrives.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-code-arrives.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"
         }
@@ -15918,6 +15926,14 @@
       "unitId": "aidlc-utility reclassify",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t-exec-codex-journey-code-arrives.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-code-arrives.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"

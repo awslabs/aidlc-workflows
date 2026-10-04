@@ -192,7 +192,9 @@ export type AnswerSpec =
   /** Pick the first option whose label CONTAINS this substring. */
   | { labelContains: string }
   /** Multi-select: each entry resolves like a single spec; results combine. */
-  | { multi: Array<{ optionIndex: number } | { label: string } | { labelContains: string }> };
+  | { multi: Array<{ optionIndex: number } | { label: string } | { labelContains: string }> }
+  /** The person's own words typed into the picker's free-text field. */
+  | { text: string };
 
 /**
  * A declarative answer policy:
@@ -231,6 +233,7 @@ function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec): string | stri
   if ("optionIndex" in spec) return pickIndex(spec.optionIndex);
   if ("label" in spec) return pickLabel(spec.label);
   if ("labelContains" in spec) return pickContains(spec.labelContains);
+  if ("text" in spec) return spec.text;
   if ("multi" in spec) {
     return spec.multi.map((s) => {
       if ("optionIndex" in s) return pickIndex(s.optionIndex);
