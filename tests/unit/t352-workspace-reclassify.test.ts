@@ -230,6 +230,17 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(String(declared.narration)).not.toContain("new project");
   });
 
+  test("a plan composed for an empty folder says so at creation too", () => {
+    // The composed plan leaves out the Reverse Engineering its scope runs, as
+    // a stock plan does there, so the same line names it while it can be corrected.
+    const composed = next(project(), ["--scope", "feature", "--skip", "reverse-engineering", "add the tooltip"]);
+    expect(composed.kind).toBe("print");
+    expect(String(composed.narration)).toContain("starting this as a new project without Reverse Engineering");
+    // A scope that never runs it says nothing about it.
+    const infra = next(project(), ["--scope", "infra", "--skip", "practices-discovery", "add the pipeline"]);
+    expect(String(infra.narration)).not.toContain("Reverse Engineering");
+  });
+
   test("scope confirmation answers carry the flag", () => {
     const proj = project();
     const ask = next(proj, ["--project-type", "brownfield", "fix the login timeout bug"]);

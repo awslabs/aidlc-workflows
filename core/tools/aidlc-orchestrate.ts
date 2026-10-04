@@ -3295,14 +3295,19 @@ function createPrintDirective(
   return directive;
 }
 
+// A new project leaves out Reverse Engineering when its plan runs it, and when
+// a plan composed for the empty folder leaves out the one its scope runs:
+// creation records both as the new-project skip, which existing code undoes.
 function newProjectDropsReverseEngineering(
   scope: string,
   projectDir: string,
   planChanges?: PlanChanges,
 ): boolean {
   const planned = planChanges ? planWithChanges(scope, planChanges) : null;
-  const stages = planned && planned.errors.length === 0 ? planned.stages : loadScopeMapping()[scope]?.stages;
-  return stages?.["reverse-engineering"] === "EXECUTE" && detectedProjectType(projectDir) === "greenfield";
+  const plannedStages = planned && planned.errors.length === 0 ? planned.stages : undefined;
+  const runs = plannedStages?.["reverse-engineering"] === "EXECUTE" ||
+    loadScopeMapping()[scope]?.stages["reverse-engineering"] === "EXECUTE";
+  return runs && detectedProjectType(projectDir) === "greenfield";
 }
 
 // How a routing question names the work already in progress.
