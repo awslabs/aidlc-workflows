@@ -55,6 +55,9 @@ JavaScript monorepo's `packages/` named in its `package.json` `workspaces` or
 tells which. A folder the brief names to scan, or one listed in
 `.aidlc-source-paths.json`, is source whatever sits beside it.
 
+List the folders you skip under **Left out** in the scan's coverage, not under
+**Skimmed only**.
+
 ## Source File Classification
 
 Classify every source file that "What to Skip" leaves in into one of these

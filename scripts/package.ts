@@ -97,7 +97,7 @@ import {
 import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { sha256Bytes } from "../core/tools/aidlc-distribution.ts";
+import { sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -686,7 +686,7 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
         ? { onboarding: `${m.harnessDir}/${m.onboarding.dst}` }
         : {}),
     managedDirectories,
-    rootIntegrations,
+    rootIntegrations: rootIntegrations.map(writtenRootIntegration),
   };
   const stamp = {
     schemaVersion: 1,
@@ -1146,7 +1146,7 @@ function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): voi
       }
       cpSync(source, destination);
     }
-    descriptor.rootIntegrations.push(integration);
+    descriptor.rootIntegrations.push(writtenRootIntegration(integration));
     paths.add(integration.path);
   }
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);

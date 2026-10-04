@@ -704,6 +704,237 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(refused.kind).toBe("error");
     });
 
+    describe("a reply that only names one of the no-selection routing question's options", () => {
+      const DESCRIPTION = "fix the broken login button";
+      const routingAsk = () => {
+        const first = JSON.parse(next([DESCRIPTION]).stdout.trim());
+        const second = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
+        expect(second.ask_type, JSON.stringify(second).slice(0, 300)).toBe("new-work-routing");
+        expect(second.available_intents).toBeDefined();
+        return second;
+      };
+      const numberedLine = (ask: { numbered_prose_question: string }, n: number): string =>
+        ask.numbered_prose_question.split("\n").find((line) => line.startsWith(`${n}. `))!;
+      const reply = (ask: { numbered_prose_question: string }, text: string): string =>
+        text.startsWith("<line ") ? numberedLine(ask, Number(text[6])) : text;
+      const directive = (text: string) => JSON.parse(next([text]).stdout.trim());
+      const emitted = (command: string) => JSON.parse(runEmittedCommand(command).stdout.trim());
+      // A command as one conversation runs it.
+      const emittedIn = (session: string, command: string) =>
+        JSON.parse(runEmittedCommand(command, proj, { AIDLC_SESSION_OVERRIDE: session }).stdout.trim());
+      const inSession = (session: string, text: string) => emittedIn(session, `${ORCH_SH} next '${text}'`);
+      const questionCount = () => readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions")).length;
+      const seedOneIntentNoCursor = (): string => {
+        expect(util(["intent-create", "--scope", "poc"]).status).toBe(0);
+        const [record] = recordDirs(proj);
+        rmSync(cursorPath(proj), { force: true });
+        return record;
+      };
+
+      test("its options render from the same labels the reply is read against", () => {
+        seedTwoIntentsNoCursor();
+        const ask = routingAsk();
+        expect(numberedLine(ask, 1)).toBe("1. **Part of existing work** \u2014 Select one of the above and continue it");
+        expect(numberedLine(ask, 3)).toBe("3. **Reshape existing work** \u2014 Select one of the above, then reshape its remaining plan");
+      });
+
+      for (const text of ["2", "Separate new piece of work", "<line 2>"]) {
+        test(`the separate-work option (${JSON.stringify(text)}) runs the question's own new-work command`, () => {
+          seedTwoIntentsNoCursor();
+          const ask = routingAsk();
+          const d = directive(reply(ask, text));
+          expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+          expect(d).toEqual(emitted(ask.new_intent_command));
+        });
+      }
+
+      for (const [route, field, texts] of [
+        ["continue", "select_commands", ["1", "Part of existing work", "<line 1>"]],
+        ["reshape", "reshape_commands", ["3", "Reshape existing work", "<line 3>"]],
+      ] as const) {
+        for (const text of texts) {
+          test(`the ${route} option (${JSON.stringify(text)}) with two records asks only which one, each record's own command a typed choice`, () => {
+            seedTwoIntentsNoCursor();
+            const ask = routingAsk();
+            const before = questionCount();
+            const d = directive(reply(ask, text));
+            expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+            expect(d.question).toContain(route === "continue" ? "Which piece of work is this part of: " : "Which piece of work should I reshape: ");
+            for (const selector of ask.available_intents) expect(d.question).toContain(selector);
+            expect(d.available_intents).toEqual(ask.available_intents);
+            expect(d.select_commands).toEqual(ask[field]);
+            expect(questionCount(), "no new question is asked").toBe(before);
+            if (route === "continue") {
+              const [target] = ask.select_commands;
+              const selected = emitted(target.command);
+              expect(runEmittedCommand(printedCommand(selected.message)).status).toBe(0);
+              expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(target.selector);
+            }
+          });
+        }
+      }
+
+      test("with one record listed, the continue option selects it, exactly as its select command does", () => {
+        const record = seedOneIntentNoCursor();
+        const ask = routingAsk();
+        expect(ask.available_intents).toEqual([record]);
+        for (const text of ["1", "Part of existing work"]) {
+          expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
+        }
+      });
+
+      test("with one record listed, the reshape option reshapes it, exactly as its reshape command does", () => {
+        seedOneIntentNoCursor();
+        const ask = routingAsk();
+        for (const text of ["3", "Reshape existing work"]) {
+          expect(directive(text)).toEqual(emitted(ask.reshape_commands[0].command));
+        }
+      });
+
+      test("an option followed by more words is the person's own words, asked about", () => {
+        seedTwoIntentsNoCursor();
+        const ask = routingAsk();
+        const d = directive("Separate new piece of work, and add CSV export");
+        expect(d.kind).toBe("ask");
+        expect(d).not.toEqual(emitted(ask.new_intent_command));
+      });
+
+      // Work moving on in another chat is no change to the question's records,
+      // so the choice stands. Separate new work acts on none of them, so even a
+      // changed list of records changes nothing for it; continue and reshape
+      // keep the route and offer only the listed work still there.
+      const progressRecord = (record: string): void => {
+        const statePath = join(intentsDir(proj), record, "aidlc-state.md");
+        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Revision Count**: 1\n`, "utf-8");
+      };
+      const addRecordUnselected = (): void => {
+        expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+        rmSync(cursorPath(proj), { force: true });
+      };
+
+      test("with one record listed, its progress in another chat changes nothing: continue and reshape still act on it", () => {
+        const record = seedOneIntentNoCursor();
+        const ask = routingAsk();
+        progressRecord(record);
+        expect(directive("1")).toEqual(emitted(ask.select_commands[0].command));
+        expect(directive("Reshape existing work")).toEqual(emitted(ask.reshape_commands[0].command));
+      });
+
+      for (const [text, field] of [["1", "select_commands"], ["3", "reshape_commands"]] as const) {
+        test(`${JSON.stringify(text)} with two records listed, after one progressed, still asks only which one`, () => {
+          const records = seedTwoIntentsNoCursor();
+          const ask = routingAsk();
+          progressRecord(records[0]);
+          const d = directive(text);
+          expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+          expect(d.select_commands).toEqual(ask[field]);
+        });
+      }
+
+      for (const text of ["2", "Separate new piece of work"]) {
+        test(`the separate-work option (${JSON.stringify(text)}) still starts the new work after the listed records changed`, () => {
+          seedTwoIntentsNoCursor();
+          const ask = routingAsk();
+          addRecordUnselected();
+          expect(directive(text)).toEqual(emitted(ask.new_intent_command));
+        });
+      }
+
+      for (const [text, field] of [
+        ["1", "select_commands"],
+        ["Part of existing work", "select_commands"],
+        ["3", "reshape_commands"],
+        ["Reshape existing work", "reshape_commands"],
+      ] as const) {
+        test(`${JSON.stringify(text)} after other work was added keeps the route and offers the listed work, each choice usable`, () => {
+          seedTwoIntentsNoCursor();
+          const ask = routingAsk();
+          addRecordUnselected();
+          const before = questionCount();
+          const d = directive(text);
+          expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+          expect(d.available_intents).toEqual(ask.available_intents);
+          expect(d.select_commands).toEqual(ask[field]);
+          expect(questionCount(), "no new question is asked").toBe(before);
+          for (const { command } of d.select_commands as Array<{ command: string }>) {
+            const chosen = emitted(command);
+            expect(chosen.kind, JSON.stringify(chosen).slice(0, 300)).toBe("print");
+          }
+        });
+      }
+
+      test("the continue option after the sole listed record was replaced asks again with the request kept, never selects it unasked", () => {
+        const record = seedOneIntentNoCursor();
+        const ask = routingAsk();
+        const registryPath = join(intentsDir(proj), "intents.json");
+        const registry = readFileSync(registryPath, "utf-8");
+        const [uuid] = registry.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/) ?? [];
+        expect(uuid).toBeDefined();
+        writeFileSync(registryPath, registry.replaceAll(uuid!, "01a10000-0000-7000-8000-000000000000"), "utf-8");
+        const d = directive("Part of existing work");
+        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
+        expect(d.new_work_description).toBe(DESCRIPTION);
+        expect(d.available_intents).toEqual([record]);
+        expect(ask.select_commands).toHaveLength(1);
+        expect(existsSync(cursorPath(proj)), "nothing is selected unasked").toBe(false);
+      });
+
+      test("an option answers from any chat on this work, not only the one that was asked", () => {
+        seedTwoIntentsNoCursor();
+        const ask = emittedIn("chat-a", inSession("chat-a", DESCRIPTION).confirm_command);
+        expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
+        expect(inSession("chat-b", "2")).toEqual(emittedIn("chat-b", ask.new_intent_command));
+      });
+
+      // The follow-up question after a plan composed and approved in a fresh
+      // clone is one of these: its separate-work option creates the plan the
+      // person approved, exactly as its own new-work command does.
+      for (const text of ["2", "Separate new piece of work"]) {
+        test(`${JSON.stringify(text)} on the approved-plan follow-up creates the approved plan, as its new-work command does`, () => {
+          seedTwoIntentsNoCursor();
+          const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+          const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+          const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+          expect(ask.ask_type).toBe("new-work-routing");
+          const creation = directive(text);
+          expect(creation.kind, JSON.stringify(creation).slice(0, 300)).toBe("print");
+          expect(creation).toEqual(emitted(ask.new_intent_command));
+          expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
+          expect(creation.message).toContain(`--request ${composed}`);
+          const created = runEmittedCommand(printedCommand(creation.message));
+          expect(created.status, created.out).toBe(0);
+          expect(recordDirs(proj)).toHaveLength(3);
+          expectApprovedPlan(composed);
+        });
+      }
+
+      test("once the approved plan started, its follow-up's options are the person's own words, even with none selected", () => {
+        seedTwoIntentsNoCursor();
+        const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+        const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+        const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+        const created = runEmittedCommand(printedCommand(emitted(ask.new_intent_command).message));
+        expect(created.status, created.out).toBe(0);
+        rmSync(cursorPath(proj), { force: true });
+        for (const text of ["2", "Separate new piece of work", "Part of existing work"]) {
+          const d = directive(text);
+          expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
+          expect(JSON.stringify(d)).not.toContain("Already started");
+          expect(d.message ?? "").not.toContain("but not which piece of work");
+        }
+        expect(recordDirs(proj)).toHaveLength(3);
+      });
+
+      test("control: an option with no routing question asked is asked about, never acted on", () => {
+        seedTwoIntentsNoCursor();
+        for (const text of ["1", "Part of existing work"]) {
+          const d = directive(text);
+          expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
+          expect(d.message ?? "").not.toContain("but not which piece of work");
+        }
+      });
+    });
+
     test("registry-only records do not strand pending work behind an empty picker", () => {
       const records = seedTwoIntentsNoCursor();
       // Registry rows survive, record dirs do not: nothing can be selected or
