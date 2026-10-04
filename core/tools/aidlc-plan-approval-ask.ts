@@ -358,7 +358,7 @@ export function codeGenerationPlanReadiness(projectDir: string, unit: string | n
   }
   const read = readTestingContract(plan);
   if ("defect" in read) {
-    return { ready: false, note: testingContractDefectMessage(read.defect, read.detail, "run next") };
+    return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
   const current = resolveTestingPosture(projectDir);
   if (read.contract.contract_sha256 !== current.contract_sha256) {

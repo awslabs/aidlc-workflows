@@ -1177,7 +1177,6 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
  */
 export function testingContractDefectMessage(
   defect: TestingContractDefect,
-  detail?: string,
   then = "re-run the fingerprint command",
 ): string {
   const render = `\`${aidlcToolInvocation("testing-posture")} render\``;
@@ -1191,7 +1190,9 @@ export function testingContractDefectMessage(
       return `code-generation-plan.md has no \`\`\`json block under a ${heading} heading. ` +
         `Run ${render}, paste its complete output into the plan unchanged, then ${then}.`;
     case "invalid-json":
-      return `the ${heading} block in code-generation-plan.md is not valid JSON${detail ? ` (${detail})` : ""}. ${replace}`;
+      // The parser's own message can quote the plan's text, so it stays out:
+      // the repair is the same whatever the parser saw.
+      return `the ${heading} block in code-generation-plan.md is not valid JSON. ${replace}`;
     case "mismatch":
       return `the ${heading} block in code-generation-plan.md changed after it was rendered, ` +
         "so its contract_sha256 no longer matches its content. Do not edit the contract or recompute the hash by hand. " +
@@ -1202,7 +1203,7 @@ export function testingContractDefectMessage(
 // The embedded contract's problem in words, or null when it reads cleanly.
 function testingContractDefectReason(plan: string): string | null {
   const read = readTestingContract(plan);
-  return "defect" in read ? testingContractDefectMessage(read.defect, read.detail) : null;
+  return "defect" in read ? testingContractDefectMessage(read.defect) : null;
 }
 
 /** Hash validity alone does not make a contract executable. */
