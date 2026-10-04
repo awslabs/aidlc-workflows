@@ -768,7 +768,7 @@ ceremony a person gets without composing (when the validator echoes no
 that the human's edit turns custom keeps the Guard Policy and settings the
 gate showed, with their change applied. Either way, move one
 only when the evidence gives a reason, as a SKIP needs one (see "Scope
-settings" in `composing.md`). No value removes a
+settings" in `{{HARNESS_DIR}}/knowledge/aidlc-composer-agent/composing.md`). No value removes a
 gate, Plan Approval, a required question, or the audit trail. A global kill
 switch such as `AIDLC_DISABLE_SENSORS=1` still forces its ceremony off
 whatever the scope says: when the validator's advisories name one forcing an
