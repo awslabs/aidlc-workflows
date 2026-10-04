@@ -20,7 +20,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   applyKiroSessionPlan,
   hasLegacyKiroEffortMap,
@@ -127,6 +127,16 @@ describe("Kiro session model rules", () => {
       ],
     }));
     expect(list.ok && list.models.map((model) => model.id)).toEqual(["claude-opus-5"]);
+  });
+
+  test.skipIf(process.platform === "win32")("kiro-cli is looked up in absolute PATH entries only", () => {
+    const dir = temp("kiro-session-path-");
+    const cli = join(dir, "kiro-cli");
+    writeFileSync(cli, "#!/bin/sh\n");
+    chmodSync(cli, 0o755);
+    // A relative entry resolves inside the folder AI-DLC runs in, the project.
+    expect(kiroCliPath({ PATH: relative(process.cwd(), dir) })).toBeNull();
+    expect(kiroCliPath({ PATH: dir })).toBe(cli);
   });
 
   test("a seam name in a .env file counts in any casing, as Windows reads it", () => {

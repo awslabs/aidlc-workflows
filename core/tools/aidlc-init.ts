@@ -155,6 +155,7 @@ import {
   listKiroModels,
   readKiroPersonalSession,
   recommendedKiroModel,
+  setByDotenvFile,
 } from "./aidlc-kiro-session.ts";
 import {
   activeModelGroups,
@@ -8244,7 +8245,11 @@ function kiroModelsPlan(input: {
   keepExistingEffort: boolean;
   kiro?: FirstRunKiroSession | null;
 }): KiroModelsPlan {
-  if (process.env.AIDLC_CONFIG_DEFER_KIRO_SESSION === "1") return { plan: null };
+  // Set by first-run setup for its own config children; a project .env that
+  // sets it is ignored, so it cannot swallow an explicit request.
+  if (process.env.AIDLC_CONFIG_DEFER_KIRO_SESSION === "1" && !setByDotenvFile("AIDLC_CONFIG_DEFER_KIRO_SESSION")) {
+    return { plan: null };
+  }
   const kiro = input.kiro ?? kiroSessionFor("kiro");
   if (!kiro) {
     if (input.setModel) {

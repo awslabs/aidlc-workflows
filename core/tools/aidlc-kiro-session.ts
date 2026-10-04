@@ -27,7 +27,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, delimiter, isAbsolute, join } from "node:path";
 import { resolveExecutableOnPath } from "./aidlc-config-diagnostics.ts";
 import type { KiroEffort } from "./aidlc-tiers.ts";
 
@@ -138,7 +138,10 @@ export function kiroCliPath(env: NodeJS.ProcessEnv = process.env): string | null
   if (env.AIDLC_TEST_NAME !== undefined || env.AIDLC_TEST_CONFIG_DETECTION_JSON !== undefined) {
     return null;
   }
-  return resolveExecutableOnPath("kiro-cli", env.PATH ?? env.Path ?? "");
+  // Only absolute PATH entries: a relative one (such as ".") resolves inside the
+  // project, where a repository could ship its own kiro-cli.
+  const absolute = (env.PATH ?? env.Path ?? "").split(delimiter).filter((entry) => isAbsolute(entry));
+  return resolveExecutableOnPath("kiro-cli", absolute.join(delimiter));
 }
 
 // Where Kiro keeps personal settings, for display only (Kiro owns the file).

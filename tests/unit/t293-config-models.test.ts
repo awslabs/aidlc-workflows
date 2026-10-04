@@ -1085,6 +1085,18 @@ describe("t293 config models CLI", () => {
     expect(existsSync(projectSettingsPath(project))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a project .env that sets setup's defer marker does not swallow --session-model", () => {
+    const project = install("kiro");
+    writeFileSync(join(project, ".env"), "AIDLC_CONFIG_DEFER_KIRO_SESSION=1\n");
+    const seam = kiroSeam({});
+    const result = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("left to first-run setup");
+    expect(kiroWrites(seam.writes)[0]).toEqual(["settings", "chat.defaultModel", "claude-sonnet-4.6"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Kiro CLI --session-model whose effort Kiro refuses reports the model it did save", () => {
     const project = install("kiro");
     const seam = kiroSeam({ "chat.defaultModel": "claude-opus-5" }, { failWrite: "chat.modelDefaults" });
