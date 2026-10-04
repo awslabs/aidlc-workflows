@@ -2083,7 +2083,12 @@ export function renderReviewBrief(
     renderFindingsContext(contexts),
     "",
     "**Decision options:**",
-    "- **Approve** - continue with the open findings accepted.",
+    // Approve says what it accepts: open findings only when there are some.
+    contexts.some((context) =>
+        context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved")
+      )
+      ? "- **Approve** - continue with the open findings accepted."
+      : "- **Approve** - continue; no findings are open.",
     "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
   );
   return lines.join("\n");
