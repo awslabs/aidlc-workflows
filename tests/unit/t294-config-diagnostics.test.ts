@@ -317,6 +317,19 @@ describe("t294 runtime diagnostics", () => {
     expect(runtimeIssues(interactiveOnly)[0].message).toContain(
       "resolves only through the interactive PATH",
     );
+    // Setup lists no step for it: started from a terminal, the hooks find it.
+    expect(postApplyOutstandingActions(project, ".claude", "claude", {
+      skipSections: ["trust", "providers"],
+      runtime: {
+        baselinePath: join(project, "empty"),
+        interactivePath: interactiveBin,
+        which(command, pathValue) {
+          const path = join(pathValue, command);
+          return existsSync(path) ? path : null;
+        },
+        run: () => ({ status: 0, stdout: "2.0.0\n" }),
+      },
+    })).toEqual([]);
 
     const absent = probeRuntime(project, ".claude", "claude", {
       baselinePath: join(project, "empty"),

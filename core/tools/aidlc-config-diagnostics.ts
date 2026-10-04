@@ -2637,7 +2637,13 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    actions.push(...runtimeIssues(diagnostics).map((issue) => ({
+    // A runtime found on this shell's PATH needs nothing from a harness started
+    // from a terminal; the doctor says what to do if its hooks never run.
+    const needed = {
+      ...diagnostics,
+      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+    };
+    actions.push(...runtimeIssues(needed).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
