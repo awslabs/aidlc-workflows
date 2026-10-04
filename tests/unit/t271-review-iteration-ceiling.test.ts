@@ -1969,9 +1969,23 @@ describe("t271 review iteration ceiling", () => {
       toPosix(relative(seededRecordDir(proj), join(proj, reviewFile))),
     );
     asRecordedBeforeOwnReviewFiles(proj);
-    // The reviewer, dispatched by the earlier release, wrote the shared file.
     const shared = join(proj, dirname(reviewFile), "1.review.md");
     mkdirSync(dirname(shared), { recursive: true });
+    // Such a request is reviewed in the shared file only: a review in the
+    // per-request file it never named, or any other file, is not its review.
+    writeFileSync(join(proj, reviewFile), reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const decoy = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(decoy.status).not.toBe(0);
+    expect(decoy.stderr).toContain("no review was written for iteration 1");
+    expect(decoy.stderr).toContain(toPosix(relative(proj, shared)));
+    for (const named of [reviewFile, toPosix(relative(proj, join(seededRecordDir(proj), "inside-review.md")))]) {
+      writeFileSync(join(proj, named), reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+      const other = runReview(proj, [...request, "--verdict", "READY", "--review-file", named], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+      expect(other.status, named).not.toBe(0);
+      expect(other.stderr, named).toContain("is not the review file for iteration 1");
+    }
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
+    // The reviewer, dispatched by the earlier release, wrote the shared file.
     writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
     const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
     expect(recorded.status, recorded.stderr).toBe(0);

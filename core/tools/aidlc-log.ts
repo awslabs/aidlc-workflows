@@ -3256,26 +3256,16 @@ function handleReview(args: string[]): void {
       // The review file is read the way the record will be read back: no
       // symlinked container or leaf, no hardlink, no oversize file. A slot
       // draft that is absent is an incomplete review; one that is anything but
-      // a plain file is refused, never silently treated as missing. A request
-      // that names its own review file is reviewed in that file only; one
-      // recorded before per-request files finds its review in the pass's
-      // shared file, where its reviewer was told to write it.
-      const sharedSlot = requestBinding.requestId !== null && !pendingRequest.ownReviewFile
-        ? reviewSlot(attempt.floor, iteration, null)
-        : null;
-      let readFrom = slot;
+      // a plain file is refused, never silently treated as missing. Each request
+      // is reviewed in one file: the one its row names, or for a request
+      // recorded before per-request files, the pass's shared file, where its
+      // reviewer was told to write. A --review-file must be that same file.
+      const readFrom = pendingRequest.ownReviewFile ? slot : reviewSlot(attempt.floor, iteration, null);
       let body: Buffer | null = null;
       try {
         const recordRoot = realpathSync(recordDir(pd) as string);
-        let target: string | null = null;
-        for (const candidate of sharedSlot === null ? [slot] : [slot, sharedSlot]) {
-          const path = assertNoSymlinkInChainOrThrow(recordRoot, candidate.draftRelativeToRecord);
-          if (lstatExists(path)) {
-            target = path;
-            readFrom = candidate;
-            break;
-          }
-        }
+        const target = assertNoSymlinkInChainOrThrow(recordRoot, readFrom.draftRelativeToRecord);
+        const present = lstatExists(target);
         if (reviewFileFlag !== undefined) {
           // An explicit review file must live inside the active intent record,
           // where the reviewer's slot lives, reached through no symlink: a
@@ -3290,19 +3280,17 @@ function handleReview(args: string[]): void {
             throw new Error("the path is outside the active intent record");
           }
           const named = assertNoSymlinkInChainOrThrow(recordRoot, relativeToRecord);
-          if (requestBinding.requestId === null) {
-            target = named;
-          } else if (target === null || !sameFileIdentity(fileIdentity(named), fileIdentity(target))) {
+          if (!present || !sameFileIdentity(fileIdentity(named), fileIdentity(target))) {
             // Named here, it must be that same file, never another request's
             // review or a copy of one.
             refuseReview(
               `Cannot record review for "${flags.stage}": ${reviewFileFlag} is not the review ` +
                 `file for iteration ${iteration}. Have the reviewer write its review to ` +
-                `${slot.draftRelative}, then record the verdict again.`,
+                `${readFrom.draftRelative}, then record the verdict again.`,
             );
           }
         }
-        if (target !== null) {
+        if (present) {
           body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
         }
       } catch (readError) {
@@ -3331,7 +3319,7 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record review for "${flags.stage}": no review was written for ` +
             `iteration ${iteration}. The reviewer writes its review to ` +
-            `${slot.draftRelative}; a retried ` +
+            `${readFrom.draftRelative}; a retried ` +
             "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
@@ -3558,7 +3546,7 @@ function handleReview(args: string[]): void {
           `Cannot record the verdict for "${flags.stage}": the review record ` +
             `would be ${recordBytes} bytes, over the ${REVIEW_RECORD_MAX_BYTES}-byte ` +
             `limit readers accept. Shorten the review file ` +
-            `${reviewFileFlag ?? slot.draftRelative} and record the verdict again.`,
+            `${reviewFileFlag ?? readFrom.draftRelative} and record the verdict again.`,
         );
       }
       try {
