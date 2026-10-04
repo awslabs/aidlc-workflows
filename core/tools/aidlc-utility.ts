@@ -1731,6 +1731,24 @@ function pendingDuration(ageMs: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+// When this work last scanned the existing code, also when Reverse Engineering
+// ran on its own and the stage counts leave it out. Read from the stage's
+// completion in the work's audit trail; nothing when it never ran.
+function codeScannedClause(projectDir: string, intent: string | undefined, space: string): string {
+  try {
+    const last = readAuditShardEvents(projectDir, intent, space)
+      .filter((row) => row.event === "STAGE_COMPLETED" && auditBlockField(row.block, "Stage") === "reverse-engineering")
+      .map((row) => row.timestamp)
+      .filter((timestamp) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp))
+      .sort()
+      .at(-1);
+    return last ? `, scanned ${last.slice(0, 10)} ${last.slice(11, 16)} UTC` : "";
+  } catch {
+    // An unreadable audit trail leaves the line as it was.
+    return "";
+  }
+}
+
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
@@ -1770,7 +1788,9 @@ To get started:
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
   let guardPolicyDisplay: string;
-  // Only the checks that are off, grouped by why: every check on says nothing.
+  // Only the checks someone switched off (the person for this work, or this
+  // machine's environment), grouped by why. The checks a lower Guard Policy
+  // turns off go with its line, which already says where the policy came from.
   let fencesOffLine = "";
   try {
     const resolution = resolveGuardPolicy(projectDir, content, {
@@ -1782,7 +1802,7 @@ To get started:
     // edited asks again; the Plan Approval line below is the plan stop itself.
     const offBySource = new Map<string, string[]>();
     for (const fence of GUARD_FENCES) {
-      if (fences[fence].value !== "off") continue;
+      if (fences[fence].value !== "off" || fences[fence].source.startsWith("guard policy ")) continue;
       const source = fenceSourceLabel(fences[fence]);
       offBySource.set(source, [...(offBySource.get(source) ?? []), fence === "plan-approval" ? "plan re-approval" : fence]);
     }
@@ -1941,7 +1961,8 @@ To get started:
   const projectTypeDisplay = projectType === null
     ? ""
     : `Project Type:   ${projectType === "Brownfield" ? "existing code" : "new project"}` +
-      `${getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON ? " (you said so)" : ""}\n`;
+      `${getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON ? " (you said so)" : ""}` +
+      `${projectType === "Brownfield" ? codeScannedClause(projectDir, selection.intent ?? undefined, selection.space) : ""}\n`;
   const depth = getField(content, "Depth");
   const testStrategy = getField(content, "Test Strategy");
   const depthDisplay = depth === null

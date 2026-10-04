@@ -444,4 +444,23 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.out).toMatch(/^Changed since approved: Practices Discovery[^\n]*\. To redo it, type `\/aidlc --stage practices-discovery`\.$/m);
     expect(r.out).not.toContain("advisory; routing continues");
   });
+
+  test("8: --status says when the existing code was scanned, also after Reverse Engineering ran on its own", () => {
+    const p = seededProj();
+    sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield\n- **Project Type Source**: you");
+    // Existing code that was never scanned says nothing about a scan.
+    expect(status(p).out).toContain("Project Type:   existing code (you said so)\n");
+    // A single run leaves the plan's stage counts alone; its completion says when.
+    appendAuditEntry("STAGE_COMPLETED", {
+      Stage: "reverse-engineering",
+      Details: "Single-stage run of reverse-engineering completed",
+      Workflow: "single-stage:reverse-engineering",
+    }, p);
+    const scanned = status(p);
+    expect(scanned.status).toBe(0);
+    expect(scanned.out).toMatch(/^Project Type: {3}existing code \(you said so\), scanned \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/m);
+    // A new project shows no scan, whatever the trail holds.
+    sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Greenfield");
+    expect(status(p).out).toContain("Project Type:   new project (you said so)\n");
+  });
 });

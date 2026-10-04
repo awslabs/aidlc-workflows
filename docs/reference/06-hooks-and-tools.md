@@ -564,10 +564,11 @@ the `Guards Off` or `Guards On` line in canonical order as
 `<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
 `GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
 that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` names each fence
-that is off on its `Checks off:` line, grouped by where the setting came from
-and worded by `fenceSourceLabel` as `formatFence` words it: `set by you`,
-`env <VAR>`, or `guard policy off (from scope classic)`; with every fence on
-there is no line.
+the person or an environment kill switch turned off on its `Checks off:` line,
+grouped by where the setting came from and worded by `fenceSourceLabel` as
+`formatFence` words it: `set by you` or `env <VAR>`. A fence the Guard Policy
+word lowers is left to the `Guard Policy:` line, which names where the policy
+came from; with no such fence off there is no line.
 
 The human-turn hook applies explicit fence and policy lowering from the person's
 typed prompt through the shared settings transaction.
