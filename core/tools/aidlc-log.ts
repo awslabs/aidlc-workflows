@@ -193,6 +193,15 @@ import {
   SUMMARY_CONFIRMATION_CHOICES,
 } from "./aidlc-reply-reader.ts";
 
+// The checkpoints `decision` and `answer` accept. The learnings question is an
+// ordinary question, so it is named with the way to run it.
+function unknownCheckpointMessage(checkpoint: string): string {
+  if (checkpoint === "learnings") {
+    return 'The learnings question takes no --checkpoint: run the same command without it.';
+  }
+  return `Unknown --checkpoint "${checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`;
+}
+
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
 // --intent/--space, so it relies on default intent resolution. On a fresh shell
@@ -766,9 +775,7 @@ function handleDecision(args: string[]): void {
     flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
-    error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
-    );
+    error(unknownCheckpointMessage(flags.checkpoint));
   }
   refusePlainSummaryConfirmation(flags, "decision");
 
@@ -1335,9 +1342,7 @@ function handleAnswer(args: string[]): void {
     flags.checkpoint !== "construction-policy" &&
     flags.checkpoint !== "plan-approval"
   ) {
-    error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy`,
-    );
+    error(unknownCheckpointMessage(flags.checkpoint));
   }
   refusePlainSummaryConfirmation(flags, "answer");
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
