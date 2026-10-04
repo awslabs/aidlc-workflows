@@ -191,7 +191,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the ProfileSerializer null pointer
-> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
+> This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
 ---

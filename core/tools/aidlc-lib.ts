@@ -34853,13 +34853,15 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
   return summary;
 }
 
-/** Human-readable policy clause appended to the scope's stage/gate counts. */
+/** Human-readable policy clause appended to the scope's stage/gate counts.
+ * Collaborators off reads as what runs instead: the lead agent alone. */
 export function ceremonyOffClause(summary: ScopeCostSummary): string {
-  const { off } = summary;
-  if (off.length === 0) return "";
-  if (off.length === 1) return `; no ${off[0]}`;
-  if (off.length === 2) return `; no ${off[0]} or ${off[1]}`;
-  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}`;
+  const off = summary.off.filter((label) => label !== "collaborators");
+  const leadOnly = off.length < summary.off.length ? "; lead agent only" : "";
+  if (off.length === 0) return leadOnly;
+  if (off.length === 1) return `; no ${off[0]}${leadOnly}`;
+  if (off.length === 2) return `; no ${off[0]} or ${off[1]}${leadOnly}`;
+  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}${leadOnly}`;
 }
 
 // --- Timestamp ---

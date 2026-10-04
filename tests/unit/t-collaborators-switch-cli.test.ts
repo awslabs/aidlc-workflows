@@ -99,7 +99,7 @@ describe("t-collaborators-cli a switch typed with the request reaches the work",
     const ask = runNext(proj, ["--collaborators", "on", "Fix the login crash when the session expires"]);
     expect(ask.ask_type).toBe("scope-confirm");
     // The preview counts collaborators as on for this work.
-    expect(String(ask.question)).not.toContain("collaborators");
+    expect(String(ask.question)).not.toContain("lead agent only");
     expect(String(ask.confirm_command)).toContain("--collaborators on");
     const created = runEmitted(proj, String(ask.confirm_command));
     expect(created.kind).toBe("print");

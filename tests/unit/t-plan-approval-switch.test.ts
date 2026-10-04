@@ -611,7 +611,7 @@ describe("asked before the piece of work exists", () => {
     const line = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", asked.id], {
       env: { ...process.env, ...CLEAR },
     });
-    expect(String((line.directive as { message?: unknown } | null)?.message)).toContain("; no plan approval or collaborators)");
+    expect(String((line.directive as { message?: unknown } | null)?.message)).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -623,7 +623,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
     const asked = requestOf(proj, "build the export");
-    expect(asked.message).toContain("; no plan approval or collaborators)");
+    expect(asked.message).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -654,7 +654,7 @@ describe("asked before the piece of work exists", () => {
       expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
       const asked = approveComposed(proj, composition, "fix the null checks the scan found");
       expect(asked.id).not.toBe(composition);
-      expect(asked.message).toContain("; no plan approval or collaborators)");
+      expect(asked.message).toContain("; no plan approval; lead agent only)");
       const made = utility(proj, ["intent-create", "--request", asked.id]);
       expect(made.status, made.stderr).toBe(0);
       expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -682,7 +682,7 @@ describe("asked before the piece of work exists", () => {
     reply(proj, "skip plan approval for this work");
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     const asked = approveComposed(proj, composition, "fix the null checks the scan found");
-    expect(asked.message).toContain("; no plan approval or collaborators)");
+    expect(asked.message).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -759,7 +759,7 @@ describe("asked before the piece of work exists", () => {
         env: { ...process.env, ...CLEAR },
       });
       const message = String((routed.directive as { message?: unknown } | null)?.message);
-      expect(message, routed.out).toContain("; no sensors, plan approval, or collaborators)");
+      expect(message, routed.out).toContain("; no sensors or plan approval; lead agent only)");
       expect(message).toContain("--sensors off");
       const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
       if (id === undefined) throw new Error(`no request in ${routed.out}`);

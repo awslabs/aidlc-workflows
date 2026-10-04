@@ -145,7 +145,7 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
     expect(q).toContain('"bugfix"');
     const bf = counts(GRID.bugfix.stages, true);
     // bugfix asks no learnings question and no summary confirmation, and says so up front.
-    expect(q).toContain(`${costClause(bf)}; no learnings ritual, summary confirmation, or collaborators.`);
+    expect(q).toContain(`${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only.`);
     expect(q).not.toContain("per unit of work");
   });
 
@@ -194,7 +194,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
-    expect(m).toContain(`(${costClause(bf)}; no learnings ritual, summary confirmation, or collaborators)`);
+    expect(m).toContain(`(${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only)`);
     expect(m).not.toContain("per unit of work");
   });
 
@@ -210,7 +210,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const message = String(d.message);
     expect(message).toContain("--summary-confirmation on");
     // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
-    expect(message).toContain("; no collaborators");
+    expect(message).toContain("; lead agent only");
   });
 
   test("feature creation preview discloses the environment sensor kill switch", () => {
@@ -222,7 +222,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(result.rc, result.out).toBe(0);
     const d = directiveOf(result.out);
     expect(d.kind).toBe("print");
-    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors or collaborators");
+    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors; lead agent only");
   });
 
   for (const scope of ["classic", "feature"]) {
@@ -237,11 +237,11 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(String(d.message)).toContain("per unit of work");
       if (scope === "classic") {
         expect(String(d.message)).toContain(
-          "; no summary confirmation or collaborators",
+          "; no summary confirmation; lead agent only",
         );
       } else {
         // feature keeps the first four ceremonies on but ships collaborators off.
-        expect(String(d.message)).toContain("; no collaborators");
+        expect(String(d.message)).toContain("; lead agent only");
       }
     });
   }

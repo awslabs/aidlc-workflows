@@ -185,7 +185,7 @@ describe("t213 scope policy cost clauses", () => {
     const summary = scopeCostSummary("classic")!;
     expect(summary.gates).toBeGreaterThan(0);
     expect(ceremonyOffClause(summary)).toBe(
-      "; no summary confirmation or collaborators",
+      "; no summary confirmation; lead agent only",
     );
   });
 
@@ -195,8 +195,8 @@ describe("t213 scope policy cost clauses", () => {
   // enterprise, ships collaborators off, so its clause names that alone.
   test("express omits reviewers and all five ceremonies, while feature omits only collaborators", () => {
     expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe(
-      "; no reviewers, sensors, learnings ritual, summary confirmation, plan approval, or collaborators",
+      "; no reviewers, sensors, learnings ritual, summary confirmation, or plan approval; lead agent only",
     );
-    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("; no collaborators");
+    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("; lead agent only");
   });
 });

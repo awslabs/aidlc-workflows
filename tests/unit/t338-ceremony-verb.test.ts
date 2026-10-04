@@ -406,7 +406,7 @@ describe("t338 atomic per-intent settings", () => {
     // The clause rides the reply's first line, after the approval gate count.
     const offClause = (stdout: string): string | undefined =>
       stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". To go back")[0];
-    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, plan approval, or collaborators");
+    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, or plan approval; lead agent only");
     // Plan approval follows the scope the person switched to.
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
@@ -416,7 +416,7 @@ describe("t338 atomic per-intent settings", () => {
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
     expect(classic.status, classic.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
-    expect(offClause(classic.stdout)).toBe("summary confirmation or collaborators");
+    expect(offClause(classic.stdout)).toBe("summary confirmation; lead agent only");
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("on (from scope classic)");
   });
 
