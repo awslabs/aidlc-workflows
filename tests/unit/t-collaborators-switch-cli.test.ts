@@ -184,3 +184,38 @@ describe("t-collaborators-cli an isolated Reverse Engineering run finishes on it
     expect(done.kind, JSON.stringify(done)).toBe("done");
   });
 });
+
+// The agent learns the switch from two places: the compose dispatch the engine
+// prints, and the orchestrator skill each tool ships.
+function composeMessage(proj: string, args: string[]): string {
+  const directive = runNext(proj, ["compose", ...args]);
+  expect(directive.kind).toBe("print");
+  return String(directive.message);
+}
+
+describe("t-collaborators-cli the agent is told how to switch collaborators", () => {
+  test("the compose gate shows collaborators on its settings row and builds its flag", () => {
+    const proj = createTestProject();
+    projects.push(proj);
+    seedAidlcMemory(proj);
+    const front = composeMessage(proj, ["fix the token bug"]);
+    expect(front).toContain("plan approval <plan_approval>, collaborators <collaborators>, reviews <review_cap>");
+    expect(front).toContain("plan_approval to --plan-approval, collaborators to --collaborators, review to --review");
+    seedStateFile(proj, MID_IDEATION);
+    const inFlight = composeMessage(proj, ["bring the specialists in"]);
+    expect(inFlight).toContain("A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off");
+    expect(inFlight).toContain("collaborators to --collaborators");
+  });
+
+  test.each(["claude", "codex", "copilot", "cursor", "kiro-ide", "kiro", "opencode"])(
+    "%s: asking in plain chat to bring collaborators in or go lead-only is carried out for the person",
+    (harness) => {
+      const skill = readFileSync(join(import.meta.dir, "..", "..", "harness", harness, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const rule = skill.split("\n").find((line) => line.startsWith("**Collaborators in plain chat.**"));
+      expect(rule, harness).toBeDefined();
+      expect(rule).toContain("engine config set collaborators on");
+      expect(rule).toContain("never hand them a command to type");
+      expect(skill).toContain("plan approval on, collaborators off, reviews advisory");
+    },
+  );
+});
