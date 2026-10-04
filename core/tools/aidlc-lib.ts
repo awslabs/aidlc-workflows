@@ -17043,9 +17043,6 @@ export interface ReviewAttemptAccounting {
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
-      // This request replaced one that could never finish (see
-      // reviewRequestReplaces); it cannot be replaced again.
-      replacement: boolean;
     }
   >;
   recoveryIteration: number | null;
@@ -17322,7 +17319,6 @@ export function reviewAttemptAccounting(
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
-      replacement: boolean;
     }
   >();
   for (let i = floor + 1; i < events.length; i++) {
@@ -17378,7 +17374,6 @@ export function reviewAttemptAccounting(
           (previous?.retried === true ||
             (auditBlockField(entry.block, "Retry") === "pending-request" &&
               modernBinding)),
-        replacement,
       });
     } else {
       const pending = pendingRequests.get(iteration);
@@ -17537,15 +17532,15 @@ export function pendingRequestCurrency(
 }
 
 // A REVIEW_REQUESTED row replaces the pending request at its scope and pass when
-// it names that request's id (`none` for one recorded before request ids) and
-// that request is not itself a replacement: one replacement per request. Any
-// other row carrying the field is an ordinary request.
+// it names that request's id (`none` for one recorded before request ids). A
+// replacement interrupted in turn is replaced the same way. Any other row
+// carrying the field is an ordinary request.
 export function reviewRequestReplaces(
   block: string,
-  pending: { binding: ReviewRequestBinding | null; replacement: boolean } | undefined,
+  pending: { binding: ReviewRequestBinding | null } | undefined,
 ): boolean {
   const named = auditBlockField(block, "Replaces Request Id");
-  if (named === null || pending === undefined || pending.replacement || pending.binding === null) {
+  if (named === null || pending === undefined || pending.binding === null) {
     return false;
   }
   return named === (pending.binding.requestId ?? "none");
@@ -17588,7 +17583,7 @@ export function pendingReviewRequestStatus(
     requestCurrent,
     retryable: requestCurrent && !pending.retried,
     verdictRecordable: requestCurrent && modernVerdictBinding,
-    replaceable: readable && !requestCurrent && !pending.replacement,
+    replaceable: readable && !requestCurrent,
   };
 }
 
@@ -18027,7 +18022,6 @@ export function freshReviewReceipts(
       timestamp: string;
       shard: string;
       verificationFailed?: boolean;
-      replacement: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -18280,7 +18274,6 @@ export function freshReviewReceipts(
         binding,
         timestamp: e.timestamp,
         shard: e.shard,
-        replacement: reviewRequestReplaces(e.block, previous),
       });
       continue;
     }
@@ -18447,11 +18440,11 @@ export function freshReviewReceipts(
     resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, projectDir) !== "1";
   for (const request of pendingRequests.values()) {
     // A pending request whose outputs or source changed before its verdict can
-    // never finish (a retry re-dispatches the old bytes); unless it already
-    // replaced one, the next move is a new request at the same pass, which is
-    // what `outstanding` names to every reader (wave entries, gates, recovery).
+    // never finish (a retry re-dispatches the old bytes); the next move is a new
+    // request at the same pass, which is what `outstanding` names to every
+    // reader (wave entries, gates, recovery).
     const currency =
-      request.binding === null || request.replacement
+      request.binding === null
         ? null
         : pendingRequestCurrency(projectDir, stage, request.unit, request.binding, {
             requireRequiredArtifacts,

@@ -2914,9 +2914,9 @@ function handleReview(args: string[]): void {
         }
         // A pending request whose outputs or source changed before its verdict
         // can never finish: a retry re-dispatches the old bytes, and a verdict
-        // cannot bind to them. A new request at the same pass replaces it (once:
-        // a replacement is not replaced again), so an interrupted review never
-        // leaves the stage with no way to be reviewed.
+        // cannot bind to them. A new request at the same pass replaces it (and a
+        // replacement interrupted in turn is replaced the same way), so an
+        // interrupted review never leaves the stage with no way to be reviewed.
         const replaceIteration = pendingStatus?.replaceable ? pendingStatus.iteration : null;
         if (replaceIteration !== null) {
           if (iteration !== replaceIteration) {

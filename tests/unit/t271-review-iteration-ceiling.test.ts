@@ -1782,10 +1782,18 @@ describe("t271 review iteration ceiling", () => {
     const again = runReview(proj, request);
     expect(again.status, again.stderr).toBe(0);
     expect(again.stdout).toContain('"replaces"');
-    // A replacement is pending like any request, and is not replaced again.
+    // The replacement is pending like any request; interrupted in turn, it is
+    // requested again at the same pass.
     expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
     writeReviewedArtifact(proj, "functional-design", "spec rewritten twice\n", "unit-alpha");
+    expect(read()).toMatchObject({ state: "outstanding", iteration: 1 });
+    const third = runReview(proj, request);
+    expect(third.status, third.stderr).toBe(0);
+    expect(third.stdout).toContain('"replaces"');
     expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+    const verdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    expect(read()).toBeUndefined();
   });
 
   test("replacing the recovery review keeps it the attempt's one recovery", () => {
@@ -1829,19 +1837,18 @@ describe("t271 review iteration ceiling", () => {
     const binding = { requestId: "review:" + "a".repeat(32) } as unknown as Parameters<
       typeof reviewRequestReplaces
     >[1] extends infer P ? P extends { binding: infer B } ? B : never : never;
-    const pending = { binding, replacement: false };
+    const pending = { binding };
     const row = (named: string) => `**Event**: REVIEW_REQUESTED\n**Replaces Request Id**: ${named}\n`;
     expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), pending)).toBe(true);
     expect(reviewRequestReplaces(row("review:" + "b".repeat(32)), pending)).toBe(false);
     expect(reviewRequestReplaces(row("none"), pending)).toBe(false);
-    expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), { binding, replacement: true })).toBe(false);
     expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), undefined)).toBe(false);
     expect(reviewRequestReplaces("**Event**: REVIEW_REQUESTED\n", pending)).toBe(false);
-    const legacy = { binding: { requestId: null } as unknown as typeof binding, replacement: false };
+    const legacy = { binding: { requestId: null } as unknown as typeof binding };
     expect(reviewRequestReplaces(row("none"), legacy)).toBe(true);
   });
 
-  test("a replacement is not replaced again", () => {
+  test("a review interrupted twice is requested again at the same pass each time", () => {
     const proj = seedProject("bugfix");
     const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
     const request = [
@@ -1849,24 +1856,33 @@ describe("t271 review iteration ceiling", () => {
       "--reviewer", "aidlc-product-lead-agent",
       "--iteration", "1",
     ];
+    const stage = resolveStage("requirements-analysis");
+    if (!stage) throw new Error("requirements-analysis not in the stage graph");
+    const attempt = () =>
+      guardAttemptState(proj, readFileSync(seededStateFile(proj), "utf-8"), stage).attempt;
     expect(runReview(proj, request).status).toBe(0);
     writeFileSync(artifact, "first rewrite\n", "utf-8");
     expect(runReview(proj, request).status).toBe(0);
+    // The replacement is cut off too, and the outputs change again.
     writeFileSync(artifact, "second rewrite\n", "utf-8");
-
-    const third = runReview(proj, request);
-    expect(third.status).not.toBe(0);
-    expect(third.stderr).toContain("iteration 1 is still waiting for a verdict");
+    expect(attempt().nextReview?.iteration).toBe(1);
     const retry = runReview(proj, [...request, "--retry-pending"]);
     expect(retry.status).not.toBe(0);
-    expect(retry.stderr).not.toContain("request it again instead");
-    expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(2);
-    const state = readFileSync(seededStateFile(proj), "utf-8");
-    const stage = resolveStage("requirements-analysis");
-    if (!stage) throw new Error("requirements-analysis not in the stage graph");
-    const attempt = guardAttemptState(proj, state, stage).attempt;
-    expect(attempt.nextReview).toBeUndefined();
-    expect(attempt.pendingReview?.iteration).toBe(1);
+    expect(retry.stderr).toContain("request it again instead");
+
+    const third = runReview(proj, request);
+    expect(third.status, third.stderr).toBe(0);
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(3);
+    expect(auditBlockField(requests[2], "Replaces Request Id")).toBe(
+      auditBlockField(requests[1], "Request Id"),
+    );
+    expect(auditBlockField(requests[2], "Iteration")).toBe("1");
+    const verdict = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    const over = runReview(proj, [...request.slice(0, -1), "2"]);
+    expect(over.status).not.toBe(0);
+    expect(over.stderr).toContain("allows 1 review pass");
   });
 
   test("an incomplete review retries once, and the retry reopens the review slot", () => {
