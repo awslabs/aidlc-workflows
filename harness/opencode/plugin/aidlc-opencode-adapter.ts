@@ -162,7 +162,20 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
   ? (DEFAULT_AIDLC_COMMAND[1] ?? "").replace(/aidlc\.ts$/, "")
   : null;
 
-/** Parse one expansion-free shell command into argv, or reject shell syntax. */
+// opencode runs bash-tool commands with the configured shell, else /bin/sh on
+// POSIX and COMSPEC (cmd.exe) on Windows. The forms below read the same in
+// every POSIX shell; cmd.exe and PowerShell read a backslash and a line break
+// differently, so there they stay refused.
+const POSIX_SHELL = process.platform !== "win32";
+
+/**
+ * Parse one expansion-free shell command into argv the way a POSIX shell reads
+ * it, or reject shell syntax. An argument may carry apostrophes and line
+ * breaks in the usual forms: single quotes (with '\'' or '"'"' for an
+ * apostrophe), double quotes, and backslash escapes. Each stays one word
+ * handed to the tool. Chaining, redirection, expansion, command substitution,
+ * and $'...' (which /bin/sh may not read as one word) are refused.
+ */
 function directShellWords(command: string): string[] | null {
   const words: string[] = [];
   let word = "";
@@ -181,17 +194,37 @@ function directShellWords(command: string): string[] | null {
         continue;
       }
       if (ch === "\\" && i + 1 < command.length) {
-        const next = command[++i];
-        if (next === "\n" || next === "\r") return null;
-        word += next;
+        const next = command[i + 1];
+        if (next === "\n" || next === "\r") {
+          if (!POSIX_SHELL) return null;
+          if (next === "\n") {
+            i++;
+            continue;
+          }
+        }
+        if (next === "$" || next === "`" || next === '"' || next === "\\") {
+          word += next;
+          i++;
+          continue;
+        }
+        word += ch;
         continue;
       }
-      if (ch === "`" || ch === "$" || ch === "\n" || ch === "\r") return null;
+      if (ch === "`" || ch === "$") return null;
+      if ((ch === "\n" || ch === "\r") && !POSIX_SHELL) return null;
       word += ch;
       continue;
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      wordStarted = true;
+      continue;
+    }
+    if (ch === "\\") {
+      if (!POSIX_SHELL || i + 1 >= command.length) return null;
+      const next = command[++i];
+      if (next === "\n") continue;
+      word += next;
       wordStarted = true;
       continue;
     }
@@ -206,7 +239,6 @@ function directShellWords(command: string): string[] | null {
     if (
       ch === "\n" ||
       ch === "\r" ||
-      ch === "\\" ||
       ch === "`" ||
       ch === "$" ||
       ch === "#" ||

@@ -341,6 +341,70 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ).rejects.toThrow("one direct invocation");
   });
 
+  // A live run's first request carried a pasted spec with an apostrophe and a
+  // line break; both ways the agent quoted it were refused, so the work could
+  // not start. These are those two commands, byte for byte.
+  const SPEC =
+    "Build this for our office. <document>Meeting room booking. Staff see today's rooms (name, seats, screen yes/no) " +
+    "and free slots in 30-minute steps from 08:00 to 18:00. They book a free slot with their name and a title; they can " +
+    "cancel their own booking. A room cannot be double booked. A wall screen per room shows the current and next booking.\n" +
+    "</document>  Keep the first version small.";
+  const START_SINGLE = `bun .aidlc/tools/aidlc.ts engine orchestrate next --scope feature '${SPEC.replaceAll("'", "'\\''")}'`;
+  const START_DOUBLE = `bun .aidlc/tools/aidlc.ts engine orchestrate next --scope feature "${SPEC}"`;
+
+  test("a pasted request with an apostrophe and a line break starts in any usual quoting, as one argument", async () => {
+    const root = freshProject();
+    const { client } = fakeClient();
+    const adapter = await createAdapter({
+      client,
+      directory: root,
+      aidlcEntrypoints: new Set([...TEST_ENTRYPOINTS, "tools/aidlc.ts"]),
+      aidlcCommand: TEST_AIDLC_COMMAND,
+    });
+    const invoke = (callID: string, command: string) =>
+      adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
+    await expect(
+      invoke("ok-dq-apostrophe", `bun .aidlc/tools/aidlc.ts engine orchestrate next '${SPEC.replaceAll("'", `'"'"'`)}'`),
+    ).resolves.toBeUndefined();
+    // A backslash or a line break in double quotes reads differently in
+    // cmd.exe and PowerShell, so these start only where the shell is POSIX.
+    const posix = process.platform !== "win32";
+    for (const [i, command] of [START_SINGLE, START_DOUBLE, "aidlc engine orchestrate next today\\'s\\ rooms"].entries()) {
+      if (posix) await expect(invoke(`ok-${i}`, command)).resolves.toBeUndefined();
+      else await expect(invoke(`ok-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // Still one command only: chaining, substitution and expansion outside or
+    // inside double quotes, and $'...', which /bin/sh may read as more than one
+    // word, are refused.
+    for (const [i, command] of [
+      `${START_SINGLE} ; touch /tmp/x`,
+      `${START_SINGLE}\ntouch /tmp/x`,
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next \"today's $(touch /tmp/x)\"",
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next \"today's `touch /tmp/x`\"",
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next \"$HOME\"",
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next $'today\\'s rooms\; touch /tmp/x'",
+      "aidlc engine orchestrate next today\\' ; touch /tmp/x",
+    ].entries()) {
+      await expect(invoke(`no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("/bin/sh hands the tool those quoted requests as one argument, unchanged", () => {
+    const root = mkdtempSync(join(tmpdir(), "t241-sh-"));
+    scratch.push(root);
+    mkdirSync(join(root, ".aidlc", "tools"), { recursive: true });
+    writeFileSync(
+      join(root, ".aidlc", "tools", "aidlc.ts"),
+      "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+      "utf-8",
+    );
+    for (const command of [START_SINGLE, START_DOUBLE]) {
+      const run = Bun.spawnSync({ cmd: ["/bin/sh", "-c", command], cwd: root, stdout: "pipe", stderr: "pipe" });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      expect(JSON.parse(run.stdout.toString())).toEqual(["engine", "orchestrate", "next", "--scope", "feature", SPEC]);
+    }
+  });
+
   test("an OpenCode state transition passes the real runtime hook command gate", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-rebuild-stage-graph.ts");
