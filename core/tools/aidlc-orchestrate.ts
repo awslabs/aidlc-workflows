@@ -272,6 +272,7 @@ import {
   delegatedWorktreeIntent,
   scopeCostSummary,
   singleStageAttemptIsOpen,
+  singleStageAttemptScope,
   defaultScope,
   defaultScopeResolution,
   type StageEntry,
@@ -10234,25 +10235,6 @@ function emitForSlug(
 // handling; isolated runs have no main-workflow approval lifecycle.
 const SINGLE_INIT_ERROR =
   `Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
-
-// Call only after confirming an open attempt. Match its boundary ordering and
-// never borrow ceremony policy from the main workflow; legacy rows return null.
-function singleStageAttemptScope(projectDir: string, slug: string): string | null {
-  const workflow = syntheticWorkflowId(slug);
-  const attemptStart = readAuditShardEvents(projectDir)
-    .filter((entry) =>
-      entry.event === "STAGE_STARTED" &&
-      auditBlockField(entry.block, "Stage") === slug &&
-      auditBlockField(entry.block, "Workflow") === workflow
-    )
-    .sort((a, b) => {
-      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-      return a.pos - b.pos;
-    })
-    .pop();
-  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
-}
 
 function ensureSingleStageStarted(
   projectDir: string,

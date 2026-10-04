@@ -31209,15 +31209,21 @@ export function pipelineLinks(
  * paths (link recording, precondition checks) hold only `projectDir`, so this
  * reads the active state for them and defers to `effectiveSupportAgents` — the
  * one switch owner. Fails open to the declared list if the state cannot be read,
- * so a resolution hiccup never strands a legitimately-run stage.
+ * so a resolution hiccup never strands a legitimately-run stage. An isolated
+ * (`--single`) run reads the scope its attempt recorded and no state, as its
+ * directive does: it never borrows the main workflow's settings.
  */
 export function effectiveSupportAgentsForProject(
   projectDir: string,
-  stage: Pick<StageEntry, "support_agents">,
+  stage: Pick<StageEntry, "slug" | "support_agents">,
+  options: { singleRun?: boolean } = {},
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const declared = stage.support_agents ?? [];
   if (declared.length === 0) return [];
+  if (options.singleRun === true) {
+    return effectiveSupportAgents(stage, singleStageAttemptScope(projectDir, stage.slug), null, env);
+  }
   let stateContent: string | null = null;
   try {
     stateContent = readStateFile(projectDir);
@@ -31315,6 +31321,26 @@ export function pipelineAttemptStartedAt(
     options.singleRun === true,
   );
   return floor?.timestamp ?? "";
+}
+
+// The scope an isolated attempt recorded on its STAGE_STARTED row. Call only
+// after confirming an open attempt. Match its boundary ordering and never
+// borrow ceremony policy from the main workflow; legacy rows return null.
+export function singleStageAttemptScope(projectDir: string, slug: string): string | null {
+  const workflow = `single-stage:${slug}`;
+  const attemptStart = readAuditShardEvents(projectDir)
+    .filter((entry) =>
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === slug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    })
+    .pop();
+  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
 }
 
 export function singleStageAttemptIsOpen(
@@ -31526,10 +31552,11 @@ export function pipelineLinkEvidence(
 ): PipelineLinkEvidence {
   // The chain honours the collaborators switch: when a caller already knows the
   // effective support list (it holds scope + state) it passes it; otherwise we
-  // resolve it from the active workflow. An empty list collapses the chain to
-  // the lead alone, which then authors the artifacts as the sole/final link.
-  const effectiveSupports =
-    options.effectiveSupports ?? effectiveSupportAgentsForProject(projectDir, stage);
+  // resolve it from the active workflow, or from an isolated run's own scope.
+  // An empty list collapses the chain to the lead alone, which then authors the
+  // artifacts as the sole/final link.
+  const effectiveSupports = options.effectiveSupports ??
+    effectiveSupportAgentsForProject(projectDir, stage, { singleRun: options.singleRun });
   const links = pipelineLinks(stage, effectiveSupports);
   const registeredRepos = intentRepos(projectDir);
   const repos = registeredRepos;

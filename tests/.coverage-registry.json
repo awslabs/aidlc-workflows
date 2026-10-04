@@ -3552,6 +3552,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-collaborators-switch.test.ts",
           "mechanism": "none"
         }
@@ -7378,6 +7382,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -10134,6 +10142,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:singleStageAttemptScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14380,6 +14400,10 @@
       "unitId": "aidlc-log link",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
