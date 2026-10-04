@@ -1433,7 +1433,9 @@ describe("t243 project initialization", () => {
     const quiet = run(INIT, [...switchArgs, "--quiet"], elsewhere);
     expect(quiet.status).toBe(4);
     const printed = quiet.stdout.trim().split("\n").at(-1) ?? "";
-    expect(printed).toContain(`${join(project, ".kiro", "tools", "aidlc.ts")} config --harness kiro --project-dir ${project}`);
+    expect(printed).toContain(
+      `${quoteCommandArgument(join(project, ".kiro", "tools", "aidlc.ts"))} config --harness kiro --project-dir ${quoteCommandArgument(project)}`,
+    );
     // The refusal comes before any source is read or fetched for the switch.
     const unread = run(INIT, [
       "config", "--project-dir", project, "--from", join(project, "no-such-release"), "--harness", "kiro-ide", "--mcp", "none",
@@ -1549,7 +1551,7 @@ describe("t243 project initialization", () => {
       const steps = /^move (.+) aside, then run `([^`]+)`$/.exec(printed);
       expect(steps?.[1], label).toBe(manifest);
       const refresh = steps?.[2] ?? "";
-      expect(refresh, label).toContain(`config --harness kiro --project-dir ${project}`);
+      expect(refresh, label).toContain(`config --harness kiro --project-dir ${quoteCommandArgument(project)}`);
       renameSync(steps?.[1] ?? "", join(elsewhere, "aidlc-manifest.damaged"));
       const recorded = runPrinted(refresh, elsewhere);
       expect(recorded.status, `${label}: ${recorded.stdout}${recorded.stderr}`).toBe(0);
@@ -1575,7 +1577,8 @@ describe("t243 project initialization", () => {
     expect(steps).toStartWith(`move ${join(project, ".kiro", "tools", "data", "aidlc-manifest.json")} aside, then run \``);
     expect(steps).toMatch(/, then run `[^`]* config --harness kiro --project-dir [^`]+`$/);
     // With nothing before it the line is the refresh alone, runnable as printed.
-    expect(_switchRefreshStepsForTests(project, { harness: "kiro" })).toMatch(/ config --harness kiro --project-dir \S+$/);
+    expect(_switchRefreshStepsForTests(project, { harness: "kiro" }))
+      .toEndWith(` config --harness kiro --project-dir ${quoteCommandArgument(project)}`);
   });
 
   test("a Kiro switch prints no version the project's own files could have forged", () => {
@@ -1743,7 +1746,7 @@ describe("t243 project initialization", () => {
     expect(refused.stdout).toContain(
       "existing project uses kiro; refusing kiro-ide without --harness kiro-ide, which switches .kiro to it in place",
     );
-    expect(refused.stdout).toContain(`config --from ${KIRO_IDE_RELEASE} --harness kiro-ide`);
+    expect(refused.stdout).toContain(`config --from ${quoteCommandArgument(KIRO_IDE_RELEASE)} --harness kiro-ide`);
     expect(transactionSourceHash(project)).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
