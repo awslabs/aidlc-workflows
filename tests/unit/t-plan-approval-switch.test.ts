@@ -30,7 +30,7 @@ import {
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { acquireAuditLock, getField, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { acquireAuditLock, getField, hooksHealthDir, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   firstFrontQuestionSince,
   latestFrontQuestionId,
@@ -727,6 +727,10 @@ describe("asked before the piece of work exists", () => {
       // Another session starts work meanwhile.
       const other = utility(proj, ["intent-create", "--scope", "bugfix", "--arguments", "a hotfix", "--label", "hotfix"]);
       expect(other.status, other.stderr).toBe(0);
+      // That session runs AI-DLC's hooks, which left a heartbeat in its record.
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
       const approved = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", scope, "--request", composition, "--", "fix the scan findings"], {
         env: { ...process.env, ...CLEAR },
       });

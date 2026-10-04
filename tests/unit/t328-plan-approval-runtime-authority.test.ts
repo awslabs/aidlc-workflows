@@ -1747,7 +1747,7 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     expect(refused.exitCode).not.toBe(0);
     const stderr = refused.stderr?.toString() ?? "";
     expect(stderr).toContain("hooks are not firing in this session");
-    expect(stderr).toContain("Run /hooks to check hook approval and policy state");
+    expect(stderr).toContain("false in this project's .claude/settings.local.json; it works in the same chat");
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     expect(
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),
