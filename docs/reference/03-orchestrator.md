@@ -434,7 +434,10 @@ another chat. A line a tool gives inside a stage (`document-input`'s
 `selection_note` and `onboard_note`) is held across the person's turns on the
 same work instead, and is also said with the `print` that opens or re-opens
 the stage's gate, so it reaches the person at the latest with the gate; it is
-said once per piece of work. Without a chat to keep them for, a line stays on
+said once per piece of work. Only a line whose paths are plain (letters,
+digits, spaces, `.`, `_`, `-`, `/`) is held, and the tool's result then says
+`notes_said_by_aidlc: true`; otherwise the stage says the line itself, next to
+the untrusted-path notice. Without a chat to keep them for, a line stays on
 its own step.
 A line that would push a step over its size limit waits for the next one.
 

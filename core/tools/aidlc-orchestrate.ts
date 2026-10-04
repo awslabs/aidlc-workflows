@@ -434,6 +434,8 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
+  // Clears the person lines this step carries, once it is written.
+  personLinesSaid?: () => void;
   marker?: {
     kind: "ask" | "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
     units?: string[];
@@ -603,28 +605,30 @@ function speaksToPerson(directive: Directive): boolean {
 
 // Person lines kept from steps the agent passed through this turn are said,
 // in order and once, with the step it speaks from. One that would push the
-// step over its size limit waits for the next one.
-function sayPendingPersonLines(requested: Directive, transported: Directive): void {
+// step over its size limit waits for the next one. They count as said only
+// once that step is written (the returned callback), so a step replaced by an
+// error leaves them for the error, or for the next step.
+function sayPendingPersonLines(requested: Directive, transported: Directive): (() => void) | undefined {
   const projectDir = engineProjectDir;
   const sessionId = engineSessionId;
-  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return;
+  if (!projectDir || !sessionId || isReadOnlyEngineProbe() || retainedIssuedDirective) return undefined;
   if (carriesNarration.has(requested)) {
     if (transported.narration && addPendingPersonLines(projectDir, sessionId, [transported.narration])) {
       delete transported.narration;
     }
-    return;
+    return undefined;
   }
-  if (!leadsToSpeech.has(requested) && !speaksToPerson(transported)) return;
+  if (!leadsToSpeech.has(requested) && !speaksToPerson(transported)) return undefined;
   const pending = pendingPersonLines(projectDir, sessionId);
-  if (pending.lines.length === 0) return;
+  if (pending.lines.length === 0) return undefined;
   const own = transported.narration;
   transported.narration = [...pending.lines, ...(own ? [own] : [])].join(" ");
   if (Buffer.byteLength(JSON.stringify(transported), "utf-8") > directiveMaxBytes()) {
     if (own) transported.narration = own;
     else delete transported.narration;
-    return;
+    return undefined;
   }
-  pending.said();
+  return pending.said;
 }
 
 function prepareEmission(directive: Directive): PreparedEmission {
@@ -718,7 +722,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
       transported = withChangeNotices(transported, [selectionNotice, ...(transported.change_notices ?? [])]);
     }
   }
-  sayPendingPersonLines(requested, transported);
+  const personLinesSaid = sayPendingPersonLines(requested, transported);
   const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
@@ -859,6 +863,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
           ? { projectDir: engineProjectDir }
         : {}),
     ...(marker ? { marker } : {}),
+    ...(personLinesSaid ? { personLinesSaid } : {}),
   };
 }
 
@@ -935,6 +940,7 @@ function legacyKiroPlanApprovalSession(projectDir: string): string | null {
 
 function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
+  prepared.personLinesSaid?.();
   // Stage work handed to the session, by any path (a fresh publication, the
   // same work handed over again, or a `continue` to the next part), ends a
   // switch's one-shot stop, so the loop holds it like any other work (#1263).
@@ -6470,7 +6476,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     // Only a front composition continues into creation, which needs the
     // request by id; an in-flight reshape carries its text in the dispatch.
+    // A request typed straight to compose passed no question, so how its
+    // pasted document was split is said here.
+    let splitSaid = "";
     if (flags.intent && !flags.request && !inFlight) {
+      splitSaid = documentSplitSentence(flags.intent);
       flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,
@@ -6478,7 +6488,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
-    emit(composeDispatchDirective(flags, inFlight));
+    const dispatch = composeDispatchDirective(flags, inFlight);
+    if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
+    emit(dispatch);
     return;
   }
 

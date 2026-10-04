@@ -5516,7 +5516,6 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // from on the same work (at the latest, the stage's gate), and is said once per
 // work.
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
-const HELD_PERSON_LINES_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const HELD_PERSON_LINES_SAID_MAX = 20;
 
 interface PendingPersonLine {
@@ -5564,7 +5563,7 @@ function readPendingPersonLines(path: string, turn: string, work: string): Pendi
       const { line, at, turn: lineTurn, work: lineWork } = entry as Partial<PendingPersonLine>;
       if (typeof line !== "string" || typeof at !== "number") return false;
       return lineWork !== undefined
-        ? lineWork === work && now - at <= HELD_PERSON_LINES_MAX_AGE_MS
+        ? lineWork === work
         : lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
     });
     const said = saved.work === work && Array.isArray(saved.said)

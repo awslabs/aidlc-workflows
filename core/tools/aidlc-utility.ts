@@ -8754,11 +8754,20 @@ function handleProjectDescription(projectDir: string): void {
 // Which file was read, and a file copied into the project, are said by AI-DLC
 // itself: the agent reads them inside the stage and goes on, so they are held
 // for the next step it speaks from (at the latest, the stage's gate), once per
-// piece of work.
-function holdDocumentInputLines(projectDir: string, lines: ReadonlyArray<string | undefined>): void {
-  const sessionId = resolveWorkflowSelection(projectDir).sessionId;
+// piece of work. A line is held only when every path in it is a plain one, so a
+// file or folder name never carries other text into what AI-DLC says; when a
+// line is not held (no chat, an unusual name, a failed write), the result says
+// so and the stage tells the person itself, next to the untrusted-path notice.
+const DOCUMENT_INPUT_SPOKEN_PATH = /^[A-Za-z0-9._/ -]{1,160}$/;
+function holdDocumentInputLines(
+  projectDir: string,
+  lines: ReadonlyArray<string | undefined>,
+  paths: readonly string[],
+): boolean {
   const said = lines.filter((line): line is string => typeof line === "string" && line.length > 0);
-  if (sessionId && said.length > 0) addPendingPersonLines(projectDir, sessionId, said, true);
+  if (said.length === 0 || !paths.every((path) => DOCUMENT_INPUT_SPOKEN_PATH.test(path))) return false;
+  const sessionId = resolveWorkflowSelection(projectDir).sessionId;
+  return sessionId !== null && addPendingPersonLines(projectDir, sessionId, said, true);
 }
 
 // A numbered pick of matching files stays this short; the person can still
@@ -9099,13 +9108,14 @@ async function handleDocumentInput(
     );
   }
 
-  holdDocumentInputLines(projectDir, [selectionNote]);
+  const held = holdDocumentInputLines(projectDir, [selectionNote], [portablePath]);
   process.stdout.write(
     `${JSON.stringify({
       path_notice: UNTRUSTED_PATH_NOTICE,
       content_notice: UNTRUSTED_CONTENT_NOTICE,
       path: portablePath,
       ...(selectionNote ? { selection_note: selectionNote } : {}),
+      ...(held ? { notes_said_by_aidlc: true } : {}),
       bytes: bytes.length,
       content_trust: "untrusted",
       content_handling: "data-not-instructions",
@@ -9230,7 +9240,11 @@ function onboardDocumentInput(
       ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
       : "");
 
-  holdDocumentInputLines(input.projectDir, [input.selectionNote, onboardNote]);
+  const held = holdDocumentInputLines(
+    input.projectDir,
+    [input.selectionNote, onboardNote],
+    [portablePath, relative(projectRoot, target).split(sep).join("/")],
+  );
   process.stdout.write(
     `${JSON.stringify({
       path_notice: kb.UNTRUSTED_PATH_NOTICE,
@@ -9241,6 +9255,7 @@ function onboardDocumentInput(
       document_id: indexed.id,
       document_path: relative(projectRoot, target).split(sep).join("/"),
       onboard_note: onboardNote,
+      ...(held ? { notes_said_by_aidlc: true } : {}),
       ...(truncated ? { truncated: true } : {}),
       ...(shown.content === undefined
         ? {}
