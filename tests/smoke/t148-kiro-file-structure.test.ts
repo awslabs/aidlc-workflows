@@ -467,8 +467,8 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-machine-config.ts global set offline on",
         ],
         // The guard does not refuse these, but no persona is admitted them: a
-        // verb the tool may gain later, writers no persona is given, and an
-        // audit append other than pipeline-deploy's diagnostic.
+        // verb the tool may gain later, writers no persona is given, and audit
+        // appends, diagnostics included.
         unadmitted: [
           "bun .kiro/tools/aidlc-graph.ts future-authority x",
           "bun .kiro/tools/aidlc-knowledge.ts summarize x",

@@ -1413,10 +1413,10 @@ and `aidlc system config global` whole.
 Kiro IDE and Kiro CLI v3 supply no such identity, so the kiro-ide row gives each
 delegated persona its own shell deny instead
 (`harness/kiro-ide/delegate-shell-deny.ts`): it denies the conductor's command
-allow and excludes only the commands the guard admits a delegate
-(`DELEGATE_ADMITTED_VERBS` and `DELEGATE_ADMITTED_FORMS`: reads and the work a
-persona is dispatched to do) and does not refuse, so a verb no one classified
-stays denied there. That rule does not follow the fence switch.
+allow and excludes only the script verbs the guard admits a delegate
+(`DELEGATE_ADMITTED_VERBS`: reads and the work a persona is dispatched to do)
+and the workspace query forms the workspace parser recognises, each where the
+guard does not refuse it, so a verb no one classified stays denied there. That rule does not follow the fence switch.
 
 The command-position parser recursively normalizes recognized execution
 wrappers (`command`, `exec`, `time`, `env`, `nice`, and `nohup`) before applying

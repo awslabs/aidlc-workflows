@@ -389,6 +389,7 @@ describe("t242 state-transition ownership guard", () => {
       // Machine-wide settings: no delegate runs machine-config at all.
       ["bun .claude/tools/aidlc-machine-config.ts global get offline", "aidlc-machine-config.ts"],
       ["bun .claude/tools/aidlc-machine-config.ts global set offline on", "aidlc-machine-config.ts"],
+      ["bun .claude/tools/aidlc-machine-config.ts global clear offline", "aidlc-machine-config.ts"],
       ["aidlc system config global set offline on", "aidlc system config global"],
       ["bun .claude/tools/aidlc.ts engine audit fork --slug u1", "aidlc.ts engine audit fork"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
