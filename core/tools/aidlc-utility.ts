@@ -7939,6 +7939,13 @@ function handleIntentCreateStateBuild(
             `say so (or run /aidlc --project-type brownfield) and I'll scan again and reverse-engineer it.\n`,
         );
       }
+    } else if (composedPlan && scopeDef.stages["reverse-engineering"] === "EXECUTE") {
+      // A plan composed for a new project leaves out the Reverse Engineering
+      // its scope runs, as there is no code to document yet. Marked as the
+      // new-project skip, so saying later that it is existing code puts it back.
+      const reStage = graph.find((s) => s.slug === "reverse-engineering");
+      const idx = reStage ? skipStages.indexOf(`${reStage.number} (${reStage.slug})`) : -1;
+      if (reStage && idx >= 0) skipStages[idx] = `${reStage.number} ${GREENFIELD_RE_SKIP_LABEL}`;
     }
   }
 

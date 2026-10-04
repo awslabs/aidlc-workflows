@@ -431,6 +431,67 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(registryRow(proj)?.repos).toBeUndefined();
   });
 
+  test("a plan composed for a new project gets its Reverse Engineering back too", () => {
+    const proj = project();
+    // A composed plan leaves Reverse Engineering out when the folder is empty.
+    expect(create(proj, "feature", ["--skip", "reverse-engineering"]).status).toBe(0);
+    expect(field(state(proj), "Stages to Skip")).toContain(GREENFIELD_MARK);
+    addRepo(proj);
+    const ask = next(proj);
+    expect(ask.ask_type).toBe("project-type");
+    expect(String(ask.question)).toContain("so I left out Reverse Engineering");
+    expect(String(ask.question)).toContain("Yes: I'll scan it and document it with Reverse Engineering when we reach that step.");
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
+    expect(r.stdout).not.toContain("This plan does not include Reverse Engineering.");
+    const s = state(proj);
+    expect(stageLine(s, "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} EXECUTE`);
+    expect(field(s, "Stages to Skip")).not.toContain("reverse-engineering");
+    expect(field(s, "Stages to Execute")).toContain("2.1");
+    expect(auditText(proj)).toContain("**Reverse Engineering**: back on the plan");
+  });
+
+  test("a composed plan already past Reverse Engineering runs it next, then returns", () => {
+    const proj = project();
+    expect(create(proj, "classic", ["--skip", "reverse-engineering"]).status).toBe(0);
+    expect(field(state(proj), "Current Stage")).toBe("practices-discovery");
+    addRepo(proj);
+    expect(String(next(proj).question)).toContain("then we continue at Practices Discovery");
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Next I'll run Reverse Engineering to document the existing code, then we're back at Practices Discovery.");
+    expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
+    expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
+  });
+
+  test("kept as a new project first, existing code said later still brings it back", () => {
+    const proj = project();
+    expect(create(proj, "feature", ["--skip", "reverse-engineering"]).status).toBe(0);
+    addRepo(proj);
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "greenfield"]).status).toBe(0);
+    expect(field(state(proj), "Stages to Skip")).toContain(GREENFIELD_MARK);
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("Project type is now Brownfield, as you said (it was Greenfield, as you said earlier).");
+    expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
+    expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} EXECUTE`);
+  });
+
+  test("a plan whose scope leaves Reverse Engineering out says so and keeps it out", () => {
+    const proj = project();
+    expect(create(proj, "infra", ["--skip", "practices-discovery"]).status).toBe(0);
+    expect(field(state(proj), "Stages to Skip")).not.toContain("greenfield");
+    addRepo(proj);
+    const before = state(proj);
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("This plan does not include Reverse Engineering.");
+    expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} SKIP`);
+    expect(field(state(proj), "Stages to Skip")).toBe(field(before, "Stages to Skip"));
+    expect(auditText(proj)).toContain("**Reverse Engineering**: plan unchanged");
+  });
+
   test("after Construction has started the plan stays and the reply names the single run", () => {
     const proj = project();
     expect(create(proj, "classic").status).toBe(0);
