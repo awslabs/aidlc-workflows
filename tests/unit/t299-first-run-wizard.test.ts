@@ -755,6 +755,42 @@ describe("t299 first-run setup wizard", () => {
     expect(kiroWrites(seam.writes)[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a write Kiro refuses is listed with what needs the person, not printed as saved", () => {
+    const writes = join(temp("aidlc-t299-kiro-"), "writes.jsonl");
+    const result = runWizard("\n", {
+      harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
+      env: {
+        AIDLC_TEST_KIRO_SESSION_JSON: JSON.stringify({
+          models: KIRO_MODELS,
+          current: { "chat.defaultModel": "claude-sonnet-4.6" },
+          levels: KIRO_LEVELS,
+          writes,
+          failWrite: "chat.modelDefaults",
+        }),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("Saved in your personal Kiro settings");
+    expect(result.stdout).toContain("One thing needs you");
+    expect(result.stdout).toMatch(
+      /Kiro did not save the effort, so your personal Kiro settings are unchanged\.\n\s+fix: \S.* config models\n/,
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a retired saved model is never the default, even when every offered model is a preview", () => {
+    const seam = kiroSeam({ "chat.defaultModel": "claude-retired-1" });
+    const previews = JSON.parse(seam.env.AIDLC_TEST_KIRO_SESSION_JSON as string) as Record<string, unknown>;
+    previews.models = KIRO_MODELS.filter((model) => model.model_id === "auto" || model.model_id === "claude-opus-5.5");
+    const result = runWizard("\n\n", {
+      harnesses: { kiro: { found: true, version: "kiro-cli 1.0.0" } },
+      env: { AIDLC_TEST_KIRO_SESSION_JSON: JSON.stringify(previews) },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/1\. claude-opus-5\.5\s+2\.0x\s+preview\s+\(recommended\)/);
+    expect(result.stdout).toContain("Model [1]:");
+    expect(kiroWrites(seam.writes)[0]).toEqual(["settings", "chat.defaultModel", "claude-opus-5.5"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("customize on Kiro CLI makes step 2 the session model and steps thorough down to the model's level", () => {
     const seam = kiroSeam({});
     // customize, harness, choose a model, claude-sonnet-4.6, thorough, plugins, MCP, record layer, apply

@@ -152,7 +152,9 @@ describe("Kiro session model rules", () => {
   test("under the test runner the host's kiro-cli is never used", () => {
     expect(kiroCliPath({ PATH: process.env.PATH, AIDLC_TEST_NAME: "t" })).toBeNull();
     expect(kiroCliPath({ PATH: process.env.PATH, AIDLC_TEST_CONFIG_DETECTION_JSON: "{}" })).toBeNull();
-    expect(kiroCliPath({ AIDLC_TEST_NAME: "t", AIDLC_TEST_KIRO_CLI: "/fake/kiro-cli" })).toBe("/fake/kiro-cli");
+    // No variable names the program to run: a project .env could set it.
+    expect(kiroCliPath({ AIDLC_TEST_NAME: "t", AIDLC_TEST_KIRO_CLI: "/fake/kiro-cli" })).toBeNull();
+    expect(kiroCliPath({ PATH: "", AIDLC_TEST_KIRO_CLI: "/fake/kiro-cli" })).toBeNull();
     expect(kiroCliPath({ AIDLC_TEST_KIRO_SESSION_JSON: "{}" })).toBe("kiro-cli");
   });
 });
@@ -261,6 +263,28 @@ describe("applying a session plan", () => {
     );
   });
 
+  test("the seam appends only to a log named writes.jsonl", () => {
+    const other = join(temp("kiro-session-"), "profile");
+    writeFileSync(other, "kept\n");
+    const env = seamEnv({ models: MODELS, current: {}, writes: other });
+    expect(writeKiroPersonalSession("kiro-cli", { model: "claude-opus-5" }, env)).toEqual({ ok: true });
+    expect(readFileSync(other, "utf-8")).toBe("kept\n");
+  });
+
+  test("when the personal map cannot be read again, nothing is written", () => {
+    const log = join(temp("kiro-session-"), "writes.jsonl");
+    const env = seamEnv({ models: MODELS, current: null, writes: log });
+    expect(writeKiroPersonalSession("kiro-cli", {
+      model: "claude-opus-5",
+      effort: { model: "claude-opus-5", effort: "medium" },
+    }, env)).toEqual({
+      ok: false,
+      reason: "Kiro could not read your settings again before saving",
+      savedModel: false,
+    });
+    expect(writes(log)).toEqual([]);
+  });
+
   test("the effort merges onto the personal map as it is at write time", () => {
     const log = join(temp("kiro-session-"), "writes.jsonl");
     // Read when the run began, the map was empty; Kiro now holds another model's effort.
@@ -269,8 +293,7 @@ describe("applying a session plan", () => {
       current: { "chat.modelDefaults": { "claude-haiku-4.5": { output_config: { effort: "low" } } } },
       writes: log,
     });
-    const stale = { ok: true as const, model: null, modelDefaults: {} };
-    expect(writeKiroPersonalSession("kiro-cli", stale, { effort: { model: "claude-opus-5", effort: "medium" } }, env))
+    expect(writeKiroPersonalSession("kiro-cli", { effort: { model: "claude-opus-5", effort: "medium" } }, env))
       .toEqual({ ok: true });
     expect(JSON.parse(writes(log)[0][2])).toEqual({
       "claude-haiku-4.5": { output_config: { effort: "low" } },
@@ -476,13 +499,13 @@ if (args[0] === "chat" && args[1] === "--list-models") {
 
   test("lists models, reads personal settings outside the project, and merges the write", () => {
     const fake = fakeKiro();
-    const env = { ...process.env, AIDLC_TEST_KIRO_CLI: fake.cli };
+    const env = { ...process.env };
     const list = listKiroModels(fake.cli, env);
     expect(list.ok && list.models[0].id).toBe("claude-opus-5.5");
     const session = readKiroPersonalSession(fake.cli, env);
     expect(session).toEqual({ ok: true, model: "claude-opus-5", modelDefaults: {} });
     if (!session.ok) return;
-    expect(writeKiroPersonalSession(fake.cli, session, {
+    expect(writeKiroPersonalSession(fake.cli, {
       model: "claude-sonnet-4.6",
       effort: { model: "claude-sonnet-4.6", effort: "high" },
     }, env)).toEqual({ ok: true });
@@ -498,7 +521,7 @@ if (args[0] === "chat" && args[1] === "--list-models") {
 
   test("reads a model's effort levels over ACP and deletes the session after Kiro exits", async () => {
     const fake = fakeKiro();
-    const env = { ...process.env, AIDLC_TEST_KIRO_CLI: fake.cli };
+    const env = { ...process.env };
     expect(await kiroEffortLevels(fake.cli, "claude-sonnet-4.6", env)).toEqual(["low", "medium", "high", "max"]);
     expect(await kiroEffortLevels(fake.cli, "claude-haiku-4.5", env)).toEqual([]);
     const order = calls(fake.log)

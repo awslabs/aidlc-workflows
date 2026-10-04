@@ -6293,9 +6293,9 @@ function snapshotFirstRunMutationPaths(
   };
 }
 
-async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<string[]> {
+async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<KiroSessionResult | null> {
   const kiro = choices.kiro;
-  if (!kiro || choices.candidate.stamp.distribution !== "kiro") return [];
+  if (!kiro || choices.candidate.stamp.distribution !== "kiro") return null;
   const result = await applyKiroSessionPlan({
     cli: kiro.cli,
     session: kiro.session,
@@ -6305,14 +6305,18 @@ async function applyFirstRunKiroSession(choices: FirstRunChoices): Promise<strin
     modelsCommand: configCommand("models"),
     doctorCommand: `${aidlcInvocation()} doctor`,
   });
-  return result.lines;
+  return result;
 }
 
 function renderFirstRunEnding(
   projectDir: string,
   choices: FirstRunChoices,
-  kiroLines: readonly string[] = [],
+  kiro: KiroSessionResult | null = null,
 ): void {
+  // A write Kiro refused is listed with the other things that need the person;
+  // any line before it (a level fallback, say) still prints with the receipts.
+  const kiroFailed = kiro !== null && !kiro.ok;
+  const kiroLines = kiro ? (kiroFailed ? kiro.lines.slice(0, -1) : kiro.lines) : [];
   const manifest = JSON.parse(readFileSync(
     join(
       projectDir,
@@ -6355,11 +6359,21 @@ function renderFirstRunEnding(
     }
     process.stdout.write("\n");
   }
-  const remaining = postApplyOutstandingActions(
-    projectDir,
-    choices.candidate.descriptor.harnessDir,
-    modelHarness(choices.candidate.stamp.distribution),
-  );
+  const remaining = [
+    ...postApplyOutstandingActions(
+      projectDir,
+      choices.candidate.descriptor.harnessDir,
+      modelHarness(choices.candidate.stamp.distribution),
+    ),
+    ...(kiro && kiroFailed
+      ? [{
+          section: "models" as const,
+          id: "kiro-session-unsaved",
+          message: (kiro.lines.at(-1) ?? "Kiro did not save your session model.").replace(/ Run `[^`]+` to try again\.$/, ""),
+          command: configCommand("models"),
+        }]
+      : []),
+  ];
   if (remaining.length > 0) {
     process.stdout.write(
       `${kiroLines.length > 0 ? "" : "\n"}  ${
@@ -6472,7 +6486,10 @@ function chooseKiroSessionModel(
   }
   if (intro) writeMenuRow("  ", intro);
   const models = list.models;
-  const recommended = recommendedKiroModel(models, current);
+  // Enter never keeps a model the account no longer offers: with only preview
+  // or internal models left, the first one offered is recommended.
+  const retired = current !== null && !models.some((model) => model.id === current);
+  const recommended = recommendedKiroModel(models, current) ?? (retired ? models[0]?.id ?? null : null);
   const keepLabel = current ? `keep ${current}` : "keep Kiro auto";
   const idWidth = Math.max(keepLabel.length, ...models.map((model) => model.id.length)) + 2;
   const numberWidth = String(models.length + 1).length;
@@ -6489,9 +6506,9 @@ function chooseKiroSessionModel(
     `    ${number(models.length + 1)} ${keepLabel.padEnd(idWidth)}${
       !current
         ? "Kiro keeps picking the model; no effort preset"
-        : models.some((model) => model.id === current)
-        ? "your current model"
-        : "not offered on your Kiro account any more"
+        : retired
+        ? "not offered on your Kiro account any more"
+        : "your current model"
     }\n`,
   );
   writeMenuRow(
@@ -7040,8 +7057,8 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     applyFirstRunChoices(projectDir, choices, snapshot);
     // Personal Kiro settings sit outside the rollback snapshot, so they are
     // written last, once every AI-DLC step has succeeded.
-    const kiroLines = await applyFirstRunKiroSession(choices);
-    renderFirstRunEnding(projectDir, choices, kiroLines);
+    const kiroResult = await applyFirstRunKiroSession(choices);
+    renderFirstRunEnding(projectDir, choices, kiroResult);
   } catch (error) {
     try {
       snapshot.restore();
@@ -7973,7 +7990,7 @@ async function emitKiroSessionResult(
         result.saved.model || result.saved.effort ? "saved the Kiro session model" : "session model unchanged",
         kiroSessionData(result),
       )
-      : failure("the Kiro session model was not saved", EXIT.failure, configCommand("models")),
+      : { ...failure("the Kiro session model was not saved", EXIT.actionNeeded, configCommand("models")), status: "action-needed" },
     options,
   );
 }
@@ -9778,10 +9795,14 @@ export async function main(
       setupMapWillRender ? [] : outstandingActions,
       options.mode,
     );
-    emitResult(success(
+    // AI-DLC's record is saved, but the person's Kiro session is not what they
+    // asked for until the printed command runs again.
+    const kiroUnsaved = kiroSession !== null && !kiroSession.ok;
+    const completed = kiroUnsaved ? `${completion}; your Kiro session was not saved` : completion;
+    const configured = success(
       // Only the human line is laid out for the terminal; JSON and --quiet
       // output keep the message exactly.
-      options.mode === "human" ? menuText(completion) : completion,
+      options.mode === "human" ? menuText(completed) : completed,
       {
         projectDir,
         distribution: stamp.distribution,
@@ -9827,10 +9848,13 @@ export async function main(
             }
           : {}),
       },
-    ), options);
-    // AI-DLC's record is saved, but the person's Kiro session is not what they
-    // asked for until the printed command runs again.
-    if (kiroSession && !kiroSession.ok) process.exitCode = EXIT.actionNeeded;
+    );
+    emitResult(
+      kiroUnsaved
+        ? { ...configured, ok: false, code: EXIT.actionNeeded, status: "action-needed", remediation: configCommand("models") }
+        : configured,
+      options,
+    );
     if (
       setupMapWillRender
     ) {

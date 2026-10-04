@@ -27,7 +27,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { resolveExecutableOnPath } from "./aidlc-config-diagnostics.ts";
 import type { KiroEffort } from "./aidlc-tiers.ts";
 
@@ -81,6 +81,12 @@ type KiroSessionSeam = {
   failWrite?: string;
 };
 
+// The seam only appends to a file named writes.jsonl, as every test names its
+// log, so a project .env that sets the seam cannot append to the person's files.
+function isSeamWriteLog(path: string): boolean {
+  return basename(path) === "writes.jsonl";
+}
+
 function kiroSessionTestSeam(env: NodeJS.ProcessEnv = process.env): KiroSessionSeam | null {
   const raw = env.AIDLC_TEST_KIRO_SESSION_JSON;
   if (raw === undefined) return null;
@@ -98,10 +104,11 @@ export function isKiroPreset(value: unknown): value is KiroPreset {
 // The kiro-cli this process would run, or null when there is none. Under the
 // test runner (AIDLC_TEST_NAME) or a stubbed config detection, the host's
 // kiro-cli is never used: a test opts in with the data seam or names a fake
-// kiro-cli in AIDLC_TEST_KIRO_CLI, so no test reaches a real ~/.kiro.
+// kiro-cli to the functions directly, so no test reaches a real ~/.kiro. No
+// variable names the program to run: Bun loads a project's .env, so one could
+// otherwise make AI-DLC run a program the project ships.
 export function kiroCliPath(env: NodeJS.ProcessEnv = process.env): string | null {
   if (kiroSessionTestSeam(env)) return "kiro-cli";
-  if (env.AIDLC_TEST_KIRO_CLI) return env.AIDLC_TEST_KIRO_CLI;
   if (env.AIDLC_TEST_NAME !== undefined || env.AIDLC_TEST_CONFIG_DETECTION_JSON !== undefined) {
     return null;
   }
@@ -394,7 +401,6 @@ export function mergedKiroModelDefaults(
 
 export function writeKiroPersonalSession(
   cli: string,
-  session: Extract<KiroPersonalSession, { ok: true }>,
   write: KiroSessionWrite,
   env: NodeJS.ProcessEnv = process.env,
 ): { ok: true } | { ok: false; reason: string; savedModel: boolean } {
@@ -402,16 +408,15 @@ export function writeKiroPersonalSession(
   if (write.model) calls.push(["settings", "chat.defaultModel", write.model]);
   if (write.effort) {
     // Merge onto the map as it is now, not as it was when the run began, so a
-    // change made in Kiro meanwhile is kept.
+    // change made in Kiro meanwhile is kept; if it cannot be read, write nothing.
     const fresh = readKiroPersonalSession(cli, env);
+    if (!fresh.ok) {
+      return { ok: false, reason: "Kiro could not read your settings again before saving", savedModel: false };
+    }
     calls.push([
       "settings",
       "chat.modelDefaults",
-      JSON.stringify(mergedKiroModelDefaults(
-        fresh.ok ? fresh.modelDefaults : session.modelDefaults,
-        write.effort.model,
-        write.effort.effort,
-      )),
+      JSON.stringify(mergedKiroModelDefaults(fresh.modelDefaults, write.effort.model, write.effort.effort)),
     ]);
   }
   const seam = kiroSessionTestSeam(env);
@@ -429,7 +434,7 @@ export function writeKiroPersonalSession(
         savedModel,
       };
     }
-    if (seam?.writes) appendFileSync(seam.writes, `${JSON.stringify(args)}\n`);
+    if (seam?.writes && isSeamWriteLog(seam.writes)) appendFileSync(seam.writes, `${JSON.stringify(args)}\n`);
     if (args[1] === "chat.defaultModel") savedModel = true;
   }
   return { ok: true };
@@ -545,7 +550,7 @@ async function applyPlan(
     if (write.effort) lines.push(`  effort   ${write.effort.effort}, for ${write.effort.model}`);
     return { ok: true, lines, model, effort, saved: {} };
   }
-  const saved = writeKiroPersonalSession(plan.cli, plan.session, write, env);
+  const saved = writeKiroPersonalSession(plan.cli, write, env);
   if (!saved.ok) {
     const modelSaved = saved.savedModel && write.model !== undefined;
     lines.push(

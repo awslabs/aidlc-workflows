@@ -962,7 +962,15 @@ describe("t293 config models CLI", () => {
     ], project, { ...runtimeEnv(), ...refused.env });
     expect(result.status, result.stdout + result.stderr).toBe(5);
     expect(result.stdout).toContain("Kiro did not save the effort, so your personal Kiro settings are unchanged.");
+    expect(result.stdout).toContain("your Kiro session was not saved");
     expect(kiroWrites(refused.writes)).toEqual([]);
+    const json = run([
+      "config", "models", "--project-dir", project, "--project", "--preset", "minimal", "--yes", "--json",
+    ], project, { ...runtimeEnv(), ...refused.env });
+    expect(json.status, json.stdout + json.stderr).toBe(5);
+    const payload = JSON.parse(json.stdout) as { ok: boolean; status: string; data: { kiroSession: { ok: boolean } } };
+    expect(payload).toEqual(expect.objectContaining({ ok: false, status: "action-needed" }));
+    expect(payload.data.kiroSession.ok).toBe(false);
     expect(existsSync(projectSettingsPath(project))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
