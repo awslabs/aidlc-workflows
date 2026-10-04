@@ -8068,7 +8068,17 @@ async function emitKiroSessionResult(
         result.saved.model || result.saved.effort ? "saved the Kiro session model" : "session model unchanged",
         kiroSessionData(result),
       )
-      : { ...failure("the Kiro session model was not saved", EXIT.actionNeeded, configCommand("models")), status: "action-needed" },
+      : {
+        ...failure(
+          result.saved.model
+            ? `Kiro saved the session model ${result.saved.model} but not its effort`
+            : "the Kiro session model was not saved",
+          EXIT.actionNeeded,
+          configCommand("models"),
+        ),
+        status: "action-needed",
+        data: kiroSessionData(result),
+      },
     options,
   );
 }

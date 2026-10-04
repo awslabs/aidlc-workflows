@@ -87,9 +87,34 @@ function isSeamWriteLog(path: string): boolean {
   return basename(path) === "writes.jsonl";
 }
 
+// Bun loads the .env files of the folder it runs in, so a seam those files set
+// is ignored: only a variable the test runner set reaches the seam, never one a
+// project ships to forge Kiro's answers.
+const BUN_DOTENV_FILES = [
+  ".env",
+  ".env.local",
+  ".env.development",
+  ".env.development.local",
+  ".env.production",
+  ".env.production.local",
+  ".env.test",
+  ".env.test.local",
+];
+
+export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
+  const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`, "m");
+  return BUN_DOTENV_FILES.some((file) => {
+    try {
+      return assignment.test(readFileSync(join(dir, file), "utf-8"));
+    } catch {
+      return false;
+    }
+  });
+}
+
 function kiroSessionTestSeam(env: NodeJS.ProcessEnv = process.env): KiroSessionSeam | null {
   const raw = env.AIDLC_TEST_KIRO_SESSION_JSON;
-  if (raw === undefined) return null;
+  if (raw === undefined || setByDotenvFile("AIDLC_TEST_KIRO_SESSION_JSON")) return null;
   return JSON.parse(raw) as KiroSessionSeam;
 }
 
@@ -148,7 +173,8 @@ export function parseKiroModelList(raw: string): KiroModelList {
   const models: KiroModel[] = [];
   for (const row of rows) {
     const id = (row as { model_id?: unknown })?.model_id;
-    if (typeof id !== "string" || !id || id === "auto") continue;
+    // A model id is printed and passed to kiro-cli, so only a plain one is kept.
+    if (typeof id !== "string" || id === "auto" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(id)) continue;
     const rate = (row as { rate_multiplier?: unknown }).rate_multiplier;
     models.push({
       id,

@@ -1085,6 +1085,28 @@ describe("t293 config models CLI", () => {
     expect(existsSync(projectSettingsPath(project))).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("Kiro CLI --session-model whose effort Kiro refuses reports the model it did save", () => {
+    const project = install("kiro");
+    const seam = kiroSeam({ "chat.defaultModel": "claude-opus-5" }, { failWrite: "chat.modelDefaults" });
+    writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, preset: "balanced" } })}\n`);
+    const result = run([
+      "config", "models", "--project-dir", project, "--session-model", "claude-sonnet-4.6", "--json",
+    ], project, { ...runtimeEnv(), ...seam.env });
+    expect(result.status, result.stdout + result.stderr).toBe(5);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      status: string;
+      message: string;
+      data: { kiroSession: { ok: boolean; saved: { model?: string } } };
+    };
+    expect(payload).toEqual(expect.objectContaining({
+      ok: false,
+      status: "action-needed",
+      message: "Kiro saved the session model claude-sonnet-4.6 but not its effort",
+    }));
+    expect(payload.data.kiroSession).toEqual(expect.objectContaining({ ok: false, saved: { model: "claude-sonnet-4.6" } }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Kiro CLI --preset --dry-run previews the personal Kiro settings change and writes nothing", () => {
     const project = install("kiro");
     const seam = kiroSeam({ "chat.defaultModel": "claude-sonnet-4.6" });
