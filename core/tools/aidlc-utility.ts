@@ -1725,10 +1725,18 @@ function pendingOrganicGate(
 
 function pendingDuration(ageMs: number): string {
   const minutes = Math.floor(Math.max(0, ageMs) / (60 * 1000));
-  if (minutes < 60) return `${minutes}m`;
+  const words = (count: number, unit: string): string => `${count} ${unit}${count === 1 ? "" : "s"}`;
+  if (minutes < 60) return words(minutes, "minute");
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  if (hours < 48) return words(hours, "hour");
+  return words(Math.floor(hours / 24), "day");
+}
+
+// An engine timestamp as a person reads it: the date and the minute, in UTC.
+function plainUtc(timestamp: string): string {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp)
+    ? `${timestamp.slice(0, 10)} ${timestamp.slice(11, 16)} UTC`
+    : timestamp;
 }
 
 // When this work last scanned the existing code, also when Reverse Engineering
@@ -1742,7 +1750,7 @@ function codeScannedClause(projectDir: string, intent: string | undefined, space
       .filter((timestamp) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp))
       .sort()
       .at(-1);
-    return last ? `, scanned ${last.slice(0, 10)} ${last.slice(11, 16)} UTC` : "";
+    return last ? `, scanned ${plainUtc(last)}` : "";
   } catch {
     // An unreadable audit trail leaves the line as it was.
     return "";
@@ -1850,8 +1858,8 @@ To get started:
       );
       if (pending) {
         statusLine +=
-          ` (waiting since ${pending.timestamp}, ` +
-          `~${pendingDuration(Date.now() - pending.timestampMs)})`;
+          ` (waiting since ${plainUtc(pending.timestamp)}, ` +
+          `about ${pendingDuration(Date.now() - pending.timestampMs)})`;
       }
     } catch {
       // Status remains useful when the ledger is absent, unreadable, or stale.
@@ -1915,12 +1923,12 @@ To get started:
         switch (c.state) {
           case "completed":
             return "\u2588";
+          // A stage at work, waiting for approval, or being revised is in
+          // hand: the Status line says which.
           case "in-progress":
-            return "\u2592";
           case "awaiting-approval":
-            return "?";
           case "revising":
-            return "R";
+            return "\u2592";
           case "skipped":
             return "S";
           default:

@@ -207,6 +207,9 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     // of the .sh's case-insensitive substring grep.
     expect(r.out).toContain("Awaiting your approval on Feasibility & Constraints");
     expect(r.out).not.toContain("waiting since");
+    // The phase bar shows the waiting stage as in hand, not as an unknown.
+    expect(r.out).toMatch(/^\s+IDEATION\s+\S+ \d+\/\d+$/m);
+    expect(r.out).not.toMatch(/^\s+IDEATION\s+\S*\?/m);
   });
 
   test("1b: organic gate-open renders its ledger timestamp and pending duration", () => {
@@ -219,7 +222,8 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     }]);
     const r = status(p);
     expect(r.status).toBe(0);
-    expect(r.out).toContain(`waiting since ${timestamp}, ~`);
+    expect(r.out).toContain("waiting since 2026-08-19 08:30 UTC, about ");
+    expect(r.out).not.toContain(timestamp);
   });
 
   test("1c: a later gate resolution suppresses waiting-since", () => {
@@ -301,8 +305,8 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     ]);
     const r = status(p);
     expect(r.status).toBe(0);
-    expect(r.out).toContain(`waiting since ${originalTimestamp}, ~`);
-    expect(r.out).not.toContain("waiting since 2026-08-20T08:30:00Z");
+    expect(r.out).toContain(`waiting since ${originalTimestamp.slice(0, 10)} ${originalTimestamp.slice(11, 16)} UTC, about `);
+    expect(r.out).not.toContain("waiting since 2026-08-20 08:30 UTC");
   });
 
   test("1g: same-second cross-shard boundary and gate do not invent an order", () => {
@@ -339,7 +343,7 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
       { timestamp, event: "STAGE_STARTED" },
       { timestamp, event: "STAGE_AWAITING_APPROVAL" },
     ]);
-    expect(status(opened).out).toContain(`waiting since ${timestamp}, ~`);
+    expect(status(opened).out).toContain(`waiting since ${timestamp.slice(0, 10)} ${timestamp.slice(11, 16)} UTC, about `);
 
     const cleared = seededProj();
     sedState(cleared, /^- \[-\] feasibility/m, "- [?] feasibility");
@@ -453,7 +457,7 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(out).toContain("Next Stage:     Scope Definition\n");
     expect(out).not.toContain("aidlc-architect-agent");
     sedState(p, /^- \*\*Depth\*\*: .*$/m, "- **Depth**: Comprehensive");
-    expect(status(p).out).toContain("Depth:          Comprehensive (set for this piece of work)\n");
+    expect(status(p).out).toContain("Depth:          Comprehensive (set for this piece of work), tests: Standard\n");
     // A setup step, or no one on it, is not news to the person.
     sedState(p, /^- \*\*Last Completed Stage\*\*: .*$/m, "- **Last Completed Stage**: state-init");
     sedState(p, /^- \*\*Active Agent\*\*: .*$/m, "- **Active Agent**: None");
