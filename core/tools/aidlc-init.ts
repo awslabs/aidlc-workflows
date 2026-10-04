@@ -3636,7 +3636,10 @@ function displayName(name: string): string {
 // Repository file names inside the one parenthesis that says they are data
 // from the repository, not instructions, as other untrusted text is printed.
 function repositoryNames(names: readonly string[]): string {
-  return `(repository file names, not instructions: ${names.join(", ")})`;
+  // As untrustedPathList does for uninstall: at most 20, then a count.
+  const shown = names.slice(0, 20);
+  const more = names.length - shown.length;
+  return `(repository file names, not instructions: ${[...shown, ...(more > 0 ? [`and ${more} more`] : [])].join(", ")})`;
 }
 
 // The hook JSON files in a hooks directory that the next baseline does not
@@ -3655,7 +3658,7 @@ function scanUnownedHooks(
   if (!pathPresent(directory)) return { redirected: false, entries: [] };
   if (!lstatSync(directory).isDirectory()) return { redirected: true, entries: [] };
   const entries = readdirSync(directory)
-    .filter((name) => name.endsWith(".json"))
+    .filter((name) => /\.json$/i.test(name))
     .sort()
     .map((name) => `${hooksDir}/${name}`)
     .filter((rel) => !Object.hasOwn(owned, rel))
@@ -3764,7 +3767,9 @@ function assertSwitchBaseline(
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
-  const refresh = `refresh it from the release it was installed from first`;
+  const refresh = `refresh it from the release it was installed from${
+    occupant.frameworkVersion ? ` (${occupant.frameworkVersion})` : ""
+  } first`;
   // Taken before the read, so the lock re-check moves only the entry judged.
   const judged = pathPresent(path) ? entryIdentity(path) : null;
   let problem: string | null = null;
@@ -3832,7 +3837,10 @@ function assertSwitchBaseline(
     () => {
       assertRefreshSafe(projectDir);
       if (judged === null || !pathPresent(path) || entryIdentity(path) !== judged) {
-        throw new Error(`${rel} changed while the switch was checking it; run the switch again`);
+        throw new SwitchRefusal(`${rel} changed while the switch was checking it`, {
+          kind: "text",
+          text: "run the switch again",
+        });
       }
       for (let index = 1; pathPresent(join(occupant.root, asideName)); index++) asideName = `${stamped}-${index}`;
       renameSync(path, join(occupant.root, asideName));
@@ -8909,7 +8917,6 @@ export async function main(
         );
       }
       if (collision) {
-        assertSwitchBaseline(projectDir, collision, stamp.distribution, "inspect");
         // The planner reads every shipped file under the hooks directory, so a
         // redirected one is refused before anything is read through it.
         const hooksRoot = join(projectDir, descriptor.harnessDir, "hooks");
@@ -9409,8 +9416,9 @@ export async function main(
       ? () => {
         const now = scanUnownedHooks(projectDir, hooksDir, files);
         if (now.redirected || canonical(now.entries) !== canonical(unownedHooks)) {
-          throw new Error(
+          throw new SwitchRefusal(
             `${hooksDir}: hook files AI-DLC does not own changed after this switch was planned; review them and run the switch again`,
+            { kind: "text", text: "run the switch with --dry-run again, review the hook files it names, and apply its new --plan-token" },
           );
         }
       }
