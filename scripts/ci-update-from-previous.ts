@@ -33,6 +33,16 @@ const HOOK_COMMAND = /^aidlc engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$
 const WINDOWS = process.platform === "win32";
 const REPOSITORY = process.env.GITHUB_REPOSITORY || "awslabs/aidlc-workflows";
 const STEP_TIMEOUT_MS = 10 * 60_000;
+const HOOK_TIMEOUT_MS = 2 * 60_000;
+// The whole check ends before the release job's 30-minute limit, so its own
+// report, not a cancelled job, says what went wrong.
+const CHECK_BUDGET_MS = 25 * 60_000;
+
+/** The harnesses a release's version.json ships that this check does not set up. */
+export function uncheckedHarnesses(versionJson: unknown): string[] {
+  const listed = (versionJson as { distributions?: Array<{ name?: unknown }> } | null)?.distributions ?? [];
+  return listed.map((entry) => String(entry?.name ?? "")).filter((name) => !(HARNESSES as readonly string[]).includes(name));
+}
 
 /** Every hook command a harness tree's JSON config files name. */
 export function hookCommands(treeDir: string): string[] {
@@ -154,6 +164,9 @@ function main(argv: string[]): number {
 }
 
 function check(previous: string, candidate: string, target: string, root: string): number {
+  const deadline = Date.now() + CHECK_BUDGET_MS;
+  const within = (ms: number) => Math.max(1_000, Math.min(ms, deadline - Date.now()));
+  const unchecked = uncheckedHarnesses(JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")));
   const machine = join(root, "machine");
   const bin = join(machine, "bin");
   const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
@@ -173,10 +186,16 @@ function check(previous: string, candidate: string, target: string, root: string
   mkdirSync(env.COPILOT_HOME!, { recursive: true });
   const shell = WINDOWS ? gitBash() : "/bin/sh";
   const failures: string[] = [];
+  // Each failure is printed as it happens, so a run that stops early still shows it.
+  const fail = (line: string) => {
+    failures.push(line);
+    console.error(`FAIL ${line}`);
+  };
+  for (const name of unchecked) fail(`the candidate ships the ${name} harness, which this check does not set up yet: add it to HARNESSES`);
   const run = (what: string, command: string, args: string[], extra: NodeJS.ProcessEnv = {}, cwd = root, input = "") => {
-    const r = spawnSync(command, args, { cwd, env: { ...env, ...extra }, encoding: "utf-8", input, timeout: STEP_TIMEOUT_MS });
+    const r = spawnSync(command, args, { cwd, env: { ...env, ...extra }, encoding: "utf-8", input, timeout: within(STEP_TIMEOUT_MS) });
     const output = `${r.stdout ?? ""}${r.stderr ?? ""}${r.error ? `\n${r.error.message}` : ""}`.trim();
-    if (r.status !== 0) failures.push(`${what}: exited ${r.status}: ${output.split("\n").slice(-3).join(" | ")}`);
+    if (r.status !== 0) fail(`${what}: exited ${r.status}: ${output.split("\n").slice(-3).join(" | ")}`);
     return { ok: r.status === 0, output };
   };
   // A person on Windows types aidlc in PowerShell, which runs aidlc.cmd; -File
@@ -201,7 +220,7 @@ function check(previous: string, candidate: string, target: string, root: string
     : run(`install ${previous}`, "sh", [installer, "--version", previous]);
   if (!installed.ok) return report(failures);
   const before = aidlc("version before the update", ["version"]);
-  if (!before.output.includes(previous)) failures.push(`the installed release reports "${before.output}", not ${previous}`);
+  if (!before.output.includes(previous)) fail(`the installed release reports "${before.output}", not ${previous}`);
 
   // 2. A project for every harness, set up by the previous release.
   const projects = HARNESSES.map((harness) => {
@@ -218,20 +237,21 @@ function check(previous: string, candidate: string, target: string, root: string
   const updated = aidlc(`aidlc update from ${previous}`, ["update", "--from", candidate, "--offline"]);
   if (!updated.ok) return report(failures);
   const after = aidlc("version after the update", ["version"]);
-  if (!after.output.includes(target)) failures.push(`after the update aidlc reports "${after.output}", not ${target}`);
+  if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
   if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
-    failures.push(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
+    fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
   }
 
   // 4. What the person does next, per project.
   let traces = 0;
+  const timedOut = new Set<string>();
   const hooks = (harness: string, project: string, when: string) => {
     const plugin = join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
     const commands = harness === "opencode"
       // The plugin passes the project folder itself; the shell reads it from the environment.
       ? opencodeHookCommands(plugin).map((command) => `${command} --project-dir "$CLAUDE_PROJECT_DIR"`)
       : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
-    if (commands.length === 0) failures.push(`${harness} ${when}: the project has no hook commands to run`);
+    if (commands.length === 0) fail(`${harness} ${when}: the project has no hook commands to run`);
     if (harness === "opencode") {
       // The plugin itself, driven the way opencode calls it.
       const trace = join(root, "trace", String(++traces));
@@ -243,20 +263,31 @@ function check(previous: string, candidate: string, target: string, root: string
       const ran = hooksTracedToCompletion(trace);
       const missing = OPENCODE_EVENT_HOOKS.filter((hook) => !ran.has(hook));
       if (driven.ok && missing.length > 0) {
-        failures.push(`opencode plugin ${when}: its events did not run ${missing.join(", ")} to the end`);
+        fail(`opencode plugin ${when}: its events did not run ${missing.join(", ")} to the end`);
       }
     }
     for (const command of commands) {
+      if (Date.now() >= deadline) {
+        fail(`${harness} hook ${when}: the check ran out of its ${CHECK_BUDGET_MS / 60_000}-minute budget before \`${command}\``);
+        break;
+      }
+      // A hook that hung once is not run again; its first failure says so.
+      if (timedOut.has(command)) continue;
       const trace = join(root, "trace", String(++traces));
       const r = spawnSync(shell, ["-c", command], {
         cwd: project,
         env: { ...env, CLAUDE_PROJECT_DIR: project, AIDLC_HOOK_TRACE_DIR: trace },
         encoding: "utf-8",
         input: "{}",
-        timeout: STEP_TIMEOUT_MS,
+        timeout: within(HOOK_TIMEOUT_MS),
       });
+      if (r.error && (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+        timedOut.add(command);
+        fail(`${harness} hook ${when}: \`${command}\` did not finish within ${HOOK_TIMEOUT_MS / 60_000} minutes; it is not run again`);
+        continue;
+      }
       if (r.status !== 0 || !tracedToCompletion(trace)) {
-        failures.push(`${harness} hook ${when}: \`${command}\` exited ${r.status}: ${`${r.stderr ?? ""}`.trim().split("\n").at(-1) ?? ""}`);
+        fail(`${harness} hook ${when}: \`${command}\` exited ${r.status}: ${`${r.stderr ?? ""}`.trim().split("\n").at(-1) ?? ""}`);
       }
     }
     return commands.length;
@@ -278,7 +309,7 @@ function report(failures: string[], success = ""): number {
     console.log(success);
     return 0;
   }
-  for (const failure of failures) console.error(`FAIL ${failure}`);
+  console.error(`${failures.length} failure(s), each printed above as it happened.`);
   return 1;
 }
 

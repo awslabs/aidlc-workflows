@@ -11,6 +11,7 @@ import {
   hooksTracedToCompletion,
   opencodeHookCommands,
   tracedToCompletion,
+  uncheckedHarnesses,
 } from "../../scripts/ci-update-from-previous.ts";
 
 const roots: string[] = [];
@@ -73,6 +74,13 @@ describe("ci-update-from-previous helpers", () => {
     writeFileSync(plugin, 'const PROJECTED_INVOKE = "{{INVOKE}}";\n  "aidlc-session-start.ts",\n');
     expect(opencodeHookCommands(plugin)).toEqual(["bun .aidlc/tools/aidlc.ts engine hook session-start"]);
     expect(opencodeHookCommands(join(tree, "missing.ts"))).toEqual([]);
+  });
+
+  test("a harness the release ships that the check does not set up is named", () => {
+    const shipped = (names: string[]) => ({ distributions: names.map((name) => ({ name })) });
+    expect(uncheckedHarnesses(shipped(["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]))).toEqual([]);
+    expect(uncheckedHarnesses(shipped(["claude", "newcli"]))).toEqual(["newcli"]);
+    expect(uncheckedHarnesses({})).toEqual([]);
   });
 
   test("the releases under test get no GitHub, Actions or provider credentials", () => {
