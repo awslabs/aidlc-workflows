@@ -159,7 +159,9 @@ The install ships:
   `orchestrate_subagent` (Kiro CLI), the dispatch tools that run each persona
   under its own permissions.
 - `.kiro/agents/aidlc-*-agent.md` — all 14 delegation personas, carrying
-  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships.
+  `tools:` grants and `permissions.rules`. No agent-v1 JSON ships. Their shell
+  rules run AI-DLC's own commands, `date -u`, and `bun --version` without
+  asking; the project's own test and build commands still ask.
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`
   registrations, and a hook cannot detect that from inside. Kiro IDE does not
@@ -410,6 +412,24 @@ A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
+
+### Command cards end with "dministrator: ...powershell.exe" on Windows
+
+On Windows, a Kiro IDE command card can end with a line such as
+`dministrator: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+once or twice. That is the terminal window's title, cut short by Kiro when it
+shows the output. It does not change what the command did or what AI-DLC
+records.
+
+To stop it, add this entry inside the braces of Kiro's user settings
+(Ctrl+Shift+P, then **Preferences: Open User Settings (JSON)**), save, and
+restart Kiro:
+
+```json
+"terminal.integrated.windowsUseConptyDll": false
+```
+
+After the restart, the cards show only the command's output.
 
 ### Kiro memories carry old AI-DLC advice
 

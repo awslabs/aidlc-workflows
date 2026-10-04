@@ -520,8 +520,8 @@ For the same target and attempt, plan, test instruction, or Testing Contract
 edits reopen approval only under Guard Policy `strict`. Under `relaxed` or
 `off`, work continues with the updated content and the original approval
 record stays intact; it does not claim you approved the edits. Check
-`/aidlc --status` for the effective setting (the `plan re-approval` entry on
-the `Fences:` line). You can still ask to review the plan again.
+`/aidlc --status` for the effective setting (`plan re-approval` is on its
+`Checks off:` line when it is off). You can still ask to review the plan again.
 
 If code generation starts without asking you about the plan at all, plan
 approval is off for this piece of work: status shows where that came from, for

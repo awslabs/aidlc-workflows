@@ -310,7 +310,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
       expect(String(d.message)).toContain("stock-distance rankings are advisory only");
       expect(String(d.message)).toContain("changes.skip and changes.add");
       expect(String(d.message)).toContain("Never write scope registry files");
-      expect(String(d.message)).toContain("fast path is available only BEFORE calling next compose");
+      expect(String(d.message)).toContain("go through next --skip or --add only BEFORE calling next compose");
       expect(String(d.message)).toContain("Dispatch the composer subagent with this message as its task");
       expect(String(d.message)).toContain("use its validated proposal at the approval gate");
       // The counterfactual: a guard-less engine routes this to the current

@@ -510,6 +510,7 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
     return directive.stage === STAGE &&
       directive.swarm_settled !== true &&
       directive.gate_only !== true &&
+      directive.build_settled !== true &&
       directive.construction_checkpoint === undefined &&
       directive.swarm_checkpoint === undefined &&
       directive.construction_policy?.completion_only !== true &&
@@ -1427,8 +1428,8 @@ const REVIEW_REQUEST_RE =
  * (`p` says the step has one; `u` names it); the marker's own top-level Unit is
  * not covered by the receipt, so it never decides the target. `built` names
  * the targets when the part delivers a step after the build (the completion
- * gate, a Unit or swarm checkpoint, the settled swarm), and is null for a plan
- * or build step. Null when the payload is missing or edited.
+ * gate, every Unit built, a Unit or swarm checkpoint, the settled swarm), and
+ * is null for a plan or build step. Null when the payload is missing or edited.
  */
 function signedPartRoute(
   projectDir: string,
@@ -1441,7 +1442,7 @@ function signedPartRoute(
   if (typeof receipt !== "string" || !steeringPayloadAuthenticAt(keyPath, payload, receipt)) return null;
   const unit = payload.p === true && typeof payload.u === "string" ? payload.u : null;
   const batch = payload.y as { units?: unknown } | undefined;
-  if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) {
+  if (payload.o !== true && payload.z !== true && payload.t !== true && payload.j === undefined && batch === undefined) {
     return { unit, built: null };
   }
   const units = Array.isArray(batch?.units) ? batch.units : [];

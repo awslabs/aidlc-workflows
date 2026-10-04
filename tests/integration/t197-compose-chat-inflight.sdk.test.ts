@@ -11,10 +11,10 @@
 //   drive:     `/aidlc can we skip market research? we already know this
 //              market` - no compose verb, no flag, pure conversation.
 //   conductor: classifies the input as a plan-reshape (not a continuation -
-//              a verbatim forward would silently run the current stage),
-//              routes via `next compose "<their words>"` or the sanctioned
-//              fast path, presents the approve gate, and on approve lands
-//              the flip through the recompose verb.
+//              a verbatim forward would silently run the current stage)
+//              that names its stage, so it runs `next --skip`, which lands
+//              the flip through the recompose verb at once: the person
+//              named the change, so nothing asks them first.
 //   disk:      market-research's suffix is SKIP (a suffix edit - the marker
 //              stays pending); derived fields rebuilt; RECOMPOSED audited;
 //              the cursor never moved and no stage advanced.
@@ -105,9 +105,9 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
           },
         );
 
-        // The gate fired; the flip landed through the deterministic verb
+        // No question first; the flip landed through the deterministic verb
         // (its verbatim summary in a tool result), not a prose state edit.
-        expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
+        expect(r.askedQuestions).toHaveLength(0);
         const recomposeCalls = r.toolResults.filter(
           (t) => t.toolName === "Bash" && t.resultText.includes("Recomposed:"),
         );

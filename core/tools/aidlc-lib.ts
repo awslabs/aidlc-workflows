@@ -2179,8 +2179,9 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
   return isReadOnlyNextArgv(args);
 }
 
-// A modifier-only next can initialize work or dispatch configuration depending
-// on state. Its own successful result must prove the terminal branch ran; the
+// A modifier-only next, or one naming a scope, can initialize work or dispatch
+// configuration or a scope change depending on state. Its own successful
+// result must prove the terminal branch ran; the
 // transcript reader owns call/result identity, ordering and human-turn binding.
 function isTerminalConfigurationDispatch(
   invocation: { command: string; args: string[] },
@@ -2215,7 +2216,13 @@ function isTerminalConfigurationDispatch(
   };
   const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
+  // A scope change names its own command, carrying any setting typed with it.
+  let scope: string | undefined;
   for (let i = 0; i < args.length; i += 2) {
+    if (args[i] === "--scope" && scope === undefined) {
+      scope = args[i + 1];
+      continue;
+    }
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
     // The engine names the parsed value: the guard policy and ceremony words,
@@ -2232,8 +2239,10 @@ function isTerminalConfigurationDispatch(
     values.set(name, value);
   }
   const named = order.filter((name) => values.has(name));
-  const expected = ["config", "set", named[0], values.get(named[0])];
-  for (const name of named.slice(1)) expected.push(`--${name}`, values.get(name));
+  const expected = scope !== undefined
+    ? ["scope", "change", "--scope", scope]
+    : ["config", "set", named[0], values.get(named[0])];
+  for (const name of scope !== undefined ? named : named.slice(1)) expected.push(`--${name}`, values.get(name));
   // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
   // Remove only the observed diagnostic line; never search arbitrary output
   // for a convenient JSON fragment or discard an unknown prefix/suffix.
@@ -2250,7 +2259,9 @@ function isTerminalConfigurationDispatch(
     const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
-    const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
+    const match = (scope !== undefined
+      ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
+      : /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/).exec(validated.data.message);
     if (!match) return false;
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
@@ -35397,7 +35408,7 @@ export function resolveFences(
   return out;
 }
 
-function fenceSourceLabel(resolution: FenceResolution): string {
+export function fenceSourceLabel(resolution: FenceResolution): string {
   return resolution.source === "you" ? "set by you" : resolution.source;
 }
 
@@ -35793,6 +35804,20 @@ export function engineErrorRelayLine(
       hookEventName: "PostToolUse",
       additionalContext: ENGINE_ERROR_RELAY_NOTE,
     },
+  })}\n`;
+}
+
+/**
+ * The one line a SessionStart or UserPromptSubmit hook prints to hand the
+ * agent context. Claude Code reads it only from hookSpecificOutput and drops a
+ * top-level additionalContext without a word; every other harness's adapter,
+ * including an older one still installed in a project, reads the top-level key
+ * and rewraps it for its own host. So the line carries both, with the same text.
+ */
+export function hookContextLine(event: "SessionStart" | "UserPromptSubmit", context: string): string {
+  return `${JSON.stringify({
+    additionalContext: context,
+    hookSpecificOutput: { hookEventName: event, additionalContext: context },
   })}\n`;
 }
 

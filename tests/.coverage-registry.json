@@ -3783,6 +3783,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:fenceSourceLabel",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t333-change-control.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:fenceSwitchSentence",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4724,6 +4736,18 @@
         {
           "file": "tests/unit/t318-session-binding-helpers.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookContextLine",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-hook-context-reaches-claude.sdk.test.ts",
+          "mechanism": "sdk"
         }
       ],
       "status": "covered"
@@ -12226,6 +12250,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t-hook-context-reaches-claude.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
@@ -12365,6 +12393,10 @@
       "unitId": "aidlc-session-start",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-hook-context-reaches-claude.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/integration/t173-session-switch-restamp.test.ts",
           "mechanism": "cli"

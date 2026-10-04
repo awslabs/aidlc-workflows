@@ -726,7 +726,8 @@ describe("t27 aidlc-utility scope-change", () => {
   test("16: scope-change poc->mvp updates Scope field to mvp", () => {
     const p = pocStateAuditProj();
     const result = util(["scope-change", "--scope", "mvp"], p);
-    expect(result.stdout).toContain("Scope changed: poc -> mvp");
+    expect(result.stdout).toContain("Switched to mvp: ");
+    expect(result.stdout).toContain("To go back, type `/aidlc --scope poc`.");
     expect(stateField(p, "Scope")).toBe("mvp");
     // STRONGER: the SCOPE_CHANGED audit row records New Scope = mvp.
     expect(auditField(auditPath(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
@@ -823,12 +824,12 @@ describe("t27 aidlc-utility scope-change", () => {
       return JSON.parse((res.stdout ?? "").trim());
     };
 
-    for (const [marker, was] of [["[?]", "it was waiting for approval"], ["[ ]", "it had not started"]]) {
+    for (const [marker, was] of [["[?]", "it was waiting for your approval"], ["[ ]", "it had not started"]]) {
       const p = atMarketResearch(marker);
       const skipsBefore = auditEventCount(auditPath(p), "STAGE_SKIPPED");
       const changed = util(["scope-change", "--scope", "mvp"], p);
       expect(changed.status, changed.out).toBe(0);
-      expect(changed.out).toContain(`Skipped market-research (${was}): mvp does not run it.`);
+      expect(changed.out).toContain(`Skipped Market Research (${was}): mvp does not run it.`);
       expect(changed.out).toContain("/aidlc --stage market-research --single");
       expect(readFileSync(statePath(p), "utf-8")).toContain("- [S] market-research \u2014 SKIP");
       expect(auditEventCount(auditPath(p), "SCOPE_CHANGED")).toBe(1);
@@ -851,11 +852,42 @@ describe("t27 aidlc-utility scope-change", () => {
       expect(auditEventCount(auditPath(p), "STAGE_SKIPPED")).toBe(skipsBefore + 1);
     }
 
+    // The reply is what happened and how to go back, then each stage it
+    // skipped and each setting whose value changed: the defaults mvp shares
+    // with feature are not listed as changes.
+    const waiting = atMarketResearch("[?]");
+    // The settings a live run listed as "changed: off (from scope feature) to
+    // off (from scope mvp)": recorded under the new scope, never said.
+    sedReplaceInFile(
+      statePath(waiting),
+      "- **Change Control**: strict (from scope feature)",
+      [
+        "- **Guard Policy**: off (from scope feature)",
+        "- **Sensors**: on (from scope feature)",
+        "- **Learnings**: on (from scope feature)",
+        "- **Summary Confirmation**: on (from scope feature)",
+        "- **Plan Approval**: on (from scope feature)",
+      ].join("\n"),
+    );
+    const lines = util(["scope-change", "--scope", "mvp"], waiting).stdout.trim().split("\n");
+    expect(stateField(waiting, "Guard Policy")).toBe("off (from scope mvp)");
+    expect(stateField(waiting, "Plan Approval")).toBe("on (from scope mvp)");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^Switched to mvp: \d+ stages \(\d+ done\), \d+ approval gates.*\. To go back, type `\/aidlc --scope feature`\.$/);
+    expect(lines[1]).toBe(
+      "Skipped Market Research (it was waiting for your approval): mvp does not run it. " +
+        "To run it on its own, type `/aidlc --stage market-research --single`.",
+    );
+    // A value that really changes is said.
+    const toPoc = util(["scope-change", "--scope", "poc"], stateAuditProj()).stdout;
+    expect(toPoc).toContain("Depth changed: Standard -> Minimal");
+    expect(toPoc).not.toContain("is already");
+
     const revising = atMarketResearch("[R]");
     const changed = util(["scope-change", "--scope", "mvp"], revising);
     expect(changed.status, changed.out).toBe(0);
     // A revision already routes, so it keeps its box.
-    expect(changed.out).not.toContain("Skipped market-research");
+    expect(changed.out).not.toContain("Skipped Market Research");
     expect(readFileSync(statePath(revising), "utf-8")).toContain(
       "- [R] market-research \u2014 SKIP",
     );

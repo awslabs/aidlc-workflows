@@ -20,6 +20,7 @@ import { delimiter, join, posix, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
+import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
@@ -2970,6 +2971,38 @@ describe("t294 config diagnostics CLI", () => {
     expect(parseToml(after).sandbox_mode).toBe("workspace-write");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("release refresh adds the start-up warning switch to a Codex config installed before it", () => {
+    const project = install("codex");
+    const env = runtimeEnv();
+    const configPath = join(project, ".codex", "config.toml");
+    const before = readFileSync(configPath, "utf-8")
+      .replace(/^[\t ]*suppress_unstable_features_warning[\t ]*=[^\r\n]*\r?\n/m, "");
+    expect(parseToml(before).suppress_unstable_features_warning).toBeUndefined();
+    writeFileSync(configPath, before);
+    const manifestPath = join(project, ".codex", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    delete manifest.entries[".codex/config.toml"].suppress_unstable_features_warning;
+    // An install from before the switch: its baseline recorded this exact file.
+    manifest.files[".codex/config.toml"] = sha256Bytes(before);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "codex"),
+      "--harness",
+      "codex",
+      "--yes",
+    ], project, env);
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const after = parseToml(readFileSync(configPath, "utf-8"));
+    expect(after.suppress_unstable_features_warning).toBe(true);
+    expect((after.features as Record<string, unknown>).default_mode_request_user_input).toBe(true);
+    expect(after.sandbox_mode).toBe("workspace-write");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("refresh treats deleted Codex developer instructions as framework drift", () => {
     const project = install("codex");
     const env = runtimeEnv();
@@ -3331,6 +3364,7 @@ describe("t294 config diagnostics CLI", () => {
       sandbox_mode: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       sandbox_workspace_write: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       shell_environment_policy: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+      suppress_unstable_features_warning: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tools: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
       tui: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
     });
