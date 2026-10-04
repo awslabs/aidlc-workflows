@@ -1575,6 +1575,50 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     expect(allowed.status, allowed.stdout + allowed.stderr).toBe(0);
     expect(allowed.stdout).toContain(`rolled back to ${AIDLC_VERSION}`);
   });
+
+  test("a rollback goes to the version the person typed, and without one says which version it went to", () => {
+    const machine = temp("aidlc-t244-rollback-typed-");
+    const project = temp("aidlc-t244-rollback-typed-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    for (const version of [AIDLC_VERSION, NEXT_VERSION]) {
+      const installed = run(LIFECYCLE, [
+        "update", "--version", version, "--from", fixture(version, { binary: "executable" }),
+      ], project, env);
+      expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    }
+    const retained = run(LIFECYCLE, [
+      "versions", "install", LIVE_PIN_VERSION, "--from", fixture(LIVE_PIN_VERSION, { binary: "executable" }),
+    ], project, env);
+    expect(retained.status, retained.stdout + retained.stderr).toBe(0);
+    const active = () => readFileSync(join(machine, "active-version"), "utf-8").trim();
+
+    // The recorded target is the version before this one; the person typed another.
+    const typed = run(LIFECYCLE, ["rollback", LIVE_PIN_VERSION], project, env);
+    expect(typed.status, typed.stdout + typed.stderr).toBe(0);
+    expect(typed.stdout).toContain(`rolled back to ${LIVE_PIN_VERSION}`);
+    expect(typed.stdout).not.toContain("the version you used before");
+    expect(active()).toBe(LIVE_PIN_VERSION);
+
+    const recorded = run(LIFECYCLE, ["rollback"], project, env);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect(recorded.stdout).toContain(
+      `rolled back to ${NEXT_VERSION}, the version you used before ${LIVE_PIN_VERSION}`,
+    );
+    expect(active()).toBe(NEXT_VERSION);
+
+    const flagged = run(LIFECYCLE, ["rollback", "--version", AIDLC_VERSION], project, env);
+    expect(flagged.status, flagged.stdout + flagged.stderr).toBe(0);
+    expect(active()).toBe(AIDLC_VERSION);
+
+    // Two different versions typed: nothing changes, and it says why.
+    const both = run(LIFECYCLE, ["rollback", NEXT_VERSION, "--version", LIVE_PIN_VERSION], project, env);
+    expect(both.status, both.stdout + both.stderr).toBe(2);
+    expect(both.stdout + both.stderr).toContain(
+      `rollback takes one version; you typed ${NEXT_VERSION} and ${LIVE_PIN_VERSION}`,
+    );
+    expect(active()).toBe(AIDLC_VERSION);
+  });
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
