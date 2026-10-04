@@ -726,6 +726,28 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("ask");
   });
 
+  // From a live Codex run: asking to be asked another way was taken as Request
+  // Changes, so the next step would have revised the plan with it as feedback.
+  test.each([
+    "Please ask me that with the question picker instead.",
+    "Can you show it to me as a list instead?",
+    "Please use the request_user_input question box for that plan question.",
+  ])("%s is no answer: the turn and the words are kept, nothing is recorded, and the question stays open", (words) => {
+    const proj = project();
+    askFor(proj);
+    const turns = (auditText(proj).match(/\*\*Event\*\*: HUMAN_TURN/g) ?? []).length;
+    reply(proj, words);
+    expect((auditText(proj).match(/\*\*Event\*\*: HUMAN_TURN/g) ?? []).length).toBe(turns + 1);
+    const dir = dirname(planApprovalRuntimeFile(proj, "ask.json"));
+    const kept = readdirSync(dir).filter((name) => name.startsWith("ask-") && name.endsWith(".json"))
+      .flatMap((name) => (JSON.parse(readFileSync(join(dir, name), "utf-8")).replies ?? []) as Array<{ text: string }>);
+    expect(kept.map((entry) => entry.text)).toContain(words);
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(auditText(proj)).not.toMatch(/\*\*(Details|User Input)\*\*: Request Changes/);
+    expect(next(proj).kind).toBe("ask");
+  });
+
   test("then \"approve the plan, but let's stop there for today\": the agent's Approve Plan with --park approves and parks in one step", () => {
     const proj = project();
     askFor(proj);
