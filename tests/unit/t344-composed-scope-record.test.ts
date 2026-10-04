@@ -30,10 +30,12 @@
 // directly against literal inputs. No temp project, no env seams needed.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  backfillComposedScopeRecords,
   composedFoldBack,
   parseComposedScopeRecord,
   renderComposedScopeRecord,
@@ -345,6 +347,16 @@ describe("t344 record parse failures name the file and never degrade silently", 
       withRegion("---\nname: x\n---", '{"stages":{"a":"MAYBE"}}'),
       /invalid action "MAYBE"/,
     ],
+    [
+      "a name with a folder separator",
+      withRegion("---\nname: x/../../other\n---", '{"stages":{}}'),
+      /has a \/ or \\ in its name/,
+    ],
+    [
+      "a name with a Windows folder separator",
+      withRegion("---\nname: x\\..\\other\n---", '{"stages":{}}'),
+      /has a \/ or \\ in its name/,
+    ],
   ];
   for (const [what, body, diagnostic] of cases) {
     test(`throws on ${what}`, () => {
@@ -465,5 +477,30 @@ describe("t344 composedFoldBack source priority", () => {
     const r = composedFoldBack({}, null, STOCK, installed);
     expect(JSON.parse(r.json)).toEqual({});
     expect([...r.names]).toEqual([]);
+  });
+});
+
+describe("t344 a scope file is written only inside its folder", () => {
+  test("a back-fill whose scope name would leave the record folder writes nothing", () => {
+    const root = mkdtempSync(join(tmpdir(), "t344-inside-"));
+    const scopes = join(root, "project", ".claude", "scopes");
+    const records = join(root, "project", "aidlc", "scopes");
+    const saved = { scopes: process.env.AIDLC_SCOPES_DIR, records: process.env.AIDLC_COMPOSED_SCOPES_DIR };
+    try {
+      mkdirSync(scopes, { recursive: true });
+      const name = "x/../../../other";
+      writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", `name: ${name}`));
+      process.env.AIDLC_SCOPES_DIR = scopes;
+      process.env.AIDLC_COMPOSED_SCOPES_DIR = records;
+      expect(() => backfillComposedScopeRecords(join(root, "project"), new Set([name]), JSON.stringify({ [name]: { stages: STAGES } })))
+        .toThrow(/is not inside/);
+      expect(existsSync(join(root, "project", "other.md"))).toBe(false);
+    } finally {
+      if (saved.scopes === undefined) delete process.env.AIDLC_SCOPES_DIR;
+      else process.env.AIDLC_SCOPES_DIR = saved.scopes;
+      if (saved.records === undefined) delete process.env.AIDLC_COMPOSED_SCOPES_DIR;
+      else process.env.AIDLC_COMPOSED_SCOPES_DIR = saved.records;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
