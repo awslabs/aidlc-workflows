@@ -194,7 +194,7 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -711,7 +711,7 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
     `Workflow is Archived, so ${operation} is refused. Bring it back first with ` +
-      "`/aidlc intent unarchive <name>`.",
+      `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
   );
 }
 
@@ -2060,7 +2060,7 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
     if (status === "Archived") {
       error(
         "Workflow is Archived - nothing to park. Bring it back first with " +
-          "`/aidlc intent unarchive <name>`.",
+          `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
       );
     }
     const currentSlug = getField(content, "Current Stage") ?? "";

@@ -29,6 +29,7 @@ import {
   claimAttemptFields,
   cloneIdFileContent,
   cloneIdPath,
+  entrySkillInvocation,
   errorMessage,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
@@ -1414,7 +1415,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service")`);
   }
   if (!existsSync(wtPath)) {
     jsonError(
@@ -1695,7 +1696,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);
   }
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service")`);
   }
 
   const wtSnapshot = readAuditSnapshot(projectDir, wtAuditPath);

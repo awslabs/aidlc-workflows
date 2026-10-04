@@ -27413,7 +27413,7 @@ function restartStageRemedy(stage: string): GuardRemedy {
   return {
     op: "restart-stage",
     action:
-      `Restart this stage with /aidlc --stage ${stage}; the recorded answers ` +
+      `Restart this stage with ${entrySkillInvocation()} --stage ${stage}; the recorded answers ` +
       "survive, and the stage will ask for confirmation again.",
     ...guardOperation({ kind: "restart-stage", stage }),
     requiresHuman: true,
@@ -27517,7 +27517,7 @@ function lifecycleResetRemedies(
       op: "change-scope",
       action:
         "This stage is excluded from the current plan; change to a scope that " +
-        `includes it with /aidlc --scope <scope>, then restart ${input.stage}.`,
+        `includes it with ${entrySkillInvocation()} --scope <scope>, then restart ${input.stage}.`,
       requiresHuman: true,
       executableNow: true,
     };
@@ -27609,7 +27609,7 @@ function lifecycleResetRemedies(
       {
         op: "redo-jump",
         action:
-          `Restart the stage from the top with /aidlc --stage ${input.stage}. ` +
+          `Restart the stage from the top with ${entrySkillInvocation()} --stage ${input.stage}. ` +
           "This costs more than finishing the current revision: your " +
           "recorded answers survive, but you re-confirm the summary once and then " +
           "save every output document again, so each one descends from the new " +
@@ -27628,9 +27628,9 @@ function lifecycleResetRemedies(
         (input.attempt.sourceCoverage === "unbindable"
           ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
             "workspace source boundary so the application source can be checked, or jump back with " +
-            `/aidlc --stage ${input.stage} to redo it.`
+            `${entrySkillInvocation()} --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
-            `jump back with /aidlc --stage ${input.stage} to redo it.`) + cost("jump"),
+            `jump back with ${entrySkillInvocation()} --stage ${input.stage} to redo it.`) + cost("jump"),
       ...guardOperation({ kind: "restart-stage", stage: input.stage }),
       requiresHuman: true,
       executableNow: true,

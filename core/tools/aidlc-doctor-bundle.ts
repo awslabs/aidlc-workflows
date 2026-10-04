@@ -74,7 +74,7 @@ import {
   stateFilePath,
   stopHookDir,
 } from "./aidlc-lib.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
@@ -687,7 +687,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         completed: s.completedRaw,
       },
       remedy:
-        "The workflow is waiting at an approval gate. Resolve it with `/aidlc` " +
+        `The workflow is waiting at an approval gate. Resolve it with \`${entrySkillInvocation()}\` ` +
         "(answer the open question / approve or reject the stage), then continue.",
       safeToAutomate: false,
     });
@@ -933,7 +933,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: ".aidlc-engine/plan.json is present but not parseable.",
       evidence: { planExists: true, planParseable: false },
       remedy:
-        "The resolve output is corrupt. Re-run the resolve step (`/aidlc` will " +
+        `The resolve output is corrupt. Re-run the resolve step (\`${entrySkillInvocation()}\` will ` +
         "recompute the plan), or remove .aidlc-engine/plan.json to force a fresh resolve.",
       safeToAutomate: false,
     });

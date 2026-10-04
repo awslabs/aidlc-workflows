@@ -185,7 +185,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { runtimeHarnessName } from "./aidlc-runtime-paths.ts";
+import { entrySkillInvocation, runtimeHarnessName } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   readApprovalGateReply,
@@ -221,7 +221,7 @@ function resolveActiveProjectDir(explicit?: string): string {
   const pd = resolveProjectDir(explicit);
   if (!existsSync(stateFilePath(pd))) {
     error(
-      'No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (/aidlc "build the auth service"), or switch to an existing one with /aidlc intent <name>.'
+      `No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (${entrySkillInvocation()} "build the auth service"), or switch to an existing one with ${entrySkillInvocation()} intent <name>.`
     );
   }
   return pd;
@@ -2195,7 +2195,7 @@ function reviewRecoveryGuidance(
     });
   } catch {
     return (
-      `Restart this stage cleanly with /aidlc --stage ${stage}, then confirm ` +
+      `Restart this stage cleanly with ${entrySkillInvocation()} --stage ${stage}, then confirm ` +
       "its summary and review the finished output again."
     );
   }

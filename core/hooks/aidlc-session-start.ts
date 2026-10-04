@@ -48,7 +48,6 @@ import {
   errorMessage,
   findIntentByUuid,
   findStageBySlug,
-  harnessDir,
   getField,
   isPerUnitStage,
   hookContextLine,
@@ -84,7 +83,7 @@ import {
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
-import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation } from "../tools/aidlc-runtime-paths.ts";
 import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 
 // While a recorded switch keeps one of the person's checks off, every new chat
@@ -270,7 +269,7 @@ if (!existsSync(stateFile)) {
         listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent) ??
           { dirName: rejoinRecord.intent },
       );
-      const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+      const entrySkill = entrySkillInvocation();
       // The record name selects exactly this record; the label is display only.
       const command =
         rejoinRecord.space === activeSpace(projectDir)
@@ -395,7 +394,7 @@ if (sessionId) {
           readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
         const liveSlug = live ? intentDisplayLabel(live) : "(none)";
-        const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+        const entrySkill = entrySkillInvocation();
         // The cursor verb switches within the active space. When the stamped
         // intent lives elsewhere, prefix the space switch. Use the harness's
         // native entry skill so Codex never receives a slash command.

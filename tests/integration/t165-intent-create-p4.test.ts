@@ -1287,6 +1287,16 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     const archived = codex(["intent", "archive", a]);
     expect(archived.status, archived.out).toBe(0);
     expect(archived.stdout).toContain(`$aidlc intent list --all shows it and $aidlc intent unarchive ${a} brings it back.`);
+    // Refusals while it is archived name it too.
+    const codexWorktree = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-worktree.ts");
+    const merge = Bun.spawnSync({
+      cmd: [BUN, codexWorktree, "merge", "--slug", "auth-service", "--target", "main", "--strategy", "squash", "--intent", a, "--project-dir", proj],
+      stdout: "pipe",
+      stderr: "pipe",
+      env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "AIDLC_HARNESS_DIR")),
+    });
+    expect(merge.exitCode).not.toBe(0);
+    expect(`${merge.stdout}${merge.stderr}`).toContain(`Bring it back first with \`$aidlc intent unarchive ${a}\`.`);
     expect(codex(["intent"]).stdout).toContain("archived intent hidden - $aidlc intent list --all shows them");
     const back = codex(["intent", "unarchive", a]);
     expect(back.status, back.out).toBe(0);
