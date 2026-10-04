@@ -474,6 +474,8 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     copyCore(root, "hooks/review-freeze-command.ts");
     copyCore(root, "hooks/runtime-integrity.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-command.ts");
+    copyCore(root, "tools/aidlc-color.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
 
@@ -507,6 +509,8 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     copyCore(root, "hooks/review-freeze-command.ts");
     copyCore(root, "hooks/runtime-integrity.ts");
     copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-command.ts");
+    copyCore(root, "tools/aidlc-color.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
     copyCore(root, "tools/aidlc-runtime-paths.ts");
 
