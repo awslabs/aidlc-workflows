@@ -26,14 +26,8 @@ import {
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
-<<<<<<< HEAD
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds,
+  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds, REDO_REUSE_SOURCE,
   _resetStageGraphForTests,
-||||||| parent of ff6ef91c4 (fix(resume): finish the re-entry wording and keep the redo record in one place)
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField,
-=======
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, REDO_REUSE_SOURCE,
->>>>>>> ff6ef91c4 (fix(resume): finish the re-entry wording and keep the redo record in one place)
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
