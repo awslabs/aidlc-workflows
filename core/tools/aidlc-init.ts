@@ -322,6 +322,8 @@ type ChoicesMutationContext = {
   nextPlugins: string[] | null;
   overrides?: ConfigDiagnosticOverrides;
   mcpMode?: "defaults" | "none";
+  /** MCP is on because the project already has the shipped servers. */
+  keepPresentServers?: true;
   summaryLines: string[];
   notes: string[];
   settings?: SettingsMutation;
@@ -3478,6 +3480,7 @@ function prepareChoiceSection(
   let next: ProjectFlagsRecord | ProjectChoicesRecord | null;
   let nextPlugins = previousPlugins;
   let mcpMode: "defaults" | "none" | undefined;
+  let keepPresentServers = false;
   let settings: SettingsMutation | undefined;
   const bypassTargets = section === "flags" && hasMutationFlags
     ? bypassSettingsTargets(argv, projectDir, selected.root)
@@ -3511,6 +3514,15 @@ function prepareChoiceSection(
         argv,
         selected,
       );
+      // Servers a release shipped that the project already has stay on until
+      // the person turns them off.
+      if (valueAfter(argv, "--mcp") === undefined && records.project?.mcp === undefined) {
+        const descriptor = siblingDescriptor(selected);
+        if (descriptor && holdsShippedServers(projectDir, descriptor)) {
+          built.record.mcp = "defaults";
+          keepPresentServers = true;
+        }
+      }
       next = built.record;
       nextPlugins = built.plugins;
       mcpMode = built.record.mcp;
@@ -3620,6 +3632,7 @@ function prepareChoiceSection(
         ? { overrides: { project: next, plugins: nextPlugins } }
         : {}),
       ...(mcpMode ? { mcpMode } : {}),
+      ...(keepPresentServers ? { keepPresentServers: true as const } : {}),
       summaryLines: summary.lines,
       notes: summary.notes,
       ...(settings ? { settings } : {}),
@@ -7004,6 +7017,25 @@ function gitTracksEvery(projectDir: string, paths: readonly string[]): boolean {
   return paths.every((path) => tracked.has(path));
 }
 
+// The project's MCP file already holds a server a release shipped, as shipped.
+function holdsShippedServers(projectDir: string, descriptor: Pick<ProjectionDescriptor, "rootIntegrations">): boolean {
+  for (const integration of descriptor.rootIntegrations) {
+    if (integration.policy !== "json-map" || !integration.optional) continue;
+    const path = join(projectDir, integration.path);
+    try {
+      if (!lstatSync(path).isFile()) continue;
+      const map = (JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>)[integration.jsonKey ?? ""];
+      if (!isRecord(map)) continue;
+      for (const [entry, hashes] of Object.entries(integration.legacySignatures?.jsonEntryHashes ?? {})) {
+        if (entry in map && hashes.includes(sha256Bytes(canonical(map[entry])))) return true;
+      }
+    } catch {
+      // A missing or unreadable file holds none.
+    }
+  }
+  return false;
+}
+
 function planRootIntegrations(
   projectDir: string,
   sourceRoot: string,
@@ -7020,6 +7052,9 @@ function planRootIntegrations(
   // recorded as shipped only when its bytes are a release's (the descriptor's
   // signatures), so a user's edit is never adopted as the framework's.
   ownBytes = false,
+  // MCP is on because the project already has the shipped servers: keep and
+  // update those, and add none it does not have.
+  keepPresent = false,
 ): void {
   let siblings: ProjectHarness[] | undefined;
   let siblingProjections: Array<{
@@ -7234,6 +7269,7 @@ function planRootIntegrations(
         for (const [entry, value] of Object.entries(sourceMap)) {
           const desiredHash = sha256Bytes(canonical(value));
           if (!(entry in targetMap)) {
+            if (keepPresent) continue;
             targetMap[entry] = value;
             nextEntries[entry] = desiredHash;
             continue;
@@ -9196,6 +9232,11 @@ export async function main(
       recordedProjectMcp ??
       prior?.mcpMode
     ) as "defaults" | "none" | undefined;
+    // Servers a release shipped that the project already has stay on until the
+    // person turns them off.
+    const keepPresentServers = choicesContext?.keepPresentServers === true ||
+      (!mcpMode && holdsShippedServers(projectDir, descriptor));
+    if (keepPresentServers) mcpMode = "defaults";
     if (
       !mcpMode &&
       configInputIsTty() &&
@@ -9245,6 +9286,8 @@ export async function main(
         operations,
         actions,
         rootContributions,
+        false,
+        keepPresentServers,
       );
       planRemovedRootIntegrations(
         projectDir,
@@ -9280,6 +9323,7 @@ export async function main(
           actions,
           rootContributions,
           ownFilesProject,
+          keepPresentServers,
         );
       }
     }

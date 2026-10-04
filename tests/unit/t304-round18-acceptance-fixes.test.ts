@@ -558,6 +558,30 @@ describe("t304 copied projection configuration", () => {
     expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers).toEqual({ "team-db": team });
   }, 120_000);
 
+  // A project copied before copies left .mcp.json out already has the shipped
+  // servers. Config with no MCP choice keeps them; only turning MCP off removes
+  // them, and never the team's own.
+  test("servers a project already has stay on until the person turns them off", () => {
+    const project = fullCopyProject();
+    const shipped = JSON.parse(readFileSync(join(DIST, "claude", ".mcp.json"), "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    const team = { command: "team-db-mcp", args: ["--read-only"] };
+    const both = { ...shipped.mcpServers, "team-db": team };
+    writeFileSync(join(project, ".mcp.json"), `${JSON.stringify({ mcpServers: both }, null, 2)}\n`);
+    const mcpServers = () => JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers;
+    // Another project choice, made from the copy's own files.
+    const own = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
+    expect(own.status, own.stdout + own.stderr).toBe(0);
+    expect(mcpServers()).toEqual(both);
+    const fromRelease = runCopied(project, ["config", "--harness", "claude", "--yes", "--from", join(DIST, "claude")]);
+    expect(fromRelease.status, fromRelease.stdout + fromRelease.stderr).toBe(0);
+    expect(mcpServers()).toEqual(both);
+    const off = runCopied(project, ["config", "project", "--mcp", "none", "--yes"]);
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(mcpServers()).toEqual({ "team-db": team });
+  }, 120_000);
+
   test("own files never adopt a user's edit to a shipped server", () => {
     const project = fullCopyProject();
     const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes", "--from", join(DIST, "claude")]);
