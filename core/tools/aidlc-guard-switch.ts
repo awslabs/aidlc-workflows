@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  latestPersonTurn,
   personSpokeSinceGate,
   assertChangeControlLedgerWritable,
   CEREMONY_ENV,
@@ -374,10 +375,13 @@ export function applyIntentSettings(
   // the conductor runs what they asked for, in their own words.
   if (
     lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
-    !personSpokeSinceGate(projectDir)
+    !personSpokeSinceGate(projectDir, { requests: true })
   ) {
-    die(guardSwitchRefusal(lowering[0], "config"));
+    // A question about the switch ("skip plan approval?") asks for nothing.
+    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
   }
+  // The setter carries out what the person asked: their words go on the record.
+  const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -482,7 +486,10 @@ export function applyIntentSettings(
       // Each event named literally at its own call, not through a ternary on
       // eventType: the emitter drift guard reads these call sites as text, and a
       // computed event name is invisible to it.
-      const fenceFields = { Guard: request.fence, Scope: scopeName, Source: request.source };
+      const fenceFields = {
+        Guard: request.fence, Scope: scopeName, Source: request.source,
+        ...(askedIn && after.value === "off" ? { "Person Reply": askedIn } : {}),
+      };
       audit.push(
         after.value === "off"
           ? { eventType: "GUARD_DISABLED", fields: fenceFields }
@@ -516,7 +523,13 @@ export function applyIntentSettings(
     const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
     // Same as Guard Policy: a scope's default that keeps the value writes no row.
     if (oldValue === value && scopeDefault(flag)) continue;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    audit.push({
+      eventType: "CEREMONY_SET",
+      fields: {
+        Key: key, Old: oldValue, New: value, Source: source,
+        ...(askedIn && source === "command" && value === "off" ? { "Person Reply": askedIn } : {}),
+      },
+    });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);

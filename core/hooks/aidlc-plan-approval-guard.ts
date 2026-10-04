@@ -1344,7 +1344,7 @@ function isFrameworkToolInvocation(
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir)) ||
+    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir, { requests: true })) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
   if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
@@ -1488,7 +1488,7 @@ function shellInvocationNeedsApproval(
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir)) ||
+    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir, { requests: true })) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&

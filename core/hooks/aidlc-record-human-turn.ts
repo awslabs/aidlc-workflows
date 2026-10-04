@@ -68,6 +68,7 @@ import {
   protectedQuestionRelativePath,
   withdrawProtectedQuestions,
   COMMAND_TURN_REPLY,
+  QUESTION_TURN_REPLY,
   consumeSharedDirectiveAsk,
   forgetGateWords,
   hookContextLine,
@@ -400,7 +401,7 @@ try {
           // question: the row says so, and decisions on that question skip it.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
-            ...(notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
+            ...(switchQuestion ? { Reply: QUESTION_TURN_REPLY } : notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
           }, projectDir);
           // Keep what the person typed in this chat, so a decision at a stage
           // gate records their own words beside the conductor's reading

@@ -75,8 +75,10 @@ one `change_notices` line; under `strict` `next` asks again. Other code moving
 never asks again. Plan approval can be off from the scope (express, poc), the
 person (their own words, `--plan-approval off`, or `guard.plan-approval off`),
 or `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`. When the person asks to turn it off,
-run `{{INVOKE}} engine config set guard.plan-approval off`; never suggest it yourself;
-turning it on is fine when they ask.
+run `{{INVOKE}} engine config set guard.plan-approval off`. When they only ask about it
+("skip plan approval?"), answer in one line, offer to turn it off for this piece of
+work, and show the plan question again; their yes is the ask. Never suggest it
+otherwise; turning it on is fine when they ask.
 
 Everything written about speaking, here and in the protocol, describes WHEN and WHETHER to speak. Only text inside double quotes on a **SAY:** line is ever itself speakable. So the field's own name, the marker, these sentences, any label or heading around them, any count of sentences, any timing clause beside a marker, and any example quoted to rule it out all stay internal: what reaches the user is a `narration` value, a `stage_validity.warning`, the filled-in text of a **SAY:** line, and the surfaces named below, as ordinary prose with nothing announcing it in front.
 

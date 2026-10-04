@@ -10722,16 +10722,29 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
 // was logged since that turn, so answers already used that reply; "consumed" when some other resolution used it or the
 // order cannot be proven; "none" when no turn is on record or a listed audit
 // shard could not be read. With `replies`, a turn that was only a command to
-// AIDLC (its HUMAN_TURN row says `Reply: command`) is not a reply to the
-// question, so it is left out.
+// AIDLC or a question about a switch (its HUMAN_TURN row says `Reply: command`
+// or `Reply: question`) is not a reply to the question, so it is left out.
+// With `requests`, only the question about a switch is left out: it asks for
+// nothing ("skip plan approval?").
 export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
 
-// The HUMAN_TURN mark for a turn that was only a command to AIDLC.
+// The HUMAN_TURN marks for a turn that was only a command to AIDLC, and for a
+// turn that only asked about a switch ("skip plan approval?").
 export const COMMAND_TURN_REPLY = "command";
+export const QUESTION_TURN_REPLY = "question";
 
-// A human turn that replied, more than a command to AIDLC.
+// A human turn that replied: more than a command to AIDLC or a question about
+// a switch.
 export function isReplyTurn(row: { event: string; block: string }): boolean {
-  return row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== COMMAND_TURN_REPLY;
+  if (row.event !== "HUMAN_TURN") return false;
+  const mark = auditBlockField(row.block, "Reply");
+  return mark !== COMMAND_TURN_REPLY && mark !== QUESTION_TURN_REPLY;
+}
+
+// A human turn that can carry a request (a command or a reply): anything but a
+// question about a switch.
+export function isRequestTurn(row: { event: string; block: string }): boolean {
+  return row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== QUESTION_TURN_REPLY;
 }
 
 // Where the audit trail stood when a question was shown: the shard and its
@@ -10764,7 +10777,7 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
   }
 }
 
-export function humanTurnState(projectDir: string, options: { replies?: boolean } = {}): HumanTurnState {
+export function humanTurnState(projectDir: string, options: { replies?: boolean; requests?: boolean } = {}): HumanTurnState {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
   // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
@@ -10818,6 +10831,7 @@ export function humanTurnState(projectDir: string, options: { replies?: boolean 
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
       if (options.replies && ev === "HUMAN_TURN" && !isReplyTurn({ event: ev, block: blocks[i] })) continue;
+      if (options.requests && ev === "HUMAN_TURN" && !isRequestTurn({ event: ev, block: blocks[i] })) continue;
       events.push({
         ts: auditBlockField(blocks[i], "Timestamp") ?? "",
         shard: s,
@@ -10915,12 +10929,13 @@ export function commandTurnHint(projectDir: string): string {
 // A person has spoken since the last decision, and that is on record: a human
 // turn exists (an empty ledger, which reads as acted for older workflows, does
 // not count). Lowering a check the person asked for in their own words needs it.
-// With `replies`, the turn must be a reply, not only a command to AIDLC.
-export function personSpokeSinceGate(projectDir: string, options: { replies?: boolean } = {}): boolean {
+// With `replies`, the turn must be a reply, not only a command to AIDLC; with
+// `requests`, anything but a question about a switch.
+export function personSpokeSinceGate(projectDir: string, options: { replies?: boolean; requests?: boolean } = {}): boolean {
   if (humanTurnState(projectDir, options) !== "acted") return false;
   try {
     return readAuditShardEvents(projectDir).some((row) =>
-      options.replies ? isReplyTurn(row) : row.event === "HUMAN_TURN");
+      options.replies ? isReplyTurn(row) : options.requests ? isRequestTurn(row) : row.event === "HUMAN_TURN");
   } catch {
     return false;
   }
@@ -35952,6 +35967,8 @@ export function parseTypedGuardSwitches(prompt: string): GuardSwitch[] {
 export function guardSwitchRefusal(
   wanted: GuardSwitch,
   context: "config" | "intent-create",
+  // The person only asked about the switch since the last decision.
+  asked = false,
 ): string {
   const hint = humanTurnMintAllowed() ? "" : unattendedHumanPresenceHint();
   const entry = entrySkillInvocation();
@@ -35975,6 +35992,11 @@ export function guardSwitchRefusal(
   // person has spoken since the last decision, so this refusal means no reply
   // from them has arrived (or an unattended driver is running).
   const wait = "No reply from the person has arrived since the last decision: run it when they ask for it.";
+  if (asked) {
+    return "The person asked a question about this check, which turns nothing off. Answer it in one line, offer to " +
+      "turn it off for this piece of work, and show the question you asked them again. When they say yes or ask " +
+      `for it, run the setter.${hint}`;
+  }
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call. ${wait} They can also type \`${entry} config set plan-approval off\`.${hint}`;
   }

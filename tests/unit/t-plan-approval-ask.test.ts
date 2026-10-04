@@ -1903,3 +1903,61 @@ describe("a question about the switch is no answer to the plan question", () => 
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 });
+
+// The conductor's call on #1677's asked form, from the same live run: a
+// question about the check turns nothing off, the agent answers it and offers,
+// and a yes is the ask. A request, plain or phrased as a question, turns it off
+// at once. No tool reads more than that one asked form.
+describe("a question about plan approval turns nothing off; a request does", () => {
+  // The setter as the agent runs it under production guards: no presence bypass.
+  function setter(proj: string): { code: number; out: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "guard.plan-approval", "off"], {
+      cwd: proj,
+      env,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    return { code: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+  }
+  const offRows = (proj: string) => (auditText(proj).match(/\*\*Event\*\*: (GUARD_DISABLED|CEREMONY_SET)/g) ?? []).length;
+
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval?\" lowers nothing; a yes to the offer does, with their words", (policy) => {
+    const proj = project(policy);
+    askFor(proj);
+    reply(proj, "skip plan approval?");
+    const refused = setter(proj);
+    expect(refused.code, refused.out).not.toBe(0);
+    expect(refused.out).toContain("asked a question about this check");
+    expect(refused.out).toContain("offer to turn it off");
+    expect(refused.out).not.toContain("They can also type");
+    expect(offRows(proj)).toBe(0);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    reply(proj, "yes");
+    const lowered = setter(proj);
+    expect(lowered.code, lowered.out).toBe(0);
+    expect(offRows(proj)).toBeGreaterThan(0);
+    expect(auditText(proj)).toContain("**Person Reply**: yes");
+  });
+
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, a polite request phrased as a question lowers it at once", (policy) => {
+    for (const words of ["can you turn plan approval off for this work?", "could we skip plan approval?"]) {
+      const proj = project(policy);
+      askFor(proj);
+      reply(proj, words);
+      const lowered = setter(proj);
+      expect(lowered.code, `${words}: ${lowered.out}`).toBe(0);
+      expect(auditText(proj)).toContain(`**Person Reply**: ${words}`);
+    }
+  });
+
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"skip plan approval for this work\" lowers it at once", (policy) => {
+    const proj = project(policy);
+    askFor(proj);
+    reply(proj, "skip plan approval for this work");
+    expect(offRows(proj)).toBeGreaterThan(0);
+    const after = next(proj);
+    expect(after.kind === "ask" && after.ask_type === "plan-approval", JSON.stringify(after)).toBe(false);
+  });
+});
