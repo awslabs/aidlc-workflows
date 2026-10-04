@@ -33838,6 +33838,11 @@ export function splitSlugList(raw: string | undefined): string[] {
 /** The state field that marks a workflow running a plan composed for it. */
 export const PLAN_FIELD = "Plan";
 
+/** Stock scopes for changing code that already exists: a new project's custom
+ *  plan runs on another one when one fits, and creation notes a new-project
+ *  scan under one as a likely misread. */
+export const EXISTING_CODE_SCOPES: readonly string[] = ["bugfix", "refactor", "security-patch"];
+
 /** The Plan field value for a plan built on `scope`. */
 export function composedPlanLabel(scope: string): string {
   return `custom, based on ${scope}`;

@@ -1,7 +1,7 @@
 // covers: function:planChangesBetween, function:planWithChanges,
 // function:splitSlugList, function:composedPlanLabel,
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
-// function:guardPolicyAtLeast,
+// function:guardPolicyAtLeast, function:EXISTING_CODE_SCOPES,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
 // function:delegatedLifecycleCommand,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:intent-create,
@@ -29,6 +29,7 @@ import { customPlanBase, customPlanStart, nearestStockScopes, scopeSettingsOf } 
 import {
   auditFilePath,
   composedPlanLabel,
+  EXISTING_CODE_SCOPES,
   firstInScopeStageOfPhase,
   firstPlannedStageOfPhase,
   guardPolicyAtLeast,
@@ -195,6 +196,29 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     const def = loadScopeMapping()[scope];
     return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === depth);
   };
+
+  test("a new project's plan runs on a scope meant for new work when one fits", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const grid = composedGrid();
+      const nearest = [
+        { scope: "security-patch", diff: 1, differs: [] },
+        { scope: "bugfix", diff: 2, differs: [] },
+        { scope: "express", diff: 3, differs: [] },
+      ];
+      // A new kiosk app is not labelled a security patch or a bug fix.
+      expect(customPlanBase(grid, "off", nearest, "minimal", "greenfield")).toEqual({
+        scope: "express",
+        changes: planChangesBetween(stockGrid("express"), grid),
+      });
+      // Existing code, or no type given, keeps the nearest.
+      expect(customPlanBase(grid, "off", nearest, "minimal", "brownfield")).toMatchObject({ scope: "security-patch" });
+      expect(customPlanBase(grid, "off", nearest, "minimal")).toMatchObject({ scope: "security-patch" });
+      // With only scopes for existing code to choose from, the nearest still serves.
+      expect(customPlanBase(grid, "off", nearest.slice(0, 2), "minimal", "greenfield")).toMatchObject({ scope: "security-patch" });
+      // The list names stock scopes, so a renamed one cannot drop out of it unseen.
+      for (const scope of EXISTING_CODE_SCOPES) expect(loadScopeMapping()[scope]).toBeDefined();
+    });
+  });
 
   test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's or lower", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {

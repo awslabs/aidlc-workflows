@@ -53,6 +53,7 @@ import {
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import {
+  EXISTING_CODE_SCOPES,
   _resetAgentsForTests,
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -1873,13 +1874,16 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
  *  the base's own default or raises it; any stock scope serves a strict plan. The base
  *  must also add nothing the gate does not show: no walking-skeleton checkpoint,
  *  and no test strategy other than the plan's `depth`, so tests follow that
- *  depth. Null, with the reason, when none
+ *  depth. A new project's plan runs on a scope meant for new work when one
+ *  qualifies, so the work is not labelled a bug fix; otherwise on the nearest
+ *  that does. Null, with the reason, when none
  *  qualifies or the plan changes an initialization stage. */
 export function customPlanBase(
   grid: Record<string, string>,
   guardPolicy: GuardPolicy,
   nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
   depth?: string,
+  projectType?: "brownfield" | "greenfield",
 ): { scope: string; changes: PlanChanges } | { error: string } {
   const init = loadGraph()
     .filter((s) => s.phase === "initialization" && grid[s.slug] !== "EXECUTE")
@@ -1893,11 +1897,11 @@ export function customPlanBase(
     return mapping[scope]?.skeleton !== true &&
       (testStrategy === undefined || testStrategy === depth?.toLowerCase());
   };
-  const base = nearest.find(
-    (candidate) =>
-      guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(candidate.scope)) &&
-      addsNothing(candidate.scope),
-  );
+  const qualifies = (scope: string): boolean =>
+    guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(scope)) && addsNothing(scope);
+  const fitsNewWork = (scope: string): boolean => projectType !== "greenfield" || !EXISTING_CODE_SCOPES.includes(scope);
+  const base = nearest.find((candidate) => qualifies(candidate.scope) && fitsNewWork(candidate.scope)) ??
+    nearest.find((candidate) => qualifies(candidate.scope));
   if (base === undefined) {
     return {
       error:
@@ -3643,7 +3647,7 @@ const COMMANDS: Record<string, Handler> = {
         r.errors.push("A custom proposal must carry its depth: a depth member of minimal, standard, or comprehensive.");
       }
       const base = routeErrors.length === 0 && matched === undefined && r.guard_policy !== undefined && planDepth !== undefined
-        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [], planDepth)
+        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [], planDepth, projectType)
         : null;
       if (base !== null && "error" in base) r.errors.push(base.error);
       if (base !== null && !("error" in base)) {
