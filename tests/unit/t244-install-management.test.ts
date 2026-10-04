@@ -1500,8 +1500,10 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       "Windows removes aidlc and all retained releases a moment after this command ends. Machine settings,",
     );
     expect(narrate({ purge: true, deferred: true })).toContain(
-      `Windows removes aidlc, all retained releases, ${state} a moment after this command ends. Project files were kept.`,
+      `Windows removes aidlc, all retained releases, ${state} a moment after this command ends. Project files were kept. ` +
+        "If aidlc still runs after that, aidlc doctor shows what is left.",
     );
+    expect(narrate({ purge: true, deferred: false })).not.toContain("aidlc doctor");
     expect(narrate({ purge: true, deferred: false })).toContain(`Removed aidlc, all retained releases, ${state}.`);
     for (const deferred of [true, false]) {
       const kept = narrate({ purge: true, deferred, preservedUnowned: ["versions/1.0.0/notes.txt"] }) ?? "";

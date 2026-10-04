@@ -2739,9 +2739,11 @@ export function humanLifecycleNarration(
     // A resumed cleanup keeps its own line.
     if (data?.recovered !== undefined) return null;
     // On Windows the files go once this command has exited, so the line says
-    // what Windows is about to remove rather than that it is gone.
+    // what Windows is about to remove rather than that it is gone, and where
+    // to look if something stays.
     const removes = (what: string): string =>
       data?.deferred ? `Windows removes ${what} a moment after this command ends.` : `Removed ${what}.`;
+    const check = data?.deferred ? " If aidlc still runs after that, aidlc doctor shows what is left." : "";
     const warnings = data?.deferred && data.warnings?.length ? `${data.warnings.join("\n")}\n` : "";
     const machineState = "machine settings, update cache, pins, harness default, and release channel";
     if (data?.preservedUnowned?.length) {
@@ -2750,7 +2752,7 @@ export function humanLifecycleNarration(
           data.purge
             ? removes(`owned aidlc files and ${machineState}`)
             : `${removes("owned aidlc files")} Machine settings, update cache, pins, harness default, and release channel were kept.`
-        } Project files were kept.${
+        } Project files were kept.${check}${
           preservedUninstallPaths(data.preservedUnowned)
         }`,
         process.stdout,
@@ -2758,8 +2760,8 @@ export function humanLifecycleNarration(
     }
     return successText(
       `${warnings}${data?.purge
-        ? `${removes(`aidlc, all retained releases, ${machineState}`)} Project files were kept.`
-        : `${removes("aidlc and all retained releases")} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`}`,
+        ? `${removes(`aidlc, all retained releases, ${machineState}`)} Project files were kept.${check}`
+        : `${removes("aidlc and all retained releases")} Machine settings, update cache, pins, harness default, release channel, and project files were kept.${check}`}`,
       process.stdout,
     );
   }
