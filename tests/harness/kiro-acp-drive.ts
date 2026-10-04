@@ -43,7 +43,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { parseLiteralShellInvocation } from "../../core/tools/aidlc-lib.ts";
-import { PersonTurnLedger } from "./person-turns.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, LIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 // --- Debug trace (parity with sdk-drive.ts) ---------------------------------
@@ -203,8 +203,6 @@ export interface AcpDriveResult {
   stateFile?: string;
   /** Audit **Event**: types parsed from aidlc-docs/audit.md, in file order. */
   auditEvents?: string[];
-  /** Decisions recorded as the person's that this turn's prompt does not back. */
-  unbackedDecisions?: string[];
 }
 
 export interface AcpDriveOptions {
@@ -709,8 +707,11 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       })),
     });
     const statePath = stateFilePathOf(opts.projectDir);
-    const unbackedDecisions = personTurns.unbacked();
-    if (unbackedDecisions.length > 0) writeAcpTrace(trace, "unbacked_decision", { decisions: unbackedDecisions });
+    const unbacked = personTurns.unbacked();
+    if (unbacked.length > 0) {
+      writeAcpTrace(trace, "unbacked_decision", { decisions: unbacked });
+      throw unbackedFailure("The Kiro ACP turn", unbacked);
+    }
     return {
       sessionId: session.sessionId,
       stopReason,
@@ -721,7 +722,6 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       rejectedToolCalls,
       stateFile: existsSync(statePath) ? readFileSync(statePath, "utf-8") : undefined,
       auditEvents: parseAuditEvents(opts.projectDir),
-      unbackedDecisions,
     };
   } finally {
     writeAcpTrace(trace, "end", { keepAlive: opts.keepAlive === true, cancelled });

@@ -3,7 +3,7 @@ import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
-import { PersonTurnLedger } from "./person-turns.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -81,6 +81,7 @@ export function recordCodexExec(
       `${header}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
       (result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`));
   }
+  if (unbacked.length > 0) throw unbackedFailure(`The codex exec "${label}"`, unbacked);
 }
 
 const samePath = (a: string, b: string): boolean => {

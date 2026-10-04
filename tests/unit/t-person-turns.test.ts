@@ -2,10 +2,17 @@
 // person's needs a turn the driver sent after its gate or question opened.
 // Seeded audit rows stand in for the engine's, so each case is exact.
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
-import { PersonTurnLedger } from "../harness/person-turns.ts";
+import {
+  PersonTurnLedger,
+  startPersonTurnSession,
+  submittedToPersonTurnSession,
+  typedIntoPersonTurnSession,
+  unbackedFailure,
+  unbackedTuiDecisions,
+} from "../harness/person-turns.ts";
 
 const projects: string[] = [];
 afterEach(() => {
@@ -94,5 +101,78 @@ describe("person-turn check", () => {
     const drive = new PersonTurnLedger(dir);
     drive.sent("carry on");
     expect(drive.unbacked()).toEqual([]);
+  });
+
+  test("a slash command at an open gate is no reply to it, but backs what it asks for", () => {
+    const dir = project();
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "requirements-analysis" });
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc --scope mvp");
+    row(dir, "GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" });
+    row(dir, "WORKSPACE_RECLASSIFIED", { "New Project Type": "Brownfield (you)" });
+    row(dir, "GATE_REJECTED", { Stage: "code-generation", Unit: "alpha", Feedback: "jump" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("GATE_APPROVED requirements-analysis");
+  });
+
+  test("a second answer to one question needs a newer turn; one menu answers several questions", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    for (const question of ["scale", "auth", "region"]) {
+      row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: question });
+    }
+    drive.sent('{"scale":"small","auth":"Cognito","region":"us-east-1"}');
+    for (const answer of ["small", "Cognito", "us-east-1"]) {
+      row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: answer });
+    }
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "plan-approval" });
+    drive.sent("rename the handler first");
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Details: "Request Changes" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Details: "Approve Plan" });
+    expect(drive.unbacked()).toHaveLength(1);
+    expect(drive.unbacked()[0]).toContain('QUESTION_ANSWERED code-generation');
+    drive.sent("now approve it");
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Details: "Approve Plan" });
+    expect(drive.unbacked()).toHaveLength(1);
+  });
+
+  test("a gate in a single-stage run is not opened by the main workflow's gate", () => {
+    const dir = project();
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc --single user-stories");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories", Workflow: "single-stage:user-stories" });
+    row(dir, "GATE_APPROVED", { Stage: "user-stories", Workflow: "single-stage:user-stories" });
+    expect(drive.unbacked()).toHaveLength(1);
+  });
+
+  test("the TUI ledger spans every session of the project and goes when it is read", () => {
+    const dir = project();
+    const session = `t-person-turns-${process.pid}`;
+    startPersonTurnSession(session, dir);
+    submittedToPersonTurnSession(session, "/aidlc --scope mvp");
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "team-formation" });
+    // A restarted session keeps the first session's start and turns.
+    startPersonTurnSession(session, dir);
+    submittedToPersonTurnSession(session, "");
+    row(dir, "GATE_APPROVED", { Stage: "team-formation", "User Input": "Approve" });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "requirements-analysis" });
+    // A slash command typed, then submitted with Enter, is still a command.
+    typedIntoPersonTurnSession(session, "/aidlc ");
+    typedIntoPersonTurnSession(session, "--status");
+    submittedToPersonTurnSession(session, "");
+    row(dir, "GATE_APPROVED", { Stage: "requirements-analysis", "User Input": "Approve" });
+    submittedToPersonTurnSession("t-person-turns-no-such-session", "");
+    const problems = unbackedTuiDecisions(dir);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("GATE_APPROVED requirements-analysis");
+    expect(problems[0]).toContain('"/aidlc --status"');
+    expect(existsSync(`${dir}.person-turns.jsonl`)).toBe(false);
+    expect(unbackedTuiDecisions(dir)).toEqual([]);
+    expect(unbackedFailure("The TUI drive", problems).message)
+      .toStartWith("The TUI drive recorded 1 decision(s) as the person's that no turn from them backs:\n  GATE_APPROVED");
   });
 });

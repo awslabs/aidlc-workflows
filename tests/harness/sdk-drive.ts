@@ -75,7 +75,7 @@ import {
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
-import { PersonTurnLedger } from "./person-turns.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -180,8 +180,6 @@ export interface DriveResult {
   turns?: DriveTurnEnd[];
   /** Stop hook verdicts, when captureStopHooks was set. */
   stopHooks?: CapturedStopHook[];
-  /** Decisions recorded as the person's that no turn this drive sent backs. */
-  unbackedDecisions?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -1139,6 +1137,12 @@ export async function driveAidlc(
   // A drive that leaves descendants behind is a failure even when its own
   // assertions could pass: the next fixture removal would hit them as EBUSY.
   if (containmentFailure) throw containmentFailure;
+  // So is a decision recorded as the person's that no turn they sent backs.
+  const unbacked = personTurns.unbacked();
+  if (unbacked.length > 0) {
+    writeSdkTrace(tracePath, "unbacked_decision", { decisions: unbacked });
+    throw unbackedFailure("The SDK drive", unbacked);
+  }
 
   const result: DriveResult = {
     toolResults,
@@ -1151,11 +1155,7 @@ export async function driveAidlc(
     stoppedWhen,
     turns,
     stopHooks,
-    unbackedDecisions: personTurns.unbacked(),
   };
-  if (result.unbackedDecisions?.length) {
-    writeSdkTrace(tracePath, "unbacked_decision", { decisions: result.unbackedDecisions });
-  }
 
   // Attach post-run file reads when they exist (read straight off disk so the
   // assertions are deterministic, not paraphrased).

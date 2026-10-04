@@ -133,6 +133,7 @@ import {
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
+import { startPersonTurnSession, submittedToPersonTurnSession, typedIntoPersonTurnSession } from "./person-turns.ts";
 import { stateFilePathFor } from "./sdk-drive.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
@@ -696,7 +697,30 @@ async function cmdStart(backend: Backend, a: Args): Promise<void> {
     command,
     requestedCommand: command.join("\0") === a.rest.join("\0") ? undefined : a.rest,
   });
+  if (isOwnedTuiFixture(cwd)) startPersonTurnSession(session, realpathSync(cwd));
   await backend.start(session, cwd, width, height, command);
+}
+
+/** Every submit (a prompt, a menu choice) is a turn from the person, with what was typed for it. */
+function recordingPersonTurns(backend: Backend): Backend {
+  const paste = backend.paste;
+  return {
+    ...backend,
+    send(session, keys, literal, noEnter) {
+      if (!noEnter) submittedToPersonTurnSession(session, keys);
+      else if (!literal && keys === "Enter") submittedToPersonTurnSession(session, "");
+      else if (literal) typedIntoPersonTurnSession(session, keys);
+      return backend.send(session, keys, literal, noEnter);
+    },
+    ...(paste
+      ? {
+        paste(session: string, text: string) {
+          typedIntoPersonTurnSession(session, text);
+          return paste.call(backend, session, text);
+        },
+      }
+      : {}),
+  };
 }
 
 async function cmdSend(backend: Backend, a: Args): Promise<void> {
@@ -2392,7 +2416,7 @@ async function main(): Promise<void> {
   }
   // Capture and retirement remain available during the reserved cleanup phase.
 
-  const backend = selectBackend();
+  const backend = recordingPersonTurns(selectBackend());
   const withinWorkDeadline = (requestedMs: number, run: () => Promise<void>): Promise<void> => {
     // Zero is an immediate poll. Leave its existing result/error contract intact.
     if (requestedMs === 0) return run();
