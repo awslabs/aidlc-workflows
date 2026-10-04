@@ -1104,19 +1104,44 @@ writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
       synthetic: false,
       ignored: true,
     });
-    // The person's turn is still read from the command text the agent gets.
-    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe(expanded);
+    // The person's turn is what they typed, as on every other harness.
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc fix the sales report end date");
 
     const bare: Array<Record<string, unknown>> = [{ id: "prt_2", type: "text", text: template.replace("$ARGUMENTS", "").trim() }];
     await adapter["chat.message"]({ sessionID: "main" }, { parts: bare });
     expect(bare[1]).toMatchObject({ text: "/aidlc", ignored: true });
 
-    // Plain words, and a part without an id, are left as they are.
+    // Plain words, and a part without an id, are shown as they are.
     const plain: Array<Record<string, unknown>> = [{ id: "prt_3", type: "text", text: "approve" }];
     await adapter["chat.message"]({ sessionID: "main" }, { parts: plain });
     expect(plain).toEqual([{ id: "prt_3", type: "text", text: "approve" }]);
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("approve");
     const noId: Array<Record<string, unknown>> = [{ type: "text", text: expanded }];
     await adapter["chat.message"]({ sessionID: "main" }, { parts: noId });
     expect(noId).toEqual([{ type: "text", text: expanded }]);
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc fix the sales report end date");
+  });
+
+  test("a setting typed through /aidlc reaches the real human-turn hook as the person's choice", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
+    const commandFile = join(REPO_ROOT, "dist", "opencode", ".opencode", "command", "aidlc.md");
+    mkdirSync(join(root, ".opencode", "command"), { recursive: true });
+    copyFileSync(commandFile, join(root, ".opencode", "command", "aidlc.md"));
+    const template = readFileSync(commandFile, "utf-8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+
+    await adapter["chat.message"](
+      { sessionID: "main" },
+      { parts: [{ id: "prt_1", type: "text", text: template.replace("$ARGUMENTS", "config set summary-confirmation off").trim() }] },
+    );
+
+    const state = readFileSync(join(seededRecordDir(root), "aidlc-state.md"), "utf-8");
+    expect(state).toContain("- **Summary Confirmation**: off (set by you)");
+    const rows = readAuditShardEvents(root).filter((entry) => entry.event === "CEREMONY_SET");
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Source")).toBe("you");
   });
 });

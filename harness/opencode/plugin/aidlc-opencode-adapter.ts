@@ -126,19 +126,19 @@ function aidlcCommandPreamble(directory: string): string | null {
 // opencode shows a command's whole template as the person's message. Keep the
 // template for the agent (synthetic: sent to the model, not shown) and show
 // what the person typed (ignored: shown, not sent, so the agent still reads
-// the request once). A part without an id is left as it is.
-function showTypedCommand(parts: ChatPart[], first: ChatPart, preamble: string): void {
+// the request once). Returns what the person typed, which is also their turn
+// as the human-turn hook reads it (a switch such as `/aidlc --guard-policy
+// off` starts with `/aidlc`), or null when the part is not the command. A part
+// without an id is shown as it is.
+function typedCommand(parts: ChatPart[], first: ChatPart, preamble: string): string | null {
   const text = first.text?.trimStart() ?? "";
-  if (typeof first.id !== "string" || !text.startsWith(preamble)) return;
+  if (!text.startsWith(preamble)) return null;
   const words = text.slice(preamble.length).trim();
+  const typed = words === "" ? "/aidlc" : `/aidlc ${words}`;
+  if (typeof first.id !== "string") return typed;
   first.synthetic = true;
-  parts.push({
-    ...first,
-    id: `${first.id}t`,
-    text: words === "" ? "/aidlc" : `/aidlc ${words}`,
-    synthetic: false,
-    ignored: true,
-  });
+  parts.push({ ...first, id: `${first.id}t`, text: typed, synthetic: false, ignored: true });
+  return typed;
 }
 
 export type PluginInput = {
@@ -468,7 +468,7 @@ export default async ({
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
       interrupted.delete(input.sessionID);
-      if (first && commandText !== null) showTypedCommand(output.parts, first, commandText);
+      const typed = first && commandText !== null ? typedCommand(output.parts, first, commandText) : null;
       if (!started.has(input.sessionID)) {
         const result = await runCore(
           "aidlc-session-start.ts",
@@ -488,7 +488,7 @@ export default async ({
         {
           hook_event_name: "UserPromptSubmit",
           session_id: input.sessionID,
-          prompt: first?.text ?? "",
+          prompt: typed ?? first?.text ?? "",
         },
         directory,
       );
