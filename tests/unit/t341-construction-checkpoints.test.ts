@@ -1201,6 +1201,68 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
 });
 
 describe("t341 review evidence is independent of project check success", () => {
+  // Two Units that both add code to one shared file, each reviewed on its own
+  // build, as a Unit-by-Unit walk over a small change does.
+  function shareFile(dir: string): void {
+    writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 1;\n");
+    for (const unit of ["alpha", "beta"]) {
+      for (const slug of STAGES) {
+        if (!findStageBySlug(slug)!.workspace_requires) continue;
+        writeFileSync(join(seededRecordDir(dir), "construction", unit, slug, "source-manifest.json"), JSON.stringify({
+          stage: slug, unit, version: 1, writes: [{ path: `src/${unit}.ts` }, { path: "src/shared.ts" }],
+        }));
+      }
+    }
+  }
+
+  function reviewUnit(dir: string, unit: string): void {
+    for (const slug of STAGES) {
+      const definition = findStageBySlug(slug)!;
+      if (!definition.reviewer) continue;
+      const fields: Record<string, string> = {
+        Stage: slug, Unit: unit, Reviewer: definition.reviewer, Iteration: "1",
+        "Artifact Fingerprint": reviewArtifactFingerprint(dir, definition, unit)!,
+      };
+      if (definition.workspace_requires) {
+        const listing = workspaceSourceListing(dir)!;
+        const manifest = readUnitSourceManifest(dir, slug, unit);
+        if (!manifest.ok) throw new Error(manifest.reason);
+        fields["Source Fingerprint"] = workspaceSourceFingerprint(dir)!;
+        fields["Unit Source Fingerprint"] = writeUnitSourceSnapshot(dir, slug, unit,
+          listing, manifest, manifest.rawBytesSha256);
+      }
+      appendAuditEntry("REVIEW_REQUESTED", fields, dir);
+      appendAuditEntry("REVIEW_COMPLETED", {
+        ...fields, Verdict: "READY",
+        ...(fields["Source Fingerprint"] ? { "Request Source Fingerprint": fields["Source Fingerprint"] } : {}),
+      }, dir);
+    }
+  }
+
+  for (const changeControl of ["strict", "relaxed"]) {
+    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit asks again (${changeControl})`, () => {
+      const dir = project();
+      writeFileSync(seededStateFile(dir), setField(setField(state(), "Review Override", "advisory"),
+        "Change Control", changeControl));
+      shareFile(dir);
+      reviewUnit(dir, "alpha");
+      expect(pass(dir).ready).toBe(true);
+      human(dir);
+      const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
+      expect(approved.approved).toBe(true);
+      // beta's own build adds to the shared file, and beta's review records it.
+      writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 1;\nexport const beta = 2;\n");
+      reviewUnit(dir, "beta");
+      const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+      expect(current.errors).toEqual([]);
+      expect(current.fingerprint).toBe(approved.fingerprint);
+      expect(current.approved).toBe(true);
+      // An edit after that matches no review, so alpha's approval no longer holds.
+      writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 3;\n");
+      expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("requires current paired reviews and claimed source even under relaxed Change Control", () => {
     const dir = project();
     writeFileSync(seededStateFile(dir), setField(state(), "Review Override", "advisory"));

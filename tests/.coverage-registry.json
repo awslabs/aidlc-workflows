@@ -3892,6 +3892,10 @@
         {
           "file": "tests/integration/t164-shard-ordering-and-lock-bucket.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5582,6 +5586,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isWorkspaceNoun",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -10671,6 +10682,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:TESTING_POSTURE_SUBCOMMANDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:toPosix",
       "minMechanism": "none",
       "coveredBy": [],
@@ -11173,6 +11191,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UTILITY_COMMANDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:uuidv7",
       "minMechanism": "none",
       "coveredBy": [
@@ -11476,6 +11501,13 @@
     {
       "unitClass": "function",
       "unitId": "function:WORKSPACE_LOCK_SENTINEL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:WORKSPACE_NOUNS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -12103,6 +12135,10 @@
       "unitId": "aidlc-continue-workflow",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-journey-question-once.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/integration/t121-stop-hook-enforce.test.ts",
           "mechanism": "cli"

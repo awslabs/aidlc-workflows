@@ -58,7 +58,9 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
 
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
-const LAUNCHER_GLOBAL_FLAGS = new Set([
+// The dispatcher's global flags: `aidlc` drops them wherever they appear
+// before `--`, then routes what remains.
+export const LAUNCHER_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
   "--json",
   "--quiet",
   "--no-color",

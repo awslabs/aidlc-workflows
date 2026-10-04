@@ -529,7 +529,10 @@ own) and returns the message to send into the same session (or nothing, to end
 the drive). `chatAboutQuestionWhen` answers a picker the way Claude Code's
 "Chat about this" button does, so the question stays open; an `answerScript`
 spec `{ text }` types the person's own words into a picker; `captureStopHooks`
-records each Stop hook verdict with its turn.
+records each Stop hook verdict with its turn. `stopWhen` ends the drive once
+the tool results so far satisfy it, for a stop that needs more than one result
+(an engine line that can arrive before or after the step that creates the
+work).
 
 A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
 hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
@@ -1388,6 +1391,11 @@ The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
+The `update-from-previous` job (`scripts/ci-update-from-previous.ts`) updates an
+install of the last stable release to the candidate on Linux, macOS and Windows
+and runs every harness project's hooks, refresh and doctor. When it fails, the
+preview still publishes, its notes open with a warning and the report gains a
+line for it; `release.yml` does not publish a stable release that fails it.
 `Release result` requires successful preview publication or an intentional
 skip. Full Suite runs separately: the preview records its run ID, downloads
 that run's evidence and reports its real result, without propagating its failure.

@@ -11,7 +11,10 @@
 // The journey:
 //   chat 1: an empty folder holding only docs/vision.md. The person types
 //           `/aidlc --scope classic Build what vision.md describes`. The drive
-//           stops once the work is created.
+//           stops once the work is created and the engine's new-project line
+//           has reached the agent: with the step that creates the work, or,
+//           when the engine knows the conversation, with the first stage
+//           after it (the step the agent speaks from).
 //   then:   the team's code lands in the folder (a small TypeScript repo).
 //   chat 2: a new chat. The person types `/aidlc`. AI-DLC asks whether the
 //           code is existing code to work on, in a picker. The person answers
@@ -50,7 +53,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
-import { driveAidlc, readStateField, readStateFile } from "../harness/sdk-drive.ts";
+import { type CapturedToolResult, driveAidlc, readStateField, readStateFile } from "../harness/sdk-drive.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -59,6 +62,8 @@ const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // The engine's own line for the person at creation (aidlc-orchestrate.ts).
+// It rides the next step the agent speaks from, so it can arrive after the
+// work is created.
 const NEW_PROJECT_LINE = "The folder has no code yet, so I'm starting this as a new project without Reverse Engineering.";
 // Printed only when new work is created (aidlc-utility.ts handleIntentCreate).
 const CREATED = "State initialized:";
@@ -69,6 +74,10 @@ const RE_RUNS = '"kind":"run-stage","stage":"reverse-engineering"';
 const ANSWER = "yes, it is our existing code";
 
 type AuditRow = ReturnType<typeof readAuditShardEvents>[number];
+
+function engineSaid(results: readonly CapturedToolResult[], text: string): boolean {
+  return results.some((t) => t.toolName === "Bash" && t.resultText.includes(text));
+}
 
 function auditRows(proj: string): AuditRow[] {
   return readAuditShardEvents(proj);
@@ -104,14 +113,12 @@ describe("t-journey-code-arrives (sdk): a new project gains the team's code", ()
         const created = await driveAidlc("/aidlc --scope classic Build what vision.md describes", {
           projectDir: proj,
           persistSession: true,
-          stopAfterToolResult: { toolName: "Bash", resultIncludes: CREATED },
+          stopWhen: (results) => engineSaid(results, CREATED) && engineSaid(results, NEW_PROJECT_LINE),
           timeoutMs: budget(),
         });
-        expect(created.stoppedAfterToolResult, "the work was never created").toBe(true);
-        expect(
-          created.toolResults.some((t) => t.toolName === "Bash" && t.resultText.includes(NEW_PROJECT_LINE)),
-          "the engine's new-project line never reached the agent",
-        ).toBe(true);
+        expect(engineSaid(created.toolResults, CREATED), "the work was never created").toBe(true);
+        expect(engineSaid(created.toolResults, NEW_PROJECT_LINE), "the engine's new-project line never reached the agent")
+          .toBe(true);
         const start = readStateFile(proj) ?? "";
         expect(readStateField(start, "Project Type")).toBe("Greenfield");
         expect(readStateField(start, "Project Type Source")).toBe("workspace scan");

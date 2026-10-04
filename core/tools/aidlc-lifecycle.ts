@@ -107,7 +107,7 @@ import {
   assertSafeUninstallRoot,
   buildUninstallPlan,
 } from "./aidlc-uninstall-plan.ts";
-import { refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
+import { channelWays, refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
   currentWindowsElevationType,
   describeWindowsUninstallFailure,
@@ -390,6 +390,15 @@ function reserveVersion(
   return () => {
     rmSync(path, { force: true });
   };
+}
+
+// A plain `aidlc update` never installs a release older than the one running:
+// the newest release of the channel the machine follows is older, so there is
+// nothing to update. Thrown before any asset downloads.
+class OlderThanRunningError extends Error {
+  constructor(readonly latest: string) {
+    super(`the newest release, ${latest}, is older than the one running`);
+  }
 }
 
 class IncompleteVersionError extends LifecycleCommandError {
@@ -1675,6 +1684,7 @@ async function installVersion(options: {
   channel?: ReleaseChannel;
   apiUrl?: string;
   replaceLauncher?: LauncherReplacement;
+  notOlderThan?: string;
 }): Promise<{ version: string; distributions: string[] }> {
   // An explicit version or local directory bypasses discovery. Otherwise the
   // stable channel is the `latest/download` redirect and the preview channel is
@@ -1692,10 +1702,12 @@ async function installVersion(options: {
   const release = await acquireRelease({
     version: wantedVersion,
     from: options.from,
-    names: (manifest) => [
-      binaryAsset(target),
-      releaseRuntimeAsset(manifest.version),
-    ],
+    names: (manifest) => {
+      if (options.notOlderThan && compareVersions(manifest.version, options.notOlderThan) < 0) {
+        throw new OlderThanRunningError(manifest.version);
+      }
+      return [binaryAsset(target), releaseRuntimeAsset(manifest.version)];
+    },
     offline: options.offline,
     baseUrl: options.baseUrl,
     caBundle: options.caBundle,
@@ -2190,24 +2202,51 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
     return success(state.message, state);
   }
   const dryRun = argv.includes("--dry-run");
-  const result = await installVersion({
-    version: valueAfter(argv, "--version"),
-    from: valueAfter(argv, "--from"),
-    offline: offline(argv),
-    activate: true,
-    dryRun,
-    baseUrl: valueAfter(argv, "--release-base-url"),
-    caBundle: valueAfter(argv, "--ca-bundle"),
-    channel,
-    apiUrl,
-    replaceLauncher: dryRun ? undefined : windowsPosixLauncherReplacement(argv),
-  });
+  // The person names a version, a release folder or a channel to go to that
+  // release, older or not; a plain update only ever moves forward.
+  const plain = !valueAfter(argv, "--version") && !valueAfter(argv, "--from") && !valueAfter(argv, "--channel");
+  let result: Awaited<ReturnType<typeof installVersion>>;
+  try {
+    result = await installVersion({
+      version: valueAfter(argv, "--version"),
+      from: valueAfter(argv, "--from"),
+      offline: offline(argv),
+      activate: true,
+      dryRun,
+      baseUrl: valueAfter(argv, "--release-base-url"),
+      caBundle: valueAfter(argv, "--ca-bundle"),
+      channel,
+      apiUrl,
+      replaceLauncher: dryRun ? undefined : windowsPosixLauncherReplacement(argv),
+      ...(plain && current ? { notOlderThan: current } : {}),
+    });
+  } catch (error) {
+    if (!(error instanceof OlderThanRunningError) || !current) throw error;
+    return success(`${current} is newer than the latest ${channel} release ${error.latest}; nothing to update`, {
+      version: current,
+      channel,
+      newerThan: { channel, version: error.latest },
+    });
+  }
   // Moving between channels is a switch, never a downgrade error: the newest
-  // stable sorts below a preview built after it, and converging on it is the
-  // documented way back.
+  // stable sorts below a preview built after it, and asking for that channel
+  // by name is the way back.
   const channelSwitch = current && versionChannel(current) !== versionChannel(result.version)
     ? { from: versionChannel(current), to: versionChannel(result.version) }
     : undefined;
+  // Only `config --channel` changes the channel the machine follows; `--channel`
+  // here lasts this run, and `--version` and `--from` pick a release of either
+  // channel. So a move onto the other channel is the machine's switch only
+  // when the machine already follows it.
+  let follows: ReleaseChannel | undefined;
+  let followsUnknown = false;
+  try {
+    follows = channelSwitch ? readMachineChannel() : undefined;
+  } catch {
+    // The update is done; an unreadable marker is doctor's to report, and the
+    // update says nothing about which channel the machine follows.
+    followsUnknown = true;
+  }
   const switched = channelSwitch
     ? ` (switched channel ${channelSwitch.from} -> ${channelSwitch.to})`
     : "";
@@ -2230,6 +2269,8 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
       ...result,
       channel,
       ...(channelSwitch ? { channelSwitch } : {}),
+      ...(follows !== undefined && follows !== channelSwitch?.to ? { follows } : {}),
+      ...(followsUnknown ? { followsUnknown } : {}),
       pruned,
       ...(pruneWarning ? { pruneWarning } : {}),
     },
@@ -2252,10 +2293,21 @@ export function configureChannel(argv: readonly string[]): CommandResult {
       return usage(`--channel must be ${RELEASE_CHANNELS.join(" or ")}`);
     }
     const channel = writeMachineChannel(requested);
-    return success(
-      `release channel set to ${channel}; run aidlc update to install its newest release`,
-      { channel, source: "machine" },
-    );
+    // A plain update never installs an older release, so from a release of
+    // the other channel it waits for a newer one; asked by name it goes now.
+    // The channel is saved by now, so a damaged version pointer (doctor
+    // reports it) only leaves out that hint.
+    let running: string | null = null;
+    try {
+      running = activeVersion();
+    } catch {
+      running = null;
+    }
+    const next = running && versionChannel(running) !== channel
+      ? `aidlc update moves to a ${channel} release once one is newer than ${running}; ` +
+        `to go to the newest ${channel} release now, run aidlc update --channel ${channel}`
+      : "run aidlc update to install its newest release";
+    return success(`release channel set to ${channel}; ${next}`, { channel, source: "machine" });
   } catch (error) {
     return lifecycleFailureResult(error, argv);
   }
@@ -2651,7 +2703,7 @@ function installProfileCommand(argv: string[]): CommandResult {
   return success(`updated ${profile} with an owned AI-DLC PATH block`, { profile, bin });
 }
 
-function humanLifecycleNarration(
+export function humanLifecycleNarration(
   command: string | undefined,
   argv: readonly string[],
   before: string | null,
@@ -2663,11 +2715,21 @@ function humanLifecycleNarration(
       version?: string;
       channel?: ReleaseChannel;
       channelSwitch?: { from: ReleaseChannel; to: ReleaseChannel };
+      follows?: ReleaseChannel;
+      followsUnknown?: boolean;
+      newerThan?: { channel: ReleaseChannel; version: string };
       pruned?: string[];
       pruneWarning?: string;
     } | undefined;
     const target = data?.version;
     if (!target) return null;
+    if (data?.newerThan) {
+      return successText(
+        `You're on ${target}, newer than the latest ${data.newerThan.channel} ${data.newerThan.version}, so ` +
+          `there's nothing to update. ${channelWays(data.newerThan.channel, versionChannel(target), data.newerThan.version)}`,
+        process.stdout,
+      );
+    }
     const channelWord = data?.channel && data.channel !== "stable" ? `${data.channel} ` : "";
     const pruned = data?.pruned ?? [];
     const pruneLine = pruned.length > 0
@@ -2675,9 +2737,11 @@ function humanLifecycleNarration(
       : data?.pruneWarning
       ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
-    const switchLine = data?.channelSwitch
-      ? `Switched release channel from ${data.channelSwitch.from} to ${data.channelSwitch.to}.`
-      : null;
+    const switchLine = !data?.channelSwitch || data.followsUnknown
+      ? null
+      : data.follows !== undefined
+      ? `This machine follows ${data.follows} releases. ${channelWays(data.follows, data.channelSwitch.to)}`
+      : `Switched release channel from ${data.channelSwitch.from} to ${data.channelSwitch.to}.`;
     if (argv.includes("--dry-run")) {
       return before === target
         ? successText(
@@ -2686,7 +2750,7 @@ function humanLifecycleNarration(
         )
         : warnVerdict(
           `Would update aidlc from ${before ?? "not installed"} to ${target}${
-            switchLine ? ` (switching to the ${data?.channelSwitch?.to} channel)` : ""
+            switchLine && data?.follows === undefined ? ` (switching to the ${data?.channelSwitch?.to} channel)` : ""
           }.`,
           process.stdout,
         );

@@ -382,7 +382,8 @@ export function managedBlockMarkers(
 }
 
 // One harness's shipped .gitignore lines combined with each sibling's: the
-// first (by name) is the base, and each other adds only the lines not seen.
+// first (by name) is the base, and each other adds only the entries not seen,
+// so the part keeps its one comment line.
 export function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
   contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
   let base = contributors[0].text.trim();
@@ -400,11 +401,14 @@ export function unionBlocks(contributors: Array<{ distribution: string; text: st
       extras.push(entry);
       seen.add(entry);
     }
-    if (extras.length > 0) {
-      base += `\n\n# ${contributor.distribution} harness\n${extras.join("\n")}`;
-    }
+    if (extras.length > 0) base += `\n${extras.join("\n")}`;
   }
   return base;
+}
+
+// The ignore entries of a .gitignore part, without its comments and blank lines.
+function ignoreEntries(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).sort().join("\n");
 }
 
 // Earlier releases shipped a generic template above their own "# AI-DLC"
@@ -463,8 +467,11 @@ export function mergeBlock(
       }`,
       currentHash: sha256Bytes(currentBlock),
       nextHash: sha256Bytes(block),
+      // A .gitignore part with exactly the shipped entries is a release's own,
+      // whatever notes an earlier release put between them.
       currentBlockShipped: currentBody === body ||
-        legacyWholeFileHashes.includes(sha256Bytes(`${currentBody.replace(/\r\n/g, "\n")}\n`)),
+        legacyWholeFileHashes.includes(sha256Bytes(`${currentBody.replace(/\r\n/g, "\n")}\n`)) ||
+        (path === ".gitignore" && ignoreEntries(currentBody) === ignoreEntries(body)),
       ...(kept ? { keptOwnLines: true } : {}),
     };
   }

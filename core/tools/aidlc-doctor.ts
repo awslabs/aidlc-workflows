@@ -38,6 +38,7 @@ import {
   discoverProjectHarnesses,
 } from "./aidlc-runtime-paths.ts";
 import { installRoot, windowsGitBashLauncherState } from "./aidlc-install-paths.ts";
+import { versionChannel } from "./aidlc-channel.ts";
 import {
   configureColor,
   dim,
@@ -170,15 +171,22 @@ export async function doctorUpdateState(
   return update;
 }
 
-function updateCheck(state: UpdateState): DoctorCheck {
+export function updateCheck(state: UpdateState): DoctorCheck {
   const invoke = aidlcInvocation();
+  // A binary of the other channel: an update goes to the channel the machine
+  // follows, which may be older, so the fix names both ways.
+  const running = versionChannel(state.currentVersion);
+  const otherChannel = state.state === "behind" && running !== state.channel;
   return {
     pass: state.state === "current",
     severity: state.state === "current" || state.state === "invalid-config"
       ? undefined
       : "warn",
     label: `Update: ${state.message}`,
-    fix: state.state === "behind"
+    fix: otherChannel
+      ? `run \`${invoke} update\` to go to the newest ${state.channel} release, or ` +
+        `\`${invoke} config --channel ${running}\` to keep ${running} releases`
+      : state.state === "behind"
       ? `run \`${invoke} update\``
       : state.state === "invalid-config"
       ? `run \`${invoke} config list --global\` and correct the invalid update setting`

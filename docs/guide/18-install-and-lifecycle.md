@@ -1157,7 +1157,7 @@ Successful config prints the host-specific next step:
 | Command | Public options and behavior |
 |---------|-----------------------------|
 | `aidlc update` | Install the newest release of the machine's channel with the complete all-harness runtime, then atomically activate. Accepts `--version <version>`, `--channel <stable\|preview>`, `--from <release-dir>`, `--release-base-url <url>`, `--release-api-url <url>`, `--ca-bundle <path>`, `--offline`, and `--dry-run`. |
-| `aidlc update --check` | Refresh update metadata for the channel without installing. Returns 5 when behind (or when the binary belongs to the other channel), 0 when current, 3 when unavailable/offline, and 1 when checks are disabled. |
+| `aidlc update --check` | Refresh update metadata for the channel without installing. Returns 5 when the channel has a release newer than the running one, 0 when current (a running release newer than the channel's newest is current), 3 when unavailable/offline, and 1 when checks are disabled. |
 | `aidlc use <version>` | Install the exact stable or preview version when it is not retained, then make it machine-active without changing project files. |
 | `aidlc config --channel [stable\|preview]` | Set the machine release channel, or print it when no value is given. |
 | `aidlc config --pin <version>` | Install and validate the exact version when needed, then atomically write `.aidlc-version`, record its machine-local resolved target, and register the project pin without changing the machine-active pointer. |
@@ -1171,8 +1171,16 @@ A no-op says `You're on the latest version of aidlc (<version>).`; `--dry-run`
 says `Would update aidlc from <old> to <new>.`, or
 `You're on the latest version of aidlc (<version>); nothing to update.` when
 nothing would change. On the preview channel the update lines say
-`preview releases` and `latest preview version`, and an update that crosses
-channels adds `Switched release channel from <a> to <b>.`. `aidlc use`
+`preview releases` and `latest preview version`. A plain `aidlc update` never
+installs a release older than the one running: on a machine that follows stable
+and runs a newer preview, it changes nothing and says `You're on <preview>, newer
+than the latest stable <x.y.z>, so there's nothing to update.`, then how to go
+back to stable (`aidlc update --channel stable`) and how to keep getting
+previews (`aidlc config --channel preview`); once a newer stable ships, it moves
+to it. An update onto the channel the machine follows, from a release of the
+other one, adds `Switched release channel from <a> to <b>.`; one that moves onto
+the other channel for one run (`--channel`, `--version` or `--from`) says that
+the machine follows its channel, with the same two ways on. `aidlc use`
 distinguishes `Now using` from `Already using`, and uninstall states exactly
 which machine state was removed or kept. JSON and quiet messages retain their
 stable machine contracts; update JSON carries `channel` and, on a switch,
@@ -1223,7 +1231,7 @@ aidlc config --channel preview   # follow the preview stream
 aidlc update                     # newest published preview
 aidlc update --check             # 5 when a newer preview exists
 aidlc config --channel stable    # back to the stable stream
-aidlc update                     # newest stable, reported as a channel switch
+aidlc update --channel stable    # newest stable now, reported as a channel switch
 ```
 
 The channel is machine-local: `aidlc config --channel` writes a `channel`
@@ -1243,9 +1251,10 @@ reported as unavailable (exit 3); the client never falls back to the stable
 release. The update cache records the channel it was refreshed for, so a cached
 preview result never answers a stable check or the reverse.
 
-Switching back is `aidlc config --channel stable` then `aidlc update`. Even if
-the newest stable id sorts below the preview you are running, update installs
-it and reports a channel switch. Preview retention is a bounded window on top
+Switching back is `aidlc config --channel stable`. A plain `aidlc update` then
+waits for a stable release newer than the preview you are running; to go back
+now, run `aidlc update --channel stable`, which installs the newest stable even
+when its id sorts below the preview and reports a channel switch. Preview retention is a bounded window on top
 of the protection every release has (active, rollback, in use, pinned): after
 an update the two newest complete previews stay, and every older preview
 without its own protection is pruned; stable retention is unchanged.

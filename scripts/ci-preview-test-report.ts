@@ -1,6 +1,8 @@
 // Renders the nightly preview's Full Suite report and stages it into the preview
 // notes. Preview publication no longer waits for a passing suite, so the run
 // summary and the published notes carry the failing jobs and test cases instead.
+// Nor does it wait for the update from the last release: a failure there opens
+// the notes with a warning and a line in the report.
 import fs from "node:fs";
 import { basename, join } from "node:path";
 import { unmetLegs } from "./ci-full-suite-result.ts";
@@ -20,7 +22,16 @@ export const FAILED_SUITE_WARNING =
   "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
 export const FAILED_SUITE_POINTER =
   "> **Warning:** Full Suite failed for this source. The preview run has the failure report.\n\n";
+export const FAILED_UPDATE_WARNING =
+  "> **Warning:** Updating from the last release to this preview failed in its checks. Stay on your release or wait for the next preview.\n\n";
 const TRUNCATED_NOTES = "\n- ...report truncated; the run summary has the full report.\n";
+
+/** What failed for a preview that still publishes. */
+export interface PreviewFailures {
+  suite: boolean;
+  /** The preview run, when the update from the last release failed in it. */
+  updateRunUrl?: string;
+}
 
 export interface RunFailures {
   artifact: string;
@@ -217,16 +228,31 @@ export function renderReport(options: {
   return report;
 }
 
+/** The report's section for an update from the last release that failed. */
+export function updateReport(runUrl: string): string {
+  return `## Update from the last release\n\n\`aidlc update\` from the last release to this preview **failed** in ${link("the preview run", runUrl)}.\n`;
+}
+
 // The published copy keeps every planned line and the source footer. The report,
-// then the warning, yields to GitHub's body limit, so a failing suite never stops
+// then the warning, yields to GitHub's body limit, so a failing check never stops
 // a preview whose planned notes fit.
-export function stagePreviewNotes(body: string, report: string, limit = RELEASE_BODY_LIMIT): string {
-  const notes = `${FAILED_SUITE_WARNING}${body}`;
+export function stagePreviewNotes(
+  body: string,
+  report: string,
+  limit = RELEASE_BODY_LIMIT,
+  failed: PreviewFailures = { suite: true },
+): string {
+  const update = failed.updateRunUrl === undefined ? "" : FAILED_UPDATE_WARNING;
+  if (!failed.suite && !update) return body;
+  const notes = `${failed.suite ? FAILED_SUITE_WARNING : ""}${update}${body}`;
+  // The short update line goes first, so a long suite report is what gets cut.
+  const full = [failed.updateRunUrl === undefined ? "" : updateReport(failed.updateRunUrl), failed.suite ? report : ""]
+    .filter(Boolean).join("\n");
   const budget = limit - notes.length - 1;
-  if (report.length <= budget) return `${notes}\n${report}`;
-  const cut = report.lastIndexOf("\n", budget - TRUNCATED_NOTES.length);
-  if (cut > 0) return `${notes}\n${report.slice(0, cut)}${TRUNCATED_NOTES}`;
-  const pointed = `${FAILED_SUITE_POINTER}${body}`;
+  if (full.length <= budget) return `${notes}\n${full}`;
+  const cut = full.lastIndexOf("\n", budget - TRUNCATED_NOTES.length);
+  if (cut > 0) return `${notes}\n${full.slice(0, cut)}${TRUNCATED_NOTES}`;
+  const pointed = `${failed.suite ? FAILED_SUITE_POINTER : ""}${update}${body}`;
   return pointed.length <= limit ? pointed : body;
 }
 
@@ -247,7 +273,15 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     process.exit(1);
   }
   const plan = JSON.parse(fs.readFileSync(planPath, "utf8")) as { notes: { body: string } };
-  plan.notes.body = stagePreviewNotes(plan.notes.body, fs.readFileSync(reportPath, "utf8"));
+  // Called for a failed suite unless FULL_SUITE_RESULT says it passed.
+  const update = process.env.UPDATE_RESULT;
+  const server = process.env.GITHUB_SERVER_URL ?? "https://github.com";
+  plan.notes.body = stagePreviewNotes(plan.notes.body, fs.readFileSync(reportPath, "utf8"), RELEASE_BODY_LIMIT, {
+    suite: process.env.FULL_SUITE_RESULT !== "success",
+    ...(update && update !== "success"
+      ? { updateRunUrl: `${server}/${process.env.GITHUB_REPOSITORY ?? ""}/actions/runs/${process.env.GITHUB_RUN_ID ?? ""}` }
+      : {}),
+  });
   await Bun.write(planPath, `${JSON.stringify(plan)}\n`);
 } else if (import.meta.main) {
   const [evidenceDir, jobsPath, outputPath] = process.argv.slice(2);

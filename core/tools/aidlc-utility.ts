@@ -344,6 +344,7 @@ import {
   parkedRefPrefix,
   normalizeDriveLetter,
   toPosix,
+  UTILITY_COMMANDS,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
@@ -392,6 +393,7 @@ import {
 // ---------------------------------------------------------------------------
 
 const CONFIG_READ_KEYS = [...CONFIG_KEYS, "guard.human-presence"] as const;
+
 // Retired key spellings, accepted for one release and read as their new name.
 const RETIRED_CONFIG_KEYS: Record<string, ConfigKey> = { "change-control": "guard-policy" };
 
@@ -12047,10 +12049,7 @@ export async function main(argv: string[]): Promise<void> {
       }
       die(
         `Unknown command "${subcommand}". Run \`aidlc-utility help\` for what this tool can do.\n\n` +
-          "Available commands: help, version, status, doctor, intent-create, intent, space, " +
-          "space-create, codekb-path, codekb-snapshot, codekb-publish, project-description, document-input, codekb-scope-diff, detect, reclassify, select-plugins, plugin-list, plugin-sync, plugin-validate, plugin-build, " +
-          "recompose, scope-change, scope-save, config-change, config-get, config-list, set-status, " +
-          "detect-scope, resolve-env-scope, scope-table, stage-table, upgrade\n" +
+          `Available commands: ${UTILITY_COMMANDS.join(", ")}\n` +
           "Common options: [--project-dir <path>] [--scope <scope>] [--json]"
       );
   }

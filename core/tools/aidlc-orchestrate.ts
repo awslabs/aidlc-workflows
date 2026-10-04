@@ -194,6 +194,7 @@ import {
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
+  codekbStoreIsCurrent,
   inspectContinuationCursor,
   isPerUnitStage,
   isReadOnlyEngineProbe,
@@ -11611,7 +11612,23 @@ function handleSingleReport(
     reason:
       `Single-stage run of "${node.slug}" committed under synthetic workflow "${wfId}". ` +
       "The main workflow's Current Stage is untouched.",
+    ...(node.slug === "reverse-engineering" && codekbMatchesCode(pd)
+      ? { narration: "The code knowledge base now matches the code." }
+      : {}),
   });
+}
+
+// Every store a Reverse Engineering run covers is CURRENT: each registered
+// repo's, or the project root's when none is registered.
+function codekbMatchesCode(projectDir: string): boolean {
+  try {
+    const repos = intentRepos(projectDir);
+    return repos.length > 0
+      ? repos.every((repo) => codekbStoreIsCurrent(projectDir, repo))
+      : codekbStoreIsCurrent(projectDir);
+  } catch {
+    return false;
+  }
 }
 
 function checkboxForSlug(

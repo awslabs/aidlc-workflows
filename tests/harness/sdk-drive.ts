@@ -169,6 +169,8 @@ export interface DriveResult {
   stoppedAfterAskUserQuestion: boolean;
   /** True when an intentional matching tool_result boundary aborted the stream. */
   stoppedAfterToolResult: boolean;
+  /** True when stopWhen ended the drive. */
+  stoppedWhen?: boolean;
   /** Each finished turn, in order (the last turn is absent when a stop aborted it). */
   turns?: DriveTurnEnd[];
   /** Stop hook verdicts, when captureStopHooks was set. */
@@ -450,6 +452,13 @@ export interface DriveOptions {
   nextMessage?: (turn: DriveTurnEnd) => string | undefined;
   /** Capture every Stop hook verdict into DriveResult.stopHooks. */
   captureStopHooks?: boolean;
+  /**
+   * End the drive, as a person closing the session would, as soon as this
+   * returns true. Checked after every tool result with the results so far, so
+   * a stop can need several of them (for example a line that may arrive before
+   * or after the step that creates the work).
+   */
+  stopWhen?: (toolResults: readonly CapturedToolResult[]) => boolean;
 }
 
 /** What one turn of a drive left behind, counted from the start of the drive. */
@@ -694,6 +703,7 @@ export async function driveAidlc(
   let timedOut = false;
   let stoppedAfterAskUserQuestion = false;
   let stoppedAfterToolResult = false;
+  let stoppedWhen = false;
   let exhaustedParentBudget: unknown;
   let containmentFailure: unknown;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -934,6 +944,11 @@ export async function driveAidlc(
                 });
                 abortController.abort();
               }
+              if (!stoppedWhen && opts.stopWhen?.(toolResults) === true) {
+                stoppedWhen = true;
+                writeSdkTrace(tracePath, "stop_when", { toolUseId, toolName: pending?.toolName ?? "" });
+                abortController.abort();
+              }
             }
           }
         }
@@ -987,7 +1002,7 @@ export async function driveAidlc(
       writeSdkTrace(tracePath, "error", { message: err.message });
     } else if (
       !(
-        (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult) &&
+        (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult || stoppedWhen) &&
         abortController.signal.aborted
       )
     ) {
@@ -1029,6 +1044,7 @@ export async function driveAidlc(
       timedOut,
       stoppedAfterAskUserQuestion,
       stoppedAfterToolResult,
+      stoppedWhen,
       toolResultCount: toolResults.length,
       askedQuestionCount: askedQuestions.length,
       hasResultEvent: resultEvent !== undefined,
@@ -1051,6 +1067,7 @@ export async function driveAidlc(
     timedOut,
     stoppedAfterAskUserQuestion,
     stoppedAfterToolResult,
+    stoppedWhen,
     turns,
     stopHooks,
   };

@@ -875,6 +875,45 @@ describe("t293 config models CLI", () => {
     expect(replaced.stdout).toContain("model profile copy: reviewing high -> reviewing max in aidlc.settings.json.\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("one agent's model alone keeps its effort, and a two-harness project takes the command with --harness", () => {
+    const project = install("claude");
+    const agentFile = join(project, ".claude", "agents", "aidlc-architect-agent.md");
+    const first = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--model", "opus", "--yes",
+    ], project, runtimeEnv());
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain("Recorded architect model (claude) opus in aidlc.settings.json.");
+    expect(JSON.parse(readFileSync(projectSettingsPath(project), "utf-8")).models.agents)
+      .toEqual({ architect: { model: { claude: "opus" } } });
+    expect(readFileSync(agentFile, "utf-8")).toMatch(/^model: opus$/m);
+    expect(readFileSync(agentFile, "utf-8")).not.toMatch(/^effort:/m);
+    // The earlier model comes back on its own, with no effort the agent never had.
+    const second = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--model", "sonnet", "--yes",
+    ], project, runtimeEnv());
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain("config models --agent architect --model opus --harness claude --project --yes");
+    expect(readFileSync(agentFile, "utf-8")).not.toMatch(/^effort:/m);
+    // An agent named with neither still says what it takes.
+    const neither = run([
+      "config", "models", "--project-dir", project, "--project", "--agent", "architect", "--yes",
+    ], project, runtimeEnv());
+    expect(neither.status).not.toBe(0);
+    expect(neither.stdout + neither.stderr).toContain("--agent requires --effort <value> or --model <raw-id>");
+    // With a second harness the command asks for --harness, and with it the change is done.
+    const added = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "codex"), "--harness", "codex", "--mcp", "none", "--yes",
+    ], project);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    const request = ["config", "models", "--project-dir", project, "--project", "--agent", "developer", "--effort", "high", "--yes"];
+    const asked = run(request, project, runtimeEnv());
+    expect(asked.status).not.toBe(0);
+    expect(asked.stdout + asked.stderr).toContain("pass one --harness <name>");
+    const named = run([...request, "--harness", "claude"], project, runtimeEnv());
+    expect(named.status, named.stdout + named.stderr).toBe(0);
+    expect(named.stdout).toContain("developer effort: not set -> high in aidlc.settings.json.");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("on Copilot a model change while a workflow runs is recorded without claiming the agents use it", () => {
     const project = install("copilot");
     const dirName = "active-copilot-policy";

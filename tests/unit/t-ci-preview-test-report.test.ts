@@ -15,6 +15,7 @@ import {
   collectFailures,
   FAILED_SUITE_POINTER,
   FAILED_SUITE_WARNING,
+  FAILED_UPDATE_WARNING,
   failedJobs,
   jobGroup,
   MAX_REPORT,
@@ -23,6 +24,7 @@ import {
   renderReport,
   type RunFailures,
   stagePreviewNotes,
+  updateReport,
 } from "../../scripts/ci-preview-test-report.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -291,6 +293,27 @@ describe("t-ci-preview-test-report", () => {
     expect(stagePreviewNotes(tight, report)).toBe(tight);
     const oversized = "x".repeat(RELEASE_BODY_LIMIT + 1);
     expect(stagePreviewNotes(oversized, report)).toBe(oversized);
+  });
+
+  test("a failed update from the last release warns and keeps its line when a long report is cut", () => {
+    const body = "- change\n\nSource commit: owner/repo@a\n";
+    const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
+    const line = updateReport("https://x/run/9");
+    expect(line).toContain("[the preview run](https://x/run/9)");
+    // A passing suite adds no report of its own, and nothing failed changes nothing.
+    expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false, updateRunUrl: "https://x/run/9" }))
+      .toBe(`${FAILED_UPDATE_WARNING}${body}\n${line}`);
+    expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false })).toBe(body);
+    const both = { suite: true, updateRunUrl: "https://x/run/9" };
+    const full = `${FAILED_SUITE_WARNING}${FAILED_UPDATE_WARNING}${body}\n${line}\n${report}`;
+    expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, both)).toBe(full);
+    const cut = stagePreviewNotes(body, report, full.length - 1, both);
+    expect(cut).toStartWith(`${FAILED_SUITE_WARNING}${FAILED_UPDATE_WARNING}${body}\n${line}\n## Nightly test report\n`);
+    expect(cut).toEndWith("\n- ...report truncated; the run summary has the full report.\n");
+    // With no room for a report the update warning stays beside the pointer.
+    const pointed = "x".repeat(RELEASE_BODY_LIMIT - FAILED_SUITE_POINTER.length - FAILED_UPDATE_WARNING.length);
+    expect(stagePreviewNotes(pointed, report, RELEASE_BODY_LIMIT, both))
+      .toBe(`${FAILED_SUITE_POINTER}${FAILED_UPDATE_WARNING}${pointed}`);
   });
 
   test("the command stages a failing preview's notes in the plan file", () => {

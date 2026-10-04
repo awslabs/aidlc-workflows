@@ -1396,10 +1396,30 @@ names.
 When a harness supplies a correlated delegated-agent identity, the same guard
 also refuses conductor-only entrypoints from reviewers, leads, and support
 agents: orchestrator `next`/`report`/`park`, mutating state verbs including
-`unpark`, jump execution, and workflow routing/configuration mutations.
-Delegated agents retain ordinary shell access for artifact work, builds,
-validation, and read-only state inspection; they return their result to the
-main conductor, which alone owns workflow lifecycle and gates.
+`unpark`, the construction setters and the `unit` receipts, jump execution,
+workflow routing/configuration mutations, project reclassification, plugin
+selection and sync (a bare selection query stays open), upgrade, the team Unit
+commands that claim, publish, pin, gate, land, or release a Unit, Bolt and swarm
+lifecycle and checkpoint decisions, question, review, and pipeline-link
+receipts, learnings persistence, runtime fragment fork and merge, audit fork and
+merge, purging a Bolt's parked worktree, and the Code Generation boundary and plan-approval
+fingerprint. It reads a script's verb
+also after `--flag value` pairs placed before it (for testing-posture, the first
+of its verbs anywhere), and an `aidlc` command past the dispatcher's global
+flags (`--json`, `--quiet`, ...), which the dispatcher drops before routing. Delegated agents retain ordinary shell
+access for artifact work, builds, validation, and read-only state inspection;
+they return their result to the main conductor, which alone owns workflow
+lifecycle and gates. The guard also refuses a delegate `aidlc-machine-config.ts`
+and `aidlc system config global` whole.
+Kiro IDE and Kiro CLI v3 supply no such identity, so the kiro-ide row gives each
+delegated persona its own shell deny instead
+(`harness/kiro-ide/delegate-shell-deny.ts`): it denies the conductor's command
+allow and excludes only the script verbs the guard admits a delegate
+(`delegateAdmittedVerbs`: reads and the work a persona is dispatched to do; the
+Bolt worktree create, merge, discard and restore for pipeline-deploy only, a
+role limit the guard itself does not apply where a call names its agent)
+and the workspace query forms the workspace parser recognises, each where the
+guard does not refuse it, so a verb no one classified stays denied there. That rule does not follow the fence switch.
 
 The command-position parser recursively normalizes recognized execution
 wrappers (`command`, `exec`, `time`, `env`, `nice`, and `nohup`) before applying

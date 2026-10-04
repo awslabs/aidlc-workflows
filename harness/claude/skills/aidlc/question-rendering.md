@@ -1,7 +1,7 @@
 # Question Rendering — Claude Code harness annex
 
 This file defines how THIS harness renders the structured questions that
-`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
 The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
@@ -155,4 +155,4 @@ reviewer, learnings, or approval steps.
   record it verbatim (protocol: never summarize User Input).
 - **Long prompts**: the question body renders at full terminal width and wraps
   gracefully (multi-line wrap verified on macOS before each release) — see
-  `knowledge/aidlc-shared/worktree-info-schema.md` for the long-path fallback.
+  `{{HARNESS_DIR}}/knowledge/aidlc-shared/worktree-info-schema.md` for the long-path fallback.

@@ -1428,6 +1428,18 @@ describe("t305 real receipt and guard flows", () => {
     const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("4b a shared path holding exactly a newer review's bytes is that Unit's own reviewed build", () => {
+    const stage = {slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]};
+    const { project, record } = runtimeFixture(); writeFileSync(join(project, "shared.ts"), "export const s=1\n");
+    review(project, record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(project, "shared.ts"), "export const s=2\n"); review(project, record, "beta", [{ path: "shared.ts" }]);
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    // alpha's shared path moved only to what beta's review recorded; beta's own bytes never moved.
+    expect([...freshReviewReceipts(project, state, stage).unitSourceAttributed]).toEqual(["alpha"]);
+    // An edit after beta's review matches no review, so nothing is attributed.
+    writeFileSync(join(project, "shared.ts"), "export const s=3\n");
+    expect([...freshReviewReceipts(project, state, stage).unitSourceAttributed]).toEqual([]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
     const claimed = runtimeFixture(); review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }]); review(claimed.project, claimed.record, "beta", []);
     writeFileSync(join(claimed.project, "extra.ts"), "export const x=1\n"); review(claimed.project, claimed.record, "beta", []);

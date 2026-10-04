@@ -260,8 +260,10 @@ hand-written code.
 Developer writes the structured scan results following the Developer Code Scan
 Template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
 
-- Unrecorded project-root repo:
-  `<record>/inception/reverse-engineering/developer-scan.md`
+- Unrecorded project-root repo (no repo is registered, and `codekb-path`
+  prints the project folder's own name):
+  `<record>/inception/reverse-engineering/developer-scan.md`, also when you
+  pass that name as `--repo`, so a rescan replaces the earlier handoff
 - Registered repo (including an exactly-one repo set):
   `<record>/inception/reverse-engineering/developer-scan-<repo>.md`
 
@@ -288,6 +290,8 @@ Delegate to Task tool with aidlc-architect-agent:
 - subagent_type="aidlc-architect-agent"
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
 - Pass the developer scan handoff path, not its body; the architect reads that file
+- Pass the template path, `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
+  the architect writes the nine artifacts and the Scope of Analysis block from it
 - Include workspace state from aidlc-state.md
 - Tell the architect that when it checks the project's source it follows the
   developer's rule: it leaves AI-DLC's own install and every folder the "What
@@ -305,7 +309,7 @@ Architect synthesizes scan results into a complete 9-artifact candidate:
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) under a `## Run Record` heading and MUST end with the structured `## Scope of Analysis` block, both from the re-artifacts.md template. Fill it from the developer's Scan Coverage and, for a focused merge, the existing store according to the rules below - it records what is ACTUALLY verified deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads.
+9. **reverse-engineering-timestamp.md** - Records when reverse engineering was performed (date, commit hash if available) under a `## Run Record` heading and MUST end with the structured `## Scope of Analysis` block, both from the template in `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`. Fill it from the developer's Scan Coverage and, for a focused merge, the existing store according to the rules below - it records what is ACTUALLY verified deeply, not what was aspired to. This is the freshness/staleness marker the Step 1 rerun guard reads.
 
 Choose the write behavior recorded in Step 1:
 

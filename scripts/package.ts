@@ -1002,6 +1002,25 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// A manifest's nativeReplacements, applied before the generic rewrite, which
+// would otherwise turn their copy-channel text into retired or unresolvable
+// engine spellings.
+function applyNativeReplacements(outRoot: string, m: HarnessManifest): void {
+  for (const { from, to } of m.nativeReplacements ?? []) {
+    let found = false;
+    for (const file of walk(outRoot)) {
+      if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
+      const value = readFileSync(file, "utf-8");
+      if (!value.includes(from)) continue;
+      found = true;
+      writeFileSync(file, value.replaceAll(from, to));
+    }
+    if (!found) {
+      throw new Error(`[${m.name}] nativeReplacements: text not found in the native projection:\n${from}`);
+    }
+  }
+}
+
 function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "kiro") return;
   const agentsDir = join(outRoot, m.harnessDir, "agents");
@@ -1151,6 +1170,7 @@ function rewriteNativeInvocations(
   copyRoot: string,
 ): void {
   projectNativeRootIntegrations(outRoot, m);
+  applyNativeReplacements(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
   // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
   // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
@@ -1315,6 +1335,14 @@ function rewriteNativeInvocations(
   }
   writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 
+  // A manifest's nativeReplacements text is generated from the route table
+  // (permission globs, not invocations), so the prose check skips it; its
+  // lines stay as blank lines so reported line numbers still match the file.
+  const withoutNativeReplacements = (value: string): string =>
+    (m.nativeReplacements ?? []).reduce(
+      (text, { to }) => text.replaceAll(to, to.replace(/[^\n]/g, "")),
+      value,
+    );
   const leftovers: string[] = [];
   for (const file of walk(outRoot)) {
     if (!/\.(?:md|mdc|json|toml|hook|ts)$/.test(file)) continue;
@@ -1334,7 +1362,7 @@ function rewriteNativeInvocations(
       leftovers.push(`${relative(outRoot, file)}: retired engine alias survived native projection`);
     }
     leftovers.push(
-      ...projectedNamespaceInvocationViolations(relative(outRoot, file), value),
+      ...projectedNamespaceInvocationViolations(relative(outRoot, file), withoutNativeReplacements(value)),
     );
     if (
       relative(outRoot, file).split(sep).join("/").includes("/agents/") &&

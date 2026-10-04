@@ -1023,7 +1023,21 @@ export function stripOrchestratorLauncherOptions(args: readonly string[]): strin
   return normalized;
 }
 
-export type WorkspaceNoun = "intent" | "space";
+export const WORKSPACE_NOUNS = ["intent", "space"] as const;
+export type WorkspaceNoun = (typeof WORKSPACE_NOUNS)[number];
+
+// aidlc-testing-posture.ts runs the first of these it finds anywhere in argv.
+export const TESTING_POSTURE_SUBCOMMANDS = ["resolve", "render", "fingerprint", "verify", "begin", "brief", "reply"] as const;
+
+// The commands aidlc-utility.ts dispatches, as its unknown-command error lists them.
+export const UTILITY_COMMANDS = [
+  "help", "version", "status", "doctor", "intent-create", "intent", "space",
+  "space-create", "codekb-path", "codekb-snapshot", "codekb-publish", "project-description",
+  "document-input", "codekb-scope-diff", "detect", "reclassify", "select-plugins", "plugin-list",
+  "plugin-sync", "plugin-validate", "plugin-build", "recompose", "scope-change", "scope-save",
+  "config-change", "config-get", "config-list", "set-status", "detect-scope",
+  "resolve-env-scope", "scope-table", "stage-table", "upgrade",
+] as const;
 
 export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "list",
@@ -1124,8 +1138,8 @@ function reservedFutureWorkspaceVerb(
   };
 }
 
-function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
-  return token === "intent" || token === "space";
+export function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
+  return (WORKSPACE_NOUNS as readonly (string | undefined)[]).includes(token);
 }
 
 function isReservedFutureWorkspaceVerb(
@@ -13909,6 +13923,10 @@ export interface FreshReviewReceipts {
   unitStale: Set<string>;
   /** Validated modern claim model for every unit whose receipt remains fresh. */
   freshUnitClaims: Map<string, SourceClaimModel>;
+  /** Units whose reviewed source moved only to bytes a newer review in this
+   *  attempt recorded for paths it claims: another Unit's own reviewed build,
+   *  not an edit after the review. Their review's source binding still holds. */
+  unitSourceAttributed: Set<string>;
   /** Effective stage-entry source baseline for unclaimed-path verification. */
   sourceBaseline: SourceBaselineResult;
   /** Current source listing from the guard's single workspace walk, when needed. */
@@ -17832,6 +17850,7 @@ export function freshReviewReceipts(
     sourceRecoverySpent: false,
     unitStale: new Set(),
     freshUnitClaims: new Map(),
+    unitSourceAttributed: new Set(),
     sourceBaseline: { state: "legacy" },
     currentSourceListing: null,
     stageStaleProgress: null,
@@ -18423,8 +18442,16 @@ export function freshReviewReceipts(
   }
 
   const freshUnitClaims = new Map<string, SourceClaimModel>();
+  const unitSourceAttributed = new Set<string>();
   if (sourceFreshnessApplies && currentSourceListing !== null) {
     const newerFreshClaims: SourceClaimModel[] = [];
+    // What each newer validated review recorded, newest first: a path it claims
+    // that now holds exactly those bytes is its own reviewed build.
+    const newerReviewedSources: { claims: SourceClaimModel; listing: WorkspaceSourceListing }[] = [];
+    const reviewedByNewer = (pathKey: string): boolean =>
+      newerReviewedSources.some((newer) =>
+        sourceClaimCovers(pathKey, newer.claims) &&
+        sourceListingEntriesEqual(currentSourceListing.get(pathKey), newer.listing.get(pathKey)));
     const receiptsNewestFirst = [...modernUnitReceipts.entries()]
       .filter(([unit]) => unitVerdicts.has(unit))
       .sort((a, b) => b[1].order - a[1].order);
@@ -18480,14 +18507,21 @@ export function freshReviewReceipts(
           // invalidates more receipts, never fewer. A newer validated claimant
           // may still shield a path.
           const movedPathKeys: string[] = [];
+          let movedAtAll = false;
+          let allReviewedByNewer = true;
+          const moved = (pathKey: string): void => {
+            movedAtAll = true;
+            if (!reviewedByNewer(pathKey)) allReviewedByNewer = false;
+          };
           for (const [pathKey, reviewedOid] of reviewedListing) {
-            if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
             if (
               !sourceListingEntriesEqual(
                 currentSourceListing.get(pathKey),
                 reviewedOid,
               )
             ) {
+              moved(pathKey);
+              if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
               movedPathKeys.push(pathKey);
             }
           }
@@ -18497,9 +18531,12 @@ export function freshReviewReceipts(
               manifest.prefixes.some((prefix) => pathKey.startsWith(prefix)) &&
               !reviewedListing.has(pathKey);
             if (!newlyPresentExact && !newlyPresentUnderPrefix) continue;
+            moved(pathKey);
             if (newerFreshClaims.some((claims) => sourceClaimCovers(pathKey, claims))) continue;
             movedPathKeys.push(pathKey);
           }
+          if (movedAtAll && allReviewedByNewer) unitSourceAttributed.add(unit);
+          newerReviewedSources.push({ claims: claimModel, listing: reviewedListing });
           if (movedPathKeys.length > 0) {
             if (isRelaxed()) {
               // Reviewed source moved: the verdict stands, the change is carried
@@ -18645,6 +18682,7 @@ export function freshReviewReceipts(
     sourceRecoverySpent,
     unitStale,
     freshUnitClaims,
+    unitSourceAttributed,
     sourceBaseline,
     currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
     stageStaleProgress,
@@ -30738,11 +30776,13 @@ export function findAllEvents(
 ): { timestamp: string; block: string }[] {
   const results: { timestamp: string; block: string; pos: number }[] = [];
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const eventRegex = new RegExp(`^\\*\\*Event\\*\\*:\\s*${escapeRegex(event)}\\s*$`, "m");
+  // A field's value sits on its own line: `[ \t]*`, never `\s*`, which would
+  // read a bare `**Event**:` label's value from the next line.
+  const eventRegex = new RegExp(`^\\*\\*Event\\*\\*:[ \\t]*${escapeRegex(event)}[ \\t]*$`, "m");
   const slugRegex = slug
-    ? new RegExp(`^\\*\\*Bolt slug\\*\\*:\\s*${escapeRegex(slug)}\\s*$`, "m")
+    ? new RegExp(`^\\*\\*Bolt slug\\*\\*:[ \\t]*${escapeRegex(slug)}[ \\t]*$`, "m")
     : null;
-  const tsRegex = /^\*\*Timestamp\*\*:\s*(\S+)/m;
+  const tsRegex = /^\*\*Timestamp\*\*:[ \t]*(\S+)/m;
   let pos = 0;
   for (const block of blocks) {
     if (!eventRegex.test(block)) {
