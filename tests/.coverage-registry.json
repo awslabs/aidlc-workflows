@@ -5204,6 +5204,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isAidlcCommandPrompt",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isArchivedIntent",
       "minMechanism": "none",
       "coveredBy": [
@@ -7290,6 +7297,13 @@
     {
       "unitClass": "function",
       "unitId": "function:PHASES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:pickerOffersOnly",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
