@@ -24,6 +24,7 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 ### Scan Coverage
 - **Analyzed deeply**: [repo-relative dirs/files actually read and understood, one per line]
 - **Skimmed only**: [areas noted at directory granularity without deep reading]
+- **Left out**: [folders not opened because "What to Skip" in code-analysis-guide.md skips them, such as build output, one per line]
 
 ### Packages Found
 - [package name] — [type] — [language] — [purpose]
@@ -160,6 +161,7 @@ Rules:
 - `kind: partial` MUST NOT include `./` in `analyzed.paths`.
 - `analyzed.paths` entries are repo-relative, directories end with `/`, no glob characters.
 - Component names must match `component-inventory.md` headings verbatim - the rerun guard compares them literally.
+- A folder the scan left out (the developer's **Left out** list, such as build output) does not go in `shallow.paths`: it stays out of the block.
 - A full rescan wholesale replaces all 9 artifacts and builds this block only from the new run.
 - For a focused scan of an existing store, read all 9 existing artifacts and the prior Scope of Analysis block first. Update or extend prose for the newly analyzed area and preserve prior prose outside it.
 - With a CURRENT store, merge `analyzed.paths` and `analyzed.components` as the union of the store and this run. A CURRENT `kind: full` store remains full and retains `./`; otherwise the merged block is partial and cannot claim `./`.
