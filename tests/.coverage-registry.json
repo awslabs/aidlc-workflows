@@ -1922,6 +1922,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:auditMark",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:auditShardDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -7248,6 +7255,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:personRepliedAfter",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
