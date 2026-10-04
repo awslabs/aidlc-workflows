@@ -1440,9 +1440,12 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
       { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
     );
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      '{"kind":"print","message":"Recorded awaiting-approval for \\"requirements-analysis\\"."}',
-    );
+    // The happy-path print, with the next stage and where the output is.
+    const printed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+    expect(printed.kind).toBe("print");
+    expect(printed.message).toBe('Recorded awaiting-approval for "requirements-analysis".');
+    expect(typeof printed.next_stage).toBe("string");
+    expect(String(printed.narration)).toStartWith("Requirements Analysis is ready for your review: what it produced is in ");
     expect(countEvent(p, "STAGE_AWAITING_APPROVAL")).toBe(1);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
