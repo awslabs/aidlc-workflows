@@ -2128,6 +2128,16 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
   const channelSwitch = current && versionChannel(current) !== versionChannel(result.version)
     ? { from: versionChannel(current), to: versionChannel(result.version) }
     : undefined;
+  // Only `config --channel` changes the channel the machine follows; `--channel`
+  // here lasts this run, and `--version` and `--from` pick a release of either
+  // channel. So a move onto the other channel is the machine's switch only
+  // when the machine already follows it.
+  let follows: ReleaseChannel | undefined;
+  try {
+    follows = channelSwitch ? readMachineChannel() : undefined;
+  } catch {
+    // The update is done; an unreadable marker is doctor's to report.
+  }
   const switched = channelSwitch
     ? ` (switched channel ${channelSwitch.from} -> ${channelSwitch.to})`
     : "";
@@ -2150,6 +2160,7 @@ async function updateCommand(argv: string[]): Promise<CommandResult> {
       ...result,
       channel,
       ...(channelSwitch ? { channelSwitch } : {}),
+      ...(follows !== undefined && follows !== channelSwitch?.to ? { follows } : {}),
       pruned,
       ...(pruneWarning ? { pruneWarning } : {}),
     },
@@ -2583,6 +2594,7 @@ function humanLifecycleNarration(
       version?: string;
       channel?: ReleaseChannel;
       channelSwitch?: { from: ReleaseChannel; to: ReleaseChannel };
+      follows?: ReleaseChannel;
       pruned?: string[];
       pruneWarning?: string;
     } | undefined;
@@ -2595,9 +2607,13 @@ function humanLifecycleNarration(
       : data?.pruneWarning
       ? `\nWarning: update succeeded, but old-release cleanup was skipped: ${data.pruneWarning}`
       : "";
-    const switchLine = data?.channelSwitch
-      ? `Switched release channel from ${data.channelSwitch.from} to ${data.channelSwitch.to}.`
-      : null;
+    const switchLine = !data?.channelSwitch
+      ? null
+      : data.follows !== undefined
+      ? `This machine still follows ${data.follows} releases, so \`aidlc update\` goes back to the ` +
+        `newest one. To follow ${data.channelSwitch.to} releases, run ` +
+        `\`aidlc config --channel ${data.channelSwitch.to}\`.`
+      : `Switched release channel from ${data.channelSwitch.from} to ${data.channelSwitch.to}.`;
     if (argv.includes("--dry-run")) {
       return before === target
         ? successText(
@@ -2606,7 +2622,7 @@ function humanLifecycleNarration(
         )
         : warnVerdict(
           `Would update aidlc from ${before ?? "not installed"} to ${target}${
-            switchLine ? ` (switching to the ${data?.channelSwitch?.to} channel)` : ""
+            switchLine && data?.follows === undefined ? ` (switching to the ${data?.channelSwitch?.to} channel)` : ""
           }.`,
           process.stdout,
         );

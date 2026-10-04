@@ -1117,8 +1117,12 @@ A no-op says `You're on the latest version of aidlc (<version>).`; `--dry-run`
 says `Would update aidlc from <old> to <new>.`, or
 `You're on the latest version of aidlc (<version>); nothing to update.` when
 nothing would change. On the preview channel the update lines say
-`preview releases` and `latest preview version`, and an update that crosses
-channels adds `Switched release channel from <a> to <b>.`. `aidlc use`
+`preview releases` and `latest preview version`. An update onto the channel the
+machine follows, from a release of the other one, adds `Switched release channel
+from <a> to <b>.`; one that moves onto the other channel for one run
+(`--channel`, `--version` or `--from`) says instead that the machine still
+follows its channel, so `aidlc update` goes back to its newest release, and
+names `aidlc config --channel <c>` to follow the other. `aidlc use`
 distinguishes `Now using` from `Already using`, and uninstall states exactly
 which machine state was removed or kept. JSON and quiet messages retain their
 stable machine contracts; update JSON carries `channel` and, on a switch,
