@@ -1736,24 +1736,29 @@ function pendingDuration(ageMs: number): string {
   return words(Math.floor(hours / 24), "day");
 }
 
-// A persona's name for status. The state file and persona files are
-// repository text, so status says only the persona's own name: its display
-// name when that is its slug's words recased ("AWS Platform Agent" for
-// aidlc-aws-platform-agent), else the slug. A stored value outside the slug
-// shape is not shown.
+// The shipped personas' names. Status says only these: persona files and the
+// state file are project text, so another persona is "a custom agent" and a
+// stored value that is no persona is not shown.
+const SHIPPED_AGENT_NAMES: Readonly<Record<string, string>> = {
+  "aidlc-architect-agent": "Architect Agent",
+  "aidlc-architecture-reviewer-agent": "Architecture Reviewer",
+  "aidlc-aws-platform-agent": "AWS Platform Agent",
+  "aidlc-compliance-agent": "Compliance Agent",
+  "aidlc-composer-agent": "Composer Agent",
+  "aidlc-delivery-agent": "Delivery Agent",
+  "aidlc-design-agent": "Design Agent",
+  "aidlc-developer-agent": "Developer Agent",
+  "aidlc-devsecops-agent": "DevSecOps Agent",
+  "aidlc-operations-agent": "Operations Agent",
+  "aidlc-pipeline-deploy-agent": "Pipeline & Deploy Agent",
+  "aidlc-product-agent": "Product Agent",
+  "aidlc-product-lead-agent": "Product Lead",
+  "aidlc-quality-agent": "Quality Agent",
+};
+
 function agentDisplayName(slug: string): string | null {
-  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(slug)) return null;
-  const words = (text: string): string =>
-    text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-agent$/, "");
-  try {
-    const display = loadAgents().find((agent) => agent.slug === slug)?.display_name;
-    if (display && /^[A-Za-z0-9 &]{1,64}$/.test(display) && words(display) === words(slug.replace(/^aidlc-/, ""))) {
-      return display;
-    }
-  } catch {
-    // A malformed or duplicate persona file is doctor's to report.
-  }
-  return slug;
+  if (Object.hasOwn(SHIPPED_AGENT_NAMES, slug)) return SHIPPED_AGENT_NAMES[slug];
+  return /^[a-z0-9][a-z0-9-]{0,79}$/.test(slug) ? "a custom agent" : null;
 }
 
 // An engine timestamp as a person reads it: the date and the minute, in UTC.
