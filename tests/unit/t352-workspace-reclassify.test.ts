@@ -502,7 +502,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(String(next(proj).question)).toContain("then we continue at Practices Discovery");
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Next I'll run Reverse Engineering to document the existing code, then we're back at Practices Discovery.");
+    expect(reply(r)).toContain("Next I'll document the code, then we're back at Practices Discovery.");
     expect(reverseEngineeringOwedBehindCursor(state(proj))).toBe(true);
     expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo --scope classic");
   });
@@ -515,7 +515,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     expect(field(state(proj), "Stages to Skip")).toContain(GREENFIELD_MARK);
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
-    expect(r.stdout).toContain("Project type is now Brownfield, as you said (it was Greenfield, as you said earlier).");
+    expect(reply(r)).toStartWith("Project type is now existing code, as you said");
     expect(r.stdout).toContain("Reverse Engineering is back on the plan; it runs when we reach it.");
     expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} EXECUTE`);
   });
