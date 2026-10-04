@@ -379,6 +379,11 @@ describe("t242 state-transition ownership guard", () => {
       ["bun .claude/tools/aidlc-worktree.ts purge --slug u1 --older-than 0", "aidlc-worktree.ts purge"],
       ["bun .claude/tools/aidlc-worktree.ts --project-dir . purge --slug u1", "aidlc-worktree.ts purge"],
       ["aidlc engine worktree --json purge --slug u1", "aidlc engine worktree purge"],
+      // The audit fork and merge-back primitives.
+      ["bun .claude/tools/aidlc-audit.ts audit-merge --slug u1", "aidlc-audit.ts audit-merge"],
+      ["bun .claude/tools/aidlc-audit.ts --project-dir . audit-fork --slug u1", "aidlc-audit.ts audit-fork"],
+      ["aidlc engine audit merge --slug u1", "aidlc engine audit merge"],
+      ["bun .claude/tools/aidlc.ts engine audit fork --slug u1", "aidlc.ts engine audit fork"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
@@ -437,6 +442,8 @@ describe("t242 state-transition ownership guard", () => {
       "bun .claude/tools/aidlc-worktree.ts discard --slug u1",
       "aidlc engine worktree restore --slug u1",
       "aidlc engine worktree info --slug u1",
+      "bun .claude/tools/aidlc-audit.ts history",
+      "aidlc engine audit append --type PRACTICES_SECTION_EMPTY",
       "aidlc engine plugin select --no-color",
     ]) {
       expect(delegatedLifecycleCommand(read), read).toBeNull();
