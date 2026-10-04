@@ -523,11 +523,13 @@ directory is read-only inside a command sandbox. A per-call
 
 A drive is one session and, by default, ends at its first turn's result. A
 journey that needs the person's next message passes `nextMessage`: when a turn
-ends, it gets that turn's counts and returns the message to send into the same
-session (or nothing, to end the drive). `chatAboutQuestionWhen` answers a
-picker the way Claude Code's "Chat about this" button does, so the question
-stays open; an `answerScript` spec `{ text }` types the person's own words into
-a picker; `captureStopHooks` records each Stop hook verdict with its turn.
+ends, it gets the turn number and the drive's running totals so far (pickers,
+tool results, Stop hooks; subtract the previous turn's totals for one turn's
+own) and returns the message to send into the same session (or nothing, to end
+the drive). `chatAboutQuestionWhen` answers a picker the way Claude Code's
+"Chat about this" button does, so the question stays open; an `answerScript`
+spec `{ text }` types the person's own words into a picker; `captureStopHooks`
+records each Stop hook verdict with its turn.
 
 A suite launched from inside a Claude Code session (`CLAUDECODE=1`) does not
 hand that session's `ANTHROPIC_DEFAULT_*_MODEL` defaults to its drives: the
