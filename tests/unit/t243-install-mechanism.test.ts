@@ -46,6 +46,7 @@ import {
   projectionFiles,
   removeJsoncSetting,
   sha256Bytes,
+  unionBlocks,
   walkFiles,
 } from "../../core/tools/aidlc-distribution.ts";
 import {
@@ -972,6 +973,9 @@ describe("t243 project initialization", () => {
     expect(gitignore).toContain("aidlc/.aidlc-turn-counter");
     expect(gitignore).toContain("aidlc/.aidlc-readonly-latch");
     expect(gitignore.split("# BEGIN AI-DLC:gitignore").length - 1).toBe(1);
+    // The combined part keeps one comment line naming it.
+    expect(gitignore.split("\n").filter((line) => line.startsWith("#") && !/^# (BEGIN|END) AI-DLC:/.test(line)))
+      .toEqual(["# AI-DLC: local working files"]);
 
     const dry = run(INIT, [
       "config",
@@ -3091,6 +3095,49 @@ describe("t243 project initialization", () => {
     const agents = readFileSync(join(project, "AGENTS.md"), "utf-8");
     expect(agents).toStartWith("# Shop\n\nOur own notes for agents.\n\n<!-- BEGIN AI-DLC:agents -->\n");
     expect(agents.match(/BEGIN AI-DLC:agents/g)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A copy with two harnesses that config never ran in holds their combined
+  // part as an earlier release wrote it, with notes between the entries.
+  // Config takes it as AI-DLC's own and writes the plain part.
+  test("config replaces an earlier combined part with notes in a copy it never ran in", () => {
+    const project = temp("aidlc-t243-copy-union-");
+    mkdirSync(join(project, ".git"));
+    const parts: Array<{ distribution: string; text: string }> = [];
+    for (const distribution of ["claude", "kiro"]) {
+      const root = join(REPO_ROOT, "dist", distribution);
+      const { descriptor } = projectionFiles(root);
+      const omitted = copyChannelOmits(descriptor);
+      for (const rel of walkFiles(root)) {
+        if (omitted.has(rel)) continue;
+        mkdirSync(dirname(join(project, rel)), { recursive: true });
+        cpSync(join(root, rel), join(project, rel));
+      }
+      parts.push({
+        distribution,
+        text: readFileSync(join(root, descriptor.harnessDir, "tools", "data", "root-blocks", "gitignore"), "utf-8"),
+      });
+    }
+    const plain = unionBlocks(parts);
+    const entries = plain.split("\n").filter((line) => !line.startsWith("#"));
+    const earlier = [
+      "# AI-DLC, the committed and ignored split.",
+      ...entries.slice(0, 4),
+      "# Machine-local runtime is ignored.",
+      ...entries.slice(4, -2),
+      "",
+      "# kiro harness",
+      ...entries.slice(-2),
+    ].join("\n");
+    writeFileSync(join(project, ".gitignore"), `mine.env\n\n# BEGIN AI-DLC:gitignore\n${earlier}\n# END AI-DLC:gitignore\n`);
+    const configured = run(INIT, [
+      "config", "--project-dir", project, "--from", join(REPO_ROOT, "dist", "claude"), "--harness", "claude", "--mcp", "none", "--yes",
+    ], project);
+    expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    const gitignore = readFileSync(join(project, ".gitignore"), "utf-8");
+    expect(gitignore).toBe(`mine.env\n\n# BEGIN AI-DLC:gitignore\n${plain}\n# END AI-DLC:gitignore\n`);
+    expect(gitignore.split("\n").filter((line) => line.startsWith("#") && !/^# (BEGIN|END) AI-DLC:/.test(line)))
+      .toEqual(["# AI-DLC: local working files"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {

@@ -41,7 +41,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
-import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
+import { sha256Bytes, unionBlocks } from "../../core/tools/aidlc-distribution.ts";
 import { addRootBlocks, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -660,6 +660,39 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     writeFileSync(join(root, ".gitignore"), earlier);
     expect(addRootBlocks(root)).toContain(".gitignore");
     expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(`${template}\n\n${gitignorePart()}`);
+  });
+
+  // Earlier parts had notes above each group of entries, and two harnesses'
+  // parts were combined under a heading per harness. A part with exactly the
+  // shipped entries is AI-DLC's own whatever its notes, so it becomes the
+  // plain part: one comment line, then every harness's entries.
+  test("an earlier part with notes, alone or combined, becomes the plain part", () => {
+    const root = copiedProject();
+    cpSync(distSurface("kiro", ".kiro"), join(root, ".kiro"), { recursive: true });
+    const kiroBlock = readFileSync(join(distSurface("kiro", ".kiro"), "tools", "data", "root-blocks", "gitignore"), "utf-8");
+    const plain = unionBlocks([
+      { distribution: "copilot", text: readFileSync(join(blocks, "gitignore"), "utf-8") },
+      { distribution: "kiro", text: kiroBlock },
+    ]);
+    const entries = plain.split("\n").filter((line) => !line.startsWith("#"));
+    const earlier = [
+      "# AI-DLC, the committed and ignored split.",
+      "# Per-user cursors are ignored.",
+      ...entries.slice(0, 3),
+      "#",
+      "# Machine-local runtime is ignored.",
+      ...entries.slice(3, -2),
+      "",
+      "# kiro harness",
+      ...entries.slice(-2),
+    ].join("\n");
+    writeFileSync(join(root, ".gitignore"), `node_modules\n\n# BEGIN AI-DLC:gitignore\n${earlier}\n# END AI-DLC:gitignore\n`);
+    expect(addRootBlocks(root)).toContain(".gitignore");
+    const written = readFileSync(join(root, ".gitignore"), "utf-8");
+    expect(written).toBe(`node_modules\n\n# BEGIN AI-DLC:gitignore\n${plain}\n# END AI-DLC:gitignore\n`);
+    expect(written).toContain("aidlc/.aidlc-turn-counter");
+    expect(written.split("\n").filter((line) => line.startsWith("#") && !/^# (BEGIN|END) AI-DLC:/.test(line)))
+      .toEqual(["# AI-DLC: local working files"]);
   });
 
   test("a part the team changed, and a project config manages, are left as they are", () => {
