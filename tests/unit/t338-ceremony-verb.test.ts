@@ -402,8 +402,10 @@ describe("t338 atomic per-intent settings", () => {
     // express declares every ceremony off; the human's learnings choice is
     // retained, so the clause names reviewers, the env-disabled sensors, and
     // the scope-owned summary confirmation and plan approval.
-    const expressSummary = express.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(expressSummary?.split("; no ")[1]).toBe("reviewers, sensors, summary confirmation, or plan approval");
+    // The clause rides the reply's first line, after the approval gate count.
+    const offClause = (stdout: string): string | undefined =>
+      stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". To go back")[0];
+    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, or plan approval");
     // Plan approval follows the scope the person switched to.
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
@@ -413,8 +415,7 @@ describe("t338 atomic per-intent settings", () => {
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
     expect(classic.status, classic.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
-    const classicSummary = classic.stdout.split("\n").find((line) => line.startsWith("Approval gates:"));
-    expect(classicSummary?.split("; no ")[1]).toBe("summary confirmation");
+    expect(offClause(classic.stdout)).toBe("summary confirmation");
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("on (from scope classic)");
   });
 
