@@ -1773,6 +1773,7 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
     learnings: meta.ceremony?.learnings ?? "on",
     summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
     plan_approval: meta.ceremony?.plan_approval ?? "on",
+    collaborators: meta.ceremony?.collaborators ?? "on",
     review_cap: meta.reviewCap ?? "adversarial",
   };
 }

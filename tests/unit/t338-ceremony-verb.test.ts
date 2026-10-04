@@ -406,7 +406,7 @@ describe("t338 atomic per-intent settings", () => {
     // The clause rides the reply's first line, after the approval gate count.
     const offClause = (stdout: string): string | undefined =>
       stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". To go back")[0];
-    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, or plan approval");
+    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, plan approval, or collaborators");
     // Plan approval follows the scope the person switched to.
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
@@ -416,7 +416,7 @@ describe("t338 atomic per-intent settings", () => {
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
     expect(classic.status, classic.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
-    expect(offClause(classic.stdout)).toBe("summary confirmation");
+    expect(offClause(classic.stdout)).toBe("summary confirmation or collaborators");
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("on (from scope classic)");
   });
 
@@ -467,6 +467,7 @@ describe("t338 atomic per-intent settings", () => {
       "guard-policy": "strict (set by you)", sensors: "off (set by a command)",
       learnings: "off (set by a command)", "summary-confirmation": "on (set by a command)",
       "plan-approval": "on (from scope classic)",
+      collaborators: "off (from scope classic)",
       // `guard.plan-approval` is the same switch, so it reads the same setting.
       "guard.plan-approval": "on (from scope classic)", "guard.review-freeze": "on (default)",
       "guard.state-transition": "on (default)", "guard.reviewer-scope": "on (default)",

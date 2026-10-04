@@ -16,6 +16,7 @@ sensors: on
 learnings: off
 summary_confirmation: off
 plan_approval: on
+collaborators: off
 ---
 
 # bugfix scope

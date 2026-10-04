@@ -83,6 +83,13 @@ function pipelineProject(): string {
   projects.push(proj);
   seedAidlcMemory(proj);
   seedStateFile(proj, "state-brownfield-init-done.md");
+  // The fixture scope ships collaborators off, which would collapse the
+  // reverse-engineering pipeline to the developer lead alone and drop the
+  // architect link this suite verifies — including isolated single runs, which
+  // inherit this main-workflow scope. Pin the scope to enterprise (the one
+  // collaborators-on scope) so both links exist on every path.
+  const statePath = seededStateFile(proj);
+  writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
   return proj;
 }
 
@@ -968,7 +975,7 @@ describe("t315 pipeline link receipts", () => {
     const first = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(first.status).toBe(0);
@@ -984,7 +991,7 @@ describe("t315 pipeline link receipts", () => {
     const resumed = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(
@@ -1048,7 +1055,7 @@ describe("t315 pipeline link receipts", () => {
     const first = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(first.directive?.pipeline).toEqual({
@@ -1072,7 +1079,7 @@ describe("t315 pipeline link receipts", () => {
     const resumed = runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     );
     expect(
@@ -1111,7 +1118,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
 
@@ -1156,7 +1163,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
     expect(singleStageAttemptIsOpen(proj, RE_STAGE)).toBe(true);
@@ -1183,7 +1190,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
 
@@ -1261,7 +1268,7 @@ describe("t315 pipeline link receipts", () => {
       expect(runOrchestrateNext(
         ORCH,
         proj,
-        ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+        ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
         { env: childEnv() },
       ).directive?.kind).toBe("run-stage");
       const stateBefore = readFileSync(seededStateFile(proj), "utf-8");
@@ -1311,7 +1318,7 @@ describe("t315 pipeline link receipts", () => {
     expect(runOrchestrateNext(
       ORCH,
       proj,
-      ["--scope", "bugfix", "--stage", RE_STAGE, "--single"],
+      ["--scope", "enterprise", "--stage", RE_STAGE, "--single"],
       { env: childEnv() },
     ).directive?.kind).toBe("run-stage");
     const stateBefore = readFileSync(seededStateFile(proj), "utf-8");

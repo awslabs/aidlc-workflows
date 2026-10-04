@@ -3536,6 +3536,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:effectiveSupportAgents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:effectiveSupportAgentsForProject",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:effectiveUnitGateRhythm",
       "minMechanism": "none",
       "coveredBy": [
@@ -7366,6 +7390,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -8897,6 +8925,10 @@
       "unitId": "function:resolveCeremony",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t337-ceremony-policy.test.ts",
           "mechanism": "none"

@@ -40,14 +40,23 @@ outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-over
 
 # Reverse Engineering
 
-This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a two-link chain in
-which each link advances the work product directly. The developer lead (link
-1) scans and returns structured results; the architect (link 2, the final
-link) synthesizes those results and writes the 9 artifacts. The final link
-leaving the `produces[]` artifacts complete plus both tool-owned link receipts
-is the pipeline contract — no contribution files on pipeline stages. On resume,
-read `directive.pipeline.completed` and dispatch only the first missing link;
-multi-repo entries are qualified as `<repo>:<agent>`.
+This stage runs `mode: pipeline` (stage-protocol-ensemble.md §5): a chain in
+which each link advances the work product directly. The links are exactly
+`directive.pipeline.links` — the engine builds them from the directive's
+effective `support_agents`, so the collaborators switch governs the chain. With
+the full roster the chain is two links: the developer lead (link 1) scans and
+returns structured results; the architect (link 2, the final link) synthesizes
+those results and writes the 9 artifacts.
+
+**When the architect is switched off (collaborators off for this scope),
+`directive.pipeline.links` is just the developer lead, and the lead is then the
+sole and final link: it both scans AND synthesizes the results into the 9
+artifacts itself** (§5 lead-only rule). Either way, the FINAL link leaves the
+`produces[]` artifacts complete; that plus the tool-owned link receipt(s) for
+the links actually dispatched is the pipeline contract — no contribution files
+on pipeline stages. On resume, read `directive.pipeline.completed` and dispatch
+only the first missing link; multi-repo entries are qualified as
+`<repo>:<agent>`.
 
 ## Steps
 
@@ -286,6 +295,15 @@ and architect run again.
 
 ### Step 3: Architect Synthesis
 
+**Run this step only when `aidlc-architect-agent` is in `directive.pipeline.links`.**
+When the chain is lead-only (collaborators off, so the links are just the
+developer lead), do NOT dispatch an architect. Instead, the developer lead is
+the sole and final link and must itself produce the complete 9-artifact
+candidate described in this step: dispatch the developer with a brief that
+covers both the Step 2 scan AND this step's synthesis spec (same write-behavior
+rules, same staging-directory contract below), then mint only the developer
+link and continue to Step 4. The rest of this step is the full-roster path.
+
 Delegate to Task tool with aidlc-architect-agent:
 - subagent_type="aidlc-architect-agent"
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
@@ -434,13 +452,16 @@ directory remains the durable per-repo code knowledge base shared across every
 intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
-present, mint the final-link receipt:
+present, mint the final-link receipt (full-roster path only — on a lead-only
+run the developer already wrote the artifacts and its link is the final one):
 
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
 ```
 
-Do not report completion until every selected repo's chain has both receipts.
+Do not report completion until every selected repo's chain has a receipt for
+each link in `directive.pipeline.links` — both links on the full-roster path,
+the developer link alone on a lead-only run.
 
 ### Step 4: Completion Handoff
 

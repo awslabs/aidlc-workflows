@@ -568,8 +568,9 @@ the grid you last wrote there.
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
-<settings> }` so the validator checks the five scope settings (Step 8) with the
-grid; an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
+<settings> }` so the validator checks the six scope settings (Step 8) with the
+grid (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`,
+`collaborators`, `review_cap`); an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
 a front/report proposal, its final run also names that route, `--matched
 <stock-scope>` or `--custom` (Step 8). Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same

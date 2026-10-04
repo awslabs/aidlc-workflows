@@ -495,9 +495,10 @@ inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
 
-Scope frontmatter also accepts four ceremony switches, each `on` | `off`
-(absent means on): `sensors`, `learnings`, `summary_confirmation`, and
-`plan_approval`.
+Scope frontmatter also accepts five ceremony switches, each `on` | `off`
+(absent means on, except `collaborators`, which ships on only on `enterprise`):
+`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and
+`collaborators` (off runs every stage lead-only; the reviewer is unaffected).
 The last is distinct from a stage's `summary_confirmation: required | if-present`:
 the scope/intent policy decides whether that checkpoint applies at all.
 `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,

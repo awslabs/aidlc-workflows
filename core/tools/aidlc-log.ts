@@ -91,6 +91,7 @@ import {
   pipelineAttemptStartedAt,
   pipelineLinkEvidence,
   pipelineLinks,
+  effectiveSupportAgentsForProject,
   pendingReviewRequestStatus,
   readAllAuditShards,
   recordAcceptedChanges,
@@ -2140,7 +2141,7 @@ function handleLink(args: string[]): void {
           `Cannot record pipeline link: stage "${flags.stage}" is not mode: pipeline.`,
         );
       }
-      const links = pipelineLinks(node);
+      const links = pipelineLinks(node, effectiveSupportAgentsForProject(pd, node));
       const index = links.indexOf(flags.link);
       if (index === -1) {
         throw new Error(

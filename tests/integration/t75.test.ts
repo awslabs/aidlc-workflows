@@ -237,7 +237,11 @@ function makeFixture(): Fixture {
       "## Project Information\n" +
       "- **Practices Affirmed Timestamp**: [ISO 8601 timestamp on affirmation]\n\n" +
       "## Current Status\n" +
-      "- **Scope**: feature\n",
+      "- **Scope**: feature\n" +
+      // feature ships collaborators off; this suite exercises promote's
+      // ensemble-evidence fail-closed path, which only applies when the
+      // practices spokes run, so pin the switch on.
+      "- **Collaborators**: on (set by you)\n",
     "utf-8",
   );
 

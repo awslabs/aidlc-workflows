@@ -31198,8 +31198,34 @@ export interface PipelineLinkEvidence {
 
 export function pipelineLinks(
   stage: Pick<StageEntry, "lead_agent" | "support_agents">,
+  effectiveSupports?: string[],
 ): string[] {
-  return [stage.lead_agent, ...(stage.support_agents ?? [])];
+  return [stage.lead_agent, ...(effectiveSupports ?? stage.support_agents ?? [])];
+}
+
+/**
+ * The collaborators a stage gets for the workflow active in `projectDir`,
+ * resolved from that workflow's recorded scope + state. The lower-level pipeline
+ * paths (link recording, precondition checks) hold only `projectDir`, so this
+ * reads the active state for them and defers to `effectiveSupportAgents` — the
+ * one switch owner. Fails open to the declared list if the state cannot be read,
+ * so a resolution hiccup never strands a legitimately-run stage.
+ */
+export function effectiveSupportAgentsForProject(
+  projectDir: string,
+  stage: Pick<StageEntry, "support_agents">,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const declared = stage.support_agents ?? [];
+  if (declared.length === 0) return [];
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(projectDir);
+  } catch {
+    return declared;
+  }
+  const scope = getField(stateContent, "Scope")?.trim() ?? null;
+  return effectiveSupportAgents(stage, scope, stateContent, env);
 }
 
 type OrderedPipelineEvidenceEvent = AuditShardEvent;
@@ -31496,9 +31522,15 @@ function currentPipelineReuseEvidence(
 export function pipelineLinkEvidence(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
-  options: { singleRun?: boolean } = {},
+  options: { singleRun?: boolean; effectiveSupports?: string[] } = {},
 ): PipelineLinkEvidence {
-  const links = pipelineLinks(stage);
+  // The chain honours the collaborators switch: when a caller already knows the
+  // effective support list (it holds scope + state) it passes it; otherwise we
+  // resolve it from the active workflow. An empty list collapses the chain to
+  // the lead alone, which then authors the artifacts as the sole/final link.
+  const effectiveSupports =
+    options.effectiveSupports ?? effectiveSupportAgentsForProject(projectDir, stage);
+  const links = pipelineLinks(stage, effectiveSupports);
   const registeredRepos = intentRepos(projectDir);
   const repos = registeredRepos;
   const singleRun = options.singleRun === true;
@@ -34775,6 +34807,7 @@ export function scopeSettingsOffList(
   if (policy.learnings === "off") off.push("learnings ritual");
   if (policy.summary_confirmation === "off") off.push("summary confirmation");
   if (policy.plan_approval === "off") off.push("plan approval");
+  if (policy.collaborators === "off") off.push("collaborators");
   return off;
 }
 
@@ -34788,6 +34821,7 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
     learnings: def.ceremony?.learnings ?? "on",
     summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
     plan_approval: def.ceremony?.plan_approval ?? "on",
+    collaborators: def.ceremony?.collaborators ?? "on",
   });
   return summary;
 }
@@ -35419,7 +35453,7 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 export const formatChangeControl = formatGuardPolicy;
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
-export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval"] as const;
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
 export type CeremonySetting = "on" | "off";
 export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
@@ -35428,6 +35462,7 @@ export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
   learnings: "Learnings",
   summary_confirmation: "Summary Confirmation",
   plan_approval: "Plan Approval",
+  collaborators: "Collaborators",
 };
 /** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
 export const CEREMONY_ENV: Record<CeremonyKey, string> = {
@@ -35435,12 +35470,14 @@ export const CEREMONY_ENV: Record<CeremonyKey, string> = {
   learnings: "AIDLC_DISABLE_LEARNINGS",
   summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
   plan_approval: "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+  collaborators: "AIDLC_DISABLE_COLLABORATORS",
 };
 export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   sensors: "--sensors",
   learnings: "--learnings",
   summary_confirmation: "--summary-confirmation",
   plan_approval: "--plan-approval",
+  collaborators: "--collaborators",
 };
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
@@ -35529,6 +35566,7 @@ export function resolveCeremonyPolicy(
     learnings: resolveCeremony("learnings", scope, stateContent),
     summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
     plan_approval: resolveCeremony("plan_approval", scope, stateContent),
+    collaborators: resolveCeremony("collaborators", scope, stateContent),
   };
 }
 
@@ -35542,7 +35580,34 @@ export function ceremonyPolicyValues(
     learnings: policy.learnings.value,
     summary_confirmation: policy.summary_confirmation.value,
     plan_approval: policy.plan_approval.value,
+    collaborators: policy.collaborators.value,
   };
+}
+
+/**
+ * The collaborators a stage ACTUALLY gets for this run — the single owner of
+ * the collaborators switch. Returns the stage's declared `support_agents`, or
+ * an empty list when the `collaborators` ceremony resolves to `off` for the
+ * active scope (env kill switch → per-run intent → scope default → on).
+ *
+ * This is the ONLY place that interprets the switch. The directive builder, the
+ * approval-gate evidence check, and practices-promote all call it, so dispatch,
+ * the gate, and promotion can never disagree about who the collaborators are.
+ * An empty list means the stage runs lead-only on every topology (the shared
+ * stage-protocol-ensemble.md contract: dispatch exactly these agents, and none
+ * means the lead runs alone).
+ */
+export function effectiveSupportAgents(
+  stage: Pick<StageEntry, "support_agents">,
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const declared = stage.support_agents ?? [];
+  if (declared.length === 0) return [];
+  return resolveCeremony("collaborators", scope, stateContent, env).value === "off"
+    ? []
+    : declared;
 }
 
 function changeControlMemoryDir(

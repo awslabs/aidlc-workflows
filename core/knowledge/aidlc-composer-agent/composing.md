@@ -127,6 +127,7 @@ ceremony runs inside them. Every front/report proposal names all five in its
 | `learnings` | `on`, `off` | The stage learnings read/write ritual |
 | `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
 | `plan_approval` | `on`, `off` | The person's approval of each code plan before it is built; off builds the plan as written with one line naming it |
+| `collaborators` | `on`, `off` | The support agents (collaborators) a stage dispatches; off runs every stage lead-only — no blind spokes, no mob round, and a pipeline's lead becomes its sole and final link |
 | `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
 
 - A matched proposal starts from its stock scope's values (from its `.md`; a
@@ -185,14 +186,14 @@ ceremony runs inside them. Every front/report proposal names all five in its
   approval, the harness records it and creation turns it off, so the proposal
   stays as it is. A plan the person saves as a scope stores the
   values in its frontmatter as `sensors:`, `learnings:`,
-  `summary_confirmation:`, `plan_approval:`, and `review_cap:`.
+  `summary_confirmation:`, `plan_approval:`, `collaborators:`, and `review_cap:`.
 - In-flight, the settings are not part of the recompose. Leave a settings
   request out of the stage delta and return `settingsChanges`, typed values
   the conductor shows on the gate and applies only on the human's approval;
-  return only what the request asks for. The keys are `sensors`, `learnings`, and
-  `summary_confirmation` (`on`/`off`), `plan_approval` (`on` only: the person
-  turns it off in their own words), and `review` (`adversarial`/`advisory`/
-  `none`). Full reviews on a capped scope is `"review": "adversarial"`; no
+  return only what the request asks for. The keys are `sensors`, `learnings`,
+  `summary_confirmation`, and `collaborators` (`on`/`off`), `plan_approval` (`on`
+  only: the person turns it off in their own words), and `review`
+  (`adversarial`/`advisory`/`none`). Full reviews on a capped scope is `"review": "adversarial"`; no
   stage changes. When `engine config get <key>` reports `from env
   AIDLC_DISABLE_<NAME>`, a kill switch on this machine overrides every
   setting: return no change and say in one line that it has to be removed

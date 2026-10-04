@@ -12,13 +12,14 @@ import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   REPO_ROOT,
   runOrchestrateNext,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -38,11 +39,18 @@ function directive(
   scope: string,
   stage: string,
   withState?: string,
+  pinCollaborators?: boolean,
 ): Record<string, unknown> {
   const proj = setupIntegrationProject(
     withState ? { withState } : {},
   );
   projects.push(proj);
+  // The seeded fixtures ship collaborators off; a pipeline link-count check
+  // needs the full chain, so pin the switch on for those cases.
+  if (pinCollaborators && withState) {
+    const sp = seededStateFile(proj);
+    writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
+  }
   const result = runOrchestrateNext(
     ORCH,
     proj,
@@ -111,6 +119,7 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
       "bugfix",
       "reverse-engineering",
       "state-brownfield-init-done.md",
+      true,
     );
     expect(pipeline.mode).toBe("pipeline");
     expect(pipeline.pipeline).toEqual({

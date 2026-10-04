@@ -65,7 +65,7 @@ const POLICY_ENV = {
   AIDLC_STAGE_GRAPH: join(AIDLC_SRC, "tools", "data", "stage-graph.json"),
   AIDLC_SCOPES_DIR: join(REPO_ROOT, "core", "scopes"),
 };
-const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", review_cap: "adversarial" } as const;
+const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial" } as const;
 // bugfix plus a design pass, without shipping: the shape the tests compose.
 const ADD = "functional-design";
 const SKIP = "deployment-pipeline,deployment-execution";
@@ -730,7 +730,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
   // person gets without composing.
   const CLASSIC = {
     guard_policy: "off",
-    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", review_cap: "advisory" },
+    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" },
   } as const;
   const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8").replace(/\s+/g, " ");
 

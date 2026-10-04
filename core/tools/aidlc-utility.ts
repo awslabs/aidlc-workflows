@@ -638,7 +638,7 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, guard.<fence>)
+  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, collaborators, guard.<fence>)
   config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
@@ -667,6 +667,7 @@ Utilities:
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
+  --collaborators <on|off>  Run stages with their support agents, or lead-only, for this intent
   --version         Show the framework version
   --help            Show this help message
 

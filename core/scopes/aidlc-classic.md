@@ -10,6 +10,7 @@ sensors: on
 learnings: on
 summary_confirmation: off
 plan_approval: on
+collaborators: off
 ---
 
 # classic scope

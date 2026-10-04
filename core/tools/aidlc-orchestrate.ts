@@ -152,6 +152,8 @@ import {
   type ReviewClass,
   scopeSettingsOffList,
   ceremonyPolicyValues,
+  effectiveSupportAgents,
+  effectiveSupportAgentsForProject,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
   clearActiveDirectiveMarker,
@@ -1543,16 +1545,18 @@ function narrateStageEntry(
   // perspective and any supports as further perspectives, and that is worth one
   // clause: the user is meeting colleagues by trade, which is a fact about their
   // project's work, where "loaded the persona files" is a fact about ours.
-  return `Now working on ${stageName}, ${peopleClause(node)}.`;
+  return `Now working on ${stageName}, ${peopleClause(node, scope, stateContent)}.`;
 }
 
 // The trades participating in an inline stage, phrased as a person would:
 // "wearing the product manager hat, with the architect on hand". Falls back to
 // the phase clause when no trade resolves, so a stage never gets a broken line.
-function peopleClause(node: GraphStage): string {
+// Honours the collaborators switch through the one owner: a lead-only run names
+// just the lead, never colleagues the engine will not bring in.
+function peopleClause(node: GraphStage, scope: string, stateContent: string | null): string {
   const lead = roleInWords(node.lead_agent);
   if (!lead) return `in the ${phaseInWords(node.phase)} phase`;
-  const supports = (node.support_agents ?? [])
+  const supports = effectiveSupportAgents(node, scope, stateContent)
     .map(roleInWords)
     .filter((trade) => trade.length > 0);
   if (supports.length === 0) return `wearing the ${lead} hat`;
@@ -4926,12 +4930,17 @@ function buildRunStageDirective(
   if (codekbCtx && stateContent) {
     ceremony.plan_approval = resolvePlanApprovalSetting(codekbCtx.projectDir, stateContent).value;
   }
+  // The collaborators the stage ACTUALLY gets this run — the one switch owner.
+  // Empty when the `collaborators` ceremony is off for this scope, which makes
+  // the stage run lead-only on every topology (dispatch, gate, and promotion
+  // all read the same answer, so they can never disagree).
+  const effectiveSupports = effectiveSupportAgents(node, scope, stateContent);
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
     phase: node.phase,
     lead_agent: node.lead_agent,
-    support_agents: node.support_agents ?? [],
+    support_agents: effectiveSupports,
     // The graph constrains mode to the active topologies
     // (inline|subagent|pipeline|mob); the directive's enum adds the reserved
     // agent-team. The node value always satisfies the contract; the validator
@@ -4986,6 +4995,7 @@ function buildRunStageDirective(
   if (node.mode === "pipeline" && codekbCtx) {
     const evidence = pipelineLinkEvidence(codekbCtx.projectDir, node, {
       singleRun,
+      effectiveSupports,
     });
     directive.pipeline = {
       links: evidence.links,
@@ -5036,7 +5046,7 @@ function buildRunStageDirective(
     node.mode === "subagent" ||
     node.mode === "pipeline" ||
     node.mode === "mob" ||
-    (node.support_agents?.length ?? 0) > 0
+    effectiveSupports.length > 0
   ) {
     protocolModules.push("ensemble");
   }
@@ -11310,9 +11320,17 @@ function checkSingleCodekbArtifacts(
   };
 }
 
+// Contribution-file evidence is owed only by the contribution-producing
+// topologies (subagent hub-and-spoke, mob mesh) AND only when the stage
+// actually has collaborators this run. Callers pass a node whose
+// `support_agents` is already the effective list (collaborators switch
+// applied), so an empty list — a lead-only run — owes nothing. Equivalent to
+// the historical "mob always, subagent-with-supports" form for the authored
+// graph (every authored mob has supports), but correct when the switch empties
+// the list. Pipeline owes link receipts, not contribution files, so it is out.
 function requiresEnsembleEvidence(node: GraphStage): boolean {
-  return node.mode === "mob" ||
-    (node.mode === "subagent" && (node.support_agents ?? []).length > 0);
+  return (node.mode === "mob" || node.mode === "subagent") &&
+    (node.support_agents ?? []).length > 0;
 }
 
 // Validate the structural completion evidence required by mob and
@@ -11538,8 +11556,14 @@ function checkStageCompletionEvidence(
     };
   }
 
+  // The collaborators switch is applied here: the evidence check sees the
+  // effective support list, so a lead-only run owes no contribution files.
+  const effNode: GraphStage = {
+    ...node,
+    support_agents: effectiveSupportAgents(node, scope, stateContent),
+  };
   return checkEnsembleEvidence(
-    node,
+    effNode,
     slug,
     pd,
     engineRelativeRecordDir(pd),
@@ -11653,9 +11677,17 @@ function handleSingleReport(
     emit(errorDirective(pipelineEvidence.message));
     return;
   }
-  const recordPrefix = requiresEnsembleEvidence(node) ? engineRelativeRecordDir(pd) : null;
+  // An isolated run honours the collaborators switch via its recorded scope
+  // (isolated reports carry no main state, so resolution falls to the scope
+  // default). A lead-only run owes no contribution evidence.
+  const singleScope = singleStageAttemptScope(pd, node.slug);
+  const effNode: GraphStage = {
+    ...node,
+    support_agents: effectiveSupportAgents(node, singleScope, null),
+  };
+  const recordPrefix = requiresEnsembleEvidence(effNode) ? engineRelativeRecordDir(pd) : null;
   const evidence = checkEnsembleEvidence(
-    node,
+    effNode,
     node.slug,
     pd,
     recordPrefix,
@@ -13283,7 +13315,9 @@ function handleWait(args: string[], projectDir: string | undefined): void {
         missing.push(`review file ${flags.reviewFile} (absent or empty)`);
       }
     } else if (target === "collaborators") {
-      for (const agent of node.support_agents ?? []) {
+      // A lead-only run (collaborators switch off) has no spokes to wait on, so
+      // the effective list is empty and nothing is ever missing.
+      for (const agent of effectiveSupportAgentsForProject(pd, node)) {
         let firstLine = "";
         try {
           firstLine = readFileSync(join(contributionsDir, `${agent}.md`), "utf-8").split("\n", 1)[0].trim();
