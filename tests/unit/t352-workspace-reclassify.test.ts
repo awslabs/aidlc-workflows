@@ -470,8 +470,7 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
     expect(reply(r)).toContain("then we're back at Requirements Analysis.");
-    // Said once, by the next step, in the words status uses too.
-    expect(reply(r)).not.toContain("ran before the code was here");
+    expect(reply(r)).toContain('Practices Discovery ran before the code was here; say "redo practices discovery" to include it.');
   });
 
   test("before the workflow reaches Reverse Engineering it is simply back on the plan", () => {
@@ -744,12 +743,14 @@ describe("t352 what the person hears after saying it is existing code", () => {
     expect(reply(r)).toBe(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
         "Next I'll document the code, then we're back at Requirements Analysis. " +
+        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
         "To undo, say it's a new project.",
     );
     const after = next(proj);
     const advisory = after.stage_validity as Record<string, unknown> | undefined;
     expect(advisory?.directly_stale).toEqual(["practices-discovery"]);
-    // The code arriving is the reason it gives, the one time it is said.
+    // Outside the chat that heard the reply, the warning gives the same reason
+    // in the same words.
     expect(advisory?.warning).toBe(
       'Practices Discovery ran before the code was here; say "redo practices discovery" to include it.',
     );
@@ -894,6 +895,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(reverseEngineering.narration)).toStartWith(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
         "Next I'll document the code, then we're back at Requirements Analysis. " +
+        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
         "To undo, say it's a new project.",
     );
     expect(reverseEngineering.stage_validity).toBeUndefined();
