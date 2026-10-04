@@ -329,6 +329,195 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(createdDescription()).toBe(description);
     });
 
+    // A plan composed and approved in a fresh clone is asked about first; started
+    // as new work, it is created exactly as approved, never as the stock scope.
+    const PLAN = [
+      "--add", "functional-design", "--skip", "deployment-pipeline,deployment-execution",
+      "--depth", "comprehensive", "--sensors", "off", "--learnings", "off", "--review", "none", "--guard-policy", "strict",
+    ];
+    const expectApprovedPlan = (request: string): void => {
+      const active = readFileSync(cursorPath(proj), "utf-8").trim();
+      const state = readFileSync(join(intentsDir(proj), active, "aidlc-state.md"), "utf-8");
+      expect(state).toContain("- **Plan**: custom, based on bugfix");
+      expect(state).toMatch(/^- \[.\] functional-design \u2014 EXECUTE/m);
+      expect(state).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
+      expect(state).toMatch(/^- \[.\] deployment-execution \u2014 SKIP/m);
+      expect(state).toContain("- **Depth**: Comprehensive");
+      expect(state).toContain("- **Review Override**: none");
+      expect(state).toContain("- **Guard Policy**: strict (set by you)");
+      expect(state).toMatch(/^- \*\*Sensors\*\*: off\b/m);
+      expect(state).toMatch(/^- \*\*Learnings\*\*: off\b/m);
+      // The work answers the request the person approved.
+      expect(state).toContain(`- **Question Id**: ${request}`);
+    };
+
+    for (const taskless of [false, true]) {
+      test(`a composed plan approved in a fresh clone${taskless ? " (task-less)" : ""} is created as approved when started as new work`, () => {
+        seedTwoIntentsNoCursor();
+        const description = "fix the flaky date parser";
+        const dispatch = JSON.parse(next(taskless ? ["compose"] : ["compose", description]).stdout.trim());
+        expect(dispatch.kind).toBe("print");
+        const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+        expect(composed).toMatch(/^[0-9a-f]{8}$/);
+        // Approval, as the conductor runs it: the base scope with the plan's typed changes and settings.
+        const approval = runEmittedCommand(
+          `${ORCH_SH} next --scope bugfix --request ${composed} ${PLAN.join(" ")}${taskless ? ` -- '${description}'` : ""}`,
+        );
+        const ask = JSON.parse(approval.stdout.trim());
+        expect(ask.ask_type, approval.out).toBe("new-work-routing");
+        const approved = taskless
+          ? readdirSync(join(proj, "aidlc", ".aidlc-sessions", "questions"))
+            .map((file) => JSON.parse(readFileSync(join(proj, "aidlc", ".aidlc-sessions", "questions", file), "utf-8")))
+            .find((question) => question.origin === "front" && question.composedFrom === composed)?.id
+          : composed;
+        expect(approved).toMatch(/^[0-9a-f]{8}$/);
+        // Asked again (a reshape with no record selected), the plan still rides along.
+        const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+        expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+        const routed = runEmittedCommand(again.new_intent_command);
+        expect(routed.status, routed.out).toBe(0);
+        const creation = JSON.parse(routed.stdout.trim());
+        expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
+        expect(creation.message).toContain("no reviewers, sensors, learnings ritual, or summary confirmation");
+        const created = runEmittedCommand(printedCommand(creation.message));
+        expect(created.status, created.out).toBe(0);
+        expect(recordDirs(proj)).toHaveLength(3);
+        expect(createdDescription()).toBe(description);
+        expectApprovedPlan(approved);
+        // Answered again, by any route of either question, it carries on with
+        // that work instead of creating it twice.
+        const feature = (row: { scope: string }) => row.scope === "feature";
+        for (const command of [again.new_intent_command, again.scope_commands.find(feature).command, ask.scope_commands.find(feature).command]) {
+          const repeated = JSON.parse(runEmittedCommand(command).stdout.trim());
+          expect(repeated.kind, JSON.stringify(repeated).slice(0, 300)).toBe("print");
+          expect(repeated.message).toContain("Already started");
+        }
+        expect(recordDirs(proj)).toHaveLength(3);
+      });
+    }
+
+    test("asked again about work selected meanwhile, the composed plan still rides along", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      // Other work is created and selected before the human answers "reshape".
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+      const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+      expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
+      expect(again.proposed_scope).toBe("bugfix");
+      const creation = JSON.parse(runEmittedCommand(again.new_intent_command).stdout.trim());
+      expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
+      const created = runEmittedCommand(printedCommand(creation.message));
+      expect(created.status, created.out).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(4);
+      expectApprovedPlan(composed);
+    });
+
+    // The composed plan's stage changes belong to the plan they were approved
+    // on; the settings typed with the request go with the work on any plan.
+    test("naming a different plan at the routing question creates that plan, not the composed one", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      const feature = ask.scope_commands.find((row: { scope: string }) => row.scope === "feature");
+      const creation = JSON.parse(runEmittedCommand(feature.command).stdout.trim());
+      expect(creation.message).toContain("intent create --scope feature");
+      expect(creation.message).not.toContain("--skip");
+      expect(creation.message).not.toContain("--add");
+      expect(creation.message).toContain("--sensors off");
+      // Either plan answers the one approved request, so the work starts once:
+      // a creation line printed before it ran, a retried approval, and every
+      // route of the question carry on with it.
+      const approvedPlan = JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim());
+      expect(approvedPlan.message).toContain(`--request ${composed}`);
+      expect(creation.message).toContain(`--request ${composed}`);
+      const created = runEmittedCommand(printedCommand(creation.message));
+      expect(created.status, created.out).toBe(0);
+      expect(recordDirs(proj)).toHaveLength(3);
+      const late = runEmittedCommand(printedCommand(approvedPlan.message));
+      expect(late.status, late.out).toBe(0);
+      expect(late.out).toContain("Already started");
+      for (const retry of [
+        `${ORCH_SH} next --scope bugfix --request ${composed} ${PLAN.join(" ")}`,
+        ask.new_intent_command,
+        feature.command,
+      ]) {
+        const repeated = JSON.parse(runEmittedCommand(retry).stdout.trim());
+        expect(repeated.kind, JSON.stringify(repeated).slice(0, 300)).toBe("print");
+        expect(repeated.message).toContain("Already started");
+      }
+      expect(recordDirs(proj)).toHaveLength(3);
+    });
+
+    // A stored plan the parser refuses (here a stage that no longer exists
+    // beside a valid one) is never asked about again in part.
+    test.each([
+      ["with no record selected", false],
+      ["after other work was selected", true],
+    ])("a stored plan the parser refuses is never asked about again in part (%s)", (_label, selectOther) => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(ask.ask_type).toBe("new-work-routing");
+      const routing: string = ask.new_intent_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const stored = JSON.parse(readFileSync(questionFile(routing), "utf-8"));
+      writeFileSync(questionFile(routing), JSON.stringify({
+        ...stored,
+        settings: { ...stored.settings, newWork: ["--skip", "deployment-pipeline", "--add", "no-such-stage"] },
+      }));
+      if (selectOther) {
+        expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+      }
+      const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+      expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("error");
+      expect(again.message).toContain("no longer available");
+    });
+
+    // Once the approved request started work, its routing question is spent: a
+    // later reply that only names one of its options is the person's own words.
+    test("after the approved work starts, a plain option reply is never taken as the spent question's answer", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      expect(util(["intent-create", "--scope", "feature", "--arguments", "third", "--label", "third"]).status).toBe(0);
+      const again = JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim());
+      expect(again.ask_type).toBe("new-work-routing");
+      const creation = JSON.parse(runEmittedCommand(again.new_intent_command).stdout.trim());
+      const created = runEmittedCommand(printedCommand(creation.message));
+      expect(created.status, created.out).toBe(0);
+      const reply = next(["Reshape the active work"]);
+      expect(reply.stdout).not.toContain("Already started");
+    });
+
+    test("a kept setting that is not one of its words is never echoed into a command", () => {
+      seedTwoIntentsNoCursor();
+      const dispatch = JSON.parse(next(["compose", "fix the flaky date parser"]).stdout.trim());
+      const composed: string = dispatch.message.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
+      const routing: string = ask.new_intent_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
+      const stored = JSON.parse(readFileSync(questionFile(routing), "utf-8"));
+      expect(stored.approvedRequest).toBe(composed);
+      expect(stored.settings.newWork).toEqual(expect.arrayContaining(["--depth", "comprehensive", "--skip", "deployment-pipeline,deployment-execution"]));
+      const tampered = [
+        { settings: { ...stored.settings, newWork: ["--depth", "minimal; touch pwned"] } },
+        { settings: { ...stored.settings, newWork: ["--skip", "x;touch pwned"] } },
+        { approvedRequest: "../../pwned" },
+      ];
+      for (const change of tampered) {
+        writeFileSync(questionFile(routing), JSON.stringify({ ...stored, ...change }));
+        const refused = JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim());
+        expect(refused.kind).toBe("error");
+        expect(refused.message).toContain("no longer available");
+      }
+      expect(existsSync(join(proj, "pwned"))).toBe(false);
+    });
+
     test("non-Kiro reshape selects the listed record, then composes the same pending request", () => {
       seedTwoIntentsNoCursor();
       const description = "fix the broken login button";

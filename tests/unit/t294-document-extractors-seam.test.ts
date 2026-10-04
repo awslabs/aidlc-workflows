@@ -192,8 +192,8 @@ const BASE_KEYS = [
 // Fields the packager emits CONDITIONALLY, so they are present for some
 // harnesses and absent for others (`scripts/package.ts` guards each on a
 // manifest value being set). `documentExtractors` is ours; upstream's
-// `runnerFrontmatterAdditions` arrived with the cursor harness, and claude
-// carries it too. A per-harness key set must therefore be BASE_KEYS plus
+// `runnerFrontmatterAdditions` arrived with the cursor harness, and claude and
+// copilot carry it too. A per-harness key set must therefore be BASE_KEYS plus
 // any subset of these -- asserting exact equality against BASE_KEYS alone fails
 // the moment a harness opts into one, which is how this test first broke.
 // `hookActivation` is the Kiro and Copilot trees' (hosts that run no hooks

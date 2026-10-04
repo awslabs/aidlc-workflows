@@ -54,9 +54,9 @@ the `Sources` section. A bare text-presentation symbol such as `©`, `™` or `�
 is not decoration. Findings quote the heading as written. Two headings keep
 exact matching because decoration must never widen what passes: `## Review`,
 whose content the sensor skips, and the H2 a `[memory:<id>]` source cites,
-which names the memory file's exact heading. This reading is the sensor's own;
-the Consolidated Summary Confirmation still requires the exact `Q<n>` and
-`Assumption Confirmation` spellings after its checkpoint.
+which names the memory file's exact heading. The Consolidated Summary
+Confirmation digest reads its `Q<n>` and `Assumption Confirmation` headings
+through the same rule, before and after its checkpoint.
 
 The sensor reads block structure and link reference definitions through the
 built-in `Bun.markdown` CommonMark/GFM parser. Where that parser accepts a link

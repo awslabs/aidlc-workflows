@@ -56,6 +56,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const LIB = join(REPO_ROOT, "core", "tools", "aidlc-lib.ts");
+const PREDECESSOR_HOLD = join(REPO_ROOT, "tests", "harness", "predecessor-hold.ts");
 
 // Per-intent bucket the contenders race on (a concrete intent so auditLockDir
 // keys a per-intent dir; the sentinel would work too — the reaper logic is
@@ -80,33 +81,47 @@ let driver: string;
 // predecessor ledger resolves that stale observation: the first winner reports
 // the seeded sentinel and records its PID; each later winner reports the prior
 // winner's real PID. After acquire, the winner resolves that predecessor before
-// probing it with process.kill(pid, 0); probing the raw observation would revive
-// the benign read/acquire race. Dead predecessors prove legitimate serial
-// re-acquisition; an alive predecessor proves the winner robbed a live holder.
+// checking it; checking the raw observation would revive the benign
+// read/acquire race. Dead predecessors prove legitimate serial re-acquisition;
+// a predecessor still holding proves the winner robbed a live holder.
+//
+// The check never trusts a bare PID once its owner has exited: Windows hands a
+// freed PID to a new process within a second, so process.kill(pid, 0) would
+// call that unrelated process the robbed holder (the product's reaper compares
+// the PID's creation time for the same reason). Each winner therefore renames a
+// release record into place after its hold, just before it exits, and
+// predecessorStillHeld (tests/harness/predecessor-hold.ts) lets that record
+// decide whenever it exists, reading it again after the PID probe.
 //
 // A WINNER then SLEEPS (HOLD_MS) BEFORE exiting. The hold widens the observation
-// window so an overlapping winner probes a predecessor that is still alive. It
+// window so an overlapping winner finds a predecessor that is still holding. It
 // does NOT assume every spawned contender reaches acquire within HOLD_MS: a late
 // contender may correctly reap a dead winner and report aliveAfterSteal=false.
 const DRIVER_SRC = (
   libPath: string,
+  holdPath: string,
   pd: string,
   intent: string,
   space: string,
   evidenceState: string,
   evidenceLock: string,
+  releasedDir: string,
 ): string =>
   [
-    `import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";`,
+    `import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";`,
     `import { join } from "node:path";`,
     `import { acquireAuditLock, auditLockDir } from ${JSON.stringify(libPath)};`,
+    `import { predecessorStillHeld } from ${JSON.stringify(holdPath)};`,
     `const lockDir = auditLockDir(${JSON.stringify(pd)}, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
+    `const epochMs = () => performance.timeOrigin + performance.now();`,
+    `const releasedPath = (pid: number) => join(${JSON.stringify(releasedDir)}, \`released-\${pid}.json\`);`,
     `let observedPid: number | null = null;`,
     `try { observedPid = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf-8")).pid; } catch {}`,
     `const productionRetries = process.argv[2] === "--production-retries";`,
     `const started = performance.now();`,
     `const won = acquireAuditLock(${JSON.stringify(pd)}, productionRetries ? undefined : 0, productionRetries ? undefined : 1, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
-    `process.stderr.write(JSON.stringify({ pid: process.pid, productionRetries, observedPid, won, acquireMs: performance.now() - started }) + "\\n");`,
+    `const acquiredAtMs = epochMs();`,
+    `process.stderr.write(JSON.stringify({ pid: process.pid, productionRetries, observedPid, won, acquireMs: performance.now() - started, acquiredAtMs }) + "\\n");`,
     `if (!won) { process.stdout.write("LOST"); process.exit(0); }`,
     `for (;;) {`,
     `  try { mkdirSync(${JSON.stringify(evidenceLock)}); break; }`,
@@ -121,12 +136,18 @@ const DRIVER_SRC = (
     `} finally {`,
     `  rmSync(${JSON.stringify(evidenceLock)}, { recursive: true, force: true });`,
     `}`,
-    `let aliveAfterSteal = false;`,
-    `try { process.kill(reapedPid, 0); aliveAfterSteal = true; } catch {}`,
+    `const aliveAfterSteal = predecessorStillHeld(`,
+    `  acquiredAtMs,`,
+    `  () => { try { return JSON.parse(readFileSync(releasedPath(reapedPid), "utf-8")).releasedAtMs; } catch { return null; } },`,
+    `  () => { try { process.kill(reapedPid, 0); return true; } catch { return false; } },`,
+    `);`,
     `process.stdout.write(\`WON \${reapedPid} \${aliveAfterSteal}\`);`,
     // A winner holds (stays alive) so concurrent losers see a LIVE holder they
     // must not rob; the harness rm's the dir between generations.
     `Bun.sleepSync(${HOLD_MS});`,
+    `mkdirSync(${JSON.stringify(releasedDir)}, { recursive: true });`,
+    `writeFileSync(\`\${releasedPath(process.pid)}.tmp\`, JSON.stringify({ releasedAtMs: epochMs() }), "utf-8");`,
+    `renameSync(\`\${releasedPath(process.pid)}.tmp\`, releasedPath(process.pid));`,
     `process.exit(0);`,
   ].join("\n");
 
@@ -138,12 +159,19 @@ function evidenceLockPath(): string {
   return join(proj, "reap-evidence.lock");
 }
 
+// Release records are per generation: a later generation can reuse an earlier
+// generation's PID, and an old record must not vouch for the new process.
+function releasedDirPath(): string {
+  return join(proj, "released");
+}
+
 /** Seed a DEAD-PID, OVER-AGE stale lock at the per-intent bucket. */
 function seedStaleLock(generation: number): string {
   const lockDir = auditLockDir(proj, INTENT, SPACE);
   rmSync(lockDir, { recursive: true, force: true });
   mkdirSync(lockDir, { recursive: true });
   rmSync(evidenceLockPath(), { recursive: true, force: true });
+  rmSync(releasedDirPath(), { recursive: true, force: true });
   writeFileSync(evidenceStatePath(), JSON.stringify({ pid: STALE_OWNER_PID }), "utf-8");
   // pid is an unlikely-live high value (ESRCH → dead owner), startedAtMs far in
   // the past (over the tightened stale threshold the test sets via env).
@@ -186,7 +214,7 @@ beforeEach(() => {
   driver = join(proj, "reap-driver.ts");
   writeFileSync(
     driver,
-    DRIVER_SRC(LIB, proj, INTENT, SPACE, evidenceStatePath(), evidenceLockPath()),
+    DRIVER_SRC(LIB, PREDECESSOR_HOLD, proj, INTENT, SPACE, evidenceStatePath(), evidenceLockPath(), releasedDirPath()),
     "utf-8",
   );
 });

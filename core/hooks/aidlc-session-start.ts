@@ -47,8 +47,10 @@ import {
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
+  findStageBySlug,
   harnessDir,
   getField,
+  isPerUnitStage,
   hooksHealthDir,
   writeHookStatusFile,
   humanPresenceGuardDisabled,
@@ -66,6 +68,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
+  UNIT_NAME_REGEX,
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
@@ -81,6 +84,22 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+
+// While a recorded switch keeps one of the person's checks off, every new chat
+// opens by saying so. Never blocks startup.
+function switchOffContext(projectDir: string): string {
+  try {
+    const lines = switchesOffLines(projectDir);
+    return lines.length === 0
+      ? ""
+      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each line to the user once, " +
+        "word for word, in your first reply.\n" +
+        lines.map((line) => `- ${line}\n`).join("");
+  } catch {
+    return "";
+  }
+}
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -269,7 +288,8 @@ if (!existsSync(stateFile)) {
       additionalContext:
         `AIDLC Runtime Session: ${sessionId}\n` +
         "Use this exact value for any Plan Approval --session argument in this conversation." +
-        rejoin,
+        rejoin +
+        (rebindCheckOnly ? "" : switchOffContext(projectDir)),
     })}\n`);
   }
   return 0;
@@ -455,11 +475,31 @@ const scope = getField(content, "Scope") ?? "unknown";
 // mid-unit, name the exact unit, its state, and — for a paused unit — the
 // recorded reason and next action, so a fresh session lands on the stopping
 // point instead of re-deriving it from disk coverage.
+// The Unit's own stage is named when it is not Current Stage. Solo unit-major
+// Construction keeps Current Stage on the first per-unit stage while each Unit
+// works through the later ones, so there it is the step in progress (#1411).
+// Both come from the state file, so the step is named only when Unit Stage is
+// a real per-unit stage and Active Unit a valid Unit name.
 const activeUnit = getField(content, "Active Unit");
+const unitStageNode = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+const unitStage = unitStageNode && isPerUnitStage(unitStageNode) ? unitStageNode.slug : null;
+const stepUnit = activeUnit && UNIT_NAME_REGEX.test(activeUnit.trim()) ? activeUnit.trim() : null;
+// Only while Current Stage is itself a per-unit stage: a jump that left the
+// per-unit stages leaves the Unit mirror behind, and its step is not current.
+const currentNode = findStageBySlug(stage);
+const inUnitStages = currentNode !== undefined && isPerUnitStage(currentNode);
+const laterUnitStage = stepUnit && unitStage && inUnitStages && unitStage !== stage ? unitStage : null;
+const unitByUnit =
+  getField(content, "Construction Iteration")?.trim() === "unit-major" &&
+  getField(content, "Unit Ownership")?.trim() !== "team";
 const unitLine = activeUnit
-  ? `Active Unit: ${activeUnit} (${getField(content, "Unit State") ?? "in-progress"}` +
+  ? `Active Unit: ${activeUnit}${laterUnitStage ? ` on ${laterUnitStage}` : ""} (${getField(content, "Unit State") ?? "in-progress"}` +
     `${getField(content, "Unit Pause Reason") ? `; reason: ${getField(content, "Unit Pause Reason")}` : ""}` +
-    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n`
+    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n` +
+    (laterUnitStage && unitByUnit
+      ? `Current Step: ${laterUnitStage} for unit ${stepUnit}. Construction runs one unit at a time, ` +
+        `so Current Stage stays ${stage} until every unit is done.\n`
+      : "")
   : "";
 
 // Check for compaction recovery breadcrumb
@@ -499,7 +539,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.

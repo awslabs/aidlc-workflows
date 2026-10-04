@@ -131,9 +131,11 @@ import {
   ActiveDirectiveLockContendedError,
   advanceContinuationCursor,
   clearSessionIntentSwitch,
-  activeUnitCheckpoint,
+  type UnitCheckpoint,
+  unitOpenCheckpoints,
   approvedConstructionUnits,
   attemptEventDefinitelyBefore,
+  attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
   boltSlugForUnit,
@@ -399,6 +401,7 @@ import {
 } from "./aidlc-state.ts";
 import { inspectStageValidity } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
+import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import {
   readRuleBundle,
   rulesContentEntries,
@@ -459,10 +462,19 @@ let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
 let activeRetiredGuardPolicyNotice: string | null = null;
 // undefined until the first emission of this command reads it (hookHealthNotice).
 let activeHookHealthNotice: string | null | undefined;
+// The lines for checks a recorded switch turned off, read once per invocation.
+let activeSwitchOffNotices: string[] | null = null;
 let engineProjectDir: string | undefined;
 
 function stageValidityUnchecked(): string {
   return `I could not check whether every finished stage is still up to date; ${entrySkillInvocation()} --status shows what was checked.`;
+}
+
+// A check a recorded switch turned off is said once, on whatever the engine
+// says next (see writePrepared for when it counts as said).
+function switchOffNoticesOnce(projectDir: string): string[] {
+  activeSwitchOffNotices ??= switchOffNotices(projectDir);
+  return activeSwitchOffNotices;
 }
 
 function projectStageValidityAdvisory(
@@ -643,6 +655,10 @@ function prepareEmission(directive: Directive): PreparedEmission {
   const hookNotice = hookHealthNotice();
   if (hookNotice !== null) {
     directive = withChangeNotices(directive, [hookNotice, ...(directive.change_notices ?? [])]);
+  }
+  const switchOff = engineProjectDir ? switchOffNoticesOnce(engineProjectDir) : [];
+  if (switchOff.length > 0) {
+    directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
   }
   if (activeStageValidityAdvisory) {
     directive = {
@@ -928,6 +944,17 @@ function writePrepared(prepared: PreparedEmission): void {
     (kind === "run-stage" || kind === "load-steering" || kind === "invoke-swarm")
   ) {
     clearSessionIntentSwitch(prepared.projectDir);
+  }
+  // The switch-off lines count as said once a directive the conductor speaks
+  // from has carried them, and a switch that is on again is forgotten. A rules
+  // part carries them too, but its run-stage is where they are said, and a
+  // read-only probe is never said at all.
+  if (
+    engineProjectDir && activeSwitchOffNotices !== null &&
+    kind !== "load-steering" && !isReadOnlyEngineProbe()
+  ) {
+    markSwitchOffNoticesSaid(engineProjectDir);
+    activeSwitchOffNotices = [];
   }
 }
 
@@ -1687,6 +1714,11 @@ interface RoutingCarried {
   creation: string;
   newWork: string;
   existingWork: string;
+  /**
+   * An approved plan's stage changes (`--skip`/`--add`): they belong to the
+   * plan they were approved on, so they ride only that plan's new-work answers.
+   */
+  planChanges: string;
 }
 
 function guardPolicyLowered(flags: ParsedFlags): boolean {
@@ -1698,11 +1730,25 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
   if (flags.review) extra.push(`--review ${flags.review}`);
   if (flags.changeControl && !guardPolicyLowered(flags)) extra.push(`--guard-policy ${flags.changeControl}`);
   const existingWork = `${carriedCreationFlags(flags)}${extra.length > 0 ? ` ${extra.join(" ")}` : ""}`;
+  const stages: string[] = [];
+  if (flags.planChanges?.skip.length) stages.push(`--skip ${flags.planChanges.skip.join(",")}`);
+  if (flags.planChanges?.add.length) stages.push(`--add ${flags.planChanges.add.join(",")}`);
   return {
     creation: carriedCreationFlags(flags),
     newWork: `${existingWork}${guardPolicyLowered(flags) ? ` --guard-policy ${flags.changeControl}` : ""}`,
     existingWork,
+    planChanges: stages.length > 0 ? ` ${stages.join(" ")}` : "",
   };
+}
+
+// A routing question asked again keeps what the first one kept: the settings
+// it stored, read back through the same parser, never the narrower set its
+// answer command happened to carry. A stored value the parser refuses keeps
+// nothing (null), so no partial plan is asked about again.
+function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
+  if (!question.settings) return carriedRoutingFlags(flags);
+  const kept = parseNextFlags(question.settings.newWork);
+  return kept.parseError ? null : carriedRoutingFlags(kept);
 }
 
 function scopeConfirmAskDirective(
@@ -1905,6 +1951,9 @@ function routingQuestionAnswer(
     if (question?.origin !== "routing" || question.stateSha256 === undefined || !target) return null;
     const option = routingOptionReply(text, question.proposedScope);
     if (!option) return null;
+    // Once the request it stopped has started work, the question is spent:
+    // the person's words are their own again.
+    if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
     const statePath = stateFilePathForSelection(projectDir, {
       space: question.askedAbout!.space,
       intent: target.intent || null,
@@ -1986,7 +2035,8 @@ function newWorkRoutingAskDirective(
   askedAbout: { space: string; targets: QuestionTarget[] },
   availableIntents?: string[],
   stateSha256?: string,
-  carried: RoutingCarried = { creation: "", newWork: "", existingWork: "" },
+  carried: RoutingCarried = { creation: "", newWork: "", existingWork: "", planChanges: "" },
+  approvedRequest?: string,
 ): AskDirective {
   // Once emitted, this typed ask is the sole route authority for the pending
   // prose. Harnesses render it and stop rather than reclassifying the request.
@@ -1995,9 +2045,9 @@ function newWorkRoutingAskDirective(
   // reshape routes act only on the item(s) it names, and ask again otherwise.
   const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
   const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256, {
-    newWork: tokens(carried.newWork),
+    newWork: tokens(`${carried.newWork}${carried.planChanges}`),
     existingWork: tokens(carried.existingWork),
-  });
+  }, approvedRequest);
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -2008,8 +2058,9 @@ function newWorkRoutingAskDirective(
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
     new_intent_command:
-      `${tool} next --new-intent --scope ${shellArg(proposedScope)} --request ${stored.id}${carried.newWork}`,
-    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork),
+      `${tool} next --new-intent --scope ${shellArg(proposedScope)} --request ${stored.id}${carried.newWork}${carried.planChanges}`,
+    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork).map((entry) =>
+      entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
     // Beside active work this reshapes it; with records to pick it composes
     // the new work, like a plan offer's compose answer.
     compose_command:
@@ -2657,6 +2708,8 @@ interface ParsedFlags {
   positionalScope?: string; // leading valid scope token (e.g. `/aidlc bugfix Fix the crash`)
   stage?: string;
   phase?: string;
+  jumpUnit?: string; // --unit <name> with --stage: reopen that per-unit stage for this Unit (unit-major)
+  everyUnit?: boolean; // --every-unit with --stage: reopen that per-unit stage for every Unit (unit-major)
   depth?: string;
   testStrategy?: string;
   projectType?: "greenfield" | "brownfield"; // --project-type: the person's word on new project vs existing code
@@ -2868,6 +2921,16 @@ function parseNextFlags(args: string[]): ParsedFlags {
     } else if (a === "--phase" && i + 1 < args.length) {
       flags.phase = args[i + 1];
       i++;
+    } else if (a === "--unit") {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = `--unit needs the unit's name: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`;
+      } else {
+        flags.jumpUnit = value;
+        i++;
+      }
+    } else if (a === "--every-unit") {
+      flags.everyUnit = true;
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
@@ -3415,7 +3478,7 @@ function composeDispatchDirective(
 // read-only: it emits a directive, it does not touch the cursor.
 function intentPickPromptIfRecordsExist(
   projectDir: string,
-  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried },
+  pendingWork?: { description: string; proposedScope: string; carried: RoutingCarried; approvedRequest?: string },
 ): AskDirective | ErrorDirective | null {
   const selection = engineSelection(projectDir);
   const space = selection.space;
@@ -3540,6 +3603,7 @@ function intentPickPromptIfRecordsExist(
       selectors,
       undefined,
       pendingWork.carried,
+      pendingWork.approvedRequest,
     );
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
@@ -3781,6 +3845,8 @@ type SteeringTokenPayload = {
   q?: UnitGateRhythm;
   j?: ConstructionCheckpointKind;
   y?: { batch: number; units: string[] };
+  // The step carries the person's Redo answer to the re-use question.
+  e?: true;
   h: string | null;
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
@@ -5187,6 +5253,7 @@ function markerSteeringPayload(
       !Array.isArray(p.y.units) || p.y.units.length === 0 ||
       !p.y.units.every((unit) => typeof unit === "string")
     )) ||
+    (p.e !== undefined && p.e !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
     (p.l !== undefined && typeof p.l !== "string")
   ) {
@@ -5234,6 +5301,7 @@ function steeringTokenPayload(
     y: directive.swarm_checkpoint
       ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
       : undefined,
+    e: directive.artifact_reuse ? true : undefined,
     h: route.stateHash,
     l: layout,
   };
@@ -5645,6 +5713,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const settings = routingAnswer.question.settings;
     if (settings) {
       const replay = parseNextFlags(routingAnswer.route === "separate" ? settings.newWork : settings.existingWork);
+      if (replay.parseError) {
+        emit(errorDirective(QUESTION_UNAVAILABLE));
+        return;
+      }
+      flags.planChanges = replay.planChanges;
       flags.depth = replay.depth;
       flags.testStrategy = replay.testStrategy;
       flags.projectType = replay.projectType;
@@ -5685,6 +5758,16 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (!found) {
       pruneQuestions();
       emit(repeatedAnswerDirective(questionDir, flags.request) ?? errorDirective(QUESTION_UNAVAILABLE));
+      return;
+    }
+    // A routing question that stopped an answer is answered once that answer's
+    // request started work, whichever of its routes runs.
+    const started = found.origin === "routing" && found.approvedRequest
+      ? repeatedAnswerDirective(questionDir, found.approvedRequest)
+      : null;
+    if (started) {
+      pruneQuestions();
+      emit(started);
       return;
     }
     question = found;
@@ -6057,6 +6140,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
   }
   let routingScopeProposal: string | undefined;
+  // A routing question asked again keeps what it kept the first time.
+  let askedAgain: { question: StoredQuestion; carried: RoutingCarried } | undefined;
   if (question?.origin === "routing" && (flags.compose || flags.continue)) {
     const named = questionTargetSelected(question, {
       ...selection,
@@ -6075,11 +6160,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.continue = false;
       flags.scope = undefined;
       flags.positionalScope = undefined;
+      const kept = carriedFromQuestion(question, flags);
+      if (kept === null) {
+        emit(errorDirective(QUESTION_UNAVAILABLE));
+        return;
+      }
       if (stateContent === null) {
         const again = intentPickPromptIfRecordsExist(pd, {
           description: question.text,
           proposedScope: question.proposedScope,
-          carried: carriedRoutingFlags(flags),
+          carried: kept,
+          approvedRequest: question.approvedRequest,
         });
         if (again) {
           emit(again);
@@ -6091,6 +6182,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         // Branch 9c asks again about the workflow selected now, proposing the
         // scope the human already confirmed.
         routingScopeProposal = question.proposedScope || undefined;
+        askedAgain = { question, carried: kept };
       }
     }
   } else if (flags.continue) {
@@ -6098,6 +6190,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       "--continue answers a new-work routing question; run the command that question supplied.",
     ));
     return;
+  }
+  // New work started from a routing question that stopped an answer (a plan
+  // approval, a scope confirmation) answers that request, whichever plan is
+  // named: the work starts once, and words said at that question reach it.
+  if (question?.origin === "routing" && question.approvedRequest && flags.newIntent &&
+    readQuestion(pd, question.approvedRequest) !== null) {
+    flags.request = question.approvedRequest;
   }
   if (question?.origin === "front" && stateContent !== null && !flags.compose && flags.scope) {
     flags.newIntent = true;
@@ -6559,9 +6658,32 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // carrying resolved artifact paths (projectType feeds the conditional_on
   // filter for the jumped-to stage). An explicit target also wins when combined
   // with --resume: `next --resume --stage <slug>` reaches this jump branch.
-  if (flags.phase || flags.stage) {
-    emitJumpDirective(flags, scope, pd, projectType);
+  // `--unit` and `--every-unit` say which Units a jump back reopens a per-unit
+  // step for, so they mean nothing without the step.
+  if ((flags.jumpUnit !== undefined || flags.everyUnit) && (!flags.stage || (flags.jumpUnit !== undefined && flags.everyUnit))) {
+    emit(errorDirective(
+      flags.stage
+        ? "Use either --unit <name> or --every-unit with --stage, not both."
+        : `--unit and --every-unit need the step to reopen: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`,
+    ));
     return;
+  }
+  if (flags.phase || flags.stage) {
+    const target = flags.stage ?? flags.phase ?? "";
+    if (emitJumpDirective(flags, scope, pd, projectType) !== "route") return;
+    // The target is the step the unit-major walk is already on: routing it is
+    // literally where the person asked to go, with nothing skipped. A parked
+    // workflow is unparked first, as a plain --resume does, so the next plain
+    // `next` does not park it again.
+    if (stateContent && (getField(stateContent, "Parked") ?? "").trim().length > 0) {
+      emit(printDirective(
+        `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
+          `to clear the park marker, then re-run \`next\` to continue at "${target}".`,
+      ));
+      return;
+    }
+    flags.phase = undefined;
+    flags.stage = undefined;
   }
 
   // Branch 7b — positional scope with no workflow yet. `/aidlc bugfix` and
@@ -6586,6 +6708,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
             description: flags.intent,
             proposedScope: flags.positionalScope,
             carried: carriedRoutingFlags(flags),
+            approvedRequest: flags.request,
           }
         : undefined,
     );
@@ -6653,6 +6776,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
               description: flags.intent,
               proposedScope: scope,
               carried: carriedRoutingFlags(flags),
+              approvedRequest: flags.request,
             }
           : undefined,
       );
@@ -6772,7 +6896,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       { space: selection.space, targets: routingTargets() },
       undefined,
       stateDigest(stateContent),
-      carriedRoutingFlags(flags),
+      askedAgain?.carried ?? carriedRoutingFlags(flags),
+      askedAgain?.question.approvedRequest,
     ));
     return;
   }
@@ -7604,7 +7729,9 @@ type UnitLedger = {
   receipts: Set<string>;
   // Units skipped for this stage in its current attempt, with the reason.
   skipped: Map<string, string>;
-  checkpoint: ReturnType<typeof activeUnitCheckpoint>;
+  checkpoint: UnitCheckpoint | null;
+  // Every open Unit, most recently touched first.
+  open: UnitCheckpoint[];
   inUse: boolean;
   mode: ReturnType<typeof currentUnitLifecycleMode>;
 };
@@ -7621,11 +7748,12 @@ function unitLedgerFor(
     return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
   }
   const receipts = unitCompletedReceipts(projectDir, slug);
-  const checkpoint = activeUnitCheckpoint(projectDir, slug);
+  const open = unitOpenCheckpoints(projectDir, slug);
   return {
     receipts,
     skipped: unitSkippedUnits(projectDir, slug, undefined, policyState ?? undefined),
-    checkpoint,
+    checkpoint: open[0] ?? null,
+    open,
     inUse: receiptsRequired || unitLifecycleReceiptsInUse(projectDir, slug),
     mode: currentUnitLifecycleMode(projectDir, slug),
   };
@@ -8992,6 +9120,12 @@ function emitTeamUnitMajorRunStage(
 // block stage halts the walk before new (stage, unit) work. Read-only, so
 // routing (emitUnitMajorRunStage) and the skip report (unitMajorWorkBeat)
 // share one walk and cannot disagree about which beat is active.
+//
+// The person can ask for another Unit's work while one is open (#1411): the
+// open Unit is then paused, set aside for that Unit. Such a pause does not halt
+// the walk while the Unit it was set aside for still has work; the walk takes
+// that Unit, then stops at the set-aside Unit to pick it up again. A Unit in
+// progress goes before the others, so a Unit picked up again comes first.
 type UnitMajorWalkStep =
   | {
       kind: "paused";
@@ -9026,13 +9160,21 @@ function unitMajorWalkStep(
   const ledgers = new Map<string, UnitLedger>(
     block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
   );
+  const setAside = new Map<string, Extract<UnitMajorWalkStep, { kind: "paused" }>>();
+  const inProgress = new Set<string>();
   for (const k of block) {
-    const cp = ledgers.get(k.slug)?.checkpoint;
-    if (cp?.state === "paused") {
-      return { kind: "paused", stage: k.slug, checkpoint: cp };
+    for (const cp of ledgers.get(k.slug)?.open ?? []) {
+      if (cp.state === "in-progress") {
+        inProgress.add(cp.unit);
+        continue;
+      }
+      const pause = { kind: "paused" as const, stage: k.slug, checkpoint: cp };
+      if (cp.setAsideFor === null || !units.includes(cp.setAsideFor)) return pause;
+      if (!setAside.has(cp.unit)) setAside.set(cp.unit, pause);
     }
   }
-  for (const u of units) {
+  // The Unit's first stop in the block, or null when it is done.
+  const stopFor = (u: string): UnitMajorWalkStep | null => {
     for (const k of block) {
       const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
       if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
@@ -9055,8 +9197,22 @@ function unitMajorWalkStep(
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
     }
+    return null;
+  };
+  const waiting: UnitMajorWalkStep[] = [];
+  const order = [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))];
+  for (const u of order) {
+    const pause = setAside.get(u);
+    if (pause) {
+      if (stopFor(pause.checkpoint.setAsideFor ?? u) === null) return pause;
+      waiting.push(pause);
+      continue;
+    }
+    const stop = stopFor(u);
+    if (stop) return stop;
   }
-  return { kind: "covered" };
+  // Units set aside for each other: ask to pick the first one up.
+  return waiting[0] ?? { kind: "covered" };
 }
 
 // The (stage, unit) work beat the solo unit-major walk directs right now for
@@ -9073,6 +9229,21 @@ function unitMajorWorkBeat(
   stateContent: string,
   currentSlug: string,
 ): { stage: GraphStage; unit: string; context: UnitWorkContext } | null {
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  return walk?.step.kind === "work"
+    ? { stage: walk.step.stage, unit: walk.step.unit, context: walk.context }
+    : null;
+}
+
+// Where the solo unit-major walk stands for the Current Stage: its step (work,
+// summary, pause, or Unit checkpoint stop), the block it walks, and the Unit DAG
+// context, or null on the same conditions as unitMajorWorkBeat.
+function unitMajorWalkBeat(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): { step: UnitMajorWalkStep; block: GraphStage[]; context: UnitWorkContext } | null {
   if (readConstructionIteration(stateContent) !== "unit-major") return null;
   if (isTeamUnitOwnership(stateContent)) return null;
   const node = nodeForSlug(currentSlug);
@@ -9096,13 +9267,11 @@ function unitMajorWorkBeat(
     projectDir, stateContent, block, units, units, resolution.unitKinds,
     recordPrefix, codekbCtx, checkpoints,
   );
-  return step.kind === "work"
-    ? {
-        stage: step.stage,
-        unit: step.unit,
-        context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx },
-      }
-    : null;
+  return {
+    step,
+    block,
+    context: { units, kinds: resolution.unitKinds, recordPrefix, codekbCtx },
+  };
 }
 
 // What the stage-work check needs about the Unit DAG, resolved once per call.
@@ -9144,6 +9313,312 @@ function unitsWithStageWork(
 
 function unitNames(units: string[]): string {
   return units.map((u) => `unit "${u}"`).join(", ");
+}
+
+const OTHER_UNITS_KEPT =
+  "The other units keep their finished work, reviews, Plan Approvals and checkpoint approvals.";
+
+// The Redo answer to the resume menu while a solo unit-major walk is on a
+// Unit's step, or null to keep the stage redo. A redo jump's STAGE_JUMPED
+// starts a new attempt for every Unit's finished steps, so once any Unit has
+// finished work Redo stays with the Unit the walk is on (#1411): it reopens
+// that Unit's step, as a jump back to it does, so the Unit does the step again
+// from a new attempt instead of continuing where it stopped (its build progress
+// and Plan Approval do not carry over). The step is the one the Unit is on or
+// paused at, the summary's step, or at a checkpoint the last step the Unit did.
+// A step the Unit has not started has nothing to reset, so next routes it.
+function unitMajorRedo(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+): string | null {
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk || walk.step.kind === "covered") return null;
+  if (!walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0)) {
+    return null;
+  }
+  const step = walk.step;
+  const only = "Construction runs one unit at a time, so only that unit's";
+  // A parked workflow is unparked first, so the `next` after it goes to the
+  // redone step instead of stopping at the park.
+  const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
+    ? `\`${aidlcToolInvocation("state")} unpark\`, then `
+    : "";
+  const blockSlugs = walk.block.map((stage) => stage.slug);
+  const unit = step.kind === "paused" ? step.checkpoint.unit : step.unit;
+  const redone = step.kind === "paused"
+    ? step.stage
+    : step.kind === "checkpoint"
+      ? [...walk.block].reverse()
+        .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(unit))?.slug ??
+        blockSlugs[blockSlugs.length - 1]
+      : step.stage.slug;
+  if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
+    return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
+      `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
+      OTHER_UNITS_KEPT;
+  }
+  const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
+    `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${unit} --via redo --scope ${scope}`;
+  // Code Generation is redone plan included, so a new plan is approved again
+  // unless plan approval is off.
+  const name = walk.block.find((stage) => stage.slug === redone)?.name || redone;
+  const line = redone !== "code-generation"
+    ? `Redoing ${name} for unit ${unit} from the start.`
+    : `Redoing ${name} for unit ${unit} from the start, plan included.` +
+      (resolvePlanApprovalSetting(projectDir, stateContent).value === "off"
+        ? ""
+        : " Its new plan comes back to you for approval.");
+  return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: run ` +
+    `${unpark}\`${reopen}\`, then tell the person in one line: "${line}" Then re-run \`next\` and do "${redone}" ` +
+    `for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
+}
+
+// Whether the person's Redo on the resume menu answered the re-use question for
+// this Unit's step (`jump reopen --via redo` records it). The answer is spent
+// once the Unit starts the step, and a later reopen or jump asks again. Rows are
+// read in the audit's time order across shards, and an answer whose order
+// against another shard's row in the same second is not known is not used.
+function redoChosenForUnitStep(projectDir: string, slug: string, unit: string): boolean {
+  const isAnswer = (row: AuditShardEvent): boolean =>
+    row.event === "ARTIFACT_REUSED" &&
+    auditBlockField(row.block, "Stage") === slug && auditBlockField(row.block, "Unit") === unit &&
+    auditBlockField(row.block, "Decision") === "redo" &&
+    auditBlockField(row.block, "Source") === "Redo on the resume menu";
+  const spends = (row: AuditShardEvent): boolean => {
+    if (row.event === "STAGE_JUMPED" || row.event === "WORKFLOW_STARTED") return true;
+    if (auditBlockField(row.block, "Unit") !== unit) return false;
+    if (row.event === "UNIT_STARTED") return auditBlockField(row.block, "Stage") === slug;
+    if (row.event !== "GATE_REJECTED") return false;
+    return (auditBlockField(row.block, "Gate Stages") ?? auditBlockField(row.block, "Stage") ?? "")
+      .split(",").map((entry) => entry.trim()).includes(slug);
+  };
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) => isAnswer(row) || spends(row)));
+  let chosen = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (isAnswer(rows[i])) chosen = i;
+    else if (chosen !== -1) chosen = -1;
+  }
+  return chosen !== -1 && !attemptEventIsCrossShardTied(rows, chosen);
+}
+
+// A jump back to a per-unit stage a Unit already finished, in a solo unit-major
+// walk (#1411). Current Stage stays on the first per-unit stage there, or has
+// moved on to a later per-unit stage's gate, so that jump would be a
+// stage-wide jump that starts every Unit's finished work over. It reopens the
+// stage for the Unit in flight only, the way a Unit checkpoint's Request
+// Changes redoes one Unit, unless the person named a Unit (`--unit`) or asked
+// for every Unit (`--every-unit`). Every other Unit keeps its finished,
+// approved work. A Unit with an open step that is not reopened is paused, set
+// aside for the reopened Unit, and the person can pick it up again by name:
+// the same flags then resume it where it stopped. "route" when the walk is
+// already on the target for that Unit; null when this is no such jump.
+function unitMajorReopen(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  targetSlug: string,
+  flags: ParsedFlags,
+): { kind: "print" | "error"; message: string } | "route" | null {
+  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk) return null;
+  const blockSlugs = walk.block.map((stage) => stage.slug);
+  const targetIndex = blockSlugs.indexOf(targetSlug);
+  if (targetIndex === -1) return null;
+  const step = walk.step;
+  const inFlight = step.kind === "paused" ? step.checkpoint.unit : step.kind === "covered" ? null : step.unit;
+  const liveStage = step.kind === "work" || step.kind === "summary"
+    ? step.stage.slug
+    : step.kind === "paused" ? step.stage : null;
+  const target = walk.block[targetIndex];
+  const finished = new Set(unitsWithStageWork(projectDir, target, walk.context));
+  const units = walk.context.units;
+  const nameOf = (slug: string): string => walk.block.find((stage) => stage.slug === slug)?.name || slug;
+  const stageName = nameOf(targetSlug);
+  const list = (names: string[]): string =>
+    names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  // Each Unit with an open step in the block, and the step.
+  const open = new Map<string, { stage: string; checkpoint: UnitCheckpoint }>();
+  for (const stage of walk.block) {
+    for (const checkpoint of unitOpenCheckpoints(projectDir, stage.slug)) {
+      if (!open.has(checkpoint.unit)) open.set(checkpoint.unit, { stage: stage.slug, checkpoint });
+    }
+  }
+  // Pause a Unit's open step, set aside for `forUnit`. A Unit already set
+  // aside stays as it is. A paused one keeps its own reason and next action:
+  // the pause verb carries them over, so recorded text is never printed into
+  // a command here.
+  const setAside = (unit: string, forUnit: string, why: string): { stage: string; command: string } | null => {
+    const entry = open.get(unit);
+    if (!entry || entry.checkpoint.setAsideFor !== null) return null;
+    const words = entry.checkpoint.state === "paused"
+      ? ""
+      : ` --reason ${shellArg(why)} --next-action ${shellArg(`Continue ${nameOf(entry.stage)} for unit ${unit} where it stopped.`)}`;
+    return {
+      stage: entry.stage,
+      command: `${aidlcToolInvocation("state")} unit pause --stage ${entry.stage} --unit ${unit}${words} --set-aside-for ${forUnit}`,
+    };
+  };
+  // A parked workflow is unparked first, as landing on the step the walk is
+  // on does, so the `next` after the reopen does not stop at the park.
+  const unpark = (getField(stateContent, "Parked") ?? "").trim().length > 0
+    ? `\`${aidlcToolInvocation("state")} unpark\`, then `
+    : "";
+  const backTo = (unit: string, stage: string): string =>
+    ` If they say 'back to ${unit}', run \`next --stage ${stage} --unit ${unit}\`.`;
+  // A Unit has reached the target when it finished it, or when the walk has it
+  // on a later step of the block (or at its checkpoint, after every step).
+  const pastTarget = inFlight !== null &&
+    (liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > targetIndex);
+  const reached = (unit: string): boolean => finished.has(unit) || (unit === inFlight && pastTarget);
+  const anyFinished = (): boolean =>
+    walk.block.some((stage) => unitsWithStageWork(projectDir, stage, walk.context).length > 0);
+  let reopened: string[];
+  if (flags.jumpUnit !== undefined) {
+    const named = flags.jumpUnit;
+    if (!units.includes(named)) {
+      return {
+        kind: "error",
+        message: `"${named}" is not one of this work's units (${units.join(", ")}). ` +
+          `Name one of them with \`${entrySkillInvocation()} --stage ${targetSlug} --unit <name>\`.`,
+      };
+    }
+    // The Unit in flight on the target itself: that is where the walk already is.
+    if (named === inFlight && liveStage === targetSlug) return "route";
+    // A Unit set aside on the target is picked up where it stopped.
+    const parked = open.get(named);
+    if (named !== inFlight && parked?.stage === targetSlug && parked.checkpoint.setAsideFor !== null) {
+      const aside = inFlight === null ? null : setAside(inFlight, named, `the person went back to ${named}`);
+      const resume = `${aidlcToolInvocation("state")} unit resume --stage ${targetSlug} --unit ${named}`;
+      const line = aside && inFlight !== null
+        ? `Paused unit ${inFlight} at ${nameOf(aside.stage)} and picked unit ${named} up at ${stageName}. ` +
+          `Say 'back to ${inFlight}' to pick ${inFlight} up again.`
+        : `Picked unit ${named} up at ${stageName}.`;
+      return {
+        kind: "print",
+        message:
+          `Run ${unpark}${aside ? `\`${aside.command}\`, then ` : ""}\`${resume}\` to pick unit "${named}" up where it stopped, ` +
+          `then tell the person in one line: "${line}" and re-run \`next\` to continue.` +
+          (aside && inFlight !== null ? backTo(inFlight, aside.stage) : ""),
+      };
+    }
+    if (!reached(named)) {
+      return {
+        kind: "print",
+        message: `Nothing to reopen: tell the person in one line, "unit ${named} has not reached ` +
+          `${stageName} yet, so there is nothing to reopen." Run nothing else.`,
+      };
+    }
+    reopened = [named];
+  } else if (flags.everyUnit) {
+    // Every unit includes one that is on the target step now: it starts it again.
+    reopened = units.filter((unit) => reached(unit) || open.get(unit)?.stage === targetSlug);
+    if (reopened.length === 0) {
+      return {
+        kind: "print",
+        message: `Nothing to reopen: tell the person in one line, "no unit has reached ${stageName} yet, ` +
+          `so there is nothing to reopen." Run nothing else.`,
+      };
+    }
+  } else {
+    if (inFlight !== null && liveStage === targetSlug && anyFinished()) return "route";
+    if (inFlight === null || !pastTarget) return null;
+    reopened = [inFlight];
+  }
+  // The target and every later per-unit step, the same reach a backward jump
+  // has, scoped to these Units: their later steps and Code Generation's Plan
+  // Approval no longer stand on the old design.
+  const stages = blockSlugs.slice(targetIndex);
+  const asides = [...open.keys()]
+    .filter((unit) => !reopened.includes(unit))
+    .map((unit) => ({ unit, aside: setAside(unit, reopened[0], `the person reopened ${reopened[0]}`) }))
+    .filter((entry): entry is { unit: string; aside: { stage: string; command: string } } => entry.aside !== null);
+  const kept = units.filter((unit) =>
+    finished.has(unit) && !reopened.includes(unit) && !asides.some((entry) => entry.unit === unit)
+  );
+  const reopenedText = `${stageName} for unit${reopened.length === 1 ? "" : "s"} ${list(reopened)}`;
+  const keptLine = kept.length > 0
+    ? ` ${list(kept)} ${kept.length === 1 ? "keeps its" : "keep their"} finished work.`
+    : "";
+  const first = asides[0];
+  const line = first
+    ? `Paused ${list(asides.map((entry) => `unit ${entry.unit} at ${nameOf(entry.aside.stage)}`))} and reopened ` +
+      `${reopenedText}. Say 'back to ${first.unit}' to pick ${first.unit} up again.${keptLine}`
+    : `Reopened ${reopenedText}.` +
+      (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
+  const reopen =
+    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scope}`;
+  return {
+    kind: "print",
+    message:
+      `Run ${unpark}${asides.map((entry) => `\`${entry.aside.command}\`, then `).join("")}\`${reopen}\` ` +
+      `to reopen "${targetSlug}" and the steps after it for ${list(reopened.map((unit) => `unit "${unit}"`))} only, then tell the person ` +
+      `in one line: "${line}" and re-run \`next\` to continue.` +
+      (first ? backTo(first.unit, first.aside.stage) : "") +
+      ` If they then ask for every unit, run \`next --stage ${targetSlug} --every-unit\`; if they name a unit, ` +
+      `\`next --stage ${targetSlug} --unit <name>\`.`,
+  };
+}
+
+// A forward jump in a solo unit-major walk. The person asked to go there, so it
+// goes through (#1411). When the target is the step the walk is already on,
+// plain routing lands there and skips nothing ("route"). Otherwise the jump runs
+// as it does anywhere, marking the steps it passes skipped for every unit, and
+// this returns the sentence naming the steps units have not finished, so the
+// agent can say what was skipped and how to reopen it. Null outside such a walk.
+function unitMajorForwardJump(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  targetSlug: string,
+): "route" | string | null {
+  const currentSlug = getField(stateContent, "Current Stage")?.trim() ?? "";
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk) return null;
+  const step = walk.step;
+  const liveStage = step.kind === "work" || step.kind === "summary"
+    ? step.stage.slug
+    : step.kind === "paused" ? step.stage : null;
+  if (liveStage === targetSlug) return "route";
+  const graph = loadGraph();
+  const targetIndex = graph.findIndex((stage) => stage.slug === targetSlug);
+  // Steps before the target that a unit has not finished are skipped; steps
+  // from the target on that a unit finished start a new attempt, so the walk
+  // takes that unit through them again.
+  const skipped = new Map<string, string[]>();
+  const redone = new Map<string, string[]>();
+  for (const stage of walk.block) {
+    const before = targetIndex === -1 || graph.findIndex((node) => node.slug === stage.slug) < targetIndex;
+    const finished = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+    for (const unit of walk.context.units) {
+      const into = before && !finished.has(unit) ? skipped : !before && finished.has(unit) ? redone : null;
+      if (into) into.set(unit, [...(into.get(unit) ?? []), stage.slug]);
+    }
+  }
+  const named = (steps: Map<string, string[]>): string => walk.context.units
+    .filter((unit) => steps.has(unit))
+    .map((unit) => `unit "${unit}" (${steps.get(unit)?.join(", ")})`)
+    .join(", ");
+  const said: string[] = [];
+  if (skipped.size > 0) {
+    said.push(`This skips the steps these units have not finished: ${named(skipped)}. Their files stay.`);
+  }
+  if (redone.size > 0) {
+    said.push(
+      `It also starts over what these units finished from "${targetSlug}" on, so each does it again ` +
+        `and needs its approvals again: ${named(redone)}.`,
+    );
+  }
+  if (said.length === 0) return "";
+  // The jump back that reopens what was skipped starts at the earliest skipped step.
+  const earliestSkipped = walk.block
+    .find((stage) => [...skipped.values()].some((steps) => steps.includes(stage.slug)))?.slug ?? currentSlug;
+  return ` ${said.join(" ")} After the jump, tell the person in one line what was ` +
+    (skipped.size > 0
+      ? `skipped${redone.size > 0 ? " or started over" : ""} and that \`${entrySkillInvocation()} --stage ${earliestSkipped}\` reopens it.`
+      : "started over.");
 }
 
 // Emit ONE iteration of the UNIT-MAJOR construction walk (opt-in via the
@@ -9317,6 +9792,9 @@ function emitUnitMajorRunStage(
     );
     directive.gate = false;
     directive.unit = step.unit;
+    if (redoChosenForUnitStep(projectDir, step.stage.slug, step.unit)) {
+      directive.artifact_reuse = { decision: "redo", unit: step.unit };
+    }
     emit(directive);
     return;
   }
@@ -9658,12 +10136,32 @@ function skippedJumpDirective(target: string, direction: string, current: string
 const INIT_JUMP_ERROR =
   "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
+// Why a jump cannot reopen its target for the unit the person named, said
+// before anything changes. The person gets one line that speaks to them; the
+// command for "for every unit" is for the conductor only.
+function unitChoiceRefusal(stateContent: string, targetSlug: string): string {
+  const node = nodeForSlug(targetSlug);
+  const name = node?.name || targetSlug;
+  const why = !node || !isPerUnit(node)
+    ? `${name} is done once for all units, so it cannot be redone for one unit. Nothing changed. ` +
+      "Say 'for every unit' to redo it."
+    : readConstructionIteration(stateContent) === "unit-major" && !checkpointPolicyEnabled(stateContent)
+      ? `${name} was approved for every unit at its stage approval, so it can only be reopened for every unit. ` +
+        "Nothing changed. Say 'for every unit' to do that."
+      : `${name} can be reopened for one unit only while Construction builds one unit at a time; here it can ` +
+        "only be reopened for every unit. Nothing changed. Say 'for every unit' to do that.";
+  return `Run nothing. Tell the person in one line: "${why}" If they say 'for every unit', ` +
+    `run \`next --stage ${targetSlug} --every-unit\`.`;
+}
+
+// Returns "route" without emitting when the target is the step a solo
+// unit-major walk is already on; the caller then routes like a plain `next`.
 function emitJumpDirective(
   flags: ParsedFlags,
   scope: string,
   projectDir: string,
   projectType: "brownfield" | "greenfield" | null = null,
-): void {
+): "route" | undefined {
   // --phase initialization is rejected up front (applies with or without state).
   if (flags.phase && canonicalisePhase(flags.phase) === "initialization") {
     emit(errorDirective(INIT_JUMP_ERROR));
@@ -9704,6 +10202,31 @@ function emitJumpDirective(
       emit(skippedJumpDirective(targetSlug, direction, resolved.currentSlug, scope));
       return;
     }
+    const unitMajorState = loadStateFileIfPresent(projectDir) ?? "";
+    // A jump back to a per-unit step reopens it for chosen Units, whichever way
+    // the jump resolves: forward or redo while Current Stage is on the first
+    // per-unit stage, backward once the stage gates have moved it on.
+    const reopen = unitMajorReopen(projectDir, scope, unitMajorState, targetSlug, flags);
+    if (reopen === "route") return "route";
+    if (reopen !== null) {
+      emit(reopen.kind === "error" ? errorDirective(reopen.message) : printDirective(reopen.message));
+      return;
+    }
+    // A named unit this jump cannot honor is never dropped for a jump that
+    // redoes the step for every unit. `--every-unit` asks for exactly what the
+    // jump below does here, so it goes through and says so in one line.
+    if (flags.jumpUnit !== undefined) {
+      emit(printDirective(unitChoiceRefusal(unitMajorState, targetSlug)));
+      return;
+    }
+    const everyUnitLine = flags.everyUnit && direction !== "forward"
+      ? ` Then tell the person in one line: "Reopened ${nodeForSlug(targetSlug)?.name || targetSlug}` +
+        `${direction === "backward" ? " and the steps after it" : ""} for every unit."`
+      : "";
+    const unitMajor = direction === "forward"
+      ? unitMajorForwardJump(projectDir, scope, unitMajorState, targetSlug)
+      : null;
+    if (unitMajor === "route") return "route";
     // Committing the jump is a MUTATION — name the move (print) and let the
     // conductor run `execute`, exactly as scope-change/config-change do. The
     // command carries the tool-resolved direction so `execute` skips/resets the
@@ -9711,7 +10234,8 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      `Run \`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
+        (unitMajor ?? "") + everyUnitLine,
     ));
     return;
   }
@@ -10941,6 +11465,8 @@ function approveArgs(slug: string, flags: ReportFlags): string[] {
 // --new-intent) and the conductor runs it — report itself never mutates. The
 // keywords are matched against the engine's own Branch-6 question wording, so
 // they are stable even though the rendered option labels are LLM-authored.
+// In a solo unit-major walk with finished Unit work, Redo names no jump: it
+// stays with the Unit's own step (unitMajorRedo).
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
@@ -10985,6 +11511,11 @@ function handleResumeReport(
   const choice = numericChoices[rawChoice] ?? rawChoice;
   if (choice.includes("redo")) {
     const scope = getField(stateContent, "Scope")?.trim() ?? "";
+    const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
+    if (unitRedo) {
+      emit(printDirective(unitRedo));
+      return;
+    }
     emit(printDirective(
       `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
     ));
@@ -12185,6 +12716,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       directive, resolveSwarmCheckpoint(pd, payload.y.batch, payload.y.units, liveState),
     );
   }
+  // Read again from the audit, so an answer spent since is not handed out.
+  if (payload.e === true && payload.u !== null && redoChosenForUnitStep(pd, node.slug, payload.u)) {
+    directive.artifact_reuse = { decision: "redo", unit: payload.u };
+  }
   if (payload.w) {
     const resolution = resolveBoltDag(pd);
     if (resolution.state === "ok") {
@@ -12567,6 +13102,7 @@ export function main(argv: string[]): void {
     engineInvocation = null;
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;
+    activeSwitchOffNotices = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;

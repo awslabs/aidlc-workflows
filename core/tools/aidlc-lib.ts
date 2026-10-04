@@ -14,6 +14,7 @@ import {
   entrySkillInvocation,
   type DirectiveLimit,
   directiveLimitFor,
+  discoverProjectHarnesses,
   isCompiledExecutable,
   type KiroLayout,
   kiroTreeLayout,
@@ -52,6 +53,7 @@ export {
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
+  headingKey,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 export {
@@ -3087,20 +3089,36 @@ export function codekbScopeFingerprint(
         ),
     );
   if (survivingPaths.length === 0) return null;
-  const exclusions = normalizedExclusions
-    .filter((exclusion) =>
-      survivingPaths.some(
-        ({ normalized: positive }) =>
-          positive === "" || exclusion.startsWith(`${positive}/`),
-      ),
-    )
-    .map((exclusion) => `:(exclude,literal)${exclusion}`);
+  const candidateExclusions = normalizedExclusions.filter((exclusion) =>
+    survivingPaths.some(
+      ({ normalized: positive }) =>
+        positive === "" || exclusion.startsWith(`${positive}/`),
+    ),
+  );
 
   const inTree = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
     cwd: repoDir,
     encoding: "utf-8",
   });
   if (inTree.status !== 0 || inTree.stdout.trim() !== "true") return null;
+  // `add` already leaves ignored paths out, and naming one, even as an
+  // exclusion, makes it fail, so only exclusions it would otherwise add are
+  // named. The temporary index starts empty, so ignore rules also cover paths
+  // the real index tracks (--no-index).
+  let ignoredExclusions = new Set<string>();
+  if (candidateExclusions.length > 0) {
+    const ignored = spawnSync("git", ["check-ignore", "--no-index", "--stdin", "-z"], {
+      cwd: repoDir,
+      input: candidateExclusions.map((path) => `${path}\0`).join(""),
+      encoding: "utf-8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (ignored.status !== 0 && ignored.status !== 1) return null;
+    ignoredExclusions = new Set(ignored.stdout.split("\0").filter(Boolean));
+  }
+  const exclusions = candidateExclusions
+    .filter((path) => !ignoredExclusions.has(path))
+    .map((exclusion) => `:(exclude,literal)${exclusion}`);
   // .NET build outputs beside a project file are not source even where nothing
   // ignores them; a path the scan names itself is still read. They leave the
   // index after `add`, because naming an ignored path to `add` fails.
@@ -3271,6 +3289,81 @@ export function codekbSourceFingerprint(
   return tree === null ? null : `tree:${tree}`;
 }
 
+// The root files each installed harness's projection writes into (its
+// rootIntegrations: .gitignore, AGENTS.md, .mcp.json, opencode.json, Cursor's
+// install.ts), with their merge policy. A legacy or unreadable descriptor, or
+// an entry that is not a plain path inside the project, names nothing.
+export function aidlcRootIntegrations(dir: string): Array<{ path: string; policy: string }> {
+  const found: Array<{ path: string; policy: string }> = [];
+  let harnesses: ReturnType<typeof discoverProjectHarnesses>;
+  try {
+    harnesses = discoverProjectHarnesses(dir);
+  } catch {
+    return found;
+  }
+  for (const harness of harnesses) {
+    let integrations: unknown;
+    try {
+      const descriptor = JSON.parse(
+        readFileSync(join(harness.root, "tools", "data", "aidlc-projection.json"), "utf-8"),
+      ) as { rootIntegrations?: unknown } | null;
+      integrations = descriptor?.rootIntegrations;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(integrations)) continue;
+    for (const integration of integrations) {
+      const path = typeof integration?.path === "string" ? normalizeGenerationPath(integration.path) : null;
+      if (path !== null && path !== "." && typeof integration.policy === "string") {
+        found.push({ path, policy: integration.policy });
+      }
+    }
+  }
+  return found;
+}
+
+// AI-DLC's own files, which the Reverse Engineering scan never reads, so a
+// change to them never makes the code knowledge base out of date. They live
+// only in a repository rooted at the workspace; a sibling repo leaves nothing
+// out. Repository-relative literal paths: the aidlc/ workspace and the harness
+// directories; the aidlc-named agents, hooks and skills under .github/ and
+// .agents/, and the stage runners generated there; every root file an
+// installed harness writes into, left out whole because none of them is
+// application code (a .gitignore edit that adds or drops files still moves the
+// fingerprint through those files); and AI-DLC's root settings files.
+const CODEKB_INSTALL_DIRS = ["aidlc", ".aidlc", ".claude", ".codex", ".cursor", ".kiro", ".opencode"];
+const CODEKB_INSTALL_ENTRY_DIRS = [".github/agents", ".github/hooks", ".github/skills", ".agents/skills"];
+export function codekbFingerprintExcludes(projectDir: string, sourceDir: string): string[] {
+  if (sourceDir !== projectDir) return [];
+  const excluded = new Set<string>([...CODEKB_INSTALL_DIRS, ...AIDLC_ROOT_SETTINGS_FILES]);
+  for (const parent of CODEKB_INSTALL_ENTRY_DIRS) {
+    const parentDir = join(projectDir, ...parent.split("/"));
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith("aidlc") || (entry.isDirectory() && generatedRunnerSkill(join(parentDir, entry.name)))) {
+        excluded.add(`${parent}/${entry.name}`);
+      }
+    }
+  }
+  for (const integration of aidlcRootIntegrations(projectDir)) excluded.add(integration.path);
+  return [...excluded].sort();
+}
+
+function generatedRunnerSkill(skillDir: string): boolean {
+  try {
+    const skillMd = join(skillDir, "SKILL.md");
+    const stat = lstatSync(skillMd);
+    return stat.isFile() && stat.size <= 256 * 1024 && hasRunnerGenMarker(readFileSync(skillMd, "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
 // Hash the complete on-disk CodeKB directory, not only its timestamp. This is
 // the compare-and-swap generation for cumulative merges: any concurrent edit to
 // any artifact changes the token and makes a stale publish refuse.
@@ -3315,7 +3408,7 @@ export function codekbStoreIsCurrent(
   const current = codekbScopeFingerprint(
     sourceRoot,
     parsed.scope.analyzedPaths,
-    sourceRoot === projectDir ? ["aidlc"] : [],
+    codekbFingerprintExcludes(projectDir, sourceRoot),
   );
   return current !== null && current === parsed.scope.fingerprint;
 }
@@ -3722,6 +3815,36 @@ export function listIntents(
     });
   }
   return infos;
+}
+
+// The workflows still running in a project, as `<space>/<record dir>`: every
+// space's intents that neither the registry nor the state file marks completed
+// or archived. config refuses to refresh a harness tree while any runs, and
+// doctor names the same list.
+export function activeWorkflowDescriptions(projectDir: string): string[] {
+  const active: string[] = [];
+  for (const space of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space.name)) {
+      if (
+        isCompletedIntent(intent) ||
+        isArchivedIntent(intent) ||
+        !intent.dirName
+      ) continue;
+      const path = stateFilePath(projectDir, intent.dirName, space.name);
+      let stateFile = false;
+      try {
+        stateFile = lstatSync(path).isFile();
+      } catch {
+        // No state file yet: the registry row alone says it runs.
+      }
+      if (stateFile) {
+        const status = getField(readFileSync(path, "utf-8"), "Status");
+        if (status === "Completed" || status === "Archived") continue;
+      }
+      active.push(`${space.name}/${intent.dirName}`);
+    }
+  }
+  return active;
 }
 
 // Materialize the active-space cursor without overwriting a concurrent explicit
@@ -7673,6 +7796,7 @@ const STATE_DIGEST_IGNORED_FIELDS = new Set([
   // The active Unit's lifecycle mirror. The receipts in the ledger are the
   // authority for a Unit's lifecycle; these fields are a convenience copy.
   "Active Unit",
+  "Unit Stage",
   "Unit State",
   "Unit Pause Reason",
   "Unit Next Action",
@@ -9055,6 +9179,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "redo-jump": null,
   "restore-or-jump": null,
   "restart-stage": null,
+  // Carried out through `next`, which routes the Unit's step again.
+  "redo-unit-step": null,
   // The person types `/aidlc --scope <scope>`, which runs through `next`: the
   // Scope is theirs, never a value the conductor fills in.
   "change-scope": null,
@@ -10546,6 +10672,18 @@ export function humanActedSinceGate(projectDir: string): boolean {
   return humanTurnState(projectDir) === "acted";
 }
 
+// A person has spoken since the last decision, and that is on record: a human
+// turn exists (an empty ledger, which reads as acted for older workflows, does
+// not count). Lowering a check the person asked for in their own words needs it.
+export function personSpokeSinceGate(projectDir: string): boolean {
+  if (!humanActedSinceGate(projectDir)) return false;
+  try {
+    return readAuditShardEvents(projectDir).some((row) => row.event === "HUMAN_TURN");
+  } catch {
+    return false;
+  }
+}
+
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
@@ -11218,8 +11356,10 @@ function visibleH2Title(line: string, block: MarkdownLine): string | null {
 	return heading?.level === 2 && !heading.nested ? heading.title : null;
 }
 
+// A Q<n> heading behind a leading emoji is still that question, as the
+// claim-sources sensor reads it.
 function visibleQuestionId(title: string): string | null {
-  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(title);
+  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(headingKey(title));
   return match ? `Q${match[1]}` : null;
 }
 
@@ -11318,7 +11458,7 @@ export function summaryConfirmationContentHash(content: string): string {
       continue;
     }
 
-    if (title === "Assumption Confirmation" && atxH2 && sawSummary) {
+    if (headingKey(title) === "Assumption Confirmation" && atxH2 && sawSummary) {
       if (postSummaryAssumptionSeen) {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }
@@ -16626,6 +16766,10 @@ export function reviewAttemptWindow(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership = artifactPerUnit && (isTeamUnitOwnership(stateContent) ||
     getField(stateContent, "Construction Checkpoints") === "enabled");
+  // A Unit-tagged rejection starts a new attempt for that Unit only wherever
+  // lifecycle floors are per Unit, solo unit-major included (#1411).
+  const unitScopedRejections =
+    artifactPerUnit && unitScopedLifecycleFloors(stateContent);
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -16634,7 +16778,7 @@ export function reviewAttemptWindow(
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
         (event.event === "GATE_REJECTED" &&
-          !(teamOwnership && auditBlockField(event.block, "Unit"))) ||
+          !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
         (event.event === "STAGE_STARTED" &&
           !unitMajor &&
           !auditBlockField(event.block, "Workflow")?.startsWith(
@@ -16932,6 +17076,8 @@ export function reviewAttemptAccounting(
     stage.for_each === "unit-of-work" &&
     (isTeamUnitOwnership(stateContent) ||
       getField(stateContent, "Construction Checkpoints") === "enabled");
+  const unitScopedRejections =
+    stage.for_each === "unit-of-work" && unitScopedLifecycleFloors(stateContent);
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -17021,8 +17167,13 @@ export function reviewAttemptAccounting(
         .map((value) => value.trim());
       if (!gateStages.includes(stage.slug)) continue;
       const rejectedUnit = auditBlockField(entry.block, "Unit");
-      if (teamOwnership && unit !== undefined && rejectedUnit !== unit) continue;
-      if (teamOwnership && unit === undefined && rejectedUnit !== null) continue;
+      // A rejection with no Unit is a stage-wide Request Changes: outside team
+      // or checkpoint ownership it starts a new attempt for every Unit.
+      if (
+        unitScopedRejections && unit !== undefined && rejectedUnit !== unit &&
+        (teamOwnership || rejectedUnit !== null)
+      ) continue;
+      if (unitScopedRejections && unit === undefined && rejectedUnit !== null) continue;
       const tied = tiedAcrossShards(i);
       ambiguity = tied
         ? `cross-shard gate boundary tie at ${entry.timestamp}`
@@ -17659,6 +17810,7 @@ export function freshReviewReceipts(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const teamOwnership = perUnit && (isTeamUnitOwnership(stateContent) ||
     getField(stateContent, "Construction Checkpoints") === "enabled");
+  const unitScopedRejections = perUnit && unitScopedLifecycleFloors(stateContent);
   const attemptWindow =
     options.attemptWindow ??
     reviewAttemptWindow(projectDir, stateContent, stage);
@@ -17858,7 +18010,7 @@ export function freshReviewReceipts(
     ) {
       continue;
     }
-    if (teamOwnership && e.event === "GATE_REJECTED") {
+    if (unitScopedRejections && e.event === "GATE_REJECTED") {
       const rejectedUnit = auditBlockField(e.block, "Unit");
       if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
         continue;
@@ -24499,6 +24651,45 @@ export function gateWordsSincePresentation(
   return words.length > 0 ? words : null;
 }
 
+// The person's latest chat turn in this clone's ledger for the selected work:
+// when it was, and the words its chat kept right after it (null when the hook
+// kept none: a slash command, a picked option, an over-long message). Null when
+// no turn is on record. It only words a notice, so it never throws.
+export function latestPersonTurn(projectDir: string): { at: string; words: string | null } | null {
+  try {
+    const shardPath = auditFilePath(projectDir);
+    const content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
+    const separator = /\r?\n---\r?\n/g;
+    let start = 0;
+    let turn: { at: string; session: string | null; from: number; to: number } | null = null;
+    for (;;) {
+      const match = separator.exec(content);
+      const end = match ? match.index : content.length;
+      const block = content.slice(start, end).replace(/\r\n/g, "\n");
+      if (auditBlockField(block, "Event") === "HUMAN_TURN") {
+        turn = {
+          at: auditBlockField(block, "Timestamp") ?? "",
+          session: auditBlockField(block, "Session"),
+          from: Buffer.byteLength(content.slice(0, start), "utf-8"),
+          to: Buffer.byteLength(content.slice(0, match ? match.index + match[0].length : end), "utf-8"),
+        };
+      }
+      if (match === null) break;
+      start = match.index + match[0].length;
+    }
+    if (turn === null) return null;
+    const { at, session, from, to } = turn;
+    const record = session ? readGateWords(projectDir, session) : null;
+    // The hook keeps a turn's words at the shard's size right after its row.
+    const kept = record?.shard === projectRelativePath(projectDir, shardPath)
+      ? record.messages.find((message) => message.offset > from && message.offset <= to)
+      : undefined;
+    return { at, words: kept?.text ?? null };
+  } catch {
+    return null;
+  }
+}
+
 // The person's revision feedback at a stage gate, in their own words: every
 // message this chat's person typed since the gate was presented, in order and
 // verbatim, joined by line breaks. A message that only picks a choice
@@ -26617,8 +26808,9 @@ export function isAutonomousSwarmStage(
 }
 
 // Human presence is the key holder, not a fence the policy word can lower.
-// It has exactly one off-switch: the machine-wide environment variable, set
-// outside the session. Persisted per-work settings cannot lower this guard.
+// Its one off-switch is AIDLC_SKIP_HUMAN_PRESENCE_GUARD, set in the environment
+// or recorded with `config flags --bypass` (the engine then says it is off).
+// Persisted per-work settings cannot lower this guard.
 export function humanPresenceGuardDisabled(): boolean {
   return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
 }
@@ -26859,6 +27051,9 @@ export const GUARD_REMEDY_OPS = [
   "redo-jump",
   "restore-or-jump",
   "restart-stage",
+  // Redo one Unit's step in a solo unit-major walk, where a stage restart
+  // would reach every Unit's finished work.
+  "redo-unit-step",
   "change-scope",
   "restore-scope",
   "abort-bolt",
@@ -27097,6 +27292,75 @@ function restartStageRemedy(stage: string): GuardRemedy {
   };
 }
 
+// Where a refusal sits in a solo unit-major walk, or null outside one. The walk
+// takes one Unit through every block stage while Current Stage stays on the
+// first, so a later block stage's checkbox reads pending while a Unit works on
+// it, and a restart there is a forward jump: it marks the earlier block stages
+// skipped for every Unit, and its STAGE_JUMPED starts a new attempt for every
+// Unit's finished steps (#1411). `unit` is the Unit the refusal is about: the
+// one it names, or the Active Unit working this stage. `live` says `next`
+// routes that Unit's step again. `unit start` records the Active Unit and its
+// stage; with neither on record a named Unit is taken at its word.
+function soloUnitMajorRefusal(
+  input: Pick<GuardRefusalInput, "stateContent" | "stage" | "unit" | "teamGate">,
+): { unit: string | null; live: boolean; firstStage: boolean } | null {
+  if (input.teamGate !== undefined || isTeamUnitOwnership(input.stateContent)) return null;
+  if (getField(input.stateContent, "Construction Iteration")?.trim() !== "unit-major") return null;
+  const block = unitMajorConstructionStageSlugs(
+    getField(input.stateContent, "Scope")?.trim() ?? "",
+    input.stateContent,
+    true,
+  );
+  if (!block.includes(input.stage)) return null;
+  // Read from the state file, so only a valid Unit name counts.
+  const recordedUnit = getField(input.stateContent, "Active Unit")?.trim() || null;
+  const activeUnit = recordedUnit !== null && UNIT_NAME_REGEX.test(recordedUnit) ? recordedUnit : null;
+  const activeHere = activeUnit !== null &&
+    getField(input.stateContent, "Unit Stage")?.trim() === input.stage;
+  const unit = input.unit ?? (activeHere ? activeUnit : null);
+  return {
+    unit,
+    live: unit !== null && (activeUnit === null || (activeHere && activeUnit === unit)),
+    firstStage: block[0] === input.stage,
+  };
+}
+
+// Redoing a Unit's step resets no attempt, so it clears a refusal about the
+// step's own work and never one about its review attempt: a review in flight,
+// a spent review budget, the one stale-review recovery already used, or a
+// terminal review whose freeze refuses the step's edits again.
+function unitStepRedoClears(code: string, attempt: GuardAttemptState): boolean {
+  if (code === "REVIEW_FREEZE_ACTIVE" || attempt.pendingReview) return false;
+  if (attempt.reviewBudget && attempt.reviewBudget.used >= attempt.reviewBudget.limit) {
+    return false;
+  }
+  return !(attempt.recovery === "spent" && attempt.reviewCoverage !== "missing");
+}
+
+function redoUnitStepRemedy(stage: string, unit: string): GuardRemedy {
+  return {
+    op: "redo-unit-step",
+    action:
+      `Redo "${stage}" for unit "${unit}" only: continue with ${entrySkillInvocation()} and do ` +
+      `that step again for unit "${unit}". The other units keep their finished work, reviews, ` +
+      "Plan Approvals and checkpoint approvals.",
+    requiresHuman: false,
+    executableNow: true,
+  };
+}
+
+// What a stage-wide reset still offered in a solo unit-major walk throws away,
+// said where it is offered: it reaches every Unit, not just this one.
+function unitMajorResetCost(reset: "jump" | "reject", stage: string): string {
+  return reset === "jump"
+    ? " Construction runs one unit at a time here, so this also throws away the work every " +
+        "unit has finished: each unit redoes its steps and needs its reviews, Plan Approvals " +
+        "and checkpoint approval again."
+    : " Construction runs one unit at a time here, so this also throws away every unit's " +
+        `finished "${stage}" work: each unit that already did it does it again and needs its ` +
+        "review and checkpoint approval again.";
+}
+
 function unresolvedTeamGateRemedy(
   resolution: Extract<TeamUnitGateResolution, { resolved: false }>,
 ): GuardRemedy {
@@ -27137,8 +27401,22 @@ function lifecycleResetRemedies(
   }
   const reportStage =
     input.teamGate?.resolved === true ? input.teamGate.gateStage : input.stage;
+  const walk = soloUnitMajorRefusal(input);
+  const cost = (reset: "jump" | "reject"): string =>
+    walk ? unitMajorResetCost(reset, input.stage) : "";
   if (state === "pending" || state === "skipped") {
-    return [restartStageRemedy(input.stage)];
+    if (!walk) return [restartStageRemedy(input.stage)];
+    if (walk.unit !== null && walk.live && unitStepRedoClears(input.code, input.attempt)) {
+      return [redoUnitStepRemedy(input.stage, walk.unit)];
+    }
+    // Restarting the first block stage is not a forward jump, so it is still
+    // offered with its cost. A later block stage's restart either lands back on
+    // the same step (when the walk is on it), which cannot clear the refusal, or
+    // jumps and starts every Unit's finished work over, so nothing is offered
+    // and a repeated refusal reaches the terminal ask, where the person decides.
+    if (!walk.firstStage) return [];
+    const restart = restartStageRemedy(input.stage);
+    return [{ ...restart, action: restart.action + cost("jump") }];
   }
   if (state === "in-progress" || state === "awaiting-approval") {
     const unitContext =
@@ -27153,7 +27431,8 @@ function lifecycleResetRemedies(
             "Halt unattended execution and ask a human what should change. " +
             `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ` +
             `"${reportStage}"${unitContext}, and end the turn. Only after the human ` +
-            "answers may their exact text be submitted as the Request Changes reason.",
+            "answers may their exact text be submitted as the Request Changes reason." +
+            cost("reject"),
           requiresHuman: true,
           executableNow: true,
         },
@@ -27166,7 +27445,8 @@ function lifecycleResetRemedies(
           `When the person already said what should change for stage "${reportStage}"${unitContext}, ` +
           "submit Request Changes with their exact text unchanged as the report reason. " +
           'Otherwise ask "What should change?" and end the turn, then submit their answer ' +
-          "the same way. Either way that unlocks revision and a fresh review.",
+          "the same way. Either way that unlocks revision and a fresh review." +
+          cost("reject"),
         requiresHuman: true,
         executableNow: true,
       },
@@ -27204,7 +27484,8 @@ function lifecycleResetRemedies(
           "This costs more than finishing the current revision: your " +
           "recorded answers survive, but you re-confirm the summary once and then " +
           "save every output document again, so each one descends from the new " +
-          "confirmation.",
+          "confirmation." +
+          cost("jump"),
         ...guardOperation({ kind: "restart-stage", stage: input.stage }),
         requiresHuman: true,
         executableNow: true,
@@ -27215,12 +27496,12 @@ function lifecycleResetRemedies(
     {
       op: "restore-or-jump",
       action:
-        input.attempt.sourceCoverage === "unbindable"
+        (input.attempt.sourceCoverage === "unbindable"
           ? "This stage is already approved; repair .aidlc-source-paths.json or the " +
             "workspace source boundary so the application source can be checked, or jump back with " +
             `/aidlc --stage ${input.stage} to redo it.`
           : "This stage is already approved; restore the reviewed source state, or " +
-            `jump back with /aidlc --stage ${input.stage} to redo it.`,
+            `jump back with /aidlc --stage ${input.stage} to redo it.`) + cost("jump"),
       ...guardOperation({ kind: "restart-stage", stage: input.stage }),
       requiresHuman: true,
       executableNow: true,
@@ -27935,22 +28216,23 @@ export function guardTerminalAskForRefusal(
     atCap: boolean;
   },
 ): GuardRecoveryAskData {
+  // In the person's terms: where the work stopped and that it needs them. The
+  // refusal code and the state signature stay in the ask's fields (and the
+  // signature at the end of a repeated stop, for a report).
   const target = refusal.unit
-    ? `Unit "${refusal.unit}" of "${refusal.stage}"`
+    ? `unit ${refusal.unit}'s "${refusal.stage}"`
     : `"${refusal.stage}"`;
+  const why = refusal.userMessage.trim().length > 0 ? ` ${refusal.userMessage.trim()}` : "";
   const situation =
-    `${refusal.blockedAction} for ${target} is refused (${refusal.code}) and ` +
-    `the engine has no authority-preserving recovery action it can offer from ` +
-    `the ${refusal.state} state. ${refusal.userMessage}`;
+    `I stopped at ${target}: this step cannot go ahead, and there is ` +
+    `nothing I can safely do about it on my own.${why}`;
   return {
     kind: "ask",
     ask_type: GUARD_RECOVERY_ASK_TYPE,
     response_route: "execute-remedy",
     question: streak.atCap
-      ? `${situation} The same guard state has refused ${streak.count} times ` +
-        `(state signature ${streak.signature}). Nothing here can be executed ` +
-        "without a human decision: tell me how you want to proceed, or report " +
-        "this signature."
+      ? `${situation} It has stopped here ${streak.count} times now. Tell me how you ` +
+        `want to proceed. (To report this, include ${streak.signature}.)`
       : `${situation} Tell me how you want to proceed.`,
     stage: refusal.stage,
     ...(refusal.unit ? { unit: refusal.unit } : {}),
@@ -28035,10 +28317,23 @@ export function recoveryGuidance(
     humanAuthority: humanAuthorityState(null),
     ...(options.teamGate ? { teamGate: options.teamGate } : {}),
   });
-  return refusal.remedies.find((remedy) => remedy.executableNow)?.action ??
-    (options.teamGate?.resolved === false
-      ? unresolvedTeamGateRemedy(options.teamGate).action
-      : restartStageRemedy(stageSlug).action);
+  const executable = refusal.remedies.find((remedy) => remedy.executableNow)?.action;
+  if (executable !== undefined) return executable;
+  if (options.teamGate?.resolved === false) return unresolvedTeamGateRemedy(options.teamGate).action;
+  // A later block stage of a solo unit-major walk has no restart to offer: it
+  // lands back on the same step or starts every Unit's finished work over.
+  const walk = soloUnitMajorRefusal({
+    stateContent,
+    stage: stageSlug,
+    ...(options.unit ? { unit: options.unit } : {}),
+    ...(options.teamGate ? { teamGate: options.teamGate } : {}),
+  });
+  if (walk && !walk.firstStage) {
+    const target = walk.unit ? `unit "${walk.unit}"'s "${stageSlug}"` : `"${stageSlug}"`;
+    return `Stop and ask the person how to go on with ${target}. Construction runs one unit at a ` +
+      `time here, so restarting "${stageSlug}" would throw away the work every unit has finished.`;
+  }
+  return restartStageRemedy(stageSlug).action;
 }
 
 export function setCheckbox(
@@ -28566,7 +28861,10 @@ function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
   try { WINDOWS_PROCESS_API?.symbols.CloseHandle(receipt.handle); } catch { /* already closed */ }
 }
 
-function processGeneration(pid: number): string | null {
+// Exported so the transaction lock proves a reused PID with the same record.
+// Locks persist this string: a format change makes a live holder from another
+// release look like a reused PID.
+export function processGeneration(pid: number): string | null {
   if (pid === process.pid && AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.selfProcessGeneration) {
     return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.selfProcessGeneration();
   }
@@ -28582,6 +28880,34 @@ function processGeneration(pid: number): string | null {
         : null;
   if (pid === process.pid) SELF_PROCESS_GENERATION = generation;
   return generation;
+}
+
+// When a live process started, in epoch ms, read from its generation record;
+// null when the platform cannot say. For locks written by releases that
+// recorded no generation. A wall-clock step can shift it, so callers compare
+// with a margin.
+export function processStartedAtMs(pid: number): number | null {
+  const generation = processGeneration(pid);
+  if (!generation) return null;
+  let started = Number.NaN;
+  try {
+    if (process.platform === "win32") {
+      // FILETIME as "high:low" hex: 100 ns intervals since 1601-01-01.
+      const [high, low] = generation.split(":");
+      const filetime = (BigInt(`0x${high}`) << 32n) | BigInt(`0x${low}`);
+      started = Number(filetime / 10_000n) - 11_644_473_600_000;
+    } else if (process.platform === "darwin") {
+      const [seconds, micros] = generation.split(":").map(Number);
+      started = seconds * 1000 + micros / 1000;
+    } else if (process.platform === "linux") {
+      // procfs counts USER_HZ ticks since boot; USER_HZ is 100 wherever Bun runs.
+      const boot = /^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf-8"));
+      if (boot) started = Number(boot[1]) * 1000 + Number(generation) * 10;
+    }
+  } catch {
+    return null;
+  }
+  return Number.isFinite(started) ? started : null;
 }
 
 function writeOwnerStamp(
@@ -31788,8 +32114,7 @@ function currentUnitLifecycleRows(
   let unitScoped = false;
   try {
     const state = stateContent ?? readStateFile(projectDir);
-    unitScoped = isTeamUnitOwnership(state) ||
-      getField(state, "Construction Checkpoints") === "enabled";
+    unitScoped = unitScopedLifecycleFloors(state);
   } catch {
     // No readable state means legacy stage-scoped flooring.
   }
@@ -31886,6 +32211,19 @@ function currentUnitLifecycleRows(
   return reduced;
 }
 
+/**
+ * Whether a Unit's lifecycle receipts are floored per Unit: team-owned Units,
+ * Construction checkpoints, and solo unit-major Construction (#1411). There a
+ * Unit-scoped rejection (a checkpoint's Request Changes, or a jump that reopens
+ * one Unit's step) starts a new attempt for that Unit only. With no such row,
+ * a Unit's floor is the stage's, so receipts written either way stay current.
+ */
+export function unitScopedLifecycleFloors(stateContent: string): boolean {
+  return isTeamUnitOwnership(stateContent) ||
+    getField(stateContent, "Construction Checkpoints") === "enabled" ||
+    getField(stateContent, "Construction Iteration")?.trim() === "unit-major";
+}
+
 function unitMajorLifecycleMode(projectDir: string): boolean {
   try {
     const state = readStateFile(projectDir);
@@ -31898,16 +32236,48 @@ function unitMajorLifecycleMode(projectDir: string): boolean {
   }
 }
 
+export interface UnitCheckpoint {
+  unit: string;
+  state: "in-progress" | "paused";
+  reason: string | null;
+  nextAction: string | null;
+  // The Unit this one was paused for (#1411): the person asked for that Unit's
+  // work while this one was open, so the walk takes that Unit first and then
+  // asks to pick this one up again. Null for an ordinary pause.
+  setAsideFor: string | null;
+}
+
+// Every Unit whose latest current-attempt row for the stage is open (started,
+// resumed, or paused), most recently touched first.
+function openUnitCheckpoints(rows: readonly UnitLifecycleRow[]): UnitCheckpoint[] {
+  const open: UnitCheckpoint[] = [];
+  const seen = new Set<string>();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const { unit, event, block } = rows[i];
+    if (seen.has(unit)) continue;
+    seen.add(unit);
+    if (UNIT_TERMINAL_EVENTS.has(event)) continue;
+    const paused = event === "UNIT_PAUSED";
+    open.push({
+      unit,
+      state: paused ? "paused" : "in-progress",
+      reason: auditBlockField(block, "Reason"),
+      nextAction: auditBlockField(block, "Next Action"),
+      setAsideFor: paused ? auditBlockField(block, "Set Aside For") : null,
+    });
+  }
+  return open;
+}
+
 export interface UnitLifecycleSnapshot {
   receipts: Set<string>;
   // Units whose current-attempt lifecycle ends in UNIT_SKIPPED, with the reason.
   skipped: Map<string, string>;
-  checkpoint: {
-    unit: string;
-    state: "in-progress" | "paused";
-    reason: string | null;
-    nextAction: string | null;
-  } | null;
+  // The most recently touched open Unit, or null.
+  checkpoint: UnitCheckpoint | null;
+  // Every open Unit, most recently touched first. Only a Unit set aside for
+  // another (#1411) stays open beside the active one.
+  open: UnitCheckpoint[];
   inUse: boolean;
   mode: UnitLifecycleMode;
 }
@@ -31976,22 +32346,8 @@ export function unitLifecycleSnapshot(
       receipts.delete(row.unit);
     }
   }
-  const latest = new Map<string, { event: string; block: string }>();
-  for (const row of rows) {
-    latest.set(row.unit, { event: row.event, block: row.block });
-  }
-  let checkpoint: UnitLifecycleSnapshot["checkpoint"] = null;
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const final = latest.get(rows[i].unit);
-    if (!final || UNIT_TERMINAL_EVENTS.has(final.event)) continue;
-    checkpoint = {
-      unit: rows[i].unit,
-      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
-      reason: auditBlockField(final.block, "Reason"),
-      nextAction: auditBlockField(final.block, "Next Action"),
-    };
-    break;
-  }
+  const open = openUnitCheckpoints(rows);
+  const checkpoint = open[0] ?? null;
   const unitEvents = new Set([
     "UNIT_STARTED",
     "UNIT_PAUSED",
@@ -32011,7 +32367,7 @@ export function unitLifecycleSnapshot(
         : sawSerial
           ? "serial"
           : "none";
-  return { receipts, skipped, checkpoint, inUse, mode };
+  return { receipts, skipped, checkpoint, open, inUse, mode };
 }
 
 export function unitCompletedReceipts(
@@ -32149,29 +32505,22 @@ export function unitLifecycleReceiptsInUse(
 export function activeUnitCheckpoint(
   projectDir: string,
   slug: string,
-): { unit: string; state: "in-progress" | "paused"; reason: string | null; nextAction: string | null } | null {
+): UnitCheckpoint | null {
+  // Most recently touched unit whose FINAL row is non-terminal wins (a unit
+  // completed by a later row is skipped).
+  return unitOpenCheckpoints(projectDir, slug)[0] ?? null;
+}
+
+// Every open Unit of the stage, most recently touched first (see
+// openUnitCheckpoints).
+export function unitOpenCheckpoints(
+  projectDir: string,
+  slug: string,
+): UnitCheckpoint[] {
   const audit = readAllAuditShards(projectDir);
-  if (!audit) return null;
+  if (!audit) return [];
   const unitMajor = unitMajorLifecycleMode(projectDir);
-  const rows = currentUnitLifecycleRows(projectDir, audit, slug, unitMajor);
-  const latest = new Map<string, { event: string; block: string }>();
-  for (const row of rows) {
-    latest.set(row.unit, { event: row.event, block: row.block });
-  }
-  // Most recently touched unit whose FINAL row is non-terminal wins (walk the
-  // chronological rows backwards; a unit completed by a later row is skipped).
-  for (let i = rows.length - 1; i >= 0; i--) {
-    const { unit } = rows[i];
-    const final = latest.get(unit);
-    if (!final || UNIT_TERMINAL_EVENTS.has(final.event)) continue;
-    return {
-      unit,
-      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
-      reason: auditBlockField(final.block, "Reason"),
-      nextAction: auditBlockField(final.block, "Next Action"),
-    };
-  }
-  return null;
+  return openUnitCheckpoints(currentUnitLifecycleRows(projectDir, audit, slug, unitMajor));
 }
 
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
@@ -32836,6 +33185,17 @@ function parseAgentFrontmatter(path: string): AgentMetadata {
 export function frontmatterBlock(body: string): string | null {
   const m = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   return m?.[1] ?? null;
+}
+
+// Every runner skill aidlc-runner-gen writes carries `generated-by:
+// aidlc-runner-gen` in its frontmatter; a plugin runner's directory has no
+// aidlc- prefix, so the marker is how it is told from the project's own skill.
+const RUNNER_GEN_MARKER_KEY = "generated-by";
+const RUNNER_GEN_MARKER_VALUE = "aidlc-runner-gen";
+export function hasRunnerGenMarker(body: string): boolean {
+  const frontmatter = frontmatterBlock(body);
+  if (!frontmatter) return false;
+  return new RegExp(`^${RUNNER_GEN_MARKER_KEY}:\\s*${RUNNER_GEN_MARKER_VALUE}\\s*$`, "m").test(frontmatter);
 }
 
 // Scalar field parser. Rejects YAML folded/literal block markers

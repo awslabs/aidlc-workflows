@@ -32,7 +32,9 @@
       "allowedPaths": [
         "aidlc/spaces/**",
         ".kiro/sensors/**",
-        "aidlc/.aidlc-compose-pending"
+        "aidlc/.aidlc-compose-pending",
+        "[!.]*",
+        "[!.]*/**"
       ]
     },
     "subagent": {

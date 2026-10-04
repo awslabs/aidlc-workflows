@@ -605,8 +605,11 @@ describe("t295 flags section", () => {
     // It says what happened and how to undo it.
     expect(recorded.stdout).toContain(`Recorded ${name} in aidlc.settings.local.json. To undo: `);
     expect(recorded.stdout).toContain(`config flags --clear-bypass ${name} --local --yes`);
-    // AI-DLC's managed .gitignore block already lists the local file.
-    expect(changedSince(before)).toEqual(["aidlc.settings.local.json"]);
+    // AI-DLC's managed .gitignore block already lists the local file. Plus the
+    // gitignored record of how the switch was set, which words the line that
+    // tells the person it is off.
+    const record = "aidlc/.aidlc-sessions/recorded-switches.json";
+    expect(changedSince(before)).toEqual(["aidlc.settings.local.json", record]);
     expect(resolvedFlags(project)?.bypasses).toEqual([name]);
     // What the plan-approval guard reads on its next check.
     expect(resolveProjectFlag(name, {}, project)).toBe("1");
@@ -617,7 +620,7 @@ describe("t295 flags section", () => {
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
     expect(cleared.stdout).toContain(`Cleared ${name} from aidlc.settings.local.json. To undo: `);
     expect(cleared.stdout).toContain(`config flags --bypass ${name} --local --yes`);
-    expect(changedSince(before)).toEqual(["aidlc.settings.local.json"]);
+    expect(changedSince(before)).toEqual(["aidlc.settings.local.json", record]);
     expect(resolvedFlags(project)?.bypasses).toBeUndefined();
     expect(resolveProjectFlag(name, {}, project)).toBeUndefined();
     const atTerminal = flagsWith({ AIDLC_TEST_CONFIG_TTY: "1" }, "--bypass", name);

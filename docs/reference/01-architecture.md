@@ -337,7 +337,8 @@ fixed number of renders; lines it cannot place stay `unknown`.
 
 Two consumers fail closed where a line is misread or left unplaced. The
 summary digest ends the excluded `Assumption Confirmation` section at any line
-spelled as a top-level `## Q<n>` or `## Requested Changes Feedback` heading,
+spelled as a top-level `## Q<n>` (with or without a leading emoji decoration)
+or `## Requested Changes Feedback` heading,
 even one the adapter reads as raw HTML or code, so a hidden heading can only
 widen the confirmed content. The claim-sources sensor reads a nonblank line the
 adapter could not place as its own claim.
@@ -581,9 +582,14 @@ owner-stamped directory when hard links are unavailable. Both use
 fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
 gate in the temporary directory, keyed by canonical root, around transaction
 execution, including
-acquisition, stale-owner recovery, and ownership-checked release. Directory
-recovery requires a matching host/boot identity and a dead owner PID; unknown,
-foreign, or incomplete directory owners are retained for manual diagnosis.
+acquisition, stale-owner recovery, and ownership-checked release. Recovery
+treats an owner as gone when its PID is dead or now runs a later process: both
+lock forms record the holder's process generation (the OS start record the
+gate's reaper also compares), and a lock from a release that recorded none is
+judged by whether the live process started more than 2 s after the lock was
+written. Each recovery prints one line on stderr. Directory recovery also
+requires a matching host/boot identity; unknown, foreign, or incomplete
+directory owners are retained for manual diagnosis.
 
 The coordination contract covers cooperating processes on one continuously
 running mount on one host with a common local temporary directory (`TMPDIR` on
@@ -913,7 +919,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 14. **Four-option session resume** -- Resume from checkpoint, redo current stage, jump to a specific stage, or start fresh (with archive confirmation). Gives users fine-grained control over workflow navigation without manual state file editing.
 
-15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
+15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); under solo unit-major Construction a jump to the step the walk is on just continues it, and any other forward jump names what it skips or starts over; backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
 
 ## Directory Structure: Tests
 

@@ -1582,6 +1582,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeWorkflowDescriptions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-doctor-harness-tree-versions.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:addPendingPersonLines",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1630,6 +1642,18 @@
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:aidlcRootIntegrations",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2662,6 +2686,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbFingerprintExcludes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-codekb-scope-diff.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4365,6 +4401,10 @@
         {
           "file": "tests/unit/t331-guard-deadlock-liveness.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4601,12 +4641,31 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hasRunnerGenMarker",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hasUnsafeSingleLineCharacter",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:headingKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -5592,6 +5651,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestPersonTurn",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-recorded-switch-notices.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6987,6 +7058,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personSpokeSinceGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-recorded-switch-notices.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PHASE_NUMBERS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7172,6 +7255,30 @@
       "coveredBy": [
         {
           "file": "tests/integration/t224-plugin-selection.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processStartedAtMs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10337,6 +10444,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t341-markdown-blocks.test.ts",
           "mechanism": "none"
         },
@@ -10793,6 +10904,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitOpenCheckpoints",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitParkedPath",
       "minMechanism": "none",
       "coveredBy": [
@@ -10826,6 +10949,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitScopedLifecycleFloors",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -12292,6 +12422,10 @@
         {
           "file": "tests/unit/t333-change-control.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -13619,6 +13753,13 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-jump reopen",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-jump resolve",
       "minMechanism": "cli",
       "coveredBy": [
@@ -13988,6 +14129,10 @@
         },
         {
           "file": "tests/unit/t335-change-control-review-summary.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14973,6 +15118,10 @@
         },
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
       ],
