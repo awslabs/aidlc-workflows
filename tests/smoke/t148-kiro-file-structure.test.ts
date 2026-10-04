@@ -814,6 +814,18 @@ describe("t148 dist/kiro file structure", () => {
         ]) {
           expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("allow");
         }
+        // A delegate runs under the conductor's allow and its own deny, so a
+        // risky form on an AI-DLC command it is admitted (or on `date -u`) is
+        // refused outright, whatever ask Kiro applies to the call; the plain
+        // command still runs.
+        const admitted = [`${invoke} engine log answers --stage x`, "date -u"];
+        if (tree === "dist") admitted.push("bun .kiro/tools/aidlc-log.ts answers --stage x");
+        for (const command of admitted) {
+          expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("deny");
+          for (const tail of ["$HOME", "`id`", "x > out.txt", "x < in.txt", "x & y", "@(1)", "@{a=1}", "x\ny", "x\r\ny"]) {
+            expect(kiroShellEffect(fm, `${command} ${tail}`), `${tree} ${persona}: ${command} ${tail}`).toBe("deny");
+          }
+        }
       }
     }
   });

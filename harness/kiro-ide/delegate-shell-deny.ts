@@ -110,6 +110,22 @@ export function nativeDelegateShellDeny(agent: string): ShellDeny {
   return { match: [trustedCommand("*")], exclude: engineRouteExclusions(agent, trustedCommand()) };
 }
 
+// Shell forms that can run, expand, or redirect more than the one command a
+// rule names, as Kiro rule text: "\\n" and "\\r" are the YAML escapes for a
+// line break. The conductor asks before a command holding one; a delegate is
+// refused one on an AI-DLC command, so the deny holds whichever ask Kiro
+// applies to a delegated call.
+export const RISKY_SHELL_FORMS = ["$", "`", ">", "<", "&", "@(", "@{", "\\n", "\\r"] as const;
+
+// The deny for those forms after each command prefix a delegate inherits from
+// the conductor's allow.
+export const riskyFormDenyLines = (prefixes: readonly string[]): string[] => [
+  "    - capability: shell",
+  "      effect: deny",
+  "      match:",
+  ...prefixes.flatMap((prefix) => RISKY_SHELL_FORMS.map((form) => `        - "${prefix}*${form}*"`)),
+];
+
 export const shellDenyLines = ({ match, exclude }: ShellDeny): string[] => [
   "    - capability: shell",
   "      effect: deny",
