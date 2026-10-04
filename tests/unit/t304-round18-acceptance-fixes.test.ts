@@ -1322,7 +1322,7 @@ describe("t304 first-run prompt and detection safety", () => {
   test("EOF at a no-default harness prompt cancels with bounded output", () => {
     const result = runWizard("");
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toContain("Nothing written.");
+    expect(result.stdout).toContain("Nothing written: this needs an answer, and the input is closed.");
     expect(result.stdout.length).toBeLessThan(20_000);
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
   });
@@ -1330,7 +1330,7 @@ describe("t304 first-run prompt and detection safety", () => {
   test("EOF mid-customize cancels with bounded output", () => {
     const result = runWizard("1\n2");
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toContain("Nothing written.");
+    expect(result.stdout).toContain("Nothing written: this needs an answer, and the input is closed.");
     expect(result.stdout.length).toBeLessThan(20_000);
   });
 
