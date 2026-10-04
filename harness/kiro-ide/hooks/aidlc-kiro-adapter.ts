@@ -1701,7 +1701,7 @@ if (target === "terminal-command-guard") {
     process.stderr.write(cmdMetacharacterRefusal(cmdHazard));
     return 2;
   }
-  const codeHazard = tool === "execute_pwsh" ? aidlcCodeArgumentHazard(rawCommand) : null;
+  const codeHazard = isKiroPowerShellTool(tool) ? aidlcCodeArgumentHazard(rawCommand) : null;
   if (codeHazard !== null) {
     process.stderr.write(aidlcCodeArgumentRefusal(codeHazard));
     return 2;
