@@ -1064,7 +1064,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
       expect(blocked.code, blocked.stderr).toBe(2);
       expect(blocked.stderr).toContain(reason);
       if (mode !== "strict") {
-        expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+        expect(blocked.stderr).toContain(" The plan-approval setting is unchanged.");
       }
       expect(blocked.stdout).toBe("");
       expect(approvalRows()).toHaveLength(0);

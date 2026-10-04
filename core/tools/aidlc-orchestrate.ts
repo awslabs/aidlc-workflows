@@ -1845,16 +1845,23 @@ function scopeConfirmAskDirective(
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
+  const confirmCommand = `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`;
+  const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
   return {
     kind: "ask",
     ask_type: "scope-confirm",
     response_route: "next",
     question,
     proposed_scope: proposedScope,
-    confirm_command:
-      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`,
-    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    confirm_command: confirmCommand,
+    compose_command: composeCommand,
     scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
+    // The answers the question offers, worded for the person, so a host that
+    // shows options shows these instead of ones the agent makes up.
+    choices: [
+      { label: `Go ahead with the "${proposedScope}" plan`, command: confirmCommand },
+      { label: "Tailor a plan to this task", command: composeCommand },
+    ],
   };
 }
 

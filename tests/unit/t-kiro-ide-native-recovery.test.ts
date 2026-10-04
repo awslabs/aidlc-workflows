@@ -282,7 +282,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       assertFence(project, policy);
       const blocked = sourceWriteOf(project);
       expect(blocked.code, blocked.stderr).toBe(2);
-      expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(blocked.stderr).toContain(" The plan-approval setting is unchanged.");
       expect(blocked.stderr).toContain(reason);
       expect(blocked.stdout).toBe("");
       assertFence(project, policy);
@@ -360,7 +360,7 @@ describe("native Kiro IDE recovery from a stale upstream directive", () => {
       // below shows the lowered fence still refuses), so it is not offered.
       expect(beforeApproval.stderr).not.toContain(LOWER_FENCE_SWITCH);
     } else {
-      expect(JSON.parse(beforeApproval.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+      expect(beforeApproval.stderr).toContain(" The plan-approval setting is unchanged.");
     }
     assertFence(project, policy);
     expect(stoodAsideRows(project)).toBe(0);

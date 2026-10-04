@@ -22,7 +22,15 @@ to list intents, \`$aidlc --doctor\` to validate setup, and
 "<task>"\` to get a plan tailored to that task
 (up front, from a scan report via \`--report <path>\`, or mid-workflow to
 re-shape the pending stages - every proposal stops at an approve/edit/reject
-gate).`,
+gate).
+
+Show AI-DLC's questions and choices with their meaning unchanged, in the
+person's language. When it has you wait for the person's answer or stop, say
+so in your own words. Do not name, link, or quote SKILL.md or any other AI-DLC
+instruction file on your own, and do not tell them a skill or rule requires
+it: they started AI-DLC to be asked. When they ask about one, answer them. The
+work's own files, such as a plan to approve, and a file AI-DLC asks the person
+to change, such as where a setting is locked, are still named by path.`,
 
     prereq_bullets: `- **Codex CLI >= 0.145.0**: earlier releases defer compact-source SessionStart after a mid-turn auto-compaction, so one model continuation can run without the restored workflow mission. Releases before 0.139.0 also lack reliable subagent role attribution and hyphenated agent-TOML resolution. \`$aidlc --doctor\` advises on the pin. Check with \`codex --version\`.
 - **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. Its hooks run with the PATH of the terminal you start \`codex\` from, so \`bun --version\` working there is enough. If Codex runs inside an IDE opened from the dock or a desktop icon and its hooks do not run, run \`bun .codex/tools/aidlc.ts doctor\` in such a terminal: its Runtime hook PATH row names the directory to add and where, so dock launches work after a restart. Until then, open the IDE from that terminal.

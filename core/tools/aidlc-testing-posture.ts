@@ -4287,8 +4287,9 @@ export function evaluateCodeGenerationApproval(
       violation?.version === 1 &&
       violation.markerRevision === authority.markerRevision
     ) {
-      empty.reason =
-        `legacy Plan Approval authority was poisoned by unsupported write target "${violation.target}"`;
+      // The target is a file name from the workspace, so it stays out of the
+      // refusal: the way on is the same whatever the file was.
+      empty.reason = "legacy Plan Approval authority was poisoned by an unsupported write target";
       return empty;
     }
     const receipt = readPlanApprovalReceipt(projectDir, identity);

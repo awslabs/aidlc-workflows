@@ -2808,7 +2808,7 @@ describe("t333 (10) retired policy confirmation", () => {
       expect(guarded.stdout.toString()).toBe("");
       expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
       if (policy === "relaxed") {
-        expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+        expect(guarded.stderr.toString()).toContain(" The plan-approval setting is unchanged.");
       }
       const fence = run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR);
       expect(fence.status, fence.stderr).toBe(0);

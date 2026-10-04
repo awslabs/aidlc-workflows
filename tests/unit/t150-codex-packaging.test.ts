@@ -327,6 +327,11 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       const standardConfig = parse(raw) as typeof config;
       expect(standardConfig.developer_instructions).toBe(onboarding);
       expect(config.developer_instructions).toContain("# AI-DLC on Codex CLI");
+      // AI-DLC's questions keep its words; the agent's own words are for the rest.
+      expect(config.developer_instructions).toContain("Show AI-DLC's questions and choices with their meaning unchanged, in the\nperson's language.");
+      expect(config.developer_instructions).toContain("are still named by path.");
+      expect(config.developer_instructions).toContain("When they ask about one, answer them.");
+      expect(config.developer_instructions).not.toContain("say it in your own words");
       expect(config.developer_instructions).toContain(".agents/skills/");
       expect(config.shell_environment_policy).toMatchObject({
         set: { AIDLC_RULES_DIR: "aidlc/spaces/default/memory" },

@@ -950,9 +950,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (/feed the human's (?:next-message )?answer back on the next `report`/.test(askRow)) {
         failures.push(`${rel}  routes ordinary asks through report`);
       }
+      // The question follows the person's language like its choices do, so a
+      // non-English conversation never gets an English question over
+      // translated options.
+      if (askRow.includes("render `directive.question` exactly")) {
+        failures.push(`${rel}  keeps the question in English`);
+      }
       for (const token of [
+        "`directive.question` with its meaning and choices unchanged",
+        "in a conversation that is not in English, say it in that language",
         "`response_route`",
         "`directive.confirm_command`",
+        "the options are the `directive.choices` labels, in order and in the conversation's language",
         "`directive.scope_commands`",
         "`directive.new_intent_command`",
         "`directive.continue_command`",
@@ -970,6 +979,19 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       failures.push("17-skill-system.md ask row  routes ordinary asks through report");
     }
     expect(failures).toEqual([]);
+  });
+
+  // A live Codex run quoted the skill file at most gates. The skills now never
+  // quote AI-DLC's instructions on their own, answer the person who asks about
+  // one, and the work's own files keep their paths.
+  test("every conductor quotes AI-DLC's instructions only when asked and still names the work's own files", () => {
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      expect(body, rel).toContain(
+        "any other AI-DLC instruction file to them on your own; when they ask about one, answer them. The work's own files, such as a plan to approve, and a file AI-DLC asks the person to change, such as where a setting is locked, are still named by path.",
+      );
+      expect(body, rel).not.toContain("any other AI-DLC file to them.");
+    }
   });
 
   test("every conductor distinguishes recovery work from separate human feedback", () => {

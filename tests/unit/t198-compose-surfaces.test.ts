@@ -372,6 +372,11 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.proposed_scope).toBe("bugfix");
     expect(String(d.question)).toContain('This looks like "bugfix" work');
     expect(String(d.question)).toContain("Say go ahead");
+    // The answers a host shows as options, worded for the person.
+    expect(d.choices).toEqual([
+      { label: 'Go ahead with the "bugfix" plan', command: d.confirm_command },
+      { label: "Tailor a plan to this task", command: d.compose_command },
+    ]);
   });
 
   test("depth and test strategy typed with the description survive the plan offer", () => {
