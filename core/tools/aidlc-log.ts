@@ -1443,7 +1443,7 @@ function answerEnginePlanApproval(
     if (!humanPresenceGuardDisabled() && !humanRepliedSinceGate(pd)) {
       error(
         "No reply from the person has arrived since the last decision. Record their request once they ask " +
-          `to review the plan.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
+          `to review the plan.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
       );
     }
     const message = requestPlanApprovalReviewNow(pd);
