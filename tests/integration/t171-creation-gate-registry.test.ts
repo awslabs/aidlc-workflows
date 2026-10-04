@@ -178,7 +178,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const d = JSON.parse(next(args).stdout.trim());
         expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
         expect(d.ask_type).toBe("intent-pick");
-        expect(d.available_intents).toEqual(records);
+        // The picker's order is the registry's; the directory listing's varies by filesystem.
+        expect([...d.available_intents].sort()).toEqual([...records].sort());
         expect(d.question).toContain("This project has 2 pieces of work in progress, and none is selected here:");
         expect(d.question.match(/\(at [A-Z][^)]*\)/g) ?? []).toHaveLength(2);
         expect(d.question).toContain("Pick one to carry on.");
