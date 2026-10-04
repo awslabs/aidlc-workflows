@@ -1409,8 +1409,11 @@ function windowsShimHelper(): string {
 // A release from before FIRST_RELEASE_WITH_CURRENT_HELPER (2.10.0 among them)
 // accepts only the helpers it wrote itself, so while it is the active version
 // it keeps its own helper; with the current one it could never switch to
-// another version again.
+// another version again. 2.8.0 and 2.8.1 wrote the stable-only helper; 2.8.2
+// on wrote the shared-marker one.
 const FIRST_RELEASE_WITH_CURRENT_HELPER = "2.10.1-preview.20261003.1";
+const FIRST_RELEASE_WITH_SHARED_MARKER_HELPER = "2.8.2";
+const STABLE_ONLY_HELPER_PATTERN = "(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)";
 
 function predatesCurrentHelper(version: string): boolean {
   try {
@@ -1421,7 +1424,15 @@ function predatesCurrentHelper(version: string): boolean {
 }
 
 function windowsShimHelperFor(version: string): string {
-  return predatesCurrentHelper(version) ? renderSilentWindowsShimHelper(VERSION_ID_PATTERN) : windowsShimHelper();
+  if (!predatesCurrentHelper(version)) return windowsShimHelper();
+  try {
+    if (compareVersions(version, FIRST_RELEASE_WITH_SHARED_MARKER_HELPER) < 0) {
+      return renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN);
+    }
+  } catch {
+    // An unparsable version cannot be older than 2.8.2.
+  }
+  return renderSilentWindowsShimHelper(VERSION_ID_PATTERN);
 }
 
 // The helper every installer wrote before refusals carried a reason.
@@ -1462,7 +1473,7 @@ export function previousWindowsShimHelpers(): string[] {
   const root = versionsRoot().replaceAll("'", "''");
   return [
     renderSilentWindowsShimHelper(VERSION_ID_PATTERN),
-    renderSilentWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
+    renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN),
     [
       "$ErrorActionPreference = 'Stop'",
       `$pointer = '${pointer}'`,

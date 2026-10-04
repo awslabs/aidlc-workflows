@@ -1625,13 +1625,16 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     expect(active()).toBe(AIDLC_VERSION);
   });
 
-  // 2.10.0 accepts only the Windows helpers it wrote itself. Switched back to
-  // it, a machine keeps 2.10.0's own helper, or 2.10.0 could never switch to
-  // another version again.
-  test.skipIf(process.platform !== "win32")(
-    "switching back to 2.10.0 leaves the helper 2.10.0 knows, and switching forward the current one",
-    () => {
-      const older = "2.10.0";
+  // A release accepts only the Windows helpers it wrote itself: 2.8.0 and
+  // 2.8.1 the stable-only one, 2.8.2 to 2.10.0 the shared-marker one. Switched
+  // back to one, a machine keeps that release's own helper, or it could never
+  // switch to another version again.
+  test.skipIf(process.platform !== "win32").each([
+    ["2.8.1", 1],
+    ["2.10.0", 0],
+  ] as const)(
+    "switching back to %s leaves the helper that release wrote, and switching forward the current one",
+    (older, era) => {
       const newer = patchVersion(1);
       const machine = temp("aidlc-t244-older-helper-");
       const project = temp("aidlc-t244-older-helper-project-");
@@ -1648,7 +1651,7 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       process.env.AIDLC_INSTALL_ROOT = machine;
       process.env.AIDLC_BIN_DIR = join(machine, "bin");
       try {
-        const [olderHelper] = previousWindowsShimHelpers();
+        const olderHelper = previousWindowsShimHelpers()[era];
         expect(helper()).not.toBe(olderHelper);
 
         const back = run(LIFECYCLE, ["use", older], project, env);
