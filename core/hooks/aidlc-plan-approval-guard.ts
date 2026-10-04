@@ -525,18 +525,17 @@ export function receiptDetail(
   return null;
 }
 
+// The refused path or command can come from the workspace, so it stays out of
+// the refusal: the agent knows what it tried, and the way on is the same.
 export function mutationBlockReason(
-  target: string,
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
-  // The path or command is quoted as data, so no text inside it can read as
-  // part of this sentence.
   const action = opaqueShell
-    ? `run mutation-capable shell command ${JSON.stringify(target)}`
-    : `modify workspace path ${JSON.stringify(target)}`;
+    ? "run mutation-capable shell commands"
+    : "modify workspace paths";
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
@@ -2171,7 +2170,6 @@ async function evaluate(
       ? authorityBlockReason(authorityFailure, standing, asked)
       : blockedMutation
       ? mutationBlockReason(
-          blockedMutation.target,
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,
