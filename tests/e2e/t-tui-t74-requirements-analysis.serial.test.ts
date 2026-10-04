@@ -440,6 +440,21 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         expect(learningsAnswerAt).toBeGreaterThan(learningsDecisionAt);
         expect(gateOpenedAt).toBeGreaterThan(learningsAnswerAt);
 
+        // --- the answer-mode question was the person's ------------------------
+        // The request leaves how to answer the questions open, so the stage must
+        // record the Guide me / I'll edit the file / Chat question and then the
+        // pick, before the gate. (The live person-turn check, where it runs,
+        // also requires that pick to follow a turn from the driver.)
+        const modeDecisionAt = auditMd.search(
+          /\*\*Event\*\*: DECISION_RECORDED\n(?:\*\*[^\n]+\n)*?\*\*Options\*\*: [^\n]*Guide me[^\n]*I'll edit the file[^\n]*Chat/,
+        );
+        expect(modeDecisionAt, "the answer-mode question was recorded").toBeGreaterThan(-1);
+        const modeAnswerAt = auditMd.indexOf("**Event**: QUESTION_ANSWERED", modeDecisionAt);
+        expect(modeAnswerAt, "the answer-mode pick was recorded").toBeGreaterThan(modeDecisionAt);
+        const modeAnswer = auditMd.slice(modeAnswerAt).split("\n---")[0];
+        expect(modeAnswer).toMatch(/\*\*Details\*\*: (?:Guide me|I'll edit the file|Chat)/);
+        expect(gateOpenedAt).toBeGreaterThan(modeAnswerAt);
+
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a waiting AskUserQuestion menu (the `❯` caret +
         // the select / submit footer) at least once during the run — exactly what
