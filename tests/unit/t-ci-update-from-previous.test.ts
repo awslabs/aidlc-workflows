@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   childEnvironment,
   hookCommands,
+  hooksTracedToCompletion,
   opencodeHookCommands,
   tracedToCompletion,
 } from "../../scripts/ci-update-from-previous.ts";
@@ -95,5 +96,11 @@ describe("ci-update-from-previous helpers", () => {
       { phase: "dispatcher-start", adapter: "kiro" }, { phase: "adapter-import-end" }, { phase: "exit", code: 1 }))).toBe(false);
     expect(tracedToCompletion(trace(join(root, "d"), { phase: "dispatcher-start", hook: "x" }, { phase: "exit", code: 0 }))).toBe(false);
     expect(tracedToCompletion(join(root, "none"))).toBe(false);
+    // By name: what the plugin's events reached, each to its end.
+    const both = trace(join(root, "e"), { phase: "dispatcher-start", hook: "session-start" }, { phase: "hook-import-end" },
+      { phase: "exit", code: 0 });
+    writeFileSync(join(both, "hook-2.ndjson"), [{ phase: "dispatcher-start", hook: "continue-workflow" }, { phase: "exit", code: 1 }]
+      .map((phase) => JSON.stringify(phase)).join("\n"));
+    expect([...hooksTracedToCompletion(both)]).toEqual(["session-start"]);
   });
 });

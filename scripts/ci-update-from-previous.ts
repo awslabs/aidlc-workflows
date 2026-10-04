@@ -86,20 +86,45 @@ export function opencodeHookCommands(pluginFile: string): string[] {
   return [...hooks].sort().map((hook) => `${invoke} ${namespace} hook ${hook}`);
 }
 
-/** Whether the hook phase trace in `directory` shows the engine ran a hook and it ended with code 0. */
-export function tracedToCompletion(directory: string): boolean {
-  if (!existsSync(directory)) return false;
-  return readdirSync(directory).some((file) => {
+/** The hooks the hook phase trace in `directory` shows the engine ran and ended with code 0. */
+export function hooksTracedToCompletion(directory: string): Set<string> {
+  const done = new Set<string>();
+  if (!existsSync(directory)) return done;
+  for (const file of readdirSync(directory)) {
     const phases = readFileSync(join(directory, file), "utf-8").split("\n").filter(Boolean)
-      .map((line) => { try { return JSON.parse(line) as { phase?: string; code?: unknown }; } catch { return {}; } });
-    const started = phases.some((p) => p.phase === "dispatcher-start");
+      .map((line) => { try { return JSON.parse(line) as { phase?: string; code?: unknown; hook?: unknown; adapter?: unknown }; } catch { return {}; } });
+    const start = phases.find((p) => p.phase === "dispatcher-start");
     // A hook loads its code in this process, or (the human-turn hook) in a child.
     const loaded = phases.some((p) =>
       p.phase === "hook-import-end" || p.phase === "adapter-import-end" || p.phase === "hook-child-started");
     const ended = phases.filter((p) => p.phase === "hook-run-end" || p.phase === "adapter-run-end" || p.phase === "exit");
-    return started && loaded && ended.length > 0 && ended.every((p) => p.code === 0);
-  });
+    if (start && loaded && ended.length > 0 && ended.every((p) => p.code === 0)) {
+      done.add(String(start.hook ?? start.adapter ?? ""));
+    }
+  }
+  return done;
 }
+
+/** Whether the hook phase trace in `directory` shows the engine ran a hook and it ended with code 0. */
+export function tracedToCompletion(directory: string): boolean {
+  return hooksTracedToCompletion(directory).size > 0;
+}
+
+// opencode's events as its plugin receives them: a message from the person, a
+// bash call, and the end of the turn. Each must reach the engine hooks it maps to.
+const OPENCODE_EVENT_HOOKS = ["session-start", "record-human-turn", "rebuild-stage-graph", "continue-workflow"];
+const OPENCODE_EVENTS = `
+const plugin = (await import(process.env.AIDLC_CHECK_PLUGIN)).default;
+const client = {
+  session: { get: async () => ({ data: {} }), prompt: async () => ({}) },
+  tui: { showToast: async () => ({}) },
+};
+const hooks = await plugin({ client, directory: process.env.AIDLC_CHECK_PROJECT });
+const sessionID = "update-check";
+await hooks["chat.message"]({ sessionID }, { parts: [{ type: "text", text: "hello" }] });
+await hooks["tool.execute.after"]({ tool: "bash", sessionID, callID: "1", args: { command: "ls" } }, { title: "", output: "", metadata: {} });
+await hooks.event({ event: { type: "session.idle", properties: { sessionID } } });
+`;
 
 function gitBash(): string {
   for (const root of [process.env.ProgramW6432, process.env.ProgramFiles, "C:\\Program Files"]) {
@@ -208,9 +233,18 @@ function check(previous: string, candidate: string, target: string, root: string
       : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
     if (commands.length === 0) failures.push(`${harness} ${when}: the project has no hook commands to run`);
     if (harness === "opencode") {
-      run(`opencode plugin ${when}`, process.execPath, ["-e",
-        `const m = await import(${JSON.stringify(pathToFileURL(plugin).href)}); if (typeof m.default !== "function") throw new Error("the plugin exports no factory");`,
-      ], {}, project);
+      // The plugin itself, driven the way opencode calls it.
+      const trace = join(root, "trace", String(++traces));
+      const driven = run(`opencode plugin ${when}`, process.execPath, ["-e", OPENCODE_EVENTS], {
+        AIDLC_CHECK_PLUGIN: pathToFileURL(plugin).href,
+        AIDLC_CHECK_PROJECT: project,
+        AIDLC_HOOK_TRACE_DIR: trace,
+      }, project);
+      const ran = hooksTracedToCompletion(trace);
+      const missing = OPENCODE_EVENT_HOOKS.filter((hook) => !ran.has(hook));
+      if (driven.ok && missing.length > 0) {
+        failures.push(`opencode plugin ${when}: its events did not run ${missing.join(", ")} to the end`);
+      }
     }
     for (const command of commands) {
       const trace = join(root, "trace", String(++traces));

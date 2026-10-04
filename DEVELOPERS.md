@@ -177,8 +177,11 @@ intentional skip), without requiring Full Suite to pass.
 A failing `update-from-previous` job does not stop the preview either: the run
 turns red, and the notes open with a warning and gain a line in the report. In
 a stable release it holds publication back, like the lifecycle checks. Its log
-names the harness and step that failed; fix the cause on `main` and run the
-release again.
+names the harness and step that failed. Rerun the job only for a passing
+problem such as a download that failed. A stable release runs on its tagged
+commit, so a fault in the build needs the fix on `main` and a new
+release-preparation PR, version and tag; the next nightly preview runs the
+check again on its own.
 
 PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).
