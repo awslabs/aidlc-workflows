@@ -911,6 +911,9 @@ const POWERSHELL_NULL_REDIRECT = /^(?:[1-6*]?>>?[ ]*\$null|[2-6*]>&1)(?=[ ;|]|$)
 // hands a native program differently than written: it splits a bare -x.y at
 // the dot, drops empty arguments, and does not escape embedded quotes or a
 // trailing backslash. The rendering is the same commands as POSIX words.
+// It is not the write-target reader: readPowerShell in
+// review-freeze-command.ts reads every line for what it may write, while
+// this reading admits only lines it can render exactly.
 function plainPowerShell(
   command: string,
 ): { commands: string[][]; rendering: string } | null {
