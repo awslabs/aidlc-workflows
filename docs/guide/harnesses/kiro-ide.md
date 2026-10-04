@@ -416,6 +416,24 @@ harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
 
+### Command cards end with "dministrator: ...powershell.exe" on Windows
+
+On Windows, a Kiro IDE command card can end with a line such as
+`dministrator: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+once or twice. That is the terminal window's title, cut short by Kiro when it
+shows the output. It does not change what the command did or what AI-DLC
+records.
+
+To stop it, add this entry inside the braces of Kiro's user settings
+(Ctrl+Shift+P, then **Preferences: Open User Settings (JSON)**), save, and
+restart Kiro:
+
+```json
+"terminal.integrated.windowsUseConptyDll": false
+```
+
+After the restart, the cards show only the command's output.
+
 ### Kiro memories carry old AI-DLC advice
 
 Kiro IDE keeps memories outside your project, in `.kiro/memories/memories.db`
