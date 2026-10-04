@@ -205,7 +205,12 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 
 - **Gates** render via the `request_user_input` tool when the shipped config
   flags enable it, with a numbered-prose fallback otherwise (answer with a
-  number or free text). Gate semantics live in the engine either way.
+  number or free text). Gate semantics live in the engine either way. Codex
+  still marks that picker as under development, so the shipped
+  `.codex/config.toml` turns it on and turns off Codex's start-up warning
+  about it; while you work in this project, that also hides the warning for
+  any other under-development feature. For numbered prose gates instead, set
+  `default_mode_request_user_input = false` under `[features]`.
 - **No custom statusline** — workflow position rides the `update_plan` tool
   (the `task-progress` statusline item) and `$aidlc --status`.
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only
