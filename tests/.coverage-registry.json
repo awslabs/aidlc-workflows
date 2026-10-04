@@ -4917,6 +4917,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:HOOKS_OFF_RERUN",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hooksHealthDir",
       "minMechanism": "none",
       "coveredBy": [],

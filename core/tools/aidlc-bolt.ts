@@ -1239,7 +1239,7 @@ function handleSetAutonomy(args: string[]): void {
           "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
           "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
           "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
-          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
+          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
       );
     }
 

@@ -326,11 +326,12 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  // Nothing on record tells a reply not sent yet from one the prompt hook
-  // failed to record: an earlier turn was spent, the prompt hook stamped its
-  // marker (it does so even when the mint fails), and another hook left a
-  // heartbeat seconds ago. The refusal still carries the step to take.
-  test("A4: fresh hook activity does not take the step to take out of the refusal", () => {
+  // With fresh hook activity the hooks run, so the refusal never sends the
+  // person after a setting that is already right: an earlier turn was spent,
+  // the prompt hook stamped its marker, and another hook left a heartbeat
+  // seconds ago. It says what happened to a reply they sent and where to look,
+  // and still never asks them to answer again.
+  test("A4: with fresh hook activity the refusal gives no hooks-off step", () => {
     const first = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${first}=in-progress`]);
     recordHumanTurn(proj);
@@ -342,12 +343,15 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     stampPrompt(proj, Date.now());
     writeHeartbeat(proj, Date.now());
     for (const [state, steps] of [
-      [KIRO_CLI_STATE, '"Type /agent and pick aidlc, then carry on."'],
+      [KIRO_CLI_STATE, "If the person already replied, that reply was not recorded for this question."],
       [KIRO_IDE_STATE, "If the person already replied, that reply was not recorded. Do not ask them to answer again."],
     ] as const) {
       const r = guarded(proj, ["approve", slug, "--user-input", "Approve"], false, state);
       expect(r.rc).not.toBe(0);
-      expect(JSON.parse(r.out).error as string).toContain(steps);
+      const refusal = JSON.parse(r.out).error as string;
+      expect(refusal).toContain(steps);
+      expect(refusal).not.toContain("Type /agent and pick aidlc");
+      expect(refusal).not.toContain("answer again;");
     }
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(field(proj, "Current Stage")).toBe(slug);

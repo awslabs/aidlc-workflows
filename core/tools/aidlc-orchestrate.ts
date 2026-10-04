@@ -307,6 +307,7 @@ import {
   hookActivation,
   hookLiveness,
   hooksOffAgentStep,
+  HOOKS_OFF_RERUN,
   hookStatusPathLinked,
   humanTurnMintAllowed,
   type WorkspaceCommand,
@@ -626,19 +627,19 @@ function engineWorkflow(projectDir: string): { intent?: string; space: string } 
 // an unattended run, for a person who switched the presence check off (the
 // notice above still says it), in a delegated worktree, whose hooks beat in
 // the parent checkout, or where a link on the way to the status files keeps
-// any heartbeat from being written. A `next` that only asks (status, doctor,
-// help, config, the intent and space verbs) runs as asked. The step runs the
-// stopped command again, so what it carried goes on.
-function hooksOffStop(
-  projectDir: string,
-  selection: WorkflowSelection,
-  nextArgs: string[],
-  argv: readonly string[],
-): string | null {
+// any heartbeat from being written. A `next` that does not move the workflow
+// (status, doctor, help, config, the intent, space, plugin and knowledge
+// commands, park, team-board, a claim or release) runs as asked. The step
+// runs the stopped command again, so what it carried goes on.
+function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs: string[]): string | null {
   if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled()) return null;
   const flags = parseNextFlags(nextArgs);
-  if (flags.parseError || !nextEngagesWorkflow(nextArgs, flags)) return null;
-  const step = hooksOffAgentStep(projectDir, `${aidlcInvocation()} engine orchestrate ${argv.map(shellArg).join(" ")}`);
+  if (
+    flags.parseError || !nextEngagesWorkflow(nextArgs, flags) || flags.orchestratorVerb !== undefined ||
+    flags.pluginCommand !== undefined || flags.knowledgeCommand !== undefined ||
+    flags.claim !== undefined || flags.release !== undefined
+  ) return null;
+  const step = hooksOffAgentStep(projectDir, HOOKS_OFF_RERUN);
   if (step === null) return null;
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
@@ -13509,7 +13510,7 @@ export function main(argv: string[]): void {
     engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
   }
   if (commandKind === "next" && !unjoined) {
-    const stop = hooksOffStop(resolvedProjectDir, resolvedSelection, subArgs, rawArgs);
+    const stop = hooksOffStop(resolvedProjectDir, resolvedSelection, subArgs);
     if (stop !== null) {
       // The stop carries the step; the notice is not added on top.
       activeHookHealthNotice = null;

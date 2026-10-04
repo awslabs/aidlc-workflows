@@ -79,9 +79,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   before the engine runs, even with its own check switched off: it says what
   the agent does itself and quotes the exact line it then shows the person.
   `next` then stops with it as a `print` before any work once a stage has
-  started with no heartbeat at all, and the attended "no new human reply"
-  refusal carries it with "do not ask them to answer again". A harness without
-  `agentStep` gives that refusal `missedReply` instead (an `AIDLC_UNATTENDED=1`
+  started with no heartbeat at all, and in that same state the attended "no
+  new human reply" refusal carries it with "do not ask them to answer again".
+  Otherwise, or for a harness without `agentStep`, that refusal gives
+  `missedReply` instead (an `AIDLC_UNATTENDED=1`
   run gets its own explanation), worded for a person who may not have replied
   yet ("If the person already replied, ..."). Set `notRunYet` only when the
   harness's hooks leave a heartbeat on the first chat message; doctor then

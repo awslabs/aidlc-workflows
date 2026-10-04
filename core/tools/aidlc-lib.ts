@@ -24527,13 +24527,15 @@ export function hookExecutionRecoveryText(projectDir?: string): string {
 
 // A harness's hook-activation text names the person's own entry command and
 // project folder as <entry> and <folder>, and the engine's next step as
-// <next>, so one manifest string reads right on every install channel. A
-// stopped command passes itself as <next>, so running it again keeps what it
-// carried.
+// <next>, so one manifest string reads right on every install channel.
+// `next`'s stop names the command it stopped instead, in fixed words: the
+// command's own arguments never enter the text.
+export const HOOKS_OFF_RERUN = "the engine command that returned this message again, exactly as you ran it,";
+
 export function fillHookActivationText(text: string, projectDir?: string, next?: string): string {
   return text
     .replaceAll("<entry>", entrySkillInvocation())
-    .replaceAll("<next>", next ?? `${aidlcInvocation()} engine orchestrate next`)
+    .replaceAll("<next>", next ?? `\`${aidlcInvocation()} engine orchestrate next\``)
     .replaceAll("<folder>", projectDir ?? "this project's folder");
 }
 
@@ -27366,7 +27368,19 @@ export function humanTurnMintAllowed(): boolean {
   return process.env.AIDLC_UNATTENDED !== "1";
 }
 
-export function unattendedHumanPresenceHint(): string {
+// The same hard signal `next`'s stop reads, for the current workflow: a stage
+// or gate event and no heartbeat at all, with no link on the way to the
+// status files. Anything unreadable proves nothing.
+function hooksNeverRanHere(projectDir?: string): boolean {
+  try {
+    const project = resolveProjectDir(projectDir);
+    return hookLiveness(project).neverFired && !hookStatusPathLinked(project);
+  } catch {
+    return false;
+  }
+}
+
+export function unattendedHumanPresenceHint(projectDir?: string): string {
   // Explain unattended submissions when relevant.
   if (!humanTurnMintAllowed()) {
     return " AIDLC_UNATTENDED=1 is set, so automated prompt submissions cannot count " +
@@ -27378,8 +27392,10 @@ export function unattendedHumanPresenceHint(): string {
   // the person did send, and never asks them to send it again. A host that runs
   // no hooks until the person acts names its own steps; the others name doctor.
   // A harness that declares the agent's own step for hooks that are not
-  // running gives it here too, so the reply is never asked for again.
-  const agentStep = hooksOffAgentStep();
+  // running gives it here too, so the reply is never asked for again, but
+  // only when the record shows the hooks never ran: with a heartbeat there
+  // they run, and the step would send the person after a setting already on.
+  const agentStep = hooksNeverRanHere(projectDir) ? hooksOffAgentStep(projectDir) : null;
   if (agentStep !== null) {
     return " If the person already replied, that reply was not recorded because AI-DLC's hooks are not " +
       `running here, so do not ask them to answer again; do this instead: ${agentStep}`;

@@ -41,7 +41,7 @@ const manifest: HarnessManifest = {
       'the question below." Then set `"disableAllHooks": false` in this project\'s ' +
       "`.claude/settings.local.json`, keep every other key as it is, and create the file if it " +
       "does not exist; Claude Code asks the person before it changes its settings. It works in " +
-      "this chat: do not ask for a restart and do not mention /hooks. Then run `<next>` and act " +
+      "this chat: do not ask for a restart and do not mention /hooks. Then run <next> and act " +
       "on what it returns, so the waiting question shows again. If it brings back this same " +
       "message, the block is the organization's: show this line instead and end your turn: " +
       '"Your organization\'s Claude Code settings block this project. Ask your Claude Code ' +
