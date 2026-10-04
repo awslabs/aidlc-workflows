@@ -505,20 +505,24 @@ export function linkOnTheWay(projectDir: string, target: string): string | null 
   return null;
 }
 
-// A name the repository chose is shown only when it is plain (letters,
-// digits, dot, dash and underscore, and short); otherwise the line names the
-// nearest plain folder above it, so no other text reaches the reader.
-const PLAIN_PATH_PART = /^[A-Za-z0-9._-]{1,64}$/;
+// The folder names AI-DLC itself gives its tree. The line shows a path only
+// as far as it is made of these, so no name a repository chose reaches the
+// reader: a link deeper down is named by the AI-DLC folder that holds it.
+const AIDLC_FOLDER_NAMES = new Set([
+  ".aidlc", ".agents", ".claude", ".codex", ".cursor", ".github", ".kiro", ".opencode",
+  "agents", "aidlc", "aidlc-common", "command", "data", "hooks", "knowledge", "plugin",
+  "rules", "scopes", "sensors", "settings", "skills", "spaces", "stages", "steering", "tools",
+]);
 
 export class LinkedFolderError extends Error {
   constructor(readonly folder: string) {
     const parts = folder.split(/[\\/]/);
-    const plain = parts.findIndex((part) => !PLAIN_PATH_PART.test(part));
+    const known = parts.findIndex((part) => !AIDLC_FOLDER_NAMES.has(part));
     super(
-      plain === -1
+      known === -1
         ? `${folder} is a link, so AI-DLC changed nothing there. ` +
           "Replace the link with a real folder or file, then run this again."
-        : `${plain === 0 ? "This project" : parts.slice(0, plain).join(sep)} holds a link, so AI-DLC changed nothing there. ` +
+        : `${known === 0 ? "This project" : parts.slice(0, known).join(sep)} holds a link, so AI-DLC changed nothing there. ` +
           "Replace the link with a real folder or file, then run this again.",
     );
   }

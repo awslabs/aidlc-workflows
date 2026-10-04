@@ -273,8 +273,8 @@ diffs the staged project, and submits one project transaction. Expected-state
 checks reject concurrent live edits; a commit failure rolls back all bytes,
 modes, stamps, and ownership records. The staged copy holds no links: a link on
 the way to or inside AI-DLC's own folders, or on the way to a file sync would
-write, stops sync before anything changes and names the link (a link with an
-odd name by the AI-DLC folder that holds it). A supported host
+write, stops sync before anything changes and names the link, or the AI-DLC
+folder that holds it when the link sits deeper inside. A supported host
 hook with an injected current root uses the same implementation for only that
 plugin. Plain sync never
 deletes content for a missing installed source. Explicit
