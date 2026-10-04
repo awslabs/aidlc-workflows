@@ -267,9 +267,10 @@ function writePlanArtifacts(project: string): string {
 function assertFence(project: string, policy: "strict" | "relaxed" | "off") {
   const status = run(project, ["--status"]);
   expect(status.code, status.stderr).toBe(0);
-  expect(status.stdout).toContain(policy === "strict"
-    ? "plan re-approval on (default)"
-    : `plan re-approval off (guard policy ${policy} (from scope poc))`);
+  // Status names the checks that are off, grouped by why.
+  const checksOff = /^Checks off:\s+(.*)$/m.exec(status.stdout)?.[1] ?? "";
+  if (policy === "strict") expect(checksOff).not.toContain("plan re-approval");
+  else expect(checksOff).toMatch(new RegExp(`plan re-approval[^;]*\\(guard policy ${policy} \\(from scope poc\\)\\)`));
 }
 
 describe("native Kiro IDE recovery from a stale upstream directive", () => {

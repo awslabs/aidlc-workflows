@@ -68,6 +68,9 @@ function personaFrontmatter(agent: string): string[] {
     "      match:",
     `        - "bun .kiro/tools/aidlc-*"`,
     `        - "date -u *"`,
+    // A read-only version check the personas run before a project's tests;
+    // the tests themselves keep asking.
+    `        - "bun --version"`,
     ...copyShellDeny,
     "    - capability: fs_read",
     "      effect: allow",

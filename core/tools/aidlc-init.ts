@@ -4309,6 +4309,11 @@ const CODEX_FRAMEWORK_ASSIGNMENTS = [
     name: "sandbox_mode",
     pattern: /[\t ]*(?:sandbox_mode|"sandbox_mode"|'sandbox_mode')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
   },
+  {
+    name: "suppress_unstable_features_warning",
+    pattern:
+      /[\t ]*(?:suppress_unstable_features_warning|"suppress_unstable_features_warning"|'suppress_unstable_features_warning')[\t ]*=[^\r\n]*(?:\r?\n|$)/y,
+  },
 ] as const;
 
 // Match only real root assignments, not lookalikes in onboarding prose, arrays,

@@ -23,8 +23,8 @@
 //          is mapped — writes a "**Event**: <type>" block to audit.md
 //   :96-125 reads the state file, extracts the workflow fields via getField,
 //          appends a ".aidlc-engine/recovery.md exists" NOTE iff that breadcrumb file
-//          is present, then writes JSON.stringify({ additionalContext }) +"\n"
-//          to stdout
+//          is present, then writes one hookContextLine (the context under
+//          hookSpecificOutput and as a top-level additionalContext) to stdout
 // None of those seams — stdin, the env/script-path projectDir derivation, the
 // exit(0) no-op gate, the heartbeat write, the additionalContext stdout — is
 // reachable by importing a function; the module's top level RUNS on import. So
@@ -231,6 +231,28 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
       "Explicit /aidlc --resume already selects Resume",
     );
     expect(parsed.additionalContext).toContain("do NOT offer the menu");
+  });
+
+  test("Claude Code reads the context: each line also carries it under hookSpecificOutput", () => {
+    // Claude Code drops a top-level additionalContext without a word and reads
+    // hookSpecificOutput; every other harness's adapter reads the top-level key.
+    const context = (stdout: string): string => {
+      const parsed = JSON.parse(stdout.trim());
+      expect(parsed.hookSpecificOutput).toEqual({ hookEventName: "SessionStart", additionalContext: parsed.additionalContext });
+      return parsed.additionalContext as string;
+    };
+    // A workflow in progress: the whole context.
+    seedStateFile(proj, MID_IDEATION);
+    expect(context(fire(proj).stdout)).toContain("On BARE /aidlc re-entry");
+    // No workflow yet: the chat's own Runtime Session id.
+    const bare = createTestProject();
+    try {
+      const session = "01995000-7a11-7000-8000-0000000051c0";
+      const payload = JSON.stringify({ hook_event_name: "SessionStart", session_id: session, source: "startup", cwd: bare });
+      expect(context(fire(bare, payload).stdout)).toContain(`AIDLC Runtime Session: ${session}`);
+    } finally {
+      cleanupTestProject(bare);
+    }
   });
 
   test("injects the Lifecycle Phase (IDEATION) [.sh test 4]", () => {

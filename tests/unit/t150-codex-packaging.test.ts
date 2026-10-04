@@ -296,7 +296,13 @@ describe("t150 dist/codex packaging determinism + trust", () => {
       const config = Bun.TOML.parse(raw) as {
         developer_instructions?: string;
         shell_environment_policy?: { set?: Record<string, string> };
+        suppress_unstable_features_warning?: boolean;
+        features?: { default_mode_request_user_input?: boolean };
       };
+      // The gate picker is a Codex under-development feature AI-DLC turns on,
+      // so the start-up warning about it is turned off in the same file.
+      expect(config.features?.default_mode_request_user_input).toBe(true);
+      expect(config.suppress_unstable_features_warning).toBe(true);
       const onboarding = readFileSync(join(root, "onboarding.md"), "utf-8");
       expect(typeof config.developer_instructions).toBe("string");
       // Bun 1.3.14 incorrectly preserves the opening newline of a TOML literal string.

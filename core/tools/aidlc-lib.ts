@@ -35411,7 +35411,7 @@ export function resolveFences(
   return out;
 }
 
-function fenceSourceLabel(resolution: FenceResolution): string {
+export function fenceSourceLabel(resolution: FenceResolution): string {
   return resolution.source === "you" ? "set by you" : resolution.source;
 }
 
@@ -35807,6 +35807,20 @@ export function engineErrorRelayLine(
       hookEventName: "PostToolUse",
       additionalContext: ENGINE_ERROR_RELAY_NOTE,
     },
+  })}\n`;
+}
+
+/**
+ * The one line a SessionStart or UserPromptSubmit hook prints to hand the
+ * agent context. Claude Code reads it only from hookSpecificOutput and drops a
+ * top-level additionalContext without a word; every other harness's adapter,
+ * including an older one still installed in a project, reads the top-level key
+ * and rewraps it for its own host. So the line carries both, with the same text.
+ */
+export function hookContextLine(event: "SessionStart" | "UserPromptSubmit", context: string): string {
+  return `${JSON.stringify({
+    additionalContext: context,
+    hookSpecificOutput: { hookEventName: event, additionalContext: context },
   })}\n`;
 }
 

@@ -761,6 +761,11 @@ export function main(argv: string[]): void {
       subcommand === "fold-unit-merge" &&
       process.env.AIDLC_STATE_TRANSITION_OWNER === `unit-merge:${process.ppid}`
     ) &&
+    // A forward jump that moves one Unit on skips that Unit's steps (#1411).
+    !(
+      subcommand === "skip" && args.includes("--unit") &&
+      process.env.AIDLC_STATE_TRANSITION_OWNER === `jump:${process.ppid}`
+    ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
     const pd = resolveProjectDir(projectDir);
@@ -6604,10 +6609,15 @@ function handleSkip(args: string[]): void {
     }
     const unitNameError = validateUnitName(unit);
     if (unitNameError) error(unitNameError);
-    validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const currentStage = getField(content, "Current Stage") ?? "";
     const graph = loadStageGraph();
     const currentIndex = graph.findIndex((s) => s.slug === currentStage);
+    // A Unit's step reopened behind its stage approval (#1411): the stage
+    // stays approved for every other Unit, so only this Unit's skip is
+    // recorded and the checkbox and Current Stage are left as they are.
+    const approvedBehind = currentIndex > graph.findIndex((s) => s.slug === slug) &&
+      getSlugState(content, slug) === "completed";
+    if (!approvedBehind) validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const perUnitConstruction = (s: { phase: string; for_each?: string } | undefined) =>
       s?.phase === "construction" && s.for_each === "unit-of-work";
     if (
@@ -6615,11 +6625,12 @@ function handleSkip(args: string[]): void {
       isTeamUnitOwnership(content) ||
       !perUnitConstruction(stage) ||
       !perUnitConstruction(graph[currentIndex]) ||
-      currentIndex > graph.findIndex((s) => s.slug === slug)
+      (!approvedBehind && currentIndex > graph.findIndex((s) => s.slug === slug))
     ) {
       error(
         `Cannot skip "${slug}" for unit "${unit}": a one-unit skip needs Construction Iteration: ` +
-          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}".`,
+          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}", ` +
+          "or one approved before it.",
       );
     }
     const dag = resolveBoltDag(pd);
@@ -6654,6 +6665,10 @@ function handleSkip(args: string[]): void {
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    if (approvedBehind) {
+      console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
+      return;
     }
     const skipped = unitSkippedUnits(pd, slug, undefined, content);
     const stillOwed = dag.units.filter((name) => owes(name) && !skipped.has(name));

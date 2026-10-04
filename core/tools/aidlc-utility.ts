@@ -136,6 +136,7 @@ import {
   guardFenceFromConfigKey,
   guardPolicyStateField,
   resolveFences,
+  fenceSourceLabel,
   formatFence,
   noteGuardPolicyRename,
   CEREMONY_FIELDS,
@@ -1762,7 +1763,8 @@ To get started:
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
   let guardPolicyDisplay: string;
-  let fencesDisplay: string;
+  // Only the checks that are off, grouped by why: every check on says nothing.
+  let fencesOffLine = "";
   try {
     const resolution = resolveGuardPolicy(projectDir, content, {
       selection: { intent: selection.intent ?? undefined, space: selection.space },
@@ -1771,11 +1773,17 @@ To get started:
     const fences = resolveFences(resolution, content);
     // The plan-approval fence now only decides whether an approved plan that is
     // edited asks again; the Plan Approval line below is the plan stop itself.
-    fencesDisplay = GUARD_FENCES.map((fence) =>
-      `${fence === "plan-approval" ? "plan re-approval" : fence} ${formatFence(fences[fence])}`).join(", ");
+    const offBySource = new Map<string, string[]>();
+    for (const fence of GUARD_FENCES) {
+      if (fences[fence].value !== "off") continue;
+      const source = fenceSourceLabel(fences[fence]);
+      offBySource.set(source, [...(offBySource.get(source) ?? []), fence === "plan-approval" ? "plan re-approval" : fence]);
+    }
+    if (offBySource.size > 0) {
+      fencesOffLine = `Checks off:     ${[...offBySource].map(([source, names]) => `${names.join(", ")} (${source})`).join("; ")}\n`;
+    }
   } catch (error) {
     guardPolicyDisplay = `unavailable (${errorMessage(error)})`;
-    fencesDisplay = "unavailable";
   }
   const ceremonyDisplay = CEREMONY_KEYS.map((key) => {
     if (key === "plan_approval") {
@@ -1892,7 +1900,9 @@ To get started:
     phaseProgress += `  ${(phaseLabels[p] || p).padEnd(16)} ${bar} ${done}/${phaseCheckboxes.length}\n`;
   }
 
-  let validityOutput = "Validity:       Current\n";
+  // Only a change the person can act on: a stage whose inputs moved since it
+  // was approved, with the redo that refreshes it. The rest is advisory.
+  let validityOutput = "";
   try {
     const validity = inspectStageValidity(projectDir, content, {
       stages: graph,
@@ -1909,32 +1919,27 @@ To get started:
       .filter((issue) => !issue.direct)
       .map((issue) => issue.stage);
     const earliest = directlyStale[0] ?? validity.issues[0]?.stage ?? null;
-    if (validity.warnings.length > 0) {
+    if (validity.issues.length > 0 && earliest !== null) {
       validityOutput =
-        "Validity:       Inspection partly unavailable - advisory; routing continues\n" +
-        `Directly stale: ${directlyStale.join(", ") || "none"}\n` +
-        `Revalidate:     ${needsRevalidation.join(", ") || "none"}\n` +
-        `Untracked:      ${validity.untracked.join(", ") || "none"}\n` +
-        `Warnings:       ${validity.warnings.join(" ")}\n`;
-    } else if (validity.issues.length > 0) {
-      validityOutput =
-        "Validity:       Drift detected - advisory; routing continues\n" +
-        `Directly stale: ${directlyStale.join(", ") || "none"}\n` +
-        `Revalidate:     ${needsRevalidation.join(", ") || "none"}\n` +
-        `Suggested redo: ${earliest ? `/aidlc --stage ${earliest}` : "none"}\n` +
-        `Untracked:      ${validity.untracked.join(", ") || "none"}\n`;
-    } else if (validity.untracked.length > 0) {
-      validityOutput =
-        "Validity:       Untracked completions - advisory; routing continues\n" +
-        `Untracked:      ${validity.untracked.join(", ")}\n`;
+        `Changed since approved: ${stageNames([...directlyStale, ...needsRevalidation])}. ` +
+        `To redo it, type \`${entrySkillInvocation()} --stage ${earliest}\`.\n`;
     }
-  } catch (error) {
-    validityOutput =
-      "Validity:       Inspection unavailable - advisory; routing continues\n" +
-      `Warnings:       ${errorMessage(error)}\n`;
+  } catch {
+    // Unreadable receipts change nothing the person can act on here.
   }
 
   const plan = getField(content, PLAN_FIELD);
+  // Said only once it is known: workspace detection writes a placeholder first.
+  const projectType = declaredProjectType(getField(content, "Project Type") ?? "");
+  const projectTypeDisplay = projectType === null
+    ? ""
+    : `Project Type:   ${projectType === "Brownfield" ? "existing code" : "new project"}` +
+      `${getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON ? " (you said so)" : ""}\n`;
+  const depth = getField(content, "Depth");
+  const testStrategy = getField(content, "Test Strategy");
+  const depthDisplay = depth === null
+    ? ""
+    : `Depth:          ${depth}${testStrategy && testStrategy !== depth ? ` (tests: ${testStrategy})` : ""}\n`;
   // Solo unit-major Construction keeps Current Stage on the first per-unit
   // stage while each Unit works through the later ones, so the active Unit's
   // own step is named too, once its recorded values check out (#1411).
@@ -1949,20 +1954,18 @@ To get started:
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
-Scope:          ${scope}
-${plan ? `Plan:           ${plan} (this piece of work only)\n` : ""}Phase:          ${phase}
+${plan ? `Plan:           ${plan} (this piece of work only)` : `Scope:          ${scope}`}
+${projectTypeDisplay}${depthDisplay}Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
 Active Agent:   ${activeAgent}
 Guard Policy:   ${guardPolicyDisplay}
-Fences:         ${fencesDisplay}
-${ceremonyDisplay}
+${fencesOffLine}${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput}
-Last Completed: ${lastCompleted}
+${validityOutput ? `${validityOutput}\n` : ""}Last Completed: ${lastCompleted}
 Next Stage:     ${nextStage}
 `;
   if (isTeamUnitOwnership(content)) {

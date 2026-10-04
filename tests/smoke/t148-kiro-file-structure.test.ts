@@ -247,6 +247,9 @@ describe("t148 dist/kiro file structure", () => {
       expect(fm, agent).toContain("permissions:");
       expect(fm, agent).toContain("  rules:");
       expect(fm, agent).toContain(`        - "aidlc/spaces/**"`);
+      // Exactly the read-only version check; `bun test` and the rest still ask.
+      expect(fm, agent).toContain(`        - "bun --version"`);
+      expect(fm, agent).not.toContain(`        - "bun *"`);
       expect(fm, agent).not.toContain("disallowedTools:");
     }
   });
