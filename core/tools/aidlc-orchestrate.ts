@@ -10268,8 +10268,9 @@ function emitSingleRunStage(
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the opposite
-// flags that undo it. recompose refuses only a flip the plan cannot take, and
-// its refusal names what can be done instead.
+// flags that undo it; recompose's own counts are not shown. recompose refuses
+// only a flip the plan cannot take, and its refusal names what can be done
+// instead.
 function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
@@ -10306,7 +10307,8 @@ function planChangeDirective(
   const recompose = `${aidlcDispatcherInvocation("recompose")} ${flips(skip, add)}`;
   return printDirective(
     `${before ? `Run \`${before}\` and print its output verbatim, then run` : "Run"} \`${recompose}\` ` +
-      "to change this workflow's remaining stages as the person asked, and print its output verbatim. " +
+      "to change this workflow's remaining stages as the person asked, and do not show its output: " +
+      "the one line below says what changed. " +
       "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
       "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
