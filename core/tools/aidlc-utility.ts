@@ -57,7 +57,7 @@ import {
   VALID_DEPTHS,
   VALID_TEST_STRATEGIES,
 } from "./aidlc-guard-switch.ts";
-import { VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
@@ -114,6 +114,7 @@ import {
 import {
   isBindableIntentRecordName,
   activeIntent,
+  activeWorkflowDescriptions,
   readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
@@ -335,6 +336,7 @@ import {
   legacyBoltName,
   legacyParkedRefPrefix,
   parkedRefPrefix,
+  normalizeDriveLetter,
   toPosix,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
@@ -356,10 +358,15 @@ import {
   compiledExecutable,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  type ProjectHarness,
+  quoteCommandArgument,
   resolveHarnessPath,
   resolveSkillsPath,
+  runtimeHarnessDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
+import { HARNESS_PRODUCT_NAMES } from "./aidlc-model-policy.ts";
+import { copyRuntimeUrl } from "./aidlc-release.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   activeVersion,
@@ -3362,6 +3369,121 @@ function hookDropEntry(hook: string, lines: readonly string[]): string {
   return `${hook} x${lines.length} (last ${lastTs})${top.length > 0 ? `, top reasons: ${top.join(", ")}` : ""}`;
 }
 
+// config refuses to refresh a harness tree while a workflow runs, so bringing
+// the older trees level waits for it; until then the tools whose trees are on
+// the release they catch up to follow that one release.
+function harnessTreeCatchUpFix(
+  workflows: string,
+  count: number,
+  steadyTools: readonly string[],
+  release: string,
+  catchUp: string,
+): string {
+  const done = count === 1 ? "completes" : "complete";
+  return steadyTools.length > 0
+    ? `continue ${workflows} in ${steadyTools.join(" or ")}, whose files are on ${release}; after ${
+      count === 1 ? "it" : "they"
+    } ${done}, ${catchUp}`
+    : `after ${workflows} ${done}, ${catchUp}`;
+}
+
+function harnessTreeProduct(tree: ProjectHarness): string | undefined {
+  const products: Readonly<Record<string, string>> = HARNESS_PRODUCT_NAMES;
+  return Object.hasOwn(products, tree.distribution) ? products[tree.distribution] : undefined;
+}
+
+// Each harness tree records the release it came from. Trees on different
+// releases give one workflow different instructions depending on which tool
+// runs it (and on a copied project each tree runs its own engine), so doctor
+// names them and the commands that bring the others level: to the project's
+// pin when it has one, as config refreshes every tree to it; else natively to
+// the engine's release, and on a copied project to the newest tree's release.
+export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null {
+  // Only directory names a harness can have reach the row and its commands.
+  const trees = discoverProjectHarnesses(projectDir).filter((tree) =>
+    /^\.[a-z0-9][a-z0-9._-]*$/i.test(tree.harnessDir)
+  );
+  if (trees.length < 2) return null;
+  const workflows = activeWorkflowDescriptions(projectDir);
+  const versions = new Set(trees.map((tree) => tree.frameworkVersion));
+  if (versions.size === 1) {
+    const [version] = versions;
+    return workflows.length === 0 ? null : {
+      pass: true,
+      label: `Multi-harness install detected (${trees.map((tree) => tree.harnessDir).join(" + ")}${
+        version ? `, all on ${version}` : ""
+      }) with an active workflow - supported but untested; keep all trees at the same framework version`,
+    };
+  }
+  const native = aidlcInvocation() === "aidlc";
+  let pinned: string | undefined;
+  try {
+    const pin = readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim();
+    if (VERSION_ID.test(pin)) pinned = pin;
+  } catch {
+    // No pin; a malformed one has its own row.
+  }
+  const newest = trees.filter((tree) => tree.frameworkVersion)
+    .sort((left, right) => compareVersions(right.frameworkVersion ?? "", left.frameworkVersion ?? ""))[0];
+  const release = pinned ?? (native ? AIDLC_VERSION : newest.frameworkVersion ?? AIDLC_VERSION);
+  const steady = trees.filter((tree) => tree.frameworkVersion === release);
+  const behind = trees.filter((tree) => tree.frameworkVersion !== release);
+  const fromProject = normalizeDriveLetter(resolve(projectDir)) === normalizeDriveLetter(resolve(process.cwd()));
+  const target = fromProject ? "" : ` --project-dir ${quoteCommandArgument(projectDir)}`;
+  // The commands run through the tool running this check, which takes every
+  // flag they use; an older tree's tool may not.
+  const tool = native || fromProject
+    ? aidlcInvocation()
+    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
+  // Under a pin, config fetches the pinned release itself. Otherwise a copied
+  // tree takes the newest release's file; one that no config run has recorded
+  // the files of reads every file as unowned against another release, so it
+  // first records them at its own.
+  const steps = behind.flatMap((tree) =>
+    native
+      ? [`${tool} config --harness ${tree.distribution}${target}`]
+      : pinned
+      ? [`${tool} config --harness ${tree.distribution} --download${target}`]
+      : [
+        ...(existsSync(join(tree.root, "tools", "data", "aidlc-manifest.json"))
+          ? []
+          : [`${tool} config --harness ${tree.distribution} --download${target}`]),
+        `${tool} config --harness ${tree.distribution} --from <that file>${target}`,
+      ]
+  );
+  const run = `run ${steps.map((step) => `\`${step}\``).join(", then ")}`;
+  const catchUp = native || pinned ? run : `get ${copyRuntimeUrl(release)} and its .sha256 into one folder, then ${run}`;
+  // A workflow is named, as code, only by the names the engine gives one, so
+  // no other text in a project's folder names reaches the line.
+  const named = workflows.every((workflow) => {
+    const [space, intent] = workflow.split("/");
+    return SPACE_NAME_REGEX.test(space) && INTENT_SELECTOR_REGEX.test(intent ?? "");
+  });
+  return {
+    pass: false,
+    severity: "warn",
+    label: `Harness trees on different releases: ${
+      trees.map((tree) => {
+        const product = harnessTreeProduct(tree);
+        return `${product ? `${product} (${tree.harnessDir})` : tree.harnessDir} ${
+          tree.frameworkVersion ?? "with no recorded release"
+        }`;
+      }).join(", ")
+    }${pinned ? ` (the project is pinned to ${pinned})` : ""} - a workflow can behave differently depending on which tool runs it`,
+    fix: workflows.length === 0 ? catchUp : harnessTreeCatchUpFix(
+      named
+        ? workflows.map((workflow) => `\`${workflow}\``).join(", ")
+        : workflows.length === 1
+        ? "the running workflow"
+        : "the running workflows",
+      workflows.length,
+      steady.map((tree) => harnessTreeProduct(tree) ?? tree.harnessDir),
+      release,
+      catchUp,
+    ),
+  };
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -4194,22 +4316,11 @@ export async function collectDoctorReport(
     });
   }
 
-  // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
-  // workflow active is supported-but-untested — warn (advisory pass with a
-  // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc", ".cursor"].filter(
-    (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
-  );
-  if (
-    otherTrees.length > 0 &&
-    existsSync(join(projectDir, harness, "tools", "aidlc-lib.ts")) &&
-    existsSync(stateFilePath(projectDir))
-  ) {
-    results.push({
-      pass: true,
-      label: `Multi-harness install detected (${harness} + ${otherTrees.join(" + ")}) with an active workflow - supported but untested; keep all trees at the same framework version`,
-    });
-  }
+  // 4b. Dual-harness coexistence (D-11): trees on one release with a workflow
+  // active are supported-but-untested (advisory pass with a visible label);
+  // trees on different releases warn, never block.
+  const treeVersions = harnessTreeVersionsCheck(projectDir);
+  if (treeVersions) results.push(treeVersions);
 
   // 4a. Project-default scope — real env overrides the recorded project flag.
   // The framework fallback is not a configured project default.

@@ -563,6 +563,44 @@ describe("t332 summary authorization id", () => {
     expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
   });
 
+  test("decorated assumption and follow-up headings after the summary read as the sections they name (#1385)", () => {
+    const proj = project();
+    const { questions, artifact } = paths(proj);
+    confirm(proj, questions);
+    writeArtifact(proj, artifact);
+    const confirmed = readFileSync(questions, "utf-8");
+    const appended = `${confirmed}\n---\n\n## \u2139\uFE0F Assumption Confirmation\n\nConfirmed.\n`;
+    writeFileSync(questions, appended);
+    expect(evidence(proj).ok).toBe(true);
+
+    writeFileSync(questions, `${appended}\n## \u2753 Q2\n\n[Answer]: Disable TLS.\n`);
+    const stale = evidence(proj);
+    expect(stale.ok).toBe(false);
+    if (stale.ok) throw new Error("expected refusal");
+    expect(stale.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
+  });
+
+  test("a summary re-presented with a decorated follow-up question records and completes (#1385)", () => {
+    const proj = project();
+    const { questions, artifact } = paths(proj);
+    const body = `${questionsBody("")}\n## \u2753 Q2. Which region?\n\n[Answer]: EU\n`;
+    writeFileSync(questions, body);
+    const decision = run(
+      [
+        "decision", "--stage", STAGE, "--checkpoint", "summary-confirmation",
+        "--questions-file", questions, "--decision", "Does this all look correct?",
+      ],
+      proj,
+    );
+    expect(decision.status, decision.stderr).toBe(0);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    writeFileSync(questions, body.replace("[Answer]: \n", "[Answer]: Looks correct\n"));
+    const recorded = answer(proj, questions, "Looks correct");
+    expect(recorded.status, recorded.stderr).toBe(0);
+    writeArtifact(proj, artifact);
+    expect(evidence(proj).ok).toBe(true);
+  });
+
   for (const { name, block } of [
     { name: "fenced JSON", block: '```json\n{"tls_required":true}\n```' },
     { name: "indented code", block: '    {"tls_required":true}' },

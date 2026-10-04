@@ -1582,6 +1582,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeWorkflowDescriptions",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-doctor-harness-tree-versions.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:advanceContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
@@ -4637,6 +4649,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:headingKey",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:holdsAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -7189,6 +7213,30 @@
       "coveredBy": [
         {
           "file": "tests/integration/t224-plugin-selection.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:processStartedAtMs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t330-transaction-filesystem.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10352,6 +10400,10 @@
         {
           "file": "tests/integration/t185-stage-artifact-guard.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-summary-decorated-headings.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/unit/t341-markdown-blocks.test.ts",

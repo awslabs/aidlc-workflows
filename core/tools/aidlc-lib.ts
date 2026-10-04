@@ -53,6 +53,7 @@ export {
 } from "./aidlc-guard-fences.ts";
 import {
   artifactFilename,
+  headingKey,
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 export {
@@ -3814,6 +3815,36 @@ export function listIntents(
     });
   }
   return infos;
+}
+
+// The workflows still running in a project, as `<space>/<record dir>`: every
+// space's intents that neither the registry nor the state file marks completed
+// or archived. config refuses to refresh a harness tree while any runs, and
+// doctor names the same list.
+export function activeWorkflowDescriptions(projectDir: string): string[] {
+  const active: string[] = [];
+  for (const space of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space.name)) {
+      if (
+        isCompletedIntent(intent) ||
+        isArchivedIntent(intent) ||
+        !intent.dirName
+      ) continue;
+      const path = stateFilePath(projectDir, intent.dirName, space.name);
+      let stateFile = false;
+      try {
+        stateFile = lstatSync(path).isFile();
+      } catch {
+        // No state file yet: the registry row alone says it runs.
+      }
+      if (stateFile) {
+        const status = getField(readFileSync(path, "utf-8"), "Status");
+        if (status === "Completed" || status === "Archived") continue;
+      }
+      active.push(`${space.name}/${intent.dirName}`);
+    }
+  }
+  return active;
 }
 
 // Materialize the active-space cursor without overwriting a concurrent explicit
@@ -11177,8 +11208,10 @@ function visibleH2Title(line: string, block: MarkdownLine): string | null {
 	return heading?.level === 2 && !heading.nested ? heading.title : null;
 }
 
+// A Q<n> heading behind a leading emoji is still that question, as the
+// claim-sources sensor reads it.
 function visibleQuestionId(title: string): string | null {
-  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(title);
+  const match = /^Q([1-9][0-9]*)(?:[.:](?:[ \t]+.*)?)?$/.exec(headingKey(title));
   return match ? `Q${match[1]}` : null;
 }
 
@@ -11277,7 +11310,7 @@ export function summaryConfirmationContentHash(content: string): string {
       continue;
     }
 
-    if (title === "Assumption Confirmation" && atxH2 && sawSummary) {
+    if (headingKey(title) === "Assumption Confirmation" && atxH2 && sawSummary) {
       if (postSummaryAssumptionSeen) {
         throw new Error('duplicate H2 section "Assumption Confirmation"');
       }
@@ -28525,7 +28558,10 @@ function releaseNativeGateMutex(receipt: NativeGateMutexReceipt): void {
   try { WINDOWS_PROCESS_API?.symbols.CloseHandle(receipt.handle); } catch { /* already closed */ }
 }
 
-function processGeneration(pid: number): string | null {
+// Exported so the transaction lock proves a reused PID with the same record.
+// Locks persist this string: a format change makes a live holder from another
+// release look like a reused PID.
+export function processGeneration(pid: number): string | null {
   if (pid === process.pid && AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.selfProcessGeneration) {
     return AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS.selfProcessGeneration();
   }
@@ -28541,6 +28577,34 @@ function processGeneration(pid: number): string | null {
         : null;
   if (pid === process.pid) SELF_PROCESS_GENERATION = generation;
   return generation;
+}
+
+// When a live process started, in epoch ms, read from its generation record;
+// null when the platform cannot say. For locks written by releases that
+// recorded no generation. A wall-clock step can shift it, so callers compare
+// with a margin.
+export function processStartedAtMs(pid: number): number | null {
+  const generation = processGeneration(pid);
+  if (!generation) return null;
+  let started = Number.NaN;
+  try {
+    if (process.platform === "win32") {
+      // FILETIME as "high:low" hex: 100 ns intervals since 1601-01-01.
+      const [high, low] = generation.split(":");
+      const filetime = (BigInt(`0x${high}`) << 32n) | BigInt(`0x${low}`);
+      started = Number(filetime / 10_000n) - 11_644_473_600_000;
+    } else if (process.platform === "darwin") {
+      const [seconds, micros] = generation.split(":").map(Number);
+      started = seconds * 1000 + micros / 1000;
+    } else if (process.platform === "linux") {
+      // procfs counts USER_HZ ticks since boot; USER_HZ is 100 wherever Bun runs.
+      const boot = /^btime (\d+)$/m.exec(readFileSync("/proc/stat", "utf-8"));
+      if (boot) started = Number(boot[1]) * 1000 + Number(generation) * 10;
+    }
+  } catch {
+    return null;
+  }
+  return Number.isFinite(started) ? started : null;
 }
 
 function writeOwnerStamp(
