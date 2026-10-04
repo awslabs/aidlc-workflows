@@ -755,11 +755,11 @@ describe("when the stage rules arrive in parts", () => {
       // The worker is told to do file work with its file tools, before the approved content.
       expect(brief.stdout).toContain(`## Files and commands\n\n${FILE_TOOLS_RULE}\n`);
       expect(brief.stdout.indexOf("## Files and commands")).toBeLessThan(brief.stdout.indexOf("## Approved plan"));
-      // The rule is about the worker writing a file itself: the plan's own
-      // file-writing command still runs.
+      // The rule is about the worker writing a file itself: a command the
+      // person asks for or the plan names still runs, even a mkdir.
       expect(brief.stdout).toContain("Step 2: run `bun install` to add the slug dependency");
-      expect(FILE_TOOLS_RULE).toContain("A project command the plan calls for that writes files on its own");
-      expect(FILE_TOOLS_RULE).toContain("still runs as a command");
+      expect(FILE_TOOLS_RULE).toContain("A command the person asks for, or one the plan names");
+      expect(FILE_TOOLS_RULE).toContain("even a `mkdir`), still runs as written");
       expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
     });
   }
