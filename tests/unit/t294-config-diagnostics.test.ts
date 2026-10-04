@@ -1340,6 +1340,67 @@ describe("t294 provider diagnostics", () => {
     expect(providerIssues(opencode, ".aidlc", "opencode", record)).toEqual([]);
   });
 
+  test("an answer recorded while a workflow runs is done, names its file, and says how to undo it", () => {
+    const project = install("claude");
+    const dirName = "active-answers";
+    const intents = join(project, "aidlc", "spaces", "default", "intents");
+    mkdirSync(join(intents, dirName), { recursive: true });
+    writeFileSync(
+      join(intents, "intents.json"),
+      `${JSON.stringify([{
+        uuid: "deadbeef-0000-4000-8000-000000000294",
+        slug: dirName,
+        dirName,
+        scope: "feature",
+        status: "in-flight",
+      }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intents, dirName, "aidlc-state.md"),
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+    );
+    const answer = (...args: string[]) => {
+      const result = run(["config", ...args, "--project-dir", project, "--yes"], project, runtimeEnv());
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("refusing to refresh");
+      return result.stdout;
+    };
+    const file = ".claude/tools/data/harness.json";
+    const acknowledged = answer("trust", "--acknowledge");
+    expect(acknowledged).toContain(`Recorded the trust answer in ${file}. To undo: `);
+    expect(acknowledged).toContain("config trust --reset --yes");
+    const reset = answer("trust", "--reset");
+    expect(reset).toContain(`Cleared the trust answer in ${file}. To undo: `);
+    expect(reset).toContain("config trust --acknowledge --yes");
+    // --acknowledge records a review, so a record without one gets no undo.
+    const dataFile = join(project, ".claude", "tools", "data", "harness.json");
+    for (const trust of [{ schemaVersion: 1, reviewed: false }, { schemaVersion: 1 }]) {
+      writeFileSync(dataFile, `${JSON.stringify({ ...JSON.parse(readFileSync(dataFile, "utf-8")), trust }, null, 2)}\n`);
+      const unreviewed = answer("trust", "--reset");
+      expect(unreviewed).toContain(`Cleared the trust answer in ${file}.`);
+      expect(unreviewed).not.toContain("--acknowledge");
+    }
+    const provider = answer("providers", "--provider", "current");
+    expect(provider).toContain(`Recorded the providers answer in ${file}. To undo: `);
+    expect(provider).toContain("config providers --reset --yes");
+    // An answer does not change how the open work runs, so nothing claims it does.
+    expect(acknowledged + reset + provider).not.toContain("picks this up");
+    // The undo brings back the acknowledgement and the actions marked done too.
+    const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8")) as Record<string, unknown>;
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region: "us-east-1",
+      acknowledged: true,
+      pendingActions: [{ id: "bedrock-model-access", status: "done" }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+    const back = answer("providers", "--provider", "current");
+    expect(back).toContain(`Changed the providers answer in ${file}. To undo: `);
+    expect(back).toContain("config providers --provider amazon-bedrock --region us-east-1 --acknowledge --mark-done bedrock-model-access --yes");
+  });
+
   test("pending actions drive check and doctor until marked done", () => {
     const project = temp("aidlc-t294-pending-");
     cpSync(join(DIST, "claude"), project, { recursive: true });

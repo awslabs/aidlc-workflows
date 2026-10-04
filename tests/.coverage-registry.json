@@ -14040,6 +14040,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t199-learnings-memory-path.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t31.test.ts",
           "mechanism": "cli"
         },

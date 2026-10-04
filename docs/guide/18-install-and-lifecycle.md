@@ -547,11 +547,12 @@ model, without Opus:
   and Kiro CLI that is the session's effort. On Claude Code, Codex CLI, and
   opencode, Code Generation runs on the developer agent, which follows the
   session only while no preset or effort is recorded for it. Otherwise its
-  effort is the recorded one for every Unit of the workflow: to raise it,
-  record it before the workflow starts, for example
-  `aidlc config models --agent developer --effort high --project --yes`, and
-  it then applies to all of Code Generation, because config does not refresh
-  agent files while a workflow is active.
+  effort is the recorded one: to raise it, record it, for example
+  `aidlc config models --agent developer --effort high --project --yes`. That
+  works while a workflow is open too: config rewrites the developer agent's
+  file, and the harness uses it the next time it starts the agent (Claude Code
+  does so at the agent's next start; a step already running keeps what it
+  started with). The command prints the one that puts it back.
 - **Change model or effort between stages, in a new chat.** See
   [Changing Model Mid-Workflow](11-session-management.md#changing-model-mid-workflow).
 
@@ -909,9 +910,20 @@ the apply fails closed.
 
 ### Refresh Safety
 
-A refresh changes project engine and graph files, so config refuses while any
-workflow in any space is not complete. Parked workflows still count as
-active. Complete every workflow named in the error, then rerun config.
+A settings change is done while work is open: `config models`, `flags`,
+`runtime`, `providers`, and `trust` read the project's own files and bring in
+no release (when the project is pinned to another release, the update it needs
+first is a refresh and waits). Each prints what changed and, where one command
+puts the earlier value back, that command. A model or flag change also names
+the open workflows that pick it up: a bypass, hook debug, the sensor timeout,
+and question retention apply right away, with no restart; models and swarm
+apply from the next step (a step already running keeps what it started with);
+a default scope applies to new work only, and a saved model profile changes
+nothing until `--from` loads it. The runtime, providers, and trust answers
+print no workflow line. A refresh that brings in release files changes project
+engine and graph files, so config refuses it while any workflow in any space
+is not complete. Parked workflows still count as active. Complete every
+workflow named in the error, then rerun config.
 
 The check runs once while planning and again under the workspace audit lock
 immediately before commit. `--force`, `--yes`, and `--plan-token` do not bypass
