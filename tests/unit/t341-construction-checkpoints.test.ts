@@ -1609,17 +1609,51 @@ describe("t341 protected question interleaving", () => {
     expect(receipts(pd)).toHaveLength(3);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // From a live Claude Code run: the agent recorded the question, then asked it
+  // in the picker with the command added. The person's Approve there was not
+  // kept, so the checkpoint asked again, refused that picker too, and they had
+  // to type it: three answers to one question.
+  test("a picker approval answers the question however the agent worded it; several picks or other labels do not", () => {
+    const pd = project();
+    const shown = `${prompt} \`bun test\``;
+    const pick = (labels: string[], picked: string, multiSelect = false) => {
+      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+        input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,
+          tool_input: { questions: [{ question: shown, multiSelect, options: labels.map((label) => ({ label })) }] },
+          tool_response: { answers: { [shown]: picked } } }),
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    };
+    ask(pd);
+    pick(["Approve", "Request Changes"], "Approve", true);
+    pick(["Yes", "No"], "Yes");
+    expect(readProtectedResponse(pd, session)).toBeNull();
+    pick(["Approve (Recommended)", "Request Changes"], "Approve");
+    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    const accepted = answer(pd);
+    expect(accepted.code, accepted.out).toBe(0);
+    expect(receipts(pd)).toHaveLength(1);
+    // Recorded once, the command is the one every later checkpoint runs, so no checkpoint asks for it again.
+    const setter = cli(pd, "state", ["set-construction-verification-command", "bun test"], env);
+    expect(setter.code, setter.out).toBe(0);
+    expect(authorizedVerificationCommand(pd, readFileSync(seededStateFile(pd), "utf-8"))?.command).toBe("bun test");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Codex retains rendered question text when forwarding a structured selection", () => {
     const pd = project();
     const adapter = join(AIDLC_SRC, "../../codex/.codex/hooks/aidlc-codex-adapter.ts");
     ask(pd);
-    for (const question of ["An unrelated question?", prompt]) {
+    // A picker offering none of the question's choices pairs by its text, so
+    // the unrelated one is refused only when the adapter forwards that text.
+    for (const [question, labels] of [["An unrelated question?", ["Yes", "No"]], [prompt, ["Approve", "Request Changes"]]] as const) {
       const submitted = childProcess.spawnSync(process.execPath, [adapter, "record-human-turn"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
         input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: session,
-          tool_input: { questions: [{ id: "choice", question, options: [{ label: "Approve" }, { label: "Request Changes" }] }] },
-          tool_response: JSON.stringify({ answers: { choice: { answers: ["Approve"] } } }) }),
+          tool_input: { questions: [{ id: "choice", question, options: labels.map((label) => ({ label })) }] },
+          tool_response: JSON.stringify({ answers: { choice: { answers: [labels[0]] } } }) }),
       });
       expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
       if (question !== prompt) {

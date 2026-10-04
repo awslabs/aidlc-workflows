@@ -123,6 +123,7 @@ import {
   type PlanApprovalRuntimeReceipt,
   type WorkspaceSourceState,
   type WorkspaceSourceListing,
+  type ProtectedQuestion,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
   TESTING_POSTURE_SUBCOMMANDS,
@@ -3099,6 +3100,19 @@ export function recordPlanApprovalHumanResponse(
   });
 }
 
+// A picker reply answers the protected question when the picker asked it: its
+// recorded text, or, however the conductor worded it, a single pick from a
+// picker offering one of its choices ("(Recommended)" stripped). Several picks,
+// or a picker offering none of its choices, answer some other question.
+function pickerAsksProtectedQuestion(
+  question: ProtectedQuestion, questionText: string, picker: PlanApprovalPickerQuestion | undefined,
+): boolean {
+  if (createHash("sha256").update(questionText, "utf-8").digest("hex") === question.promptDigest) return true;
+  if (!picker?.options?.length || picker.severalPicks) return false;
+  const own = APPROVAL_GATE_CHOICES.map((choice) => choice.toLowerCase());
+  return picker.options.some((label) => own.includes(stripRecommendedDecorator(label).trim().toLowerCase()));
+}
+
 // The person's reply to a construction policy, verification command, or
 // Construction checkpoint question. The hook keeps that a person replied to
 // this exact question and their words, verbatim; the conductor reads them and
@@ -3106,12 +3120,13 @@ export function recordPlanApprovalHumanResponse(
 // picker asked this question. Nothing is inferred from the words here.
 export function recordProtectedHumanResponse(
   projectDir: string, session: string, responseText: string, questionText: string | null,
+  picker?: PlanApprovalPickerQuestion,
 ): { recorded: boolean } {
   return withAuditLock(projectDir, () => {
     const question = readProtectedQuestion(projectDir, session);
     if (!question) return { recorded: false };
     const picked = question.promptDigest !== undefined && questionText !== null;
-    if (picked && createHash("sha256").update(questionText, "utf-8").digest("hex") !== question.promptDigest) {
+    if (picked && !pickerAsksProtectedQuestion(question, questionText, picker)) {
       return { recorded: false };
     }
     const text = responseText.trim();

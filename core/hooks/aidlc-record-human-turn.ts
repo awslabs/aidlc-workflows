@@ -433,7 +433,7 @@ try {
               clearPlanApprovalChallenge(projectDir, sessionId);
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
-              if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText);
+              if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText, pickerQuestion);
             } else if (!notAReply) {
               recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
             }

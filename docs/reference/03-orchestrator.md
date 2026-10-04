@@ -1016,9 +1016,12 @@ response. A protected response binds the session, the fresh challenge ID, and th
 person's words, and a reply that is exactly one offered choice also records it
 as their pick. Its consumer also requires the current canonical target digest.
 
-When a picker supplies the rendered question, the hook requires its exact text
-digest to match the minting command's `--decision` text. Without rendered text,
-the one-open-question rule is the fallback. Every `log decision`, including an
+When a picker supplies the rendered question, its reply answers the protected
+question when its exact text digest matches the minting command's `--decision`
+text, or, however the conductor worded it, when it is a single pick from a
+picker offering Approve or Request Changes (`(Recommended)` stripped). Several
+picks, or a picker offering neither, answer some other question. Without
+rendered text, the one-open-question rule is the fallback. Every `log decision`, including an
 ordinary question, withdraws protected consent for its explicit or
 ancestry-resolved session before recording the decision; if the session cannot
 be resolved, it withdraws every session's protected consent. Opening a lifecycle
