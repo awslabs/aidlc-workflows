@@ -449,7 +449,9 @@ try {
         // A reply the engine's guard-recovery ask took as its answer is that
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
-        if (consumeSharedDirectiveAsk(projectDir, notAReply ? "" : humanResponseText) && offset !== null) {
+        // A command, or several picks, is no one remedy.
+        const recoveryReply = notAReply || pickerQuestion?.severalPicks ? "" : humanResponseText;
+        if (consumeSharedDirectiveAsk(projectDir, recoveryReply) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
           } catch {

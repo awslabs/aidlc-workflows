@@ -537,6 +537,25 @@ describe("a recovery question: exact picks are recorded, everything else is the 
     },
   );
 
+  test("several picks in a picker are no one remedy: nothing is taken", () => {
+    ask();
+    const question = "How should we recover?";
+    const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: SESSION,
+        tool_input: { questions: [{ question, multiSelect: true, options: remedies.map((remedy) => ({ label: remedy.action })) }] },
+        tool_response: { answers: { [question]: remedies.map((remedy) => remedy.action) } },
+      }),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0", AIDLC_SESSION_OVERRIDE: SESSION },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(response()?.selected_op ?? null).toBeNull();
+    expect(response()?.picked_by).toBeUndefined();
+  });
+
   test("Request Changes with what to change, read by the agent, is ready and bound to their words", () => {
     ask();
     consumeSharedDirectiveAsk(proj, "split the save-search flow into two steps");
