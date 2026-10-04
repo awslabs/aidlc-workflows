@@ -1408,8 +1408,8 @@ of its verbs anywhere), and an `aidlc` command past the dispatcher's global
 flags (`--json`, `--quiet`, ...), which the dispatcher drops before routing. Delegated agents retain ordinary shell
 access for artifact work, builds, validation, and read-only state inspection;
 they return their result to the main conductor, which alone owns workflow
-lifecycle and gates. A delegate never runs `aidlc-machine-config.ts` (or
-`aidlc system config global`), which writes the person's machine-wide settings.
+lifecycle and gates. The guard also refuses a delegate `aidlc-machine-config.ts`
+and `aidlc system config global` whole.
 Kiro IDE and Kiro CLI v3 supply no such identity, so the kiro-ide row gives each
 delegated persona its own shell deny instead
 (`harness/kiro-ide/delegate-shell-deny.ts`): it denies the conductor's command
