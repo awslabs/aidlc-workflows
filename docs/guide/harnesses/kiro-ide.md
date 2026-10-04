@@ -420,15 +420,9 @@ once or twice. That is the terminal window's title, cut short by Kiro when it
 shows the output. It does not change what the command did or what AI-DLC
 records.
 
-To stop it, add this entry inside the braces of Kiro's user settings
-(Ctrl+Shift+P, then **Preferences: Open User Settings (JSON)**), save, and
-restart Kiro:
-
-```json
-"terminal.integrated.windowsUseConptyDll": false
-```
-
-After the restart, the cards show only the command's output.
+If you added `"terminal.integrated.windowsUseConptyDll": false` to Kiro's
+settings, remove it and restart Kiro: it makes Kiro wrap command output, which
+can stop Code Generation.
 
 ### Kiro memories carry old AI-DLC advice
 
