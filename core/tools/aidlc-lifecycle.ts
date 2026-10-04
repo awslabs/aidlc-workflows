@@ -1416,6 +1416,9 @@ const FIRST_RELEASE_WITH_SHARED_MARKER_HELPER = "2.8.2";
 const STABLE_ONLY_HELPER_PATTERN = "(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)";
 
 function predatesCurrentHelper(version: string): boolean {
+  // This binary's own version always has the current helper: only a release
+  // built before the cutoff ever wrote an older one.
+  if (version === AIDLC_VERSION) return false;
   try {
     return compareVersions(version, FIRST_RELEASE_WITH_CURRENT_HELPER) < 0;
   } catch {

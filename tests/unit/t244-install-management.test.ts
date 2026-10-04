@@ -1628,10 +1628,12 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
   // A release accepts only the Windows helpers it wrote itself: 2.8.0 and
   // 2.8.1 the stable-only one, 2.8.2 to 2.10.0 the shared-marker one. Switched
   // back to one, a machine keeps that release's own helper, or it could never
-  // switch to another version again.
+  // switch to another version again. (2.9.0 stands for that second era: this
+  // source still calls itself 2.10.0 until its release, and a binary's own
+  // version always gets the current helper.)
   test.skipIf(process.platform !== "win32").each([
     ["2.8.1", 1],
-    ["2.10.0", 0],
+    ["2.9.0", 0],
   ] as const)(
     "switching back to %s leaves the helper that release wrote, and switching forward the current one",
     (older, era) => {
