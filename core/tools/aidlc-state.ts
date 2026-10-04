@@ -761,6 +761,11 @@ export function main(argv: string[]): void {
       subcommand === "fold-unit-merge" &&
       process.env.AIDLC_STATE_TRANSITION_OWNER === `unit-merge:${process.ppid}`
     ) &&
+    // A forward jump that moves one Unit on skips that Unit's steps (#1411).
+    !(
+      subcommand === "skip" && args.includes("--unit") &&
+      process.env.AIDLC_STATE_TRANSITION_OWNER === `jump:${process.ppid}`
+    ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
     const pd = resolveProjectDir(projectDir);

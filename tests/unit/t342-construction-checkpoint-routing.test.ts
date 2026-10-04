@@ -24,7 +24,7 @@ import {
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts,
+  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1081,6 +1081,40 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
     expect(approved(p, "alpha")).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // "Stop the design, build it" (#1411): beta is in its reopened NFR
+  // Requirements and the person jumps on to Code Generation. Only beta moves
+  // on, skipping its own unfinished steps; alpha's built, approved work stays.
+  test("a forward jump inside the per-unit steps moves only the unit in flight on", () => {
+    const p = betaBuilding();
+    reopenFor(p, ["--stage", "nfr-requirements"]);
+    expect(tool(p, "state", ["unit", "start", "--stage", "nfr-requirements", "--unit", "beta"]).status).toBe(0);
+    expect(next(p)).toMatchObject({ stage: "nfr-requirements", unit: "beta" });
+    const currentStage = getField(readFileSync(seededStateFile(p), "utf-8"), "Current Stage");
+    const jump = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "code-generation"]).stdout);
+    expect(jump.kind, JSON.stringify(jump)).toBe("print");
+    expect(jump.message).toContain(
+      "execute --target code-generation --direction forward --units beta " +
+        "--stages nfr-requirements,nfr-design,infrastructure-design --scope feature",
+    );
+    expect(jump.message).not.toContain("starts over");
+    expect(jump.message).not.toContain('unit "alpha" (');
+    expect(jump.message).toContain("--stage nfr-requirements` reopens it");
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(jump.message)?.[1];
+    const executed = tool(p, "jump", command!.split(" "));
+    expect(executed.status, executed.out).toBe(0);
+    expect(JSON.parse(executed.stdout)).toMatchObject({
+      direction: "forward", target: "code-generation", units: ["beta"],
+      stages_skipped: ["nfr-requirements", "nfr-design", "infrastructure-design"], stages_reset: [],
+    });
+    expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+    for (const slug of stages) expect(unitCompletedReceipts(p, slug).has("alpha"), slug).toBe(true);
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(getField(state, "Current Stage")).toBe(currentStage);
+    expect(state).not.toContain("- **Unit Stage**:");
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a parked workflow resumed at the active unit's step unparks first, then stays resumed", () => {

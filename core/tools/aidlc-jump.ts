@@ -1,7 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
+import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   type CheckboxState,
   countCheckboxes,
@@ -48,6 +52,8 @@ function effectiveAction(
 ): string | undefined {
   return suffixes.get(slug) ?? scopeMapping.stages[slug];
 }
+
+const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
 // --- Audit emission helper ---
 function emitAudit(
@@ -364,7 +370,7 @@ function handleExecute(args: string[]): void {
   let content = readStateFile(pd);
 
   const targetSlug = flags.target;
-  if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--scope <scope>]");
+  if (!targetSlug) error("Usage: execute --target <slug> --direction <forward|backward|redo> [--units <unit[,unit...]> [--stages <slug[,slug...]>]] [--scope <scope>]");
 
   const direction = flags.direction;
   if (
@@ -398,6 +404,11 @@ function handleExecute(args: string[]): void {
     error(
       `Stage "${targetSlug}" is skipped for scope "${scope}". Use \`next --stage ${targetSlug}\`, which handles a stage the plan skips.`
     );
+  }
+
+  if (flags.units !== undefined) {
+    executeUnitsForward(pd, flags, targetStage, direction);
+    return;
   }
 
   const graph = loadStageGraph();
@@ -662,6 +673,100 @@ function handleExecute(args: string[]): void {
       timestamp,
     })
   );
+}
+
+// `execute --units`: a forward jump in Construction that runs one unit at a
+// time moves only the named Units on (#1411). Each named step is skipped for
+// those Units with the state tool's own one-Unit skip, so every other Unit
+// keeps its finished work, reviews, Plan Approvals and checkpoint approvals:
+// no STAGE_JUMPED, no checkbox the other Units still owe, no Current Stage
+// move. The engine names the steps (the ones the walk would stop these Units
+// at before the target), and stages_skipped is exactly those steps.
+function executeUnitsForward(
+  pd: string,
+  flags: Record<string, string>,
+  targetStage: StageEntry,
+  direction: string,
+): void {
+  const units = flags.units.split(",").map((unit) => unit.trim()).filter(Boolean);
+  if (direction !== "forward" || units.length === 0 || !isPerUnitStage(targetStage)) {
+    error(
+      "execute --units moves Units forward to a per-unit stage: " +
+        "--direction forward --units <unit[,unit...]> [--stages <slug[,slug...]>]",
+    );
+  }
+  for (const unit of units) {
+    if (!UNIT_NAME_REGEX.test(unit)) error(`Invalid Unit name: ${unit}`);
+  }
+  const stages = (flags.stages ?? "").split(",").map((slug) => slug.trim()).filter(Boolean);
+  for (const slug of stages) {
+    const stage = findStageBySlug(slug);
+    if (!stage || !isPerUnitStage(stage) || stageIndex(slug) >= stageIndex(targetStage.slug)) {
+      error(`Not a per-unit stage before ${targetStage.slug}: ${slug}`);
+    }
+  }
+  for (const slug of stages) {
+    for (const unit of units) {
+      const run = runStateTool(pd, [
+        "skip", slug, "--unit", unit, "--reason", `Skipped by jump to ${targetStage.slug} (${direction})`,
+      ]);
+      if (!run.ok) error(toolError(run));
+    }
+  }
+  // The active Unit's lifecycle mirror describes the step it left; the next
+  // `unit start` writes it again.
+  let content = readStateFile(pd);
+  if (units.includes(getField(content, "Active Unit")?.trim() ?? "")) {
+    for (const field of ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"]) {
+      content = removeField(content, field);
+    }
+  }
+  const timestamp = isoTimestamp();
+  content = setField(content, "Last Updated", timestamp);
+  writeStateFile(pd, content);
+  console.log(
+    JSON.stringify({
+      direction,
+      target: targetStage.slug,
+      target_phase: targetStage.phase.toUpperCase(),
+      units,
+      stages_skipped: stages,
+      stages_reset: [],
+      state_updated: true,
+      audit_appended: stages.length > 0,
+      completed_count: countCheckboxes(content, "completed"),
+      workflow_stopped: false,
+      timestamp,
+    })
+  );
+}
+
+// The state tool, run as its own command: it owns the one-Unit skip, and
+// accepts it from this process only (the token names this PID).
+function runStateTool(pd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
+  const executable = compiledExecutable();
+  const command = executable
+    ? [executable, "engine", "state", ...args, "--project-dir", pd]
+    : [process.execPath, join(TOOLS_DIR, "aidlc-state.ts"), ...args, "--project-dir", pd];
+  const result = spawnSync(command[0], command.slice(1), {
+    encoding: "utf-8",
+    cwd: pd,
+    timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    env: { ...process.env, AIDLC_PROJECT_DIR: pd, AIDLC_STATE_TRANSITION_OWNER: `jump:${process.pid}` },
+  });
+  return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+// The message of a tool's `{"error": ...}` envelope, or its raw stderr.
+function toolError(run: { stderr: string }): string {
+  const raw = run.stderr.trim();
+  try {
+    const parsed = JSON.parse(raw.split(/\r?\n/).find((line) => line.startsWith("{")) ?? raw) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Not the envelope: the raw text below.
+  }
+  return raw || "the state tool failed";
 }
 
 // --- Utility ---
