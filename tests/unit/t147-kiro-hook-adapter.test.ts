@@ -826,6 +826,8 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     // A document's own code fence stays inside the block.
     expect(relayAsTextBlock("# Notes\n```ts\nconst a = 1;\n```\n")).toContain("(````text on its own line before it, ```` after it)");
     expect(relayAsTextBlock("````md\n````\n")).toContain("(`````text on its own line before it, ````` after it)");
+    // A long record with many short runs is read in one pass.
+    expect(relayAsTextBlock("`a".repeat(200_000))).toContain("(```text on its own line before it, ``` after it)");
   });
 
   test("3b: plain-text sanitizer drops unterminated 7-bit and 8-bit controls", () => {

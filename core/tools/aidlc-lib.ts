@@ -1805,7 +1805,12 @@ export function decodeHarnessPlainText(
 // fence is longer than any run of backticks in the output, so a document's own
 // code fence stays inside the block.
 export function relayAsTextBlock(output: string): string {
-  const longest = Math.max(0, ...(output.match(/`+/g) ?? []).map((run) => run.length));
+  let longest = 0;
+  let run = 0;
+  for (let i = 0; i < output.length; i++) {
+    run = output.charCodeAt(i) === 96 ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
   const fence = "`".repeat(Math.max(3, longest + 1));
   return `inside one fenced text block (${fence}text on its own line before it, ${fence} after it), exactly as it is`;
 }
