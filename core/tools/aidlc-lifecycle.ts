@@ -1605,8 +1605,9 @@ export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
     const repair = olderReleaseHelperRepair();
-    const helper = repair ??
+    const wanted = (): string | null => repair ??
       (previousWindowsShimHelperState()?.kind === "replace" ? windowsShimHelper() : null);
+    const helper = wanted();
     if (helper === null) return;
     const root = machineTransactionRoot();
     executePlan({
@@ -1616,6 +1617,15 @@ export function replacePreviousWindowsShimHelper(): void {
         writeOperation(relative(root, windowsShimPath()), helper, expected, 0o700),
         ...(repair === null ? gitBashLauncherCatchUp(root) : []),
       ],
+    }, {
+      // A switch that finished just before the lock was taken can leave the
+      // same helper bytes beside another active release: choose again under
+      // the lock, and leave the helper if the answer changed.
+      validateLocked: () => {
+        if (olderReleaseHelperRepair() !== repair || wanted() !== helper) {
+          throw new Error("the active release changed before the launcher helper was replaced");
+        }
+      },
     });
   } catch {
     // The previous helper still starts aidlc; a later command retries.

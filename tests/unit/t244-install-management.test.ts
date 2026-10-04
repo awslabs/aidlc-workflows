@@ -1697,8 +1697,9 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
         ], project, env);
         expect(installed.status, installed.stdout + installed.stderr).toBe(0);
       }
-      expect(run(LIFECYCLE, ["use", older], project, env).status).toBe(0);
       const helperPath = join(machine, "aidlc-shim.ps1");
+      const current = readFileSync(helperPath, "utf-8");
+      expect(run(LIFECYCLE, ["use", older], project, env).status).toBe(0);
       const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
       process.env.AIDLC_INSTALL_ROOT = machine;
       process.env.AIDLC_BIN_DIR = join(machine, "bin");
@@ -1712,6 +1713,26 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
         writeFileSync(helperPath, handEdited);
         replacePreviousWindowsShimHelper();
         expect(readFileSync(helperPath, "utf-8")).toBe(handEdited);
+
+        // The same through the dispatcher a pinned project's newer binary
+        // runs: beside the older active release, the current helper (which
+        // forwards no @args) is still put back to that release's own.
+        const dispatcher = join(machine, "versions", newer, "aidlc.exe");
+        const built = spawnSync(
+          process.execPath,
+          ["build", "--compile", join(REPO_ROOT, "dist-release", "claude", ".claude", "tools", "aidlc.ts"), "--outfile", dispatcher],
+          { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
+        );
+        expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+        writeFileSync(helperPath, current);
+        const ran = spawnSync(dispatcher, ["version"], {
+          cwd: project,
+          env: { ...process.env, ...env },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+        expect(readFileSync(helperPath, "utf-8")).toBe(stableOnly);
       } finally {
         if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
         else process.env.AIDLC_INSTALL_ROOT = saved.root;

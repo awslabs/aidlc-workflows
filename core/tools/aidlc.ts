@@ -3197,10 +3197,21 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     // Every previous launcher helper forwards @args and the current one does
-    // not, so a current helper costs one read.
+    // not, so a current helper costs one read. A binary that is not the active
+    // release (a pinned project's) may also have to give an older active
+    // release back the helper it needs, so it reads which release is active.
     try {
-      const helper = join(dirname(dirname(dirname(process.execPath))), "aidlc-shim.ps1");
-      if (readFileSync(helper, "utf-8").includes("& $executable @args")) {
+      const installRoot = dirname(dirname(dirname(process.execPath)));
+      const helper = join(installRoot, "aidlc-shim.ps1");
+      const otherActive = (): boolean => {
+        try {
+          return readFileSync(join(installRoot, "active-version"), "utf-8").trim() !==
+            basename(dirname(process.execPath));
+        } catch {
+          return false;
+        }
+      };
+      if (readFileSync(helper, "utf-8").includes("& $executable @args") || otherActive()) {
         const { replacePreviousWindowsShimHelper } = await import("./aidlc-lifecycle.ts");
         replacePreviousWindowsShimHelper();
       }
