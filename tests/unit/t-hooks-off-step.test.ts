@@ -146,8 +146,8 @@ function intentCreate(proj: string, h: Harness): void {
 
 type Printed = { kind: string; message?: string };
 
-function next(proj: string, h: Harness, extra: Record<string, string> = {}): Printed {
-  const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next"], attendedEnv(extra));
+function next(proj: string, h: Harness, extra: Record<string, string> = {}, args: string[] = []): Printed {
+  const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next", ...args], attendedEnv(extra));
   expect(r.code, r.stderr).toBe(0);
   return JSON.parse(r.stdout) as Printed;
 }
@@ -187,6 +187,23 @@ describe("next stops with the agent's step when the engine knows the hooks never
     const message = next(proj, h).message ?? "";
     expect(message).toContain("`bun .claude/tools/aidlc.ts engine orchestrate next`");
     expect(message).toContain("do not ask for a restart and do not mention /hooks");
+  });
+
+  test("Claude's step runs the stopped command again, so what it carried goes on", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const message = next(proj, h, {}, ["--", "carry on with the parser"]).message ?? "";
+    expect(message).toContain("`bun .claude/tools/aidlc.ts engine orchestrate next -- 'carry on with the parser'`");
+  });
+
+  test("a next that only asks runs as asked: status, help, version, doctor", () => {
+    const proj = installed(COPILOT);
+    intentCreate(proj, COPILOT);
+    for (const ask of ["--status", "--help", "--version", "--doctor"]) {
+      expect(isStop(next(proj, COPILOT, {}, [ask])), ask).toBe(false);
+    }
+    expect(isStop(next(proj, COPILOT))).toBe(true);
   });
 
   test("the hook on the agent's own command beats first, so a host that runs hooks never sees the stop", () => {

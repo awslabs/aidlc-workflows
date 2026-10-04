@@ -626,10 +626,19 @@ function engineWorkflow(projectDir: string): { intent?: string; space: string } 
 // an unattended run, for a person who switched the presence check off (the
 // notice above still says it), in a delegated worktree, whose hooks beat in
 // the parent checkout, or where a link on the way to the status files keeps
-// any heartbeat from being written.
-function hooksOffStop(projectDir: string, selection: WorkflowSelection): string | null {
+// any heartbeat from being written. A `next` that only asks (status, doctor,
+// help, config, the intent and space verbs) runs as asked. The step runs the
+// stopped command again, so what it carried goes on.
+function hooksOffStop(
+  projectDir: string,
+  selection: WorkflowSelection,
+  nextArgs: string[],
+  argv: readonly string[],
+): string | null {
   if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled()) return null;
-  const step = hooksOffAgentStep(projectDir);
+  const flags = parseNextFlags(nextArgs);
+  if (flags.parseError || !nextEngagesWorkflow(nextArgs, flags)) return null;
+  const step = hooksOffAgentStep(projectDir, `${aidlcInvocation()} engine orchestrate ${argv.map(shellArg).join(" ")}`);
   if (step === null) return null;
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
@@ -5904,6 +5913,19 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   }
 }
 
+// A `next` that moves the workflow, as opposed to a read-only utility, a
+// configuration or workspace command, the read-only board, or terminal
+// guidance. The engine marker and the stop for hooks that never ran read it.
+function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags(args)): boolean {
+  return !flags.readOnly &&
+    !flags.config &&
+    !flags.retiredOnly &&
+    !flags.configCommand &&
+    !flags.workspaceCommand &&
+    flags.orchestratorVerb !== "team-board" &&
+    !isRefusedModifierNextArgv(args);
+}
+
 // The `next` handler reads workflow state and emits exactly one directive. A
 // normal rule-transport request may lazily mint its machine-local MAC key.
 // Internal observer modes are strictly read-only: route checks bypass transport,
@@ -5937,14 +5959,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // errored command still counted on the transcript path.
   // A modifier-only next it refuses is terminal on every harness, like the
   // refused --config alias: see isRefusedModifierNextArgv.
-  const engagesWorkflow =
-    !flags.readOnly &&
-    !flags.config &&
-    !flags.retiredOnly &&
-    !flags.configCommand &&
-    !flags.workspaceCommand &&
-    flags.orchestratorVerb !== "team-board" &&
-    !isRefusedModifierNextArgv(args);
+  const engagesWorkflow = nextEngagesWorkflow(args, flags);
   if (engagesWorkflow) {
     touchEngineMarker(projectDir);
   }
@@ -13494,7 +13509,7 @@ export function main(argv: string[]): void {
     engineSelections.set(resolvedProjectDir, { ...resolvedSelection, intent: null, binding: null });
   }
   if (commandKind === "next" && !unjoined) {
-    const stop = hooksOffStop(resolvedProjectDir, resolvedSelection);
+    const stop = hooksOffStop(resolvedProjectDir, resolvedSelection, subArgs, rawArgs);
     if (stop !== null) {
       // The stop carries the step; the notice is not added on top.
       activeHookHealthNotice = null;

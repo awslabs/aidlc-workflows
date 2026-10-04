@@ -24527,11 +24527,13 @@ export function hookExecutionRecoveryText(projectDir?: string): string {
 
 // A harness's hook-activation text names the person's own entry command and
 // project folder as <entry> and <folder>, and the engine's next step as
-// <next>, so one manifest string reads right on every install channel.
-export function fillHookActivationText(text: string, projectDir?: string): string {
+// <next>, so one manifest string reads right on every install channel. A
+// stopped command passes itself as <next>, so running it again keeps what it
+// carried.
+export function fillHookActivationText(text: string, projectDir?: string, next?: string): string {
   return text
     .replaceAll("<entry>", entrySkillInvocation())
-    .replaceAll("<next>", `${aidlcInvocation()} engine orchestrate next`)
+    .replaceAll("<next>", next ?? `${aidlcInvocation()} engine orchestrate next`)
     .replaceAll("<folder>", projectDir ?? "this project's folder");
 }
 
@@ -24551,9 +24553,9 @@ const HOOKS_OFF_AGENT_RULES =
  * such step. `next` stops with it before any work, and a refusal for a reply
  * that was not recorded carries it.
  */
-export function hooksOffAgentStep(projectDir?: string): string | null {
+export function hooksOffAgentStep(projectDir?: string, next?: string): string | null {
   const step = hookActivation()?.agentStep;
-  return step ? `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir)}` : null;
+  return step ? `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next)}` : null;
 }
 
 export interface HookHeartbeatStamp {
