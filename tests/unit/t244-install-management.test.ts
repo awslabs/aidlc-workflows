@@ -1287,7 +1287,7 @@ describe("t244 management lifecycle", () => {
     expect(uninstall.status, `${uninstall.stdout}\n${uninstall.stderr}`).toBe(0);
     // Windows removes the files once the command ends, and says so.
     const removes = (what: string) => process.platform === "win32"
-      ? `Windows removes ${what} a moment after this command ends.`
+      ? `Windows removes ${what} after this command ends.`
       : `Removed ${what}.`;
     expect(uninstall.stdout).toContain(
       `${removes("aidlc and all retained releases")} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`,
@@ -1497,17 +1497,17 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
       humanLifecycleNarration("uninstall", ["uninstall"], null, { ok: true, code: 0, status: "ok", message: "", data } as never);
     const state = "machine settings, update cache, pins, harness default, and release channel";
     expect(narrate({ purge: false, deferred: true })).toContain(
-      "Windows removes aidlc and all retained releases a moment after this command ends. Machine settings,",
+      "Windows removes aidlc and all retained releases after this command ends. Machine settings,",
     );
     expect(narrate({ purge: true, deferred: true })).toContain(
-      `Windows removes aidlc, all retained releases, ${state} a moment after this command ends. Project files were kept. ` +
+      `Windows removes aidlc, all retained releases, ${state} after this command ends. Project files were kept. ` +
         "If aidlc still runs after that, aidlc doctor shows what is left.",
     );
     expect(narrate({ purge: true, deferred: false })).not.toContain("aidlc doctor");
     expect(narrate({ purge: true, deferred: false })).toContain(`Removed aidlc, all retained releases, ${state}.`);
     for (const deferred of [true, false]) {
       const kept = narrate({ purge: true, deferred, preservedUnowned: ["versions/1.0.0/notes.txt"] }) ?? "";
-      expect(kept).toContain(deferred ? `Windows removes owned aidlc files and ${state} a moment` : `Removed owned aidlc files and ${state}.`);
+      expect(kept).toContain(deferred ? `Windows removes owned aidlc files and ${state} after this command ends` : `Removed owned aidlc files and ${state}.`);
       expect(kept).not.toContain(deferred ? "Removed" : "Windows removes");
     }
   });

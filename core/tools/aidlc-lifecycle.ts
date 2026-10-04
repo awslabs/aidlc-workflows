@@ -2742,7 +2742,7 @@ export function humanLifecycleNarration(
     // what Windows is about to remove rather than that it is gone, and where
     // to look if something stays.
     const removes = (what: string): string =>
-      data?.deferred ? `Windows removes ${what} a moment after this command ends.` : `Removed ${what}.`;
+      data?.deferred ? `Windows removes ${what} after this command ends.` : `Removed ${what}.`;
     const check = data?.deferred ? " If aidlc still runs after that, aidlc doctor shows what is left." : "";
     const warnings = data?.deferred && data.warnings?.length ? `${data.warnings.join("\n")}\n` : "";
     const machineState = "machine settings, update cache, pins, harness default, and release channel";
