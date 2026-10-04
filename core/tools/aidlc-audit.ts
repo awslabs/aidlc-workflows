@@ -498,6 +498,22 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Bolt, fork and worktree lifecycle: reviewAttemptWindow opens, completes
+  // and merges an attempt from BOLT_STARTED / BOLT_COMPLETED / AUDIT_MERGED,
+  // audit-merge reads AUDIT_FORKED and an existing AUDIT_MERGED, and the
+  // worktree frontier reads WORKTREE_*. Their owning tools (aidlc-bolt,
+  // aidlc-audit, aidlc-state, aidlc-worktree) emit them through the library, so
+  // a CLI-appended row would claim a merge or a fork that never ran.
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "AUDIT_FORKED",
+  "AUDIT_MERGED",
+  "STATE_FORKED",
+  "STATE_MERGED",
+  "WORKTREE_CREATED",
+  "WORKTREE_MERGED",
+  "WORKTREE_DISCARDED",
   // Commit-provenance anchors: `aidlc-attest.ts anchor` derives attribution
   // from receipts + evidence and deduplicates on (Commit, Repo). A CLI-forged
   // row would suppress the genuine derived anchor the same way a forged
@@ -1116,9 +1132,15 @@ function handleAppendRaw(
   );
   const safeHeading = redactProjectDirPrefix(heading, projectDir);
   for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
-    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
+    // The same optional bullet the field readers accept (exactAuditField).
+    const line = raw.replace(/^-[ \t]*/, "");
     if (!line.startsWith("**Event**:")) continue;
     const value = line.slice("**Event**:".length).trim();
+    // An empty label reads nothing on its own line; refuse it rather than
+    // leave a reader to find the value on the next one.
+    if (value === "") {
+      jsonError("append-raw refuses a body with an empty **Event**: line; put the value on the same line.");
+    }
     if (VALID_EVENT_TYPES.has(value)) {
       jsonError(
         `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
@@ -1243,7 +1265,7 @@ function validateMergeDelta(delta: string): void {
 function exactAuditField(block: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [...block.matchAll(
-    new RegExp(`^(?:-\\s*)?\\*\\*${escaped}\\*\\*:\\s*(.*)$`, "gm"),
+    new RegExp(`^(?:-[ \\t]*)?\\*\\*${escaped}\\*\\*:[ \\t]*(.*)$`, "gm"),
   )];
   return matches.length === 1 ? matches[0][1].trim() : null;
 }

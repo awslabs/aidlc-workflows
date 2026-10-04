@@ -63,8 +63,8 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
 // status or routing, record an authority-bearing receipt, or apply the
 // person's choice, and their verbs (state's are DELEGATED_STATE_MUTATIONS, the
 // utility's DELEGATED_UTILITY_VERBS). The kiro-ide row, whose calls carry no
-// agent identity, reads the scripts here and asks delegatedLifecycleCommand
-// about each verb to build each persona's own shell deny.
+// agent identity, builds each persona's shell deny from DELEGATE_ADMITTED_VERBS
+// below, filtered by these refusals.
 const DELEGATED_ORCHESTRATE_VERBS = ["next", "continue", "report", "park"];
 const DELEGATED_JUMP_VERBS = ["execute", "reopen"];
 // Team Unit coordination: claims, publication, the merge pin, the human merge
@@ -111,11 +111,55 @@ const DELEGATED_SCRIPT_VERBS: Readonly<Record<string, readonly string[]>> = {
   "aidlc-audit.ts": DELEGATED_AUDIT_VERBS.map((verb) => `audit-${verb}`),
   "aidlc-plugin.ts": ["sync"],
 };
+// Scripts no delegated agent runs at all: machine-config writes the person's
+// machine-wide settings, and no persona is given any of its commands.
+const DELEGATED_WHOLE_SCRIPTS = ["aidlc-machine-config.ts"];
 export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
   "aidlc-state.ts",
   "aidlc-utility.ts",
   ...Object.keys(DELEGATED_SCRIPT_VERBS),
 ];
+
+// What a delegated agent may run, by script and verb: reads, and the work a
+// persona is dispatched to do (worktree create, merge and discard for
+// pipeline-deploy and restore on the person's request, CodeKB snapshot and
+// publish for reverse engineering, sensor fire to rerun the author's check,
+// testing-posture brief, and document-input with its onboarding forms, which
+// Intent Capture and Requirements Analysis require when a project runs them as
+// a subagent). The kiro-ide row, whose calls carry no agent
+// identity, excludes only these from each persona's deny, and only where the
+// refusals above do not refuse them; a verb not listed here (a new one, or a
+// writer no persona is given, such as knowledge sync or runtime compile)
+// stays denied there. `select-plugins` is admitted as its bare query only.
+// The refusals above stay what the guard enforces where a call names its agent.
+export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>> = {
+  "aidlc-utility.ts": [
+    "help", "version", "status", "detect", "project-description", "codekb-path", "codekb-scope-diff",
+    "codekb-snapshot", "codekb-publish", "plugin-list", "plugin-validate", "config-get", "config-list",
+    "resolve-env-scope", "scope-table", "stage-table", "select-plugins", "document-input",
+  ],
+  "aidlc-state.ts": ["get", "count", "resume", "lookup"],
+  "aidlc-orchestrate.ts": ["wait", "team-board"],
+  "aidlc-jump.ts": ["resolve"],
+  "aidlc-unit.ts": ["merge-status", "status"],
+  "aidlc-log.ts": ["answers"],
+  "aidlc-learnings.ts": ["surface"],
+  "aidlc-runtime.ts": ["read", "summary"],
+  "aidlc-testing-posture.ts": ["resolve", "render", "verify", "reply", "brief"],
+  "aidlc-worktree.ts": ["create", "merge", "discard", "restore", "list", "verify", "info"],
+  "aidlc-audit.ts": ["history"],
+  "aidlc-plugin.ts": ["list"],
+  "aidlc-graph.ts": [
+    "artifacts", "producers", "consumers", "topo", "cycles", "scope", "validate-scope", "validate-grid", "ars",
+    "export",
+  ],
+  "aidlc-sensor.ts": ["list", "describe", "fire"],
+  "aidlc-validate.ts": ["outputs"],
+  "aidlc-review-brief.ts": ["review", "context", "summary"],
+  "aidlc-attest.ts": ["resolve"],
+  "aidlc-knowledge.ts": ["list", "show"],
+};
+
 // Bare, these print the current selection instead of changing it.
 const SELECTION_QUERIES = ["select-plugins"];
 const DELEGATED_UTILITY_VERBS = [
@@ -159,7 +203,7 @@ const DELEGATED_DISPATCHER_VERBS: Readonly<Record<string, readonly string[]>> = 
   orchestrate: DELEGATED_ORCHESTRATE_VERBS,
   intent: ["create"],
   jump: DELEGATED_JUMP_VERBS,
-  config: ["set"],
+  config: ["set", "global"],
   workspace: ["reclassify"],
   plugin: ["select", "sync"],
   unit: DELEGATED_UNIT_VERBS,
@@ -1070,6 +1114,7 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
       script = invocation.script;
       args = invocation.args;
     }
+    if (isOneOf(DELEGATED_WHOLE_SCRIPTS, script)) return script;
     if (isOneOf(DELEGATED_LIFECYCLE_SCRIPTS, script)) {
       const refused = scriptVerbCandidates(script, args).find((verb) =>
         (script === "aidlc-state.ts" && DELEGATED_STATE_MUTATIONS.has(verb)) ||

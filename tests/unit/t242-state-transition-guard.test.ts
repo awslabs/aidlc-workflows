@@ -15,12 +15,15 @@ import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
+  DELEGATE_ADMITTED_VERBS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
   directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { resolveAction, ROUTES } from "../../dist/claude/.claude/tools/aidlc.ts";
+import { UTILITY_COMMANDS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
@@ -383,6 +386,10 @@ describe("t242 state-transition ownership guard", () => {
       ["bun .claude/tools/aidlc-audit.ts audit-merge --slug u1", "aidlc-audit.ts audit-merge"],
       ["bun .claude/tools/aidlc-audit.ts --project-dir . audit-fork --slug u1", "aidlc-audit.ts audit-fork"],
       ["aidlc engine audit merge --slug u1", "aidlc engine audit merge"],
+      // Machine-wide settings: no delegate runs machine-config at all.
+      ["bun .claude/tools/aidlc-machine-config.ts global get offline", "aidlc-machine-config.ts"],
+      ["bun .claude/tools/aidlc-machine-config.ts global set offline on", "aidlc-machine-config.ts"],
+      ["aidlc system config global set offline on", "aidlc system config global"],
       ["bun .claude/tools/aidlc.ts engine audit fork --slug u1", "aidlc.ts engine audit fork"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
@@ -421,6 +428,34 @@ describe("t242 state-transition ownership guard", () => {
     for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
     expect(delegatedLifecycleCommand(nested)).not.toBeNull();
     expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
+    // What the kiro-ide personas are admitted is a real verb of its script and
+    // never one this guard refuses with arguments (select-plugins is admitted
+    // as its bare query only). A script the dispatcher routes is checked
+    // against the verbs it hands that script; the utility against its command
+    // list; the rest against a case or command-table entry in their source.
+    const routed = new Map<string, Set<string>>();
+    for (const route of ROUTES) {
+      for (const verb of route.verbs) {
+        const action = resolveAction([
+          ...(route.namespace === "engine" || route.namespace === "system" ? [route.namespace] : []),
+          ...(route.group === "top" ? [] : [route.group]),
+          ...verb.split(" "),
+        ]);
+        if (action.type !== "delegate") continue;
+        if (!routed.has(action.tool)) routed.set(action.tool, new Set());
+        routed.get(action.tool)?.add(action.args[0] ?? "");
+      }
+    }
+    for (const [file, verbs] of Object.entries(DELEGATE_ADMITTED_VERBS)) {
+      const source = readFileSync(join(REPO_ROOT, "core", "tools", file), "utf-8");
+      for (const verb of verbs) {
+        if (file === "aidlc-utility.ts") expect([...UTILITY_COMMANDS] as string[], verb).toContain(verb);
+        else if (routed.has(file)) expect([...(routed.get(file) ?? [])], `${file} ${verb}`).toContain(verb);
+        else expect(source, `${file} ${verb}`).toMatch(new RegExp(`case "${verb}"|^\\s+"?${verb}"?: `, "m"));
+        if (verb === "select-plugins") continue;
+        expect(delegatedLifecycleCommand(`bun .claude/tools/${file} ${verb} x`), `${file} ${verb}`).toBeNull();
+      }
+    }
     // Reads stay open to a delegate.
     for (const read of ["get", "count", "lookup", "resume"]) {
       expect(delegatedLifecycleCommand(`bun .claude/tools/aidlc-state.ts ${read} x`), read).toBeNull();
@@ -443,7 +478,7 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc engine worktree restore --slug u1",
       "aidlc engine worktree info --slug u1",
       "bun .claude/tools/aidlc-audit.ts history",
-      "aidlc engine audit append --type PRACTICES_SECTION_EMPTY",
+      "aidlc engine audit append PRACTICES_SECTION_EMPTY --field Details=x",
       "aidlc engine plugin select --no-color",
     ]) {
       expect(delegatedLifecycleCommand(read), read).toBeNull();

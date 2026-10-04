@@ -1408,10 +1408,15 @@ of its verbs anywhere), and an `aidlc` command past the dispatcher's global
 flags (`--json`, `--quiet`, ...), which the dispatcher drops before routing. Delegated agents retain ordinary shell
 access for artifact work, builds, validation, and read-only state inspection;
 they return their result to the main conductor, which alone owns workflow
-lifecycle and gates. Kiro IDE and Kiro CLI v3 supply no such identity, so the
-kiro-ide row projects the same lists into each delegated persona's own shell
-deny instead (`harness/kiro-ide/delegate-shell-deny.ts`); that rule does not
-follow the fence switch.
+lifecycle and gates. A delegate never runs `aidlc-machine-config.ts` (or
+`aidlc system config global`), which writes the person's machine-wide settings.
+Kiro IDE and Kiro CLI v3 supply no such identity, so the kiro-ide row gives each
+delegated persona its own shell deny instead
+(`harness/kiro-ide/delegate-shell-deny.ts`): it denies the conductor's command
+allow and excludes only the commands the guard admits a delegate
+(`DELEGATE_ADMITTED_VERBS` and `DELEGATE_ADMITTED_FORMS`: reads and the work a
+persona is dispatched to do) and does not refuse, so a verb no one classified
+stays denied there. That rule does not follow the fence switch.
 
 The command-position parser recursively normalizes recognized execution
 wrappers (`command`, `exec`, `time`, `env`, `nice`, and `nohup`) before applying

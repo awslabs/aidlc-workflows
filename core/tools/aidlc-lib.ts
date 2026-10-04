@@ -30534,11 +30534,13 @@ export function findAllEvents(
 ): { timestamp: string; block: string }[] {
   const results: { timestamp: string; block: string; pos: number }[] = [];
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const eventRegex = new RegExp(`^\\*\\*Event\\*\\*:\\s*${escapeRegex(event)}\\s*$`, "m");
+  // A field's value sits on its own line: `[ \t]*`, never `\s*`, which would
+  // read a bare `**Event**:` label's value from the next line.
+  const eventRegex = new RegExp(`^\\*\\*Event\\*\\*:[ \\t]*${escapeRegex(event)}[ \\t]*$`, "m");
   const slugRegex = slug
-    ? new RegExp(`^\\*\\*Bolt slug\\*\\*:\\s*${escapeRegex(slug)}\\s*$`, "m")
+    ? new RegExp(`^\\*\\*Bolt slug\\*\\*:[ \\t]*${escapeRegex(slug)}[ \\t]*$`, "m")
     : null;
-  const tsRegex = /^\*\*Timestamp\*\*:\s*(\S+)/m;
+  const tsRegex = /^\*\*Timestamp\*\*:[ \t]*(\S+)/m;
   let pos = 0;
   for (const block of blocks) {
     if (!eventRegex.test(block)) {

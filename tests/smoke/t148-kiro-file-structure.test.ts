@@ -463,6 +463,22 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-audit.ts audit-merge --slug u1",
           "bun .kiro/tools/aidlc-audit.ts audit-fork --slug u1",
           "bun .kiro/tools/aidlc-utility.ts select-plugins test-pro --no-color",
+          "bun .kiro/tools/aidlc-machine-config.ts global get offline",
+          "bun .kiro/tools/aidlc-machine-config.ts global set offline on",
+        ],
+        // The guard does not refuse these, but no persona is admitted them: a
+        // verb the tool may gain later, writers no persona is given, and an
+        // audit append other than pipeline-deploy's diagnostic.
+        unadmitted: [
+          "bun .kiro/tools/aidlc-graph.ts future-authority x",
+          "bun .kiro/tools/aidlc-knowledge.ts summarize x",
+          "bun .kiro/tools/aidlc-runtime.ts compile",
+          "bun .kiro/tools/aidlc-utility.ts plugin-build test-pro",
+          "bun .kiro/tools/aidlc-utility.ts doctor",
+          "bun .kiro/tools/aidlc-init.ts --yes",
+          "bun .kiro/tools/aidlc-audit.ts append ERROR_LOGGED --field Details=x",
+          "bun .kiro/tools/aidlc-audit.ts append PRACTICES_SECTION_EMPTY --field Details=x",
+          "bun .kiro/tools/aidlc-audit.ts append-raw Note body",
         ],
         foreign: "bun .kiro/tools/aidlc-log.ts answers --stage x && rm -rf docs",
         hostOnly: ["bun .kiro/tools/aidlc-sensor-linter.ts --stage code-generation"],
@@ -485,11 +501,11 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-utility.ts intent --all --json",
           "bun .kiro/tools/aidlc-unit.ts merge-status u1",
           "bun .kiro/tools/aidlc-worktree.ts create --slug u1 --base main",
+          "bun .kiro/tools/aidlc-utility.ts document-input --onboard --include-ignored",
           "bun .kiro/tools/aidlc-worktree.ts info --slug u1",
           "bun .kiro/tools/aidlc-worktree.ts discard --slug u1",
           "bun .kiro/tools/aidlc-worktree.ts restore --slug u1",
           "bun .kiro/tools/aidlc-audit.ts history",
-          "bun .kiro/tools/aidlc-audit.ts append --type PRACTICES_SECTION_EMPTY",
           "bun .kiro/tools/aidlc-utility.ts select-plugins --no-color",
           "bun .kiro/tools/aidlc-utility.ts intent --quiet",
         ],
@@ -531,6 +547,16 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine audit fork --slug u1",
           "aidlc engine plugin select --no-color test-pro",
         ],
+        unadmitted: [
+          "aidlc engine graph future-authority x",
+          "aidlc engine knowledge summarize x",
+          "aidlc engine runtime compile",
+          "aidlc engine plugin build test-pro",
+          "aidlc engine gen runners",
+          "aidlc engine scope detect",
+          "aidlc engine audit append ERROR_LOGGED --field Details=x",
+          "aidlc engine audit append PRACTICES_SECTION_EMPTY --field Details=x",
+        ],
         foreign: "aidlc engine log answers --stage x && rm -rf docs",
         hostOnly: [
           "aidlc engine hook record-human-turn",
@@ -551,17 +577,19 @@ describe("t148 dist/kiro file structure", () => {
           "aidlc engine plugin select --json",
           "aidlc engine testing-posture brief --unit u1",
           "aidlc engine worktree create --slug u1 --base main",
+          "aidlc engine workspace document-input --onboard",
           "aidlc engine worktree info --slug u1",
           "aidlc engine worktree discard --slug u1",
           "aidlc engine worktree restore --slug u1",
           "aidlc engine audit history",
-          "aidlc engine audit append --type PRACTICES_SECTION_EMPTY",
           "aidlc engine plugin select --no-color",
+          "aidlc engine gen stage-table",
         ],
       },
     ];
-    for (const { tree, allow, refused, foreign, hostOnly, allowed } of channels) {
+    for (const { tree, allow, refused, unadmitted, foreign, hostOnly, allowed } of channels) {
       for (const command of refused) expect(delegatedLifecycleCommand(command), command).not.toBeNull();
+      for (const command of unadmitted) expect(delegatedLifecycleCommand(command), command).toBeNull();
       for (const command of allowed) expect(delegatedLifecycleCommand(command), command).toBeNull();
       const agents = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
       expect(frontmatter(join(agents, "aidlc.md")), `${tree} conductor`).toContain(`        - "${allow}"`);
@@ -572,6 +600,8 @@ describe("t148 dist/kiro file structure", () => {
         // Host-only routing surfaces (hooks, the adapter, sensors) stay denied
         // though no lifecycle rule names them.
         for (const command of hostOnly) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
+        // A command the guard lets through stays denied unless it is admitted.
+        for (const command of unadmitted) expect(denies(rule, command), `${tree} ${file}: ${command}`).toBe(true);
         // An allowed command with a foreign command appended still asks.
         expect(runsUnprompted(rule, allow, foreign), `${tree} ${file}: ${foreign}`).toBe(false);
         for (const command of allowed) {

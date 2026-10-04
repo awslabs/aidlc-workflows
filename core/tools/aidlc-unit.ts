@@ -574,9 +574,9 @@ function skeletonCompletedAtOid(projectDir: string, oid: string): boolean {
     const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
     if (!shown.ok) continue;
     for (const block of shown.stdout.split(/\n---\n/)) {
-      const event = /^\*\*Event\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim();
+      const event = /^\*\*Event\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim();
       const names =
-        /^\*\*Bolt names\*\*:\s*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
+        /^\*\*Bolt names\*\*:[ \t]*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
       if (!event) continue;
       events.push({
         event,

@@ -3841,6 +3841,10 @@
         {
           "file": "tests/integration/t164-shard-ordering-and-lock-bucket.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
