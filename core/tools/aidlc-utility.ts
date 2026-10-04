@@ -92,6 +92,7 @@ import {
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
+  cursorTrustedShell,
 } from "./aidlc-command.ts";
 import {
   capInlineContextPaths,
@@ -3709,7 +3710,7 @@ export async function collectDoctorReport(
           hashes.length > 0 &&
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
-        nativePermission = commands.includes(`Shell(${trustedCommand("*")})`);
+        nativePermission = commands.includes(cursorTrustedShell());
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
@@ -4288,7 +4289,7 @@ export async function collectDoctorReport(
     // standing + phase method rule pointers are all inside .cursor/.
     for (const [file, what] of [
       ["hooks.json", "hook wiring"],
-      ["cli.json", "Shell(bun) permission pre-approval"],
+      ["cli.json", "AI-DLC command permission pre-approval"],
       ["rules/aidlc.mdc", "standing method rule (alwaysApply read instruction)"],
       ["rules/aidlc-phase-ideation.mdc", "Ideation phase rule (agent-decided read instruction)"],
       ["rules/aidlc-phase-inception.mdc", "Inception phase rule (agent-decided read instruction)"],

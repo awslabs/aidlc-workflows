@@ -204,9 +204,10 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   `/aidlc --status`) and the progress lines at gates.
 - **Tab autocomplete is untouched** by this install - it rides Cursor's own
   models regardless of configuration.
-- **Permissions**: `.cursor/cli.json` pre-approves `Shell(bun)` only (a
-  project-level `cli.json` carries permissions only); every other shell command
-  follows your Cursor approval settings.
+- **Permissions**: `.cursor/cli.json` pre-approves only AI-DLC's own workflow
+  commands, its engine commands and its `aidlc-*.ts` tools (a project-level
+  `cli.json` carries permissions only); every other shell command follows your
+  Cursor approval settings.
 - **MCP servers**: none ship; configure your own under `.cursor/mcp.json` if
   needed.
 - **Headless `agent -p` runs cannot pass approval gates.** The human-presence
@@ -231,7 +232,7 @@ agent -p "/aidlc --status" --output-format text --trust   # /aidlc --status thro
 ```
 
 The doctor's Cursor-specific checks: the hook wiring at `.cursor/hooks.json`,
-the `Shell(bun)` permission pre-approval at `.cursor/cli.json`, the standing
+the permission pre-approval for AI-DLC's commands at `.cursor/cli.json`, the standing
 rule at `.cursor/rules/aidlc.mdc`, all four phase-rule pointers, and whether
 the project is in a git repository.
 

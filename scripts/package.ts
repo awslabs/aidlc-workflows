@@ -89,6 +89,7 @@ import {
   writeMarkdownAgentSurface,
 } from "../core/tools/aidlc-model-policy.ts";
 import {
+  cursorTrustedShell,
   scanNamespaceInvocations,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_ROUTE_NAMESPACE,
@@ -1092,9 +1093,11 @@ function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): vo
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[cursor] cli.json has no permissions.allow list");
+  // The copy channel's bun entries name its tool paths; native runs the
+  // aidlc command, so they give way to its one trusted-prefix entry.
   value.permissions!.allow = [
-    ...allow.filter((entry) => entry !== "Shell(bun)"),
-    `Shell(${trustedCommand("*")})`,
+    ...allow.filter((entry) => typeof entry !== "string" || !entry.startsWith("Shell(bun")),
+    cursorTrustedShell(),
   ];
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }

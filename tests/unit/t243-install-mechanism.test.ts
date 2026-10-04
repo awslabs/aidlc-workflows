@@ -75,6 +75,7 @@ import {
   TRUSTED_COMMAND_TOKENS,
   UNTRUSTED_ROUTE_NAMESPACES,
   trustedCommand,
+  cursorTrustedShell,
 } from "../../core/tools/aidlc-command.ts";
 import {
   acquireRelease,
@@ -7922,9 +7923,10 @@ describe("t243 projection channel", () => {
     const cursorCli = JSON.parse(
       readFileSync(join(CURSOR_RELEASE, ".cursor", "cli.json"), "utf-8"),
     ) as { permissions: { allow: string[] } };
-    expect(cursorCli.permissions.allow).toEqual([
-      `Shell(${trustedCommand("*")})`,
-    ]);
+    // Cursor reads the first token as the command base and the rest as an
+    // argument glob.
+    expect(cursorCli.permissions.allow).toEqual(["Shell(aidlc:engine *)"]);
+    expect(cursorCli.permissions.allow).toEqual([cursorTrustedShell()]);
     expect(cursorCli.permissions.allow).not.toContain("Shell(bun)");
     const cursorHooks = readFileSync(
       join(CURSOR_RELEASE, ".cursor", "hooks.json"),

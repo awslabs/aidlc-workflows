@@ -219,13 +219,17 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
-  test("6: cli.json pre-approves exactly Shell(bun) at the project level", () => {
+  test("6: cli.json pre-approves only AI-DLC's own workflow commands at the project level", () => {
     const cli = JSON.parse(readFileSync(join(ENGINE, "cli.json"), "utf-8")) as {
       permissions?: { allow?: string[]; deny?: string[] };
     };
     // Project-level cli.json is permissions-only (Cursor's documented
-    // contract); the shipped allowlist is the engine runner and nothing else.
-    expect(cli.permissions?.allow).toEqual(["Shell(bun)"]);
+    // contract); the shipped allowlist is the dispatcher's engine namespace and
+    // AI-DLC's own tool files, nothing else bun can run.
+    expect(cli.permissions?.allow).toEqual([
+      "Shell(bun:.cursor/tools/aidlc.ts engine *)",
+      "Shell(bun:.cursor/tools/aidlc-*)",
+    ]);
     expect(cli.permissions?.deny).toEqual([]);
   });
 
@@ -261,7 +265,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(r.stdout).toContain("ok    aidlc-cursor-adapter.ts present");
       expect(r.stdout).toContain("ok    hooks.json present (hook wiring)");
-      expect(r.stdout).toContain("ok    cli.json present (Shell(bun) permission pre-approval)");
+      expect(r.stdout).toContain("ok    cli.json present (AI-DLC command permission pre-approval)");
       expect(r.stdout).toContain(
         "ok    rules/aidlc.mdc present (standing method rule (alwaysApply read instruction))",
       );
@@ -291,7 +295,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(
         join(cursorDir, "cli.json"),
         `${JSON.stringify({
-          permissions: { allow: ["Shell(git)"], deny: ["Shell(rm)"] },
+          // Shell(bun) is the entry earlier releases shipped; refresh drops it.
+          permissions: { allow: ["Shell(git)", "Shell(bun)"], deny: ["Shell(rm)"] },
           projectSetting: true,
         }, null, 2)}\n`,
       );
@@ -323,7 +328,11 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         projectSetting: boolean;
       };
       expect(cli.projectSetting).toBe(true);
-      expect(cli.permissions.allow).toEqual(["Shell(git)", "Shell(bun)"]);
+      expect(cli.permissions.allow).toEqual([
+        "Shell(git)",
+        "Shell(bun:.cursor/tools/aidlc.ts engine *)",
+        "Shell(bun:.cursor/tools/aidlc-*)",
+      ]);
       expect(cli.permissions.deny).toEqual(["Shell(rm)"]);
       expect(readFileSync(join(cursorDir, ".gitignore"), "utf-8")).toBe(
         "project-cursor-cache\n",
