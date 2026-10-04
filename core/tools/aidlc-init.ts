@@ -2613,10 +2613,18 @@ async function runSetupWalk(
     }
     return;
   }
-  const answer = promptYesDefault(
-    `\n  Fix the ${flagged.length} sections that need you now?`,
-    true,
-  );
+  let answer: boolean;
+  try {
+    answer = promptYesDefault(
+      `\n  Fix the ${flagged.length} sections that need you now?`,
+      true,
+    );
+  } catch (error) {
+    if (!(error instanceof FirstRunCancelled)) throw error;
+    process.stdout.write(noAnswerLines(error, projectDir));
+    process.exitCode = EXIT.usage;
+    return;
+  }
   if (!answer) {
     renderSetupLedger(initialLedger);
     return;
@@ -5927,13 +5935,32 @@ type FirstRunChoices = {
   opencodeDefault: boolean;
 };
 
-class FirstRunCancelled extends Error {}
+// A question config asked got no answer: the person cancelled it, or the
+// input closed (EOF) so no answer can come.
+class FirstRunCancelled extends Error {
+  constructor(readonly inputClosed = false) {
+    super(inputClosed ? "the input closed before the question was answered" : "the question was cancelled");
+  }
+}
 
 function firstRunPromptValue(value: string | null): string {
-  if (value === null) throw new FirstRunCancelled();
+  if (value === null) throw new FirstRunCancelled(true);
   const normalized = value.trim();
   if (normalized.includes("\u0003")) throw new FirstRunCancelled();
   return normalized;
+}
+
+// What the person reads when a question got no answer: nothing changed, and,
+// when no answer could come, what to run instead (the command that goes ahead
+// without questions, when there is one, or this one again where they can
+// answer).
+function noAnswerLines(error: FirstRunCancelled, projectDir: string, withoutQuestions?: string): string {
+  if (!error.inputClosed) return "\n  Nothing written.\n";
+  return `\n  Nothing written: this needs an answer, and the input is closed. ${
+    withoutQuestions
+      ? `To go ahead without questions, run ${withoutQuestions}.`
+      : `Run ${configCommand(projectTarget(projectDir))} again where you can answer.`
+  }\n`;
 }
 
 // First-run rows are a lead (the number and label, or the spaces under them)
@@ -7069,7 +7096,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   return true;
   } catch (error) {
     if (error instanceof FirstRunCancelled) {
-      process.stdout.write("\n  Nothing written.\n");
+      process.stdout.write(noAnswerLines(error, projectDir, configCommand(`--yes${projectTarget(projectDir)}`)));
       process.exitCode = EXIT.usage;
       return true;
     }
@@ -10155,6 +10182,12 @@ export async function main(
       );
     }
   } catch (error) {
+    // A question with no answer is not a failure to report as one.
+    if (error instanceof FirstRunCancelled) {
+      process.stdout.write(noAnswerLines(error, projectDir));
+      process.exitCode = EXIT.usage;
+      return;
+    }
     const rawMessage = error instanceof Error ? error.message : String(error);
     const copyChannel = aidlcInvocation() !== "aidlc";
     // A pin refusing the files named by --from wants the pinned release itself,

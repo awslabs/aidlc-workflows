@@ -451,6 +451,21 @@ describe("t304 copied projection configuration", () => {
     expect(harness.trust.reviewed).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A setup question with its input closed gets no answer: config says so and
+  // how to run without questions, never an empty error.
+  test("a setup question with no possible answer says so plainly", () => {
+    const project = readmeCopyProject();
+    const result = runCopied(project, ["config"], {
+      input: "",
+      env: { AIDLC_TEST_CONFIG_TTY: "1" },
+    });
+    expect(result.stdout).toMatch(/Fix the \d+ sections? that needs? you now\? \[Y\/n\]:/);
+    expect(result.stdout).toContain(
+      "Nothing written: this needs an answer, and the input is closed. Run bun .claude/tools/aidlc.ts config again where you can answer.",
+    );
+    expect(result.stdout + result.stderr).not.toContain('{"error"');
+  });
+
   test("bare config announces and uses the recognized copied-projection walk", () => {
     const project = readmeCopyProject();
     const result = runCopied(project, ["config"], {
