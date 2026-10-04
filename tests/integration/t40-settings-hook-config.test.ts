@@ -17,7 +17,7 @@
 //   hooks.SessionStart -> one group, matcher "", one native hook command
 //   :18-21  statusLine.type == "command",
 //           statusLine.command routes through `aidlc statusline`
-//   :5-17   permissions.allow — exactly 8 entries, including `Bash(aidlc *)`
+//   permissions.allow: exactly 5 entries, including `Edit(/**)` and the source tool pattern
 // AND (dist/claude/.claude/settings.local.json.example):
 //   the personal-override stub must be valid JSON (it ships as a copy-to
 //   template; a malformed example would silently break the documented
@@ -36,7 +36,7 @@
 //   .sh test 2 (SessionStart routes to the session hook)    -> T2
 //   .sh test 3 (statusLine.type == "command")               -> T3
 //   .sh test 4 (statusLine routes through native aidlc)     -> T4
-//   .sh test 5 (permissions.allow has exactly 8 tools)      -> T5
+//   .sh test 5 (permissions.allow has exactly 5 entries)    -> T5
 //   .sh test 6 (settings.local.json.example is valid JSON)  -> T6
 
 import { describe, expect, test } from "bun:test";
@@ -94,9 +94,10 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(readSettings().statusLine?.command).toBe(`${SOURCE_INVOKE} engine statusline`);
   });
 
-  test("T5: permissions.allow has exactly 9 entries incl. the source tool pattern and date [.sh test 5]", () => {
+  test("T5: permissions.allow has exactly 5 entries incl. project edits, the source tool pattern and date [.sh test 5]", () => {
     const allow = readSettings().permissions?.allow ?? [];
-    expect(allow.length).toBe(9);
+    expect(allow.length).toBe(5);
+    expect(allow).toContain("Edit(/**)");
     expect(allow).toContain("Bash(bun .claude/tools/*)");
     expect(allow).toContain("Bash(date -u *)");
     expect(allow).not.toContain("Bash");

@@ -2289,6 +2289,7 @@ This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` comma
 bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
 bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <timestamp.md>
 bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths src/payments/,src/billing/
+bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --check <timestamp.md>
 ```
 
 The reverse-engineering rerun guard. The codekb store is space-level and
@@ -2312,6 +2313,11 @@ new knowledge into it cumulatively, so the stage checks first:
 - **Mint mode** (`--mint --paths <a,b,...>`) prints the fingerprint the
   architect pastes into the scope block at synthesis time (`unknown` outside
   a git work tree or when a pathspec is invalid).
+- **Check mode** (`--check <timestamp.md>`) reads a timestamp written for
+  publication, such as the staged candidate, and prints `VALID` with what its
+  scope block records and whether its fingerprint matches the source now
+  (`current`, `stale`, or `unknown`), or `INVALID` with the parser's reason. It
+  needs no store, so a first scan can check its candidate before publishing.
 
 Add `--json` for the structured shape. Always exits 0 with the verdict in the
 output (except usage errors); writes nothing, no audit event. The fingerprint

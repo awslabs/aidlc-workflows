@@ -344,6 +344,14 @@ its output verbatim:
    {{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed paths>
    ```
 
+Then have the architect check the staged timestamp and fix the block until it
+prints `VALID`. If it says the fingerprint does not match the source now, mint
+it again; an unknown fingerprint (outside git) is left for publication to check:
+
+   ```
+   {{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <record>/.aidlc-engine/codekb-stage-<repo>/reverse-engineering-timestamp.md
+   ```
+
 At Minimal depth, all nine artifacts and every required section above still
 exist. Keep them concise by recording each inventory or finding once in its
 owning artifact and cross-referencing it elsewhere instead of repeating the

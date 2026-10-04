@@ -1763,16 +1763,15 @@ A stage reported as skipped emits `STAGE_SKIPPED` instead of
 
 The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Code tools to avoid per-invocation permission prompts:
 
-| Claude Code Tool | AI-DLC Usage |
-|------------------|-------------|
-| `Read` | Reading stage files, knowledge files, state files, project source code |
-| `Edit` | Modifying existing artifacts, updating state files |
-| `Write` | Creating new artifacts, scaffolding directories (never the `audit/` shards, which the guards refuse) |
-| `Bash` | Running build tools, test commands, timestamps, package managers |
-| `Glob` | Finding files by pattern during workspace detection and reverse engineering |
-| `Grep` | Searching codebases for patterns, dependencies, and API endpoints |
+| Allow entry | AI-DLC Usage |
+|-------------|-------------|
+| `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
+| `Bash(bun .claude/tools/*)` | AI-DLC's own commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(date -u *)` | Timestamps |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
+
+Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does.
 
 `AskUserQuestion` is always permitted by default and does not require explicit approval.
 
@@ -1826,7 +1825,7 @@ path for a framework command.
 | `project-description` | Direct-only, read-only query used by Intent Capture and Requirements Analysis. Marked records decode the exact `project-description.json` string; only unmarked pre-2.6.115 records fall back to `aidlc-state.md#Project`. When the request carries a pasted document it also returns `directions` (the text outside the span from the first `<document>` to the last `</document>`), `document` (that span), and `document_split` (one line saying how it was split). | - |
 | `codekb-snapshot --repo <name> --paths <csv> [--json]` | Direct-only pre-scan snapshot of the shared store generation and source fingerprint. There is no `/aidlc codekb-snapshot` route. | — |
 | `codekb-publish --repo <name> --staged <dir> --paths <csv> --expect-store <generation> --expect-source <fingerprint> [--json]` | Direct-only guarded publication of a complete nine-artifact CodeKB candidate. Refuses stale source or store generations. There is no `/aidlc codekb-publish` route. | — |
-| `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | — |
+| `codekb-scope-diff [--repo <name>] [--compare <timestamp.md> \| --check <timestamp.md> \| --mint --paths <csv>] [--json]` | Direct-only CodeKB status, scope comparison, candidate check, and source-fingerprint minting query. There is no `/aidlc codekb-scope-diff` route. | none |
 | `reclassify --project-type <greenfield\|brownfield> [--intent <slug>] [--space <name>] [--then-rerun]` | Behind `aidlc engine workspace reclassify` (a mid-workflow `/aidlc --project-type`, plain words, or an answer to the "this folder now has code" question). Rescans the folder, sets `Project Type` and `Project Type Source: you`, refreshes Workspace State, records sibling repos when none were recorded and Construction has not started, and puts back (existing code) or skips (new project) Reverse Engineering. One write under the workspace lock, then the work's own lock, audited first; selectors must match the name grammars. Prints one directive: `done` with `workflow_continues`, or with `--then-rerun` a `print` naming the same `next` again. The person's reply is kept for the chat and said with the next step the agent speaks from (no chat: it rides this directive's `narration`). | `WORKSPACE_RECLASSIFIED` |
 | `select-plugins [names]` | Query/update behind `aidlc engine plugin select`; stages all selected surfaces and commits their diff through the transaction engine. | `PLUGIN_SELECTION_CHANGED` in set mode |
 | `scope-change` | Re-plan which stages execute and apply any of the eleven setting flags in one atomic update. A same-scope request still applies settings. Scope-owned Guard Policy/ceremony rows follow new defaults without asking; human overrides and absent legacy rows are preserved. Explicit fence or policy lowering follows the same no-op or fixture/harness-launch presence-bypass rule as `config-change`. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. A real scope change replaces any composed plan with the new scope's grid and drops the `Plan` field. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
