@@ -366,6 +366,26 @@ describe("t331 preview release channel", () => {
     expect(narrated).not.toContain("This machine follows");
   });
 
+  // The same narration on every system, Windows included: a one-run move to
+  // the other channel says which channel the machine follows, never a switch.
+  test("a one-run move to the other channel says the machine still follows its own", () => {
+    const narrated = humanLifecycleNarration("update", ["update", "--channel", PREVIEW_CHANNEL], AIDLC_VERSION, {
+      ok: true,
+      code: 0,
+      status: "ok",
+      message: "",
+      data: {
+        version: PREVIEW_2,
+        channel: PREVIEW_CHANNEL,
+        channelSwitch: { from: STABLE_CHANNEL, to: PREVIEW_CHANNEL },
+        follows: STABLE_CHANNEL,
+      },
+    } as never) ?? "";
+    expect(narrated).toContain(`This machine follows ${STABLE_CHANNEL} releases.`);
+    expect(narrated).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${PREVIEW_2}.`);
+    expect(narrated).not.toContain("Switched release channel");
+  });
+
   // An update goes to the channel the machine follows, which can be older
   // than a preview it runs, so doctor names both ways and lets the person pick.
   test("doctor's fix for a binary of the other channel names going to that channel and keeping this one", () => {
