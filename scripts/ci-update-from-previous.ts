@@ -14,9 +14,9 @@
 //
 // Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
@@ -85,13 +85,23 @@ function gitBash(): string {
 function main(argv: string[]): number {
   const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
   const previous = option("--previous")?.replace(/^v/, "");
-  const candidate = option("--candidate");
+  const given = option("--candidate");
+  // The update runs from a scratch folder, so a relative path must not reach it.
+  const candidate = given ? resolve(given) : undefined;
   if (!previous || !candidate || !existsSync(join(candidate, "version.json"))) {
     console.error("Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>");
     return 2;
   }
   const target = (JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")) as { version?: string }).version ?? "";
   const root = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "aidlc-update-from-previous-"));
+  try {
+    return check(previous, candidate, target, root);
+  } finally {
+    if (process.env.AIDLC_KEEP_TEMP !== "1") rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+function check(previous: string, candidate: string, target: string, root: string): number {
   const machine = join(root, "machine");
   const bin = join(machine, "bin");
   const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
@@ -181,11 +191,13 @@ function main(argv: string[]): number {
     return commands.length;
   };
   for (const { harness, project } of projects) {
+    const known = failures.length;
     const count = hooks(harness, project, `before the refresh`);
     aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--yes", "--quiet"]);
     hooks(harness, project, "after the refresh");
     aidlc(`aidlc doctor for ${harness}`, ["doctor", "--project-dir", project, "--quiet"]);
-    console.log(`${harness}: ${count} hook command(s) ran before and after the refresh; doctor ran`);
+    const result = failures.length === known ? "all passed" : `${failures.length - known} failed`;
+    console.log(`${harness}: ${count} hook command(s) before and after the refresh, the refresh, and doctor: ${result}`);
   }
   return report(failures, `Updated from ${previous} to ${target}; every harness's hooks, refresh and doctor work.`);
 }
