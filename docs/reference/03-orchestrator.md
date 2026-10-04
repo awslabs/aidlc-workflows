@@ -420,9 +420,10 @@ speaking: the `print` that creates the work ("Setting up a poc workflow for
 this ... The folder has no code yet, so I'm starting this as a new project
 ..."), and the `workspace reclassify` reply. The agent runs those and goes on,
 then speaks only at a later step, so a line left there was lost. A request
-typed with its scope, or typed straight to compose, never passed an ask, so its
-creation line also says how a pasted document was split (the `document_split`
-line); the stages that read the document do not say it again. A plan composed
+typed with its scope never passed an ask, so its creation line also says how a
+pasted document was split (the `document_split` line); one typed straight to
+compose hears it with the composer's start line, before the plan is offered.
+The stages that read the document do not say it again. A plan composed
 for the piece of work is named "the plan you approved" in these lines, never by
 the scope it was built on. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
@@ -434,7 +435,7 @@ belong to the person's current turn: a newer prompt on the work, or fifteen
 minutes with no prompt hook, drops them, so a line never surfaces later or in
 another chat. A line a tool gives inside a stage (`document-input`'s
 `selection_note` and `onboard_note`) is said by the stage as soon as it gets
-it, next to the untrusted-path notice. Without a chat to keep them for, a line
+it, on a **SAY:** line in the stage file, next to the untrusted-path notice. Without a chat to keep them for, a line
 stays on its own step.
 A line that would push a step over its size limit waits for the next one.
 Every skill says a `print`'s or a `run-stage`'s `narration` first (on a

@@ -3392,12 +3392,9 @@ function createPrintDirective(
   directive.narration = clause
     ? `Setting up ${plan} for this: ${clause}.`
     : `Setting up ${plan} for this.`;
-  // A request typed with its scope was never shown on an ask, nor one typed
-  // straight to compose, so the line on how a pasted document was split is
-  // said here.
-  if (description && (!flags.request || readQuestion(projectDir, flags.request)?.splitUnsaid)) {
-    directive.narration += documentSplitSentence(description);
-  }
+  // A request typed with its scope was never shown on an ask, so the line on
+  // how a pasted document was split is said here.
+  if (description && !flags.request) directive.narration += documentSplitSentence(description);
   // Say it while the person can still correct it: an empty folder starts as a
   // new project, which drops Reverse Engineering from the plan.
   if (!flags.projectType && newProjectDropsReverseEngineering(scope, projectDir, flags.planChanges)) {
@@ -6646,20 +6643,21 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     }
     // Only a front composition continues into creation, which needs the
     // request by id; an in-flight reshape carries its text in the dispatch.
-    // A request typed straight to compose passed no question, so the person
-    // hears how its pasted document was split when the work is created.
+    // A request typed straight to compose passed no question, so how its
+    // pasted document was split is said here, before the plan is offered.
+    let splitSaid = "";
     if (flags.intent && !flags.request && !inFlight) {
-      flags.request = saveQuestion(
-        pd, flags.intent, flags.scope ?? "", "front", undefined, false, undefined, undefined, undefined, undefined,
-        authoritativeProjectDescription(flags.intent).documentSplit !== undefined,
-      ).id;
+      splitSaid = documentSplitSentence(flags.intent);
+      flags.request = saveQuestion(pd, flags.intent, flags.scope ?? "").id;
     } else if (!flags.request && !inFlight) {
       // A report-only or task-less composition is described only on approval,
       // and its approval names this entry, so words said at its gate (plan
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
-    emit(composeDispatchDirective(flags, inFlight));
+    const dispatch = composeDispatchDirective(flags, inFlight);
+    if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
+    emit(dispatch);
     return;
   }
 

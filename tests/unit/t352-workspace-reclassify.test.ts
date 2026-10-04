@@ -896,15 +896,16 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(nextIn(proj).narration ?? "")).not.toContain("the only file in the project");
   });
 
-  // The agent dispatches the composer in its own words, so the line on how the
-  // request was split rides the creation, said as the first stage starts.
-  test("a request typed straight to compose hears how its pasted document was split when the work starts", () => {
+  // The person hears how the request was split before the plan is offered,
+  // with the step that starts the composer, and not again when the work starts.
+  test("a request typed straight to compose hears how its pasted document was split, once", () => {
     const proj = project();
     const split =
       "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.";
     const dispatch = nextIn(proj, ["compose", "plan this for our office <document>Staff vote on lunch.</document>"]);
     expect(dispatch.kind).toBe("print");
-    expect(String(dispatch.narration ?? "")).not.toContain(split);
+    expect(String(dispatch.narration)).toContain(split);
+    expect(String(dispatch.narration)).not.toContain("Staff vote on lunch");
     const questions = join(proj, "aidlc", ".aidlc-sessions", "questions");
     const [request] = readdirSync(questions).map((name) => name.replace(/\.json$/, ""));
     const creation = nextIn(proj, ["--scope", "poc", "--request", request]);
@@ -916,8 +917,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = String(nextIn(proj).narration);
     expect(said).toStartWith("Setting up a poc workflow for this");
-    expect(said).toContain(split);
-    expect(said).not.toContain("Staff vote on lunch");
+    expect(said).not.toContain(split);
   });
 
   // The person approved a plan composed for this work; the scope it is built

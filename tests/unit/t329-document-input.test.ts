@@ -162,7 +162,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "already heard how the request was split (the `document_split` line) when the work started, so do not say it again.",
         "Never split the request yourself or ask the user to delimit it again.",
         "Never search for the file yourself or choose among matches for the user: `document-input` looks the name up.",
-        "returns a `selection_note`: tell the user that line.",
+        'returns a `selection_note`: **SAY:** "[the `selection_note`, word for word]".',
         "returns `matches` instead: offer them as a numbered pick",
       ]) {
         expect(flat, `${file}: ${phrase}`).toContain(phrase);
@@ -179,6 +179,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "tell the user its `document_split` line",
         // The stage says which file it read when it gets it, never later.
         "notes_said_by_aidlc",
+        "returns a `selection_note`: tell the user that line.",
       ]) {
         expect(flat, `${file}: ${retired}`).not.toContain(retired);
       }
@@ -207,7 +208,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "For a PDF or Word file the user named",
         "document-input --onboard`",
         "never ask the user to run a command or type a document id",
-        "Tell the user the `onboard_note` and use that id",
+        '**SAY:** "[the `onboard_note`, word for word]". Use that id',
         "When it returns an `ask` instead, the file is git-ignored (or git could not say) and nothing was copied",
         "Only after they say to use it anyway, run",
         "document-input --onboard --include-ignored`",
@@ -220,6 +221,7 @@ describe("t329 project-description and document-input boundaries", () => {
         "/aidlc knowledge show <id>",
         "direct the user to place the file",
         "notes_said_by_aidlc",
+        "Tell the user the `onboard_note`",
       ]) {
         expect(flat, `${file}: ${retired}`).not.toContain(retired);
       }
