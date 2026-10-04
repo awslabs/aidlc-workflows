@@ -107,11 +107,7 @@ if [ -f your-project/.kiro/settings/cli.json ]; then
 fi
 cp -R "$RUNTIME_ROOT/kiro-ide/.kiro/." your-project/.kiro/
 cp -R "$RUNTIME_ROOT/kiro-ide/aidlc/." your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cp "$RUNTIME_ROOT/kiro-ide/AGENTS.md" your-project/AGENTS.md   # merge if you already have one
-# Existing .gitignore: preserve it and merge only the section beginning "# AI-DLC".
-if [ ! -e your-project/.gitignore ]; then
-  cp dist/kiro-ide/.gitignore your-project/.gitignore
-fi
+cd your-project && bun .kiro/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness kiro-ide
 ```
 
 The first removal loop is the v2.5.57 hook-name migration. The second removes
@@ -148,11 +144,9 @@ per-user cursors (`aidlc/active-space`, `aidlc/spaces/*/intents/active-intent`)
 and machine-local runtime (`aidlc/.aidlc-clone-id`, `runtime-graph.json`, sensor
 caches, `spaces/*/knowledge/.sources.local.json`) stay untracked, while the
 shared records — method memory, state, audit shards, artifacts — travel with
-git. The guarded command copies the complete starter file only when the project
-has no `.gitignore`. If one exists, preserve every project-owned rule and merge
-only the section from `# AI-DLC` through the end of the shipped file; do not
-copy its generic starter rules. The `## Git Integration` section of the
-installed `AGENTS.md` assumes the AI-DLC rules are in place before your first
+git. The last line, the copy's own setup, adds those lines and AI-DLC's part of
+`AGENTS.md` after everything already in your files, or creates the files when
+the project has none, so the AI-DLC rules are in place before your first
 workflow.
 
 The install ships:

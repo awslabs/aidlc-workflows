@@ -88,7 +88,6 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -r "$RUNTIME_ROOT/opencode/.opencode/" your-project/.opencode/
    cp -r "$RUNTIME_ROOT/opencode/aidlc/"     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
    cp "$RUNTIME_ROOT/opencode/opencode.json" your-project/opencode.json  # or merge into yours
-   cp "$RUNTIME_ROOT/opencode/AGENTS.md"     your-project/AGENTS.md      # or merge into yours
    ```
 
    `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
@@ -103,9 +102,16 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    chaining, redirection, expansion, or command substitution. Engine-code edits
    prompt for approval.
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" before starting a workflow (per-clone audit shards are
-   committed deliberately; cursors and machine-local runtime stay ignored).
+2. Run the copy's own setup once, from the project:
+
+   ```bash
+   bun .aidlc/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness opencode
+   ```
+
+   It adds AI-DLC's lines to your `AGENTS.md` and `.gitignore`, after
+   everything already there (or creates them), before your first workflow
+   (per-clone audit shards are committed deliberately; cursors and
+   machine-local runtime stay ignored).
 
 3. Start opencode in the project and run `/aidlc --doctor`, then `/aidlc`
    followed by what you want to build.

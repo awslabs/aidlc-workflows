@@ -647,17 +647,18 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
   const rootIntegrations = m.rootIntegrations.map((integration) => {
     if (integration.policy !== "managed-block") return integration;
     const bytes = readFileSync(join(outRoot, integration.path));
-    if (integration.shared === "union") {
-      const dst = join(
-        treeRoot,
-        "tools",
-        "data",
-        "root-blocks",
-        integration.marker || basename(integration.path),
-      );
-      mkdirSync(dirname(dst), { recursive: true });
-      writeFileSync(dst, bytes);
-    }
+    // Every managed block ships a copy inside the harness folder: siblings
+    // read it to combine .gitignore lines, the copy runtime leaves the root
+    // file out, and config and the engine add AI-DLC's part from it.
+    const dst = join(
+      treeRoot,
+      "tools",
+      "data",
+      "root-blocks",
+      integration.marker || basename(integration.path),
+    );
+    mkdirSync(dirname(dst), { recursive: true });
+    writeFileSync(dst, bytes);
     const currentHash = sha256Bytes(bytes);
     return {
       ...integration,

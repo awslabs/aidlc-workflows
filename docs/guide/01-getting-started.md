@@ -32,9 +32,12 @@ Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 If you cannot install a native executable or prefer to manage the project files
 manually, install [Bun](https://bun.sh/), download
 `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
-[release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-the complete `runtime/<harness>/` directory into the project. The manual-copy
-path does not require the native `aidlc` command.
+[release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
+the complete `runtime/<harness>/` directory into the project, and run its own
+setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.
+A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
+lines to them. The manual-copy path does not require the native `aidlc`
+command.
 
 ### 2. Configure a project
 

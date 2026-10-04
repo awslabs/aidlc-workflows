@@ -48,6 +48,8 @@ const manifest: HarnessManifest = {
           "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
           // The variant shipped before the block listed aidlc.settings.local.json.
           "sha256:ced6459be00ce352fe298e1ff07759933fa2ebf07a9151ef2f1af995579f7afd",
+          // The variant shipped with a generic template above the AI-DLC lines.
+          "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
         ],
       },
     },

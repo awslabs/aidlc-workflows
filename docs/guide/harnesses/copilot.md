@@ -104,11 +104,11 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
    cp -R "$RUNTIME_ROOT/copilot/.aidlc/."  your-project/.aidlc/
    cp -R "$RUNTIME_ROOT/copilot/aidlc/."   your-project/aidlc/    # the workspace shell — a sibling of .aidlc/, not inside it
    cp -R "$RUNTIME_ROOT/copilot/.github/." your-project/.github/  # MERGE — everything is aidlc-prefixed, nothing of yours is overwritten
-   cp "$RUNTIME_ROOT/copilot/AGENTS.md"    your-project/AGENTS.md # or merge into yours — keep the @-import block (the method include)
    ```
 
-2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" before starting a workflow (per-clone audit shards are
+2. AI-DLC adds its lines to your `AGENTS.md` (including the method include)
+   and `.gitignore` when the first chat starts, after everything already there,
+   or creates them when the project has none (per-clone audit shards are
    committed deliberately; cursors and machine-local runtime stay ignored).
    For VS Code, also add `"chat.agent.maxRequests": 200` to your
    `.vscode/settings.json` if it does not set that key (see
