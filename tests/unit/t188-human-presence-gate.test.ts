@@ -1363,38 +1363,43 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 
-    test("a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer)", () => {
-      const slug = field(proj, "Current Stage");
-      guarded(proj, ["checkbox", `${slug}=in-progress`]);
-      guarded(proj, ["gate-start", slug]);
+    // "can you fix it?" is from a live run where the agent passed the person's
+    // question about a setting as their approval; presence alone refuses it.
+    test.each(["Approve (Recommended)", "can you fix it?"])(
+      "a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer): %s",
+      (reply) => {
+        const slug = field(proj, "Current Stage");
+        guarded(proj, ["checkbox", `${slug}=in-progress`]);
+        guarded(proj, ["gate-start", slug]);
 
-      const answer = guardedLog(proj, [
-        "answer",
-        "--stage",
-        slug,
-        "--details",
-        "Approve (Recommended)",
-      ]);
-      expect(answer.rc).not.toBe(0);
-      expect(answer.out).toContain("Cannot record this approval choice");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+        const answer = guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--details",
+          reply,
+        ]);
+        expect(answer.rc).not.toBe(0);
+        expect(answer.out).toContain("Cannot record this approval choice");
+        expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
 
-      const approve = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        "--user-input",
-        "Approve (Recommended)",
-      ]);
-      expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("no new human reply has been received");
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
-        `- [?] ${slug}`,
-      );
-    });
+        const approve = guardedReport(proj, [
+          "--stage",
+          slug,
+          "--result",
+          "approved",
+          "--user-input",
+          reply,
+        ]);
+        expect(approve.rc).toBe(0);
+        expect(approve.out).toContain('"kind":"error"');
+        expect(approve.out).toContain("no new human reply has been received");
+        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+        expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+          `- [?] ${slug}`,
+        );
+      },
+    );
 
     test("rejection with NO human turn refuses without mutating state", () => {
       const slug = field(proj, "Current Stage");
