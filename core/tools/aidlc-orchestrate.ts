@@ -12118,7 +12118,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ...workflowContinues(pd),
       narration: `${node.name} does not apply here, so I skipped it.`,
     };
-    carriesNarration.add(skipped);
+    // Carried only while the work goes on; the last stage's skip is said here.
+    if (skipped.kind === "done" && skipped.workflow_continues === true) carriesNarration.add(skipped);
     emit(skipped);
     return;
   }
