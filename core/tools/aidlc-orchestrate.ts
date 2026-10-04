@@ -1700,13 +1700,13 @@ function scopeCommands(
   }));
 }
 
-// The depth, test strategy, project type, and sensors, learnings, and summary
-// confirmation switches typed with a description ride on the plan offer's
-// answer commands, so the work the person confirms is created as the offer
-// previewed it. Each was checked against its allowed words when parsed. Plan
-// approval rides only as on: only the person's own words turn it off, on their
-// own path.
-const CARRIED_CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation"] as const;
+// The depth, test strategy, project type, and sensors, learnings, summary
+// confirmation, and collaborators switches typed with a description ride on
+// the plan offer's answer commands, so the work the person confirms is created
+// as the offer previewed it. Each was checked against its allowed words when
+// parsed. Plan approval rides only as on: only the person's own words turn it
+// off, on their own path.
+const CARRIED_CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "collaborators"] as const;
 
 function carriedCeremonyFlags(flags: ParsedFlags): string[] {
   const carried: string[] = [];
