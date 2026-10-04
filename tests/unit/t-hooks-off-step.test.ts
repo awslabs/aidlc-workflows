@@ -15,7 +15,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
@@ -74,7 +74,9 @@ const HARNESSES: Harness[] = [
     name: "opencode",
     dir: ".aidlc",
     lines: (proj) => [
-      `Quit opencode and start it again with just \`opencode\` in ${proj}, then type /aidlc to carry on.`,
+      // The engine names the folder the way this OS writes it (backslashes on
+      // Windows), while the fixture path is kept portable.
+      `Quit opencode and start it again with just \`opencode\` in ${proj && normalize(proj)}, then type /aidlc to carry on.`,
     ],
   },
 ];
