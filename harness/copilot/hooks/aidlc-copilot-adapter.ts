@@ -871,8 +871,9 @@ export async function run(
     // reads the orchestrator's other verbs under that prefix.
     const routedOrchestrate = !viaDispatcher || (args[0] === "engine" && args[1] === "orchestrate");
     // The form a refusal names, started the way the agent started the command.
+    // (Built from parts: a release rewrites literal copy-channel spellings.)
     const start = !(first === "bun" || first === process.execPath) ? "aidlc"
-      : viaDispatcher ? "bun .aidlc/tools/aidlc.ts" : "bun .aidlc/tools/aidlc-orchestrate.ts";
+      : `bun ${[".aidlc", "tools", viaDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
     const form = (verb: string) => `${start}${viaDispatcher && routedOrchestrate ? " engine orchestrate" : ""} ${verb}`;
     if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
