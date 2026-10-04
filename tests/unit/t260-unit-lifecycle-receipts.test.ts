@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED, audit:CONSTRUCTION_POLICY_SET
+// covers: function:unitLifecycleRunFloorForProject, subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED, audit:CONSTRUCTION_POLICY_SET
 //
 // t260 — unit lifecycle receipts on inline per-unit Construction stages
 // (issue 681, claims 1/2/9). The contract under test:
@@ -55,6 +55,7 @@ import {
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
   readAuditShardEvents,
@@ -985,14 +986,42 @@ describe("t260 finished Units keep their receipts across a Construction policy c
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
   });
 
-  test("a stage start recorded under unit-major flooring stays ignored after the switch back", () => {
-    const audit = [
-      block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n"),
-      block("STAGE_STARTED", "2026-01-02T00:00:00Z", `**Stage**: ${SLUG}\n`),
-      block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: stage-major\n**Previous Value**: unit-major\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: unset\n"),
-    ].join("");
-    expect(latestMainWorkflowStageRunFloor(audit, SLUG, true)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
-    expect(latestMainWorkflowStageRunFloor(audit, SLUG, false)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+  const switchBack = (ts: string) =>
+    block("CONSTRUCTION_POLICY_SET", ts, "**Field**: Construction Iteration\n**Value**: stage-major\n**Previous Value**: unit-major\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: unset\n");
+
+  test("a stage start recorded under unit-major flooring stays out of the receipts' floor only", () => {
+    policyProject("unit-major");
+    appendFileSync(seededAuditShard(proj), switchBack("2026-01-03T00:00:00Z"));
+    // A Unit's receipt floor leaves the start out; the stage's other attempt
+    // floors (swarm convergence, source merges, batch checkpoints) still count it.
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, false)).toBe("STAGE_STARTED:2026-01-02T00:00:00Z#1");
+  });
+
+  test("a later stage started after its Units finished keeps them after the switch back", () => {
+    // A unit-major walk runs a later stage before that stage's own STAGE_STARTED.
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`) +
+        block("STAGE_STARTED", "2026-01-04T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    setPolicy("set-construction-iteration", "stage-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("a switch and a stage start in the same second in different shards count as a restart", () => {
+    policyProject("unit-major");
+    appendFileSync(seededAuditShard(proj), switchBack("2026-01-05T00:00:00Z"));
+    // The start may have come after the switch, so it is a boundary.
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-other-session.md"),
+      "# AI-DLC Audit Log\n" + block("STAGE_STARTED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false)).toMatch(/^(STAGE_STARTED:2026-01-05T00:00:00Z|AMBIGUOUS:)/);
   });
 
   test("the change is recorded with the policy it leaves in force", () => {

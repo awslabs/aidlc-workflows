@@ -116,7 +116,7 @@ import {
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
-  latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
   loadScopeMapping,
   loadStageGraph,
   nextInScopeStage,
@@ -2374,7 +2374,7 @@ function handleUnit(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Unit: unit,
-      "Run floor": latestMainWorkflowStageRunFloorForProject(
+      "Run floor": unitLifecycleRunFloorForProject(
         pd,
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major" ||
@@ -6655,7 +6655,7 @@ function handleSkip(args: string[]): void {
         Stage: slug,
         Unit: unit,
         Reason: reason,
-        "Run floor": latestMainWorkflowStageRunFloorForProject(
+        "Run floor": unitLifecycleRunFloorForProject(
           pd,
           slug,
           true,

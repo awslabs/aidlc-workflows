@@ -31507,6 +31507,26 @@ export function latestMainWorkflowStageRunFloorForProject(
   );
 }
 
+// The floor a Unit's lifecycle receipt carries and is read against. Unlike the
+// stage's other attempt floors, stage-major flooring here leaves out a stage
+// start recorded while unit-major flooring was in force, so a switch back to
+// stage-major keeps the Units finished before it.
+export function unitLifecycleRunFloorForProject(
+  projectDir: string,
+  slug: string,
+  unitMajor: boolean,
+  unit?: string,
+  auditRows?: readonly AuditShardEvent[],
+): string {
+  return latestMainWorkflowStageRunFloorFromRows(
+    auditRows ?? readAuditShardEvents(projectDir),
+    slug,
+    unitMajor,
+    unit,
+    true,
+  );
+}
+
 // Callers may hand in raw readAuditShardEvents rows, which are shard-major,
 // so the boundary order is settled here and never trusted from input.
 function latestMainWorkflowStageRunFloorFromRows(
@@ -31514,6 +31534,7 @@ function latestMainWorkflowStageRunFloorFromRows(
   slug: string,
   unitMajor = false,
   unit?: string,
+  unitReceipts = false,
 ): string {
   const relevant = new Set([
     "WORKFLOW_STARTED",
@@ -31529,7 +31550,7 @@ function latestMainWorkflowStageRunFloorFromRows(
   // flooring count, each with the ordinal it had there (its place among all of
   // this stage's starts), so its floor token is unchanged by the switch.
   const stageFloored = unitMajor ? stageStartsUnderStageFlooring(rowsInput) : null;
-  const unitFloored = unitMajor ? null : stageStartsUnderUnitFlooring(rowsInput);
+  const unitFloored = unitMajor || !unitReceipts ? null : stageStartsUnderUnitFlooring(rowsInput);
   const startOrdinals = new Map(
     sortAttemptEvents(rowsInput.filter(stageStart)).map((row, index) => [row, index + 1]),
   );
@@ -31625,12 +31646,13 @@ function stageStartsUnderStageFlooring(
   return counted;
 }
 
-// The stage starts recorded while unit-major flooring was in force, which
-// stage-major flooring leaves out so a switch back keeps the Units finished
-// under unit-major. A start after the last change follows the caller's current
-// stage-major flooring and counts; when same-second rows in different shards
-// leave the first change after a start unknown, it is left out only when every
-// candidate found unit-major flooring, the same reading as above.
+// The stage starts recorded while unit-major flooring was in force, which a
+// Unit receipt's stage-major floor leaves out so a switch back keeps the Units
+// finished under unit-major. A start after the last change follows the current
+// stage-major flooring and counts. A start is left out only when it is plainly
+// before every change that may be the first one after it and all of them found
+// unit-major flooring: a start in the same second as a change in another shard
+// may have come after it, so it counts, as a restart would.
 function stageStartsUnderUnitFlooring(
   rows: readonly AuditShardEvent[],
 ): Set<AuditShardEvent> {
@@ -31645,7 +31667,9 @@ function stageStartsUnderUnitFlooring(
     const firstAfter = after.filter((change) =>
       !after.some((other) => before(start, other) && before(other, change)));
     const candidates = firstAfter.length > 0 ? firstAfter : after;
-    if (candidates.every((change) => constructionPolicyFoundUnitMajor(change))) ignored.add(start);
+    if (candidates.every((change) => before(start, change) && constructionPolicyFoundUnitMajor(change))) {
+      ignored.add(start);
+    }
   }
   return ignored;
 }
@@ -32272,6 +32296,17 @@ function currentUnitLifecycleRows(
         })
         .at(-1)?.timestamp ?? ""
     : latestMainWorkflowStageStarted(audit, slug);
+  // Under stage-major flooring the rows start at the latest stage start that
+  // counts for the receipts (see unitLifecycleRunFloorForProject), so a later
+  // stage started after its Units finished in a unit-major walk keeps them.
+  const ignoredStarts = unitMajor ? new Set<AuditShardEvent>() : stageStartsUnderUnitFlooring(sourceRows);
+  const cutoff = ignoredStarts.size === 0
+    ? startedAt
+    : sortAttemptEvents(sourceRows.filter((row) =>
+        row.event === "STAGE_STARTED" &&
+        auditBlockField(row.block, "Stage") === slug &&
+        !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
+        !ignoredStarts.has(row))).at(-1)?.timestamp ?? "";
   let unitScoped = false;
   try {
     const state = stateContent ?? readStateFile(projectDir);
@@ -32284,7 +32319,7 @@ function currentUnitLifecycleRows(
     const key = unitScoped ? unit : "";
     const existing = floorByUnit.get(key);
     if (existing) return existing;
-    const floor = latestMainWorkflowStageRunFloorForProject(
+    const floor = unitLifecycleRunFloorForProject(
       projectDir,
       slug,
       unitMajor,
@@ -32309,7 +32344,7 @@ function currentUnitLifecycleRows(
     if (!unit) continue;
     if (!eventMatchesClaimAttempt(projectDir, row.block, unit)) continue;
     if (auditBlockField(row.block, "Run floor") !== floorFor(unit)) continue;
-    if (!unitMajor && startedAt && row.timestamp < startedAt) continue;
+    if (!unitMajor && cutoff && row.timestamp < cutoff) continue;
     rows.push({
       ts: row.timestamp,
       pos: row.pos,

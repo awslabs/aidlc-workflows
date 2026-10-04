@@ -1712,7 +1712,9 @@ Switching to `unit-major` or turning checkpoints on in the middle of a stage
 keeps the Units already finished: `/aidlc` carries on with the next Unit that
 still has work, and the change is recorded as `CONSTRUCTION_POLICY_SET`.
 Going the other way, to `stage-major` with checkpoints off (switching iteration
-back, or turning checkpoints off while stage-major), keeps them too.
+back, or turning checkpoints off while stage-major), keeps them too, with one
+exception: a Unit that was redone after its checkpoint's Request Changes is handed
+out once more when checkpoints are turned off.
 
 Execution is separate from approval: swarm works with guided (`gated`) or
 automatic (`autonomous`) completion. Unit-major stays serial and refuses a

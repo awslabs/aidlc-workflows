@@ -10911,6 +10911,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitLifecycleRunFloorForProject",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitLifecycleSnapshot",
       "minMechanism": "none",
       "coveredBy": [

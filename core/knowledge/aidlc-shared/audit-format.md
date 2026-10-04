@@ -213,8 +213,10 @@ their work can precede their own `STAGE_STARTED`. A changed Construction policy
 is not a boundary: a `STAGE_STARTED` recorded while stage-major flooring was in
 force (the policy the next `CONSTRUCTION_POLICY_SET` found) stays one after a
 switch to unit-major iteration or checkpoints, and one recorded while unit-major
-flooring was in force stays ignored after a switch back to stage-major with
-checkpoints off, so Units finished before either switch keep their receipts. `UNIT_SKIPPED` settles one
+flooring was in force stays ignored by a Unit receipt's floor after a switch back to
+stage-major with checkpoints off, so Units finished before either switch keep their
+receipts (a Unit redone after its checkpoint's Request Changes is the exception: its
+receipt's per-Unit floor no longer applies once checkpoints are off). `UNIT_SKIPPED` settles one
 unit's beat when the stage's condition does not apply to that unit: the unit
 owes the stage nothing in that attempt (like a unit whose kind prunes every
 output), while every other unit still does. The stage is marked skipped only
