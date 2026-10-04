@@ -404,6 +404,59 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4e: a typed re-entry request gets a complete command; the person's words are never classified", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, [
+        "report", "--result", "resumed", ...extra, "--project-dir", p,
+      ]));
+    const words = (text: string) => ["--user-input", text];
+
+    // Words no keyword would match still route, because the conductor typed them.
+    const back = report("--choice", "jump", "--target", "requirements-analysis",
+      ...words("take me back to requirements analysis"));
+    expect(back.kind).toBe("print");
+    expect(back.message).toContain("Run `next --stage requirements-analysis`");
+    expect(back.message).not.toContain("<slug>");
+
+    const unnamed = report("--choice", "jump", ...words("let's go somewhere else"));
+    expect(unnamed.kind).toBe("print");
+    expect(unnamed.message).toContain("Ask the person which stage");
+
+    const unknown = report("--choice", "jump", "--target", "no-such-stage", ...words("go to the moon"));
+    expect(unknown.kind).toBe("error");
+    expect(unknown.message).toContain('No stage is named "no-such-stage"');
+
+    const fresh = report("--choice", "fresh", "--description", "a CSV export for the reports page",
+      ...words("forget this, I want a CSV export for the reports page"));
+    expect(fresh.kind).toBe("print");
+    expect(fresh.message).toContain("Run `next --new-intent 'a CSV export for the reports page'`");
+    expect(fresh.message).not.toContain("<scope>");
+
+    const freshUnsaid = report("--choice", "fresh", ...words("start over"));
+    expect(freshUnsaid.message).toContain("Ask the person what the new work is");
+
+    const redo = report("--choice", "redo", ...words("do this one again please"));
+    expect(redo.message).toContain("--direction redo");
+
+    const resume = report("--choice", "resume", ...words("keep going"));
+    expect(resume.message).toContain("Re-run `next`");
+
+    const wrong = report("--choice", "sideways", ...words("hmm"));
+    expect(wrong.kind).toBe("error");
+    expect(wrong.message).toContain('Unknown --choice "sideways"');
+
+    // The typed flags belong only to a re-entry request.
+    const misplaced = directive(run(ORCHESTRATE, [
+      "report", "--stage", "code-generation", "--result", "approved", "--choice", "redo", "--project-dir", p,
+    ]));
+    expect(misplaced.kind).toBe("error");
+    expect(misplaced.message).toContain("go only with --result resumed");
+
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   // ============================================================
   // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope

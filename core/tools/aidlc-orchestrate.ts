@@ -10954,6 +10954,11 @@ interface ReportFlags {
   overrideBlockingSensors?: boolean;
   unit?: string; // --unit <name>: required for team-owned per-unit gates
   park?: boolean; // --park: the person also asked to stop here for now
+  // A re-entry request (--result resumed): the choice the conductor read from
+  // the person's words, the stage they named, the new work they described.
+  choice?: string;
+  target?: string;
+  description?: string;
   parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
 
@@ -10971,6 +10976,9 @@ const REPORT_FLAGS = [
   "--single",
   "--override-blocking-sensors",
   "--park",
+  "--choice",
+  "--target",
+  "--description",
 ] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
@@ -11025,6 +11033,15 @@ function parseReportFlags(args: string[]): ReportFlags {
     } else if (a === "--unit" && i + 1 < args.length) {
       flags.unit = args[i + 1];
       i++;
+    } else if (a === "--choice" && i + 1 < args.length) {
+      flags.choice = args[i + 1];
+      i++;
+    } else if (a === "--target" && i + 1 < args.length) {
+      flags.target = args[i + 1];
+      i++;
+    } else if (a === "--description" && i + 1 < args.length) {
+      flags.description = args[i + 1];
+      i++;
     } else if (a === "--single") {
       flags.single = true;
     } else if (a === "--override-blocking-sensors") {
@@ -11047,6 +11064,12 @@ function parseReportFlags(args: string[]): ReportFlags {
       missingValue(a, "a stage name");
     } else if (a === "--unit") {
       missingValue(a, "a unit name");
+    } else if (a === "--choice") {
+      missingValue(a, "<resume|redo|jump|fresh>");
+    } else if (a === "--target") {
+      missingValue(a, "a stage name");
+    } else if (a === "--description") {
+      missingValue(a, "the new work, in the person's words");
     } else if (a !== "--") {
       refuse(
         `report does not accept "${a}". It accepts ${REPORT_FLAGS.join(", ")}. ` +
@@ -12058,6 +12081,10 @@ function handleResumeReport(
     ));
     return;
   }
+  if (flags.choice !== undefined) {
+    emitTypedResumeChoice(flags, pd, stateContent, slug);
+    return;
+  }
   // Numbered-prose harnesses show this fixed menu as 1-4. Normalize an exact
   // visible response key before semantic matching so the engine, not the
   // conductor, owns that stable mapping.
@@ -12105,6 +12132,67 @@ function handleResumeReport(
   }
   emit(errorDirective(
     `Unrecognized resume choice "${flags.userInput}". Accepted choices: 1/resume from last checkpoint, 2/redo the current stage, 3/jump to a stage, or 4/start fresh.`,
+  ));
+}
+
+// A redo, jump, or start-fresh request on re-entry, typed by the conductor
+// from the person's own words (--user-input keeps them). Each print names the
+// whole command, or the one thing to ask when the person left it out.
+function emitTypedResumeChoice(
+  flags: ReportFlags,
+  pd: string,
+  stateContent: string,
+  slug: string,
+): void {
+  const choice = flags.choice?.trim().toLowerCase() ?? "";
+  const scope = getField(stateContent, "Scope")?.trim() ?? "";
+  if (choice === "resume") {
+    emit(printDirective(
+      `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
+    ));
+    return;
+  }
+  if (choice === "redo") {
+    const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
+    emit(printDirective(unitRedo ??
+      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`));
+    return;
+  }
+  if (choice === "jump") {
+    const target = flags.target?.trim() ?? "";
+    if (!target) {
+      emit(printDirective(
+        "Ask the person which stage they want, then report again with `--choice jump --target <stage>`.",
+      ));
+      return;
+    }
+    const node = nodeForSlug(target);
+    if (node === undefined) {
+      emit(errorDirective(
+        `No stage is named "${target}". Report again with --target set to one of: ${loadGraph().map((stage) => stage.slug).join(", ")}.`,
+      ));
+      return;
+    }
+    emit(printDirective(
+      `Jump accepted. Run \`next --stage ${node.slug}\`; the direction and the target are worked out and checked for you.`,
+    ));
+    return;
+  }
+  if (choice === "fresh") {
+    const description = flags.description?.trim() ?? "";
+    if (!description) {
+      emit(printDirective(
+        "Ask the person what the new work is, then report again with `--choice fresh --description \"<their words>\"`.",
+      ));
+      return;
+    }
+    emit(printDirective(
+      `Start-fresh accepted. Run \`next --new-intent ${shellArg(description)}\`; the work in progress stays as it is, and the new work starts alongside it.`,
+    ));
+    return;
+  }
+  emit(errorDirective(
+    `Unknown --choice "${flags.choice}". Use resume, redo, jump, or fresh.`,
   ));
 }
 
@@ -12194,6 +12282,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 
   // A resume ask has no stage and commits no lifecycle outcome. Accept the
   // natural verdict used by conductors, then return to next without mutation.
+  const resumeRequest =
+    flags.choice !== undefined || flags.target !== undefined || flags.description !== undefined;
+  if (resumeRequest && !(flags.result && RESUME_RESULTS.has(flags.result))) {
+    emit(errorDirective(
+      "--choice, --target and --description go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
+    ));
+    return;
+  }
   if (flags.result && RESUME_RESULTS.has(flags.result)) {
     handleResumeReport(flags, projectDir);
     return;

@@ -194,5 +194,5 @@ Rules (both tracks):
   remedies and follows the human-selected command or action, never an invented
   report. Empty remedies remain terminal. A redo, jump, or start-fresh request
   on re-entry is the sole non-stage report round-trip and uses
-  `report --result resumed --user-input "<their words>"`; this is not a generic
+  `report --result resumed --choice <redo|jump|fresh> --user-input "<their words>"`; this is not a generic
   engine-ask answer route. Explicit guard-remedy stage reports are unchanged.

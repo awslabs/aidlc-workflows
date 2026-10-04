@@ -231,8 +231,10 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
       "A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume",
     );
     expect(parsed.additionalContext).toContain("send the first `next` as `next --resume`");
+    // The hint is the recovery protocol's one SAY line; the request is typed.
+    expect(parsed.additionalContext).toContain("including its one SAY line");
     expect(parsed.additionalContext).toContain(
-      "Say redo, jump to a stage, or start fresh if you'd rather.",
+      'report --result resumed --choice <redo|jump|fresh> --user-input "<their words>"',
     );
     expect(parsed.additionalContext).toContain("`/aidlc` alone -> `next --resume`");
     expect(parsed.additionalContext).not.toContain("Resume / Redo / Jump / Start Fresh");
@@ -249,7 +251,7 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     };
     // A workflow in progress: the whole context.
     seedStateFile(proj, MID_IDEATION);
-    expect(context(fire(proj).stdout)).toContain("On BARE /aidlc re-entry");
+    expect(context(fire(proj).stdout)).toContain("A BARE /aidlc re-entry carries on");
     // No workflow yet: the chat's own Runtime Session id.
     const bare = createTestProject();
     try {
@@ -259,6 +261,29 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     } finally {
       cleanupTestProject(bare);
     }
+  });
+
+  test("work created but not started gets the same carry-on rule, with no menu", () => {
+    // Intent Capture is current and nothing has run: the first call starts it.
+    seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
+    const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("send the first `next` as `next --resume`");
+    expect(ctx).not.toContain("Resume / Redo / Jump / Start Fresh");
+  });
+
+  test("a parked workflow gets the same carry-on rule on a bare re-entry", () => {
+    // A new session on a parked workflow: the first call is `next --resume`,
+    // which clears the park, so the person never has to retype `/aidlc --resume`.
+    seedStateFile(proj, MID_IDEATION);
+    const state = statePath(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(
+      "## Runtime State\n",
+      "## Runtime State\n- **Parked**: 2026-10-03T23:18:27Z\n- **Parked At Stage**: feasibility\n",
+    ));
+    expect(readFileSync(state, "utf-8")).toContain("- **Parked At Stage**: feasibility");
+    const ctx = JSON.parse(fire(proj).stdout.trim()).additionalContext as string;
+    expect(ctx).toContain("send the first `next` as `next --resume`");
+    expect(ctx).toContain("`/aidlc` alone -> `next --resume`");
   });
 
   test("injects the Lifecycle Phase (IDEATION) [.sh test 4]", () => {

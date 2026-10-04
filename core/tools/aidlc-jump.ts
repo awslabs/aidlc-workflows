@@ -425,6 +425,10 @@ function handleExecute(args: string[]): void {
 
   // Get current stage for audit
   const currentSlug = getField(content, "Current Stage") || "state-init";
+  // Where the person was: the active Unit's own step in a unit-at-a-time walk,
+  // which Current Stage does not name.
+  const unitStage = getField(content, "Unit Stage")?.trim() ?? "";
+  const cameFrom = graph.some((node) => node.slug === unitStage) ? unitStage : currentSlug;
 
   // States that count as "in-flight" (skip on forward jump, reset on backward jump)
   const IN_FLIGHT_STATES: CheckboxState[] = [
@@ -669,7 +673,7 @@ function handleExecute(args: string[]): void {
   };
   const notice = direction === "forward"
     ? `Moved to ${targetStage.name}${stagesSkipped.length > 0 ? `; skipped ${named(stagesSkipped)}` : ""}. ` +
-      `To go back, type \`${entrySkillInvocation()} --stage ${currentSlug}\`.`
+      `To go back, type \`${entrySkillInvocation()} --stage ${cameFrom}\`.`
     : undefined;
 
   console.log(

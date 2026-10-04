@@ -1344,6 +1344,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/tools/aidlc-jump.ts",
       "core/tools/aidlc-directive.ts",
       "core/aidlc-common/protocols/stage-protocol.md",
+      "core/aidlc-common/protocols/stage-protocol-recovery.md",
       "core/knowledge/aidlc-shared/audit-format.md",
       "README.md",
       ...[...new Bun.Glob("docs/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
@@ -1364,10 +1365,29 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /presents four options/i,
         /skips this menu/i,
         /Redo menu/,
+        /Offer to resume from the last incomplete stage/i,
+        /result resumed --user-input/,
       ]) {
         if (old.test(text)) stale.push(`${rel}  ${old.source}`);
       }
     }
     expect(stale).toEqual([]);
+  });
+
+  test("a re-entry request is typed by the conductor and the hint is one SAY line", () => {
+    // The conductor reads redo, jump, or start fresh from the person's words and
+    // passes the choice; the engine never classifies their words.
+    const typed = 'report --result resumed --choice <redo|jump|fresh> --user-input "<their words>"';
+    const missing = skills.filter((rel) => !readFileSync(join(REPO_ROOT, rel), "utf-8").includes(typed));
+    expect(missing).toEqual([]);
+    const recovery = readFileSync(
+      join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-recovery.md"),
+      "utf-8",
+    );
+    expect(recovery).toContain(
+      '**SAY:** "Say redo, jump to a stage, or start fresh if you\'d rather."',
+    );
+    expect(recovery).toContain("--choice <redo|jump|fresh>");
+    expect(recovery).not.toContain("Offer to resume from the last incomplete stage");
   });
 });
