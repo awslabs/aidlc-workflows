@@ -11333,7 +11333,8 @@ export function presenceFloorHolds(
 
 // The interview path (handleAnswer) uses the SAME resolution-boundary check: a
 // QUESTION_ANSWERED is itself a gate resolution, so "a human turn since the last
-// resolution" gives one-answer-per-reply for free. Thin alias for call-site
+// resolution" bounds what a reply can answer (the caller lets one reply answer
+// every question open when it arrived: humanTurnState "answered"). Thin alias for call-site
 // readability; both paths share one definition so the predicate cannot drift.
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanRepliedSinceGate(projectDir);

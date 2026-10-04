@@ -1176,22 +1176,26 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("COMMITS with a HUMAN_TURN, then a second answer this turn REFUSES", () => {
+    // From a live Kiro IDE run: the person answered five practice questions in
+    // one reply, the first answer recorded, and the rest were refused. One reply
+    // answers every question open when it arrived, each as its own answer; a
+    // question asked after it waits for the next reply.
+    test("one reply answers every question open when it arrived; a question asked after it waits", () => {
       const slug = field(proj, "Current Stage");
+      for (const question of ["Way of working?", "Walking skeleton?", "How much testing?"]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+      }
       recordHumanTurn(proj);
-      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
-      expect(r.rc).toBe(0);
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
-      // The QUESTION_ANSWERED is the new boundary: a second answer with no fresh
-      // HUMAN_TURN refuses (one answer per human turn).
-      const r2 = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
-      expect(r2.rc).not.toBe(0);
-      // The person did reply, and the first answer used that reply: the refusal
-      // says so rather than asking them to reply again.
-      expect(r2.out).toContain("the person's latest reply is already recorded as an answer");
-      expect(r2.out).toContain("single answer entry");
-      expect(r2.out).not.toContain("no new human reply has arrived");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      for (const reply of ["A", "B", "A, with CI"]) {
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Deploy anywhere?", "--options", "A,B"]).rc).toBe(0);
+      const late = guardedLog(proj, ["answer", "--stage", slug, "--details", "A"]);
+      expect(late.rc).not.toBe(0);
+      expect(late.out).toContain("no new human reply has arrived for the question");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
     test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {

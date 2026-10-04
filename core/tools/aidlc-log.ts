@@ -1716,8 +1716,8 @@ function handleAnswer(args: string[]): void {
     // Human-presence gate (ledger-event design): the interview answer is
     // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
     // QUESTION_ANSWERED (ledger order) before recording another. The prior
-    // QUESTION_ANSWERED is the "since" boundary (its own consume-once: one human turn
-    // logs one answer), so no separate marker/consume step is needed. Autonomy
+    // QUESTION_ANSWERED is the "since" boundary (one reply answers the questions
+    // open when it arrived, and none asked after it), so no separate marker/consume step is needed. Autonomy
     // carve-out FIRST (Construction swarm/Bolt answers are not human), then the scoped
     // test off-switch. Fail-open when no ledger exists (presence not tracked yet).
     const content = existsSync(stateFilePath(pd))
@@ -2074,18 +2074,17 @@ function handleAnswer(args: string[]): void {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch
-    } else if (!humanActedSinceLastAnswer(pd)) {
-      // One reply records one answer. When an earlier answer already used the
-      // latest reply, the person did reply: the answers from that reply belong
-      // in one entry, so say that instead of asking them to reply again.
+    } else if (
+      !humanActedSinceLastAnswer(pd) &&
+      !(humanTurnMintAllowed() && humanTurnState(pd, { replies: true }) === "answered")
+    ) {
+      // One reply answers every question that was open when it arrived, each
+      // as its own answer ("answered": only answers used it, and nothing was
+      // asked since). A question asked after it waits for the next reply.
       error(
-        humanTurnState(pd, { replies: true }) === "answered" && humanTurnMintAllowed()
-          ? "Cannot record this answer because the person's latest reply is already recorded as an answer. "
-            + "Record every answer from one reply in a single answer entry, and wait for the next reply "
-            + "before recording another."
-          : "Cannot record this answer because no new human reply has arrived for the question. "
-            + "Wait for the human to type an answer, then try again."
-            + commandTurnHint(pd) + unattendedHumanPresenceHint(),
+        "Cannot record this answer because no new human reply has arrived for the question. "
+          + "Wait for the human to type an answer, then try again."
+          + commandTurnHint(pd) + unattendedHumanPresenceHint(),
       );
     }
 
