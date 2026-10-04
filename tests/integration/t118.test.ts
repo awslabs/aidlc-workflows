@@ -453,6 +453,23 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     // The choice alone is enough; the person's words are not needed in the command.
     expect(report("--choice", "resume").message).toContain("Re-run `next`");
 
+    // A jump for a Unit the person named, or for every Unit, keeps that scope.
+    const forBeta = report("--choice", "jump", "--target", "requirements-analysis", "--unit", "beta");
+    expect(forBeta.kind).toBe("print");
+    expect(forBeta.message).toContain("Run `next --stage requirements-analysis --unit beta`");
+    const forEvery = report("--choice", "jump", "--target", "requirements-analysis", "--every-unit");
+    expect(forEvery.message).toContain("Run `next --stage requirements-analysis --every-unit`");
+    for (const [extra, refusal] of [
+      [["--choice", "redo", "--unit", "beta"], "go only with --choice jump"],
+      [["--choice", "fresh", "--every-unit"], "go only with --choice jump"],
+      [["--choice", "jump", "--target", "requirements-analysis", "--unit", "beta", "--every-unit"], "not both"],
+      [["--choice", "jump", "--target", "requirements-analysis", "--unit", "../beta"], "Invalid Unit name"],
+    ] as const) {
+      const refused = report(...extra);
+      expect(refused.kind, extra.join(" ")).toBe("error");
+      expect(refused.message, extra.join(" ")).toContain(refusal);
+    }
+
     // The typed flags belong only to a re-entry request.
     const misplaced = directive(run(ORCHESTRATE, [
       "report", "--stage", "code-generation", "--result", "approved", "--choice", "redo", "--project-dir", p,
@@ -463,6 +480,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     for (const extra of [
       ["--single", "--stage", "requirements-analysis", "--result", "completed", "--choice", "redo"],
       ["--skeleton-stance", "on", "--choice", "jump", "--target", "requirements-analysis"],
+      ["--stage", "code-generation", "--result", "approved", "--every-unit"],
     ]) {
       const dropped = directive(run(ORCHESTRATE, ["report", ...extra, "--project-dir", p]));
       expect(dropped.kind, extra.join(" ")).toBe("error");

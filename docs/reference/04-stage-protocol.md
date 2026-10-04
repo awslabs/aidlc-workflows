@@ -713,7 +713,7 @@ and reconcile the other sources against the event timeline on disagreement.
 
 When `aidlc-state.md` exists at session start, the conductor reads it to
 determine completed stages (`[x]`), current/next stage, and artifact
-existence, then offers to resume from the last incomplete stage.
+existence, then carries on from the last incomplete stage with no resume menu.
 
 ### Resume Context Loading by Phase
 

@@ -58,7 +58,8 @@ picking the work back up (at an approval gate too):
 Redo, a jump, or a fresh start happens only when the person asks for one. Read
 which one they mean from their words and report it with
 `{{INVOKE}} engine orchestrate report --result resumed --choice <redo|jump|fresh>`,
-adding `--target <stage slug>` for the stage they named, then follow the print
+adding `--target <stage slug>` for the stage they named (and `--unit <unit>` or
+`--every-unit` when they named a Unit or said every Unit), then follow the print
 it returns. At an approval gate such a request is not the gate's answer: report
 it this way, never as Request Changes.
 

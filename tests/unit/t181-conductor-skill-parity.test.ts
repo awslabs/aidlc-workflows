@@ -1346,6 +1346,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/aidlc-common/protocols/stage-protocol.md",
       "core/aidlc-common/protocols/stage-protocol-recovery.md",
       "core/knowledge/aidlc-shared/audit-format.md",
+      // The neutral onboarding every harness ships, always loaded or injected.
+      "core/templates/onboarding.md",
+      ...[...new Bun.Glob("dist/*/**/{AGENTS,CLAUDE}.md").scanSync({ cwd: REPO_ROOT, dot: true })].sort(),
       "README.md",
       ...[...new Bun.Glob("docs/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
     ];
@@ -1366,6 +1369,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /skips this menu/i,
         /Redo menu/,
         /Offer to resume from the last incomplete stage/i,
+        /offers? to resume from (the )?last/i,
         /result resumed --user-input/,
         /choice <redo\|jump\|fresh> --user-input/,
         /--description "<the new work>"/,

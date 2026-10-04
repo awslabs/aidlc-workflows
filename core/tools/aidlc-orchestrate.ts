@@ -336,6 +336,7 @@ import {
   personLineHeard,
   PLAN_FIELD,
   extractMarkdownSection,
+  validateUnitName,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -10955,9 +10956,11 @@ interface ReportFlags {
   unit?: string; // --unit <name>: required for team-owned per-unit gates
   park?: boolean; // --park: the person also asked to stop here for now
   // A re-entry request (--result resumed): the choice the conductor read from
-  // the person's words, and the stage they named for a jump.
+  // the person's words, the stage they named for a jump, and the Units it is
+  // for when they named one (--unit) or said every Unit (--every-unit).
   choice?: string;
   target?: string;
+  everyUnit?: boolean;
   parseError?: string; // an argument report cannot act on (see parseReportFlags)
 }
 
@@ -10977,6 +10980,7 @@ const REPORT_FLAGS = [
   "--park",
   "--choice",
   "--target",
+  "--every-unit",
 ] as const;
 
 // Extract report's flags. --result is the verdict; --user-input carries the
@@ -11039,6 +11043,8 @@ function parseReportFlags(args: string[]): ReportFlags {
       i++;
     } else if (a === "--single") {
       flags.single = true;
+    } else if (a === "--every-unit") {
+      flags.everyUnit = true;
     } else if (a === "--override-blocking-sensors") {
       flags.overrideBlockingSensors = true;
     } else if (a === "--park") {
@@ -12145,6 +12151,21 @@ function emitTypedResumeChoice(
     emit(errorDirective("--target goes only with --choice jump: it names the stage to jump to."));
     return;
   }
+  if ((flags.unit !== undefined || flags.everyUnit) && choice !== "jump") {
+    emit(errorDirective(
+      "--unit and --every-unit go only with --choice jump: they name the Units the jump is for.",
+    ));
+    return;
+  }
+  if (flags.unit !== undefined && flags.everyUnit) {
+    emit(errorDirective("Use --unit <unit> or --every-unit, not both."));
+    return;
+  }
+  const unitProblem = flags.unit !== undefined ? validateUnitName(flags.unit) : null;
+  if (unitProblem !== null) {
+    emit(errorDirective(unitProblem));
+    return;
+  }
   if (choice === "resume") {
     emit(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
@@ -12172,8 +12193,12 @@ function emitTypedResumeChoice(
       ));
       return;
     }
+    // The Units the person named travel with the jump, so it reopens their work.
+    const units = flags.unit !== undefined
+      ? ` --unit ${flags.unit}`
+      : flags.everyUnit ? " --every-unit" : "";
     emit(printDirective(
-      `Jump accepted. Run \`next --stage ${node.slug}\`; the direction and the target are worked out and checked for you.`,
+      `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.`,
     ));
     return;
   }
@@ -12250,11 +12275,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // The typed re-entry flags are refused on every other report before any
   // branch below commits something with them dropped.
   if (
-    (flags.choice !== undefined || flags.target !== undefined) &&
+    (flags.choice !== undefined || flags.target !== undefined || flags.everyUnit) &&
     !(flags.result && RESUME_RESULTS.has(flags.result))
   ) {
     emit(errorDirective(
-      "--choice and --target go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
+      "--choice, --target, and --every-unit go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
     ));
     return;
   }
