@@ -416,7 +416,10 @@ See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-deliv
 Some person-facing lines arrive on a step the agent passes through without
 speaking: the `print` that creates the work ("Setting up a poc workflow for
 this ... The folder has no code yet, so I'm starting this as a new project
-..."), and the `workspace reclassify` reply. The agent runs those and goes on,
+..."), and the `workspace reclassify` reply. A request typed with its scope
+never passed an ask, so its creation line also says how a pasted document was
+split (the `document_split` line); the stages that read the document do not
+say it again. The agent runs those and goes on,
 then speaks only at a later step, so a line left there was lost. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
 and puts them, in order and once, in front of the `narration` of the next

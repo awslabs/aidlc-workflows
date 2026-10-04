@@ -159,7 +159,7 @@ describe("t329 project-description and document-input boundaries", () => {
       const flat = body.replace(/\s+/g, " ");
       for (const phrase of [
         "from the first `<document>` to the last `</document>`",
-        "tell the user its `document_split` line",
+        "already heard how the request was split (the `document_split` line) when the work started, so do not say it again.",
         "Never split the request yourself or ask the user to delimit it again.",
         "Never search for the file yourself or choose among matches for the user: `document-input` looks the name up.",
         "returns a `selection_note`: tell the user that line.",
@@ -175,6 +175,8 @@ describe("t329 project-description and document-input boundaries", () => {
         "ask the user to delimit it, and end the turn",
         "Never search recursively",
         "require exactly one explicit path",
+        // The engine says the split when the work starts, so the stage never repeats it.
+        "tell the user its `document_split` line",
       ]) {
         expect(flat, `${file}: ${retired}`).not.toContain(retired);
       }

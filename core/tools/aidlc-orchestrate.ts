@@ -3198,6 +3198,9 @@ function createPrintDirective(
   directive.narration = clause
     ? `Setting up a ${scope} workflow for this: ${clause}.`
     : `Setting up a ${scope} workflow for this.`;
+  // A request typed with its scope was never shown on an ask, so the line on
+  // how a pasted document was split is said here.
+  if (description && !flags.request) directive.narration += documentSplitSentence(description);
   // Say it while the person can still correct it: an empty folder starts as a
   // new project, which drops Reverse Engineering from the plan.
   if (!flags.projectType && newProjectDropsReverseEngineering(scope, projectDir, flags.planChanges)) {

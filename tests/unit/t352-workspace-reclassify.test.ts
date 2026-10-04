@@ -724,6 +724,24 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(nextIn(proj).narration ?? "")).not.toContain("Setting up a poc workflow");
   });
 
+  test("how a pasted document was split is said with the first stage", () => {
+    const proj = project();
+    const creation = nextIn(proj, ["--scope", "poc", "build this for our office <document>Staff vote on lunch.</document>"]);
+    expect(creation.kind).toBe("print");
+    const request = /--request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    const created = spawnSync(BUN, [
+      AIDLC, "engine", "intent", "create", "--scope", "poc", "--request", request ?? "",
+      "--label", "lunch-poll", "--project-dir", proj,
+    ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    const said = String(nextIn(proj).narration);
+    expect(said).toStartWith("Setting up a poc workflow for this");
+    expect(said).toContain(
+      "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
+    );
+    expect(said).not.toContain("Staff vote on lunch");
+  });
+
   test("the existing-code reply is said with the next step the agent speaks from", () => {
     const proj = project();
     expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
