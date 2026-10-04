@@ -10484,7 +10484,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
       for (const c of existingCheckboxes) {
         if (c.state === "awaiting-approval" && skips(c.slug)) {
-          skippedNow.push({ slug: c.slug, was: "it was waiting for approval" });
+          skippedNow.push({ slug: c.slug, was: "it was waiting for your approval" });
         }
       }
       const skippedNowSlugs = new Set(skippedNow.map((s) => s.slug));
@@ -10586,16 +10586,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           },
         })),
       );
+      // What happened and how to go back, then each stage it skipped and each
+      // setting whose value changed. Nothing runs until the person asks.
       outputLines = [
-        `Scope changed: ${oldScope} -> ${newScope}`,
-        `Stages in scope: ${executeStages.length} (${deltaStr})`,
-        `Approval gates: ${gates}${ceremonyOffClause(summary)}`,
-        `Depth: ${effectiveDepth}`,
-        ...(flags.review === undefined ? [] : [`Review override: ${getField(content, "Review Override") || "scope default"}`]),
-        `Completed: ${completedCount}/${executeStages.length}`,
+        `Switched to ${newScope}: ${executeStages.length} stages (${completedCount} done), ` +
+          `${gates} approval gates${ceremonyOffClause(summary)}. ` +
+          `To go back, type \`${entrySkillInvocation()} --scope ${oldScope}\`.`,
         ...skippedNow.map(({ slug, was }) =>
-          `Skipped ${slug} (${was}): ${newScope} does not run it. To run it on its own, type ` +
-            `\`${entrySkillInvocation()} --stage ${slug} --single\`.`),
+          `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
+            `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
         ...update.lines,
       ];
     }

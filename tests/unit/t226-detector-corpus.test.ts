@@ -1203,6 +1203,39 @@ describe("detector corpus", () => {
     }
   });
 
+  test("a scope change needs its exact authoritative dispatch output", () => {
+    const command = "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp";
+    const directive = {
+      kind: "print",
+      message: "Run `bun .claude/tools/aidlc.ts engine scope change --scope mvp` to change scope, then print its output verbatim and stop.",
+    };
+    const output = JSON.stringify(directive);
+    expect(d1(command)).toBe(true);
+    expect(isEngineToolCall("Bash", { command }, output)).toBe(false);
+    // Settings typed with it ride on the same command.
+    const withDepth = JSON.stringify({
+      ...directive,
+      message: directive.message.replace("--scope mvp`", "--scope mvp --depth minimal`"),
+    });
+    expect(isEngineToolCall("Bash", { command: `${command} --depth Minimal` }, withDepth)).toBe(false);
+    for (const other of [
+      "aidlc next --scope poc",
+      "aidlc next --scope mvp --depth minimal",
+      "aidlc next --scope mvp --stage intent-capture",
+      "aidlc next --scope mvp --new-intent",
+      `${command} && aidlc report --result approved`,
+    ]) {
+      expect(isEngineToolCall("Bash", { command: other }, output), other).toBe(true);
+    }
+    for (const invalid of [
+      JSON.stringify({ ...directive, message: directive.message.replace("to change scope", "to update the configuration") }),
+      JSON.stringify({ ...directive, message: directive.message.replace("--scope mvp`", "--scope poc`") }),
+      JSON.stringify({ kind: "print", message: "Run `bun .claude/tools/aidlc.ts engine config set depth standard` to update the configuration, then print its output verbatim and stop." }),
+    ]) {
+      expect(isEngineToolCall("Bash", { command }, invalid), invalid).toBe(true);
+    }
+  });
+
   test("one absolute literal cd preserves only the exact terminal config proof", () => {
     const output = JSON.stringify({
       kind: "print",

@@ -3481,6 +3481,43 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("(h) a scope change through next allows the stop after its result, so nothing starts until the person asks", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const { typed, command } of [
+        { typed: "--scope mvp", command: "scope change --scope mvp" },
+        { typed: "--scope mvp --depth Minimal", command: "scope change --scope mvp --depth minimal" },
+      ]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const output = terminalModifierDispatch(proj, typed.split(" "), command);
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: `/aidlc ${typed}` },
+          { kind: "bash", id: "scope-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
+          { kind: "result", id: "scope-call", output },
+          { kind: "bash", id: "change-call", command: `bun .claude/tools/aidlc.ts engine ${command}` },
+          { kind: "result", id: "change-call", output: "Switched to mvp: 22 stages (7 done), 19 approval gates." },
+          { kind: "text" },
+        ]);
+        const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+        expect(result.rc, `${format}: ${typed}`).toBe(0);
+        expect(result.out, `${format}: ${typed}`).toBe("");
+      }
+    }
+    // A print naming another scope proves nothing, so the stop is still blocked.
+    const proj = makeProject();
+    seedActive(proj);
+    const output = terminalModifierDispatch(proj, ["--scope", "poc"], "scope change --scope poc");
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "/aidlc --scope mvp" },
+      { kind: "bash", id: "scope-call", command: "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp" },
+      { kind: "result", id: "scope-call", output },
+      { kind: "text" },
+    ]);
+    const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+    expect(result.rc).toBe(0);
+    expect(JSON.parse(result.out).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(h) a guard-policy next whose print names a different value still blocks (#1369)", () => {
     const proj = makeProject();
     seedActive(proj);
