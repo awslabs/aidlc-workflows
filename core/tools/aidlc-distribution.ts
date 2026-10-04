@@ -105,6 +105,20 @@ export function isSafeOnboardingPath(value: unknown, harnessDir: string): value 
     value.startsWith(`${harnessDir}/`);
 }
 
+// A managed block names a file inside the project and a marker that is a
+// plain word, so nothing read or written through it (the team's file, its copy
+// in root-blocks) leaves the project. Config's projection check and the
+// engine's root-file fallback both hold a managed block to this.
+export function managedBlockIsSafe(integration: Pick<RootIntegration, "path" | "marker" | "policy">): boolean {
+  try {
+    safeRelativePath(integration.path, "root integration path");
+  } catch {
+    return false;
+  }
+  return integration.policy === "managed-block" && typeof integration.marker === "string" &&
+    /^[a-z0-9-]+$/.test(integration.marker);
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -229,10 +243,7 @@ export function validateProjectionDescriptor(
     if (integration.policy === "jsonc-settings" && !jsoncRootMembers(readFileSync(path, "utf-8"))?.members.length) {
       throw new Error(`${root}: ${safe} must ship a JSON object with at least one setting`);
     }
-    if (
-      integration.policy === "managed-block" &&
-      (typeof integration.marker !== "string" || !/^[a-z0-9-]+$/.test(integration.marker))
-    ) {
+    if (integration.policy === "managed-block" && !managedBlockIsSafe(integration)) {
       throw new Error(`${root}: ${safe} has an invalid managed-block marker`);
     }
     if (

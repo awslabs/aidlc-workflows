@@ -26,17 +26,21 @@
 //   4. A cursorless call resolves `default` (activeSpace fallback).
 //   5. Round-trip default → teamB → default restores the original bytes.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { addRootBlocks, repointHarnessIncludes } from "../../core/tools/aidlc-includes.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -664,5 +668,59 @@ describe("t-active-space-includes: AI-DLC's part of the team's root files", () =
     expect(addRootBlocks(configured)).toEqual([]);
     expect(readFileSync(join(configured, ".gitignore"), "utf-8")).toBe("node_modules\n");
     expect(readdirSync(configured)).not.toContain("AGENTS.md");
+  });
+
+  test("files the Cursor installer manages are left to it", () => {
+    const root = copiedProject();
+    const installed = "node_modules\n\n# BEGIN AIDLC CURSOR\naidlc/active-space\n# END AIDLC CURSOR\n";
+    writeFileSync(join(root, ".gitignore"), installed);
+    writeFileSync(join(root, "AGENTS.md"), "<!-- BEGIN AIDLC CURSOR -->\n# AI-DLC\n<!-- END AIDLC CURSOR -->\n");
+    expect(addRootBlocks(root)).toEqual([]);
+    expect(readFileSync(join(root, ".gitignore"), "utf-8")).toBe(installed);
+  });
+
+  test("nothing outside the project is read or written, whatever the harness folder declares", () => {
+    const root = copiedProject();
+    const outside = freshRoot();
+    const descriptorPath = join(root, ".aidlc", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8"));
+    const escaping = `../${basename(outside)}/escaped`;
+    descriptor.rootIntegrations.push(
+      { path: escaping, policy: "managed-block", marker: "escape" },
+      { path: "linked/AGENTS.md", policy: "managed-block", marker: "linked" },
+      { path: "notes.md", policy: "managed-block", marker: "../../../outside" },
+    );
+    writeFileSync(descriptorPath, `${JSON.stringify(descriptor)}\n`);
+    for (const marker of ["escape", "linked"]) {
+      writeFileSync(join(root, ".aidlc", "tools", "data", "root-blocks", marker), "export EVIL=1\n");
+    }
+    symlinkSync(outside, join(root, "linked"), "dir");
+    // The team's AGENTS.md is a link to a file outside: it is not written through.
+    writeFileSync(join(outside, "AGENTS.md"), "# elsewhere\n");
+    symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
+    expect(addRootBlocks(root)).toEqual([".gitignore"]);
+    expect(existsSync(join(outside, "escaped"))).toBe(false);
+    expect(readdirSync(outside).sort()).toEqual(["AGENTS.md"]);
+    expect(readFileSync(join(outside, "AGENTS.md"), "utf-8")).toBe("# elsewhere\n");
+    expect(existsSync(join(root, "notes.md"))).toBe(false);
+  });
+
+  test("a part written at session start names the person's active space", () => {
+    const root = copiedProject();
+    mkdirSync(join(root, "aidlc", "spaces", "team-b", "memory", "phases"), { recursive: true });
+    writeFileSync(join(root, "aidlc", "spaces", "team-b", "memory", "org.md"), "# org team-b\n");
+    writeFileSync(join(root, "aidlc", "active-space"), "team-b\n");
+    const started = spawnSync(process.execPath, [join(root, ".aidlc", "hooks", "aidlc-session-start.ts")], {
+      cwd: root,
+      input: "{}",
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc", AIDLC_HARNESS_NAME: "copilot" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(started.status, `${started.stdout}${started.stderr}`).toBe(0);
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("<!-- BEGIN AI-DLC:agents -->");
+    expect(agents).toContain("@aidlc/spaces/team-b/memory/org.md");
+    expect(agents).not.toContain("@aidlc/spaces/default/memory/");
   });
 });

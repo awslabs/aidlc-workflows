@@ -2096,6 +2096,27 @@ describe("t294 instruction-file doctor row", () => {
     expect(missingOnboarding.label).toContain("missing (.codex/onboarding.md)");
   });
 
+  test("in a copy config never ran in, AGENTS.md needs AI-DLC's part where the engine can add it", () => {
+    const project = temp("aidlc-t294-copy-agents-");
+    cpSync(join(DIST, "codex", ".codex"), join(project, ".codex"), { recursive: true });
+    cpSync(join(DIST, "codex", "aidlc"), join(project, "aidlc"), { recursive: true });
+    const agentsPath = join(project, "AGENTS.md");
+    const part = readFileSync(join(project, ".codex", "tools", "data", "root-blocks", "agents"), "utf-8").trim();
+    writeFileSync(agentsPath, `# Shop\n\n<!-- BEGIN AI-DLC:agents -->\n${part}\n<!-- END AI-DLC:agents -->\n`);
+    expect(instructionFileDoctorCheck(project, ".codex").pass).toBe(true);
+    // An earlier release's text the team changed: the session start cannot
+    // add the part, so the doctor says so instead of calling it intact.
+    writeFileSync(agentsPath, `${readFileSync(join(DIST, "codex", "AGENTS.md"), "utf-8")}\nOur own line.\n`);
+    const edited = instructionFileDoctorCheck(project, ".codex");
+    expect(edited.pass).toBe(false);
+    expect(edited.label).toContain("conflict (AGENTS.md)");
+    // The team's own file, before the session start adds the part.
+    writeFileSync(agentsPath, "# Shop\n");
+    const own = instructionFileDoctorCheck(project, ".codex");
+    expect(own.pass).toBe(false);
+    expect(own.label).toContain("missing (AGENTS.md)");
+  });
+
   test("an unsafe onboarding path is ignored like an absent descriptor field", () => {
     const project = install("codex");
     const descriptorPath = join(project, ".codex", "tools", "data", "aidlc-projection.json");

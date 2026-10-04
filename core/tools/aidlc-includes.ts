@@ -40,8 +40,10 @@
 // pointer in place, recoverable by re-running.
 
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import {
+  assertProjectionPathHasNoSymlinks,
+  managedBlockIsSafe,
   mergeBlock,
   type ProjectionDescriptor,
   type RootIntegration,
@@ -382,8 +384,9 @@ function readSafe(path: string): string | null {
 // part with config's own rule, at the same two moments as the includes: after
 // the team's content, or as the whole file when there is none. A part that is
 // exactly what a release shipped is brought up to date; a part the team
-// changed, and every file config manages, is left as it is. Best-effort: a
-// file that cannot be read or merged is skipped, never corrupted.
+// changed, and every file config or the Cursor installer manages, is left as
+// it is. Best-effort: a file that cannot be read or merged is skipped, never
+// corrupted, and nothing outside the project is read or written.
 export function addRootBlocks(projectDir: string): string[] {
   const written: string[] = [];
   const parts = new Map<string, {
@@ -403,13 +406,22 @@ export function addRootBlocks(projectDir: string): string[] {
     let descriptor: ProjectionDescriptor;
     try {
       descriptor = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8")) as ProjectionDescriptor;
+      if (descriptor.harnessDir !== harness.harnessDir || descriptor.distribution !== harness.distribution) continue;
     } catch {
       continue;
     }
     const configured = existsSync(join(data, "aidlc-manifest.json"));
-    for (const integration of descriptor.rootIntegrations ?? []) {
-      if (integration.policy !== "managed-block") continue;
-      const text = readSafe(rootBlockPath(harness.root, integration));
+    for (const integration of Array.isArray(descriptor.rootIntegrations) ? descriptor.rootIntegrations : []) {
+      // Config's own check on a managed block: a path inside the project and a
+      // plain marker, and no symlink on the way to the copy in root-blocks.
+      if (integration?.policy !== "managed-block" || !managedBlockIsSafe(integration)) continue;
+      const blockPath = rootBlockPath(harness.root, integration);
+      try {
+        assertProjectionPathHasNoSymlinks(projectDir, relative(projectDir, blockPath).split(sep).join("/"));
+      } catch {
+        continue;
+      }
+      const text = readSafe(blockPath);
       if (text === null) continue;
       const part = parts.get(integration.path) ?? {
         integration,
@@ -431,6 +443,7 @@ export function addRootBlocks(projectDir: string): string[] {
     const target = join(projectDir, path);
     let current = "";
     try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
       const stat = lstatSync(target, { throwIfNoEntry: false });
       if (stat && !stat.isFile()) continue;
       if (stat) {
@@ -441,10 +454,14 @@ export function addRootBlocks(projectDir: string): string[] {
     } catch {
       continue;
     }
+    // A file the Cursor installer manages already holds AI-DLC's part, under
+    // that installer's own markers; it stays the installer's to update.
+    if (/^(?:# |<!-- )BEGIN AIDLC [A-Z]+/m.test(current)) continue;
     const merged = mergeBlock(path, current, shipped, part.integration.marker || basename(path), [...part.legacy]);
     if (merged.error || merged.value === undefined || merged.value === current) continue;
     if (merged.currentHash && !merged.currentBlockShipped) continue;
     try {
+      assertProjectionPathHasNoSymlinks(projectDir, path);
       writeFileAtomic(target, merged.value);
       written.push(path);
     } catch {

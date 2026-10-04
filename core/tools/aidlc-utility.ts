@@ -7294,14 +7294,15 @@ function ensureWorkspaceDirs(
       }
     }
   }
+  // A copy that config never ran in gets AI-DLC's part of .gitignore and
+  // AGENTS.md, after the team's own content. Before the includes are aligned,
+  // so a part written here points at the active space too.
+  addRootBlocks(projectDir);
   // Align the harness-native includes with the active space at bootstrap (first
   // /aidlc). A no-op when they already point there (the common default-cursor
   // case) — so this never dirties a single-team committed tree; it self-heals a
   // tree whose cursor and includes drifted out of sync.
   repointHarnessIncludes(projectDir, activeSpace(projectDir));
-  // A copy that config never ran in gets AI-DLC's part of .gitignore and
-  // AGENTS.md, after the team's own content.
-  addRootBlocks(projectDir);
 }
 
 function waitAtIntentCreateChangeControlSnapshotBarrier(): void {

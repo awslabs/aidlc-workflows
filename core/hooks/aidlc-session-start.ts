@@ -225,16 +225,16 @@ if (sessionId) {
 }
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
-// harness-native includes before the no-workflow early exit.
+// harness-native includes before the no-workflow early exit. A copy that
+// config never ran in first gets AI-DLC's part of .gitignore and AGENTS.md,
+// after the team's own content, so a part written here is aligned too.
 ensureActiveSpaceCursor(projectDir);
+addRootBlocks(projectDir);
 try {
   repointHarnessIncludes(projectDir, selection.space);
 } catch {
   // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
 }
-// A copy that config never ran in gets AI-DLC's part of .gitignore and
-// AGENTS.md, after the team's own content.
-addRootBlocks(projectDir);
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
