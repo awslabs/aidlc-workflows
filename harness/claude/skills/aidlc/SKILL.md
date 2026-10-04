@@ -113,6 +113,8 @@ For an isolated run's reviewer, add `--single` to both `aidlc-log.ts review` cal
 
 **In-session configuration (`--config [section]`).** When a terminal `print` directive names configuration, read current state first with `{{INVOKE}} config <section> --show --json`; for a bare alias, ask which sections to consider; for a named section, always ask what to change there, offering the choices `{{INVOKE}} config <section> --help` lists and leaving it unchanged, even when it is already clean. Gather changes conversationally, use the native question picker for enumerable choices, and skip any section the human leaves unchanged. Land each accepted section with exactly one `{{INVOKE}} config <section> <explicit value flags> --yes`, relaying the human's answers verbatim; show the command and output. Never invent values or run bare `{{INVOKE}} config --yes`. After landing or decline, STOP: do not call `next`, advance, resume, or run a stage.
 
+**Model and effort requests.** When the person asks in plain words to change an agent's model or effort, run `{{INVOKE}} config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes` (`--local` instead of `--project` when it is only for them; add `--model <id>` for a model), print its output, and stop. Never edit the `aidlc-*-agent` files for this.
+
 **Guard-recovery execution.** After the human selects an executable remedy, branch on its `interaction`:
 
 - `command`: execute the exact returned `command`, backed by its structured `operation`, in the emitted native or source form. The selection is sufficient to attempt this command; it is not Plan Approval or a review verdict. Follow any remaining `action` through the existing protocol only after success.

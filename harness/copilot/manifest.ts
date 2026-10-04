@@ -136,6 +136,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before runners became typed-only (it had no
           // line on reading a runner typed in a headless run).
           "sha256:1095316799b8630bcb498539cb82b9b0907fa7aa69cdfb3ee6a9b489c8ed42e3",
+          // The variant shipped before the onboarding named the command for a
+          // model or effort request.
+          "sha256:d35dbc2ff6a2cad09144e8a625144bfbce4c0e91212a2da39d45da11198474f4",
         ],
       },
     },

@@ -123,10 +123,11 @@ knob and is ignored under `--check`; a stray `AIDLC_TIER_CAP` in CI must not
 change the determinism measurement. The packager prints a notice when it
 ignores one and names the active cap and source on every capped write run.
 
-To opt a SINGLE agent out instead, edit the projected value in the installed
-harness directory (for example, set `model: opus` on one Claude agent `.md`).
-The edit survives until a later `aidlc config` refresh replaces that
-framework-owned file after reporting the local modification.
+To opt a SINGLE agent out instead, record an exception with
+`aidlc config models --agent <name> --effort <value> [--model <id>] --project --yes`.
+Config writes it into the projected agent file. A hand edit to that file is
+reported as drift by `aidlc config models --check`, and the next `aidlc config`
+puts the recorded value back.
 
 ---
 
@@ -194,7 +195,7 @@ Agent display names and example knowledge files are authoritative in each agent'
 ## How to Modify an Agent
 
 - **Change tools**: Add or edit a `tools:` allowlist in frontmatter to narrow the agent; omit it to inherit the full session toolset. A `tools:` list drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed.
-- **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed project instead, edit the projected `model:` in its harness agent file (Claude Code accepts aliases, full ids, and `inherit`).
+- **Change tier**: Edit `tier:` to `judgment`, `balanced`, or `templated` and regenerate (`bun scripts/package.ts`). To force a specific model on ONE agent in an installed project instead, run `aidlc config models --agent <name> --effort <value> --model <id> --project --yes` (Claude Code accepts aliases, full ids, and `inherit`); a hand edit to the projected agent file is put back by the next `aidlc config`.
 - **Change behavior**: Edit the markdown body sections (responsibilities, principles).
 - **Change stage assignments**: Edit `lead_agent` / `support_agents` in the relevant stage files (`core/aidlc-common/stages/`), then regenerate with `bun scripts/package.ts` — the compiled stage graph is derived from stage frontmatter, never hand-edited.
 
