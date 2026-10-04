@@ -420,6 +420,37 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(true);
   }, TIMEOUT);
 
+  // A live run built two Units one at a time with checkpoints. At the first
+  // Unit's checkpoint the agent surfaced each stage that Unit had walked, and
+  // three were refused because Current Stage stays on functional-design until
+  // every Unit is past it. A stage of that open per-Unit run is the Unit's own.
+  test("built one Unit at a time, each stage the Unit walked is surfaced while Current Stage waits", () => {
+    const pd = mkWorkspaceProject();
+    const state = (iteration: string) =>
+      "# AI-DLC State Tracking\n- **Current Stage**: functional-design\n- **Scope**: classic\n" +
+      `- **Construction Checkpoints**: enabled\n- **Construction Iteration**: ${iteration}\n`;
+    const surface = (slug: string) => spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", slug, "--project-dir", pd],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    writeFileSync(seededStateFile(pd), state("unit-major"));
+    for (const slug of ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]) {
+      const surfaced = surface(slug);
+      expect(surfaced.status, `${slug}: ${surfaced.stderr}`).toBe(0);
+      expect(JSON.parse(surfaced.stdout).stage_slug ?? slug).toBe(slug);
+    }
+    // A stage outside that run is still refused.
+    const outside = surface("requirements-analysis");
+    expect(outside.status).toBe(1);
+    expect(outside.stderr).toContain('slug mismatch: requested "requirements-analysis" but Current Stage is "functional-design"');
+    // Built stage by stage, Current Stage is the stage that just ran.
+    writeFileSync(seededStateFile(pd), state("stage-major"));
+    const stageMajor = surface("nfr-requirements");
+    expect(stageMajor.status).toBe(1);
+    expect(stageMajor.stderr).toContain('slug mismatch: requested "nfr-requirements" but Current Stage is "functional-design"');
+  }, TIMEOUT);
+
   // The ritual's two commands, run the way an agent got them wrong live: the
   // refusal names the value to pass, so the next attempt is the right one.
   test("a wrong --slug or a learnings --checkpoint is refused with the way to run it", () => {

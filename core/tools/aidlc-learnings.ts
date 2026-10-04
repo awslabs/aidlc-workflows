@@ -127,6 +127,7 @@ import {
   resolveProjectDir,
   resolveWorkflowSelection,
   runtimeGraphPath,
+  unitMajorConstructionStageSlugs,
   spacesRoot,
   validSpaceFlag,
   withAuditLock,
@@ -342,6 +343,15 @@ function resolveMemoryPath(
   return derived;
 }
 
+// Built one Unit at a time, Current Stage stays on the first per-Unit stage
+// every Unit has not finished while a Unit walks the later ones, so a stage
+// of that same open per-Unit run is the Unit's own.
+function unitWalkStage(stateContent: string, current: string, slug: string): boolean {
+  if (getField(stateContent, "Construction Iteration")?.trim() !== "unit-major") return false;
+  const block = unitMajorConstructionStageSlugs(getField(stateContent, "Scope")?.trim() ?? "", stateContent);
+  return block.includes(current) && block.includes(slug);
+}
+
 // The §13 ritual runs while the just-completed stage is still the Active
 // (Current Stage) row at the approval gate. Reject a slug that isn't the
 // active one — the orchestrator must surface the stage it just ran.
@@ -350,7 +360,7 @@ function assertActiveStage(stateContent: string, slug: string): void {
   if (current === null) {
     fail("state file has no Current Stage field", 1);
   }
-  if (current !== slug) {
+  if (current !== slug && !unitWalkStage(stateContent, current, slug)) {
     // --slug takes a stage's slug. When the value is no stage at all (an
     // intent's record name is the usual one), name the active stage to pass.
     const retry = !findStageBySlug(slug) && findStageBySlug(current)

@@ -2097,7 +2097,7 @@ The tool-as-actor half of the stage-protocol §13 learning ritual. `surface` rea
 
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
-| `surface --slug <stage-slug>` | Read-only. Partition `memory.md` entries into keep-candidates (Interpretations / Deviations / Tradeoffs) and parked open questions; print a structured JSON candidate set | — |
+| `surface --slug <stage-slug>` | Read-only. Partition `memory.md` entries into keep-candidates (Interpretations / Deviations / Tradeoffs) and parked open questions; print a structured JSON candidate set. The slug is the stage that just ran: the Current Stage, or, while Construction builds one Unit at a time, any per-Unit stage of the open run, since Current Stage waits on the first one until every Unit is past it | — |
 | `persist --slug <stage-slug> --selections-json <path>` | Write each confirmed learning as a dated practice (default scope project) to the `project.md` / `team.md` memory file in the space bound when `surface` ran, with audit and locking pinned to that same surface-time space/intent; for a Sensor-binding learning, scaffold a project-tier manifest and append its id to the originating stage's `sensors:` frontmatter — both writes inside one `withAuditLock` | `RULE_LEARNED`, `SENSOR_PROPOSED` |
 
 Each entry in the selections file's `selections[]` names its candidate with `candidate_id`, and `id` — the spelling `surface` prints for each candidate — is accepted as an alias; the selection schema is stated in full in the stage protocol's §13 step 5.
