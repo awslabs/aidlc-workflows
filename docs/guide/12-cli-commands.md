@@ -1381,7 +1381,8 @@ only after the person acts, the steps that turn them on; elsewhere, that
 `/aidlc --doctor` shows whether AI-DLC's hooks run here. It never asks the
 person to reply again.
 
-Only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence.
+Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
+or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).
 `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
 the fence. Any attempt to set `guard.human-presence` refuses the whole update
 with a non-zero exit and this message:
@@ -1495,9 +1496,11 @@ aidlc config flags --show
 
 Use `--project` instead of `--local` to share the recorded switch with the
 project. Real environment variables take precedence over recorded config flags.
-Recording or clearing a switch changes only that settings file and refreshes no
-harness files, so it also works while a workflow is running: the next check
-reads it, with no restart. AI-DLC's managed `.gitignore` block already lists
+Recording or clearing a switch changes only that settings file (and AI-DLC's
+gitignored note of how it was set,
+`aidlc/.aidlc-sessions/recorded-switches.json`) and refreshes no harness files,
+so it also works while a workflow is running: the next check reads it, with no
+restart. AI-DLC's managed `.gitignore` block already lists
 `aidlc.settings.local.json`; on an install from before that, the first `--local`
 record keeps the file out of git through the clone's own `.git/info/exclude`
 instead of editing `.gitignore`. Neither settings file counts as your code, so
@@ -1509,6 +1512,27 @@ command that undoes it. With no `--local`, `--project`, or `--global`, a
 clears the switch from every file that records it. A switch is on while any of
 the files records it. A command that also changes
 another flag, or adds `--download`, is a refresh and waits for the workflow.
+
+A switch counts the moment it is recorded, however it was set: this command, a
+terminal, or an edit to the file. The nine that take a check away from you
+(plan approval, review freeze, reviewer read scope, human presence, summary
+confirmation and its check, the stage output check, the revision backstop, and
+the pipeline handoff check) are always said. The next step the agent relays
+carries one line naming the check, since when, how it was set, and the command
+that turns it back on, for example:
+
+> The review freeze check is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Say "turn it back on" to restore it (aidlc config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes).
+
+When no message of yours in the chat stood behind it, the line says `set from a
+terminal or a file, not from your chat` instead. Every new chat opens with the
+same line while the check stays off (except on opencode, which shows no
+session-start context), and `config flags --show` and the doctor Flags row (a
+warning, which does not change doctor's exit code) list it. Say "turn it back
+on" and the agent runs that command; if something else still keeps the check
+off (the environment variable, or another settings file), the command says so
+and names it. During a plan-approval lockout the agent's own `config flags
+--bypass` passes once you have spoken since the last decision (never from an
+unattended run), and `--clear-bypass` always passes.
 
 #### `/aidlc --plan-approval` - Plan approval
 
@@ -2218,7 +2242,9 @@ path, both leave out .NET `bin/`, `obj/`, and `out/` beside a `.csproj`,
 `.fsproj`, or `.vbproj` file, and the fallback also skips dependency and cache
 directories such as `node_modules/` and tool byproduct files such as
 `.DS_Store`, so a `dotnet build` during the scan does not invalidate it. A path
-named in `--paths` is always read. A space+repo lock keeps
+named in `--paths` is always read. When the workspace root is the repository
+root, both also leave out AI-DLC's own files, as `codekb-scope-diff` does
+(below). A space+repo lock keeps
 the two values from straddling a concurrent publication. The returned
 `store_generation`, `source_fingerprint`, and `paths` are inputs to
 `codekb-publish`.
@@ -2263,6 +2289,7 @@ This is a **direct utility invocation**, not an `/aidlc codekb-scope-diff` comma
 bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo>
 bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --compare <timestamp.md>
 bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --mint --paths src/payments/,src/billing/
+bun .claude/tools/aidlc-utility.ts codekb-scope-diff --repo <repo> --check <timestamp.md>
 ```
 
 The reverse-engineering rerun guard. The codekb store is space-level and
@@ -2286,15 +2313,28 @@ new knowledge into it cumulatively, so the stage checks first:
 - **Mint mode** (`--mint --paths <a,b,...>`) prints the fingerprint the
   architect pastes into the scope block at synthesis time (`unknown` outside
   a git work tree or when a pathspec is invalid).
+- **Check mode** (`--check <timestamp.md>`) reads a timestamp written for
+  publication, such as the staged candidate, and prints `VALID` with what its
+  scope block records and whether its fingerprint matches the source now
+  (`current`, `stale`, or `unknown`), or `INVALID` with the parser's reason. It
+  needs no store, so a first scan can check its candidate before publishing.
 
 Add `--json` for the structured shape. Always exits 0 with the verdict in the
 output (except usage errors); writes nothing, no audit event. The fingerprint
-is a `git write-tree` over a temporary index restricted to the analyzed paths,
-excluding the framework-owned `aidlc/` tree when the workspace root is the
-repository root. It tracks source working-tree content without invalidating
-itself when codekb/state artifacts are written; rebases or squashes that
-rewrite history do not fool it, and reverting an edit restores the original
-fingerprint.
+is a `git write-tree` over a temporary index restricted to the analyzed paths.
+When the workspace root is the repository root it leaves out AI-DLC's own
+files, which the scan never reads: the `aidlc/` workspace, the harness
+directories (`.claude/`, `.kiro/`, `.codex/`, `.cursor/`, `.opencode/`,
+`.aidlc/`), the `aidlc`-named agents, hooks and skills and the generated stage
+runners under `.github/` and `.agents/`, every root file an installed
+harness's projection writes into (such as `.gitignore`, `AGENTS.md`,
+`.mcp.json`, `.vscode/settings.json`, `opencode.json`, and Cursor's
+`install.ts`), and `aidlc.settings.json` and `aidlc.settings.local.json`. So
+an AI-DLC update, a setting change, or committing the install leaves the store
+`CURRENT`; only a change to the project's own files makes it `STALE`. It tracks
+source working-tree content without invalidating itself when codekb/state
+artifacts are written; rebases or squashes that rewrite history do not fool
+it, and reverting an edit restores the original fingerprint.
 
 ### `aidlc-utility detect` - read-only workspace scan
 

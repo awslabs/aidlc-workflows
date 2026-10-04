@@ -84,6 +84,10 @@ All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` 
 [Mermaid sequence or flow diagrams showing how key business transactions are implemented across components]
 ```
 
+AI-DLC ships no Mermaid validator, so there is none to look for: check each
+diagram by reading it, keep to `flowchart` and `sequenceDiagram` syntax, and put
+the text fallback beneath it.
+
 ### Run Record (reverse-engineering-timestamp.md)
 
 Start reverse-engineering-timestamp.md with this section, so a reader sees
@@ -112,7 +116,7 @@ ACTUALLY covered deeply, not what the stage aspired to cover:
 scope_version: 1
 kind: partial
 intent: [active intent slug]
-fingerprint: [output of the mint command in stage Step 3 - verbatim; it prints "unknown" when not computable]
+fingerprint: [output of the mint command below - verbatim; it prints "unknown" when not computable]
 analyzed:
   paths:
     - [repo-relative dir (trailing slash) or file analyzed deeply, one per line]
@@ -123,6 +127,33 @@ shallow:
     - [areas only skimmed]
 ```
 ````
+
+How the tools read this block (everything you need to fill it):
+
+- Mint the `fingerprint:` line with
+  `{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --mint --paths <analyzed.paths, comma-separated>`
+  (omit `--repo` only for an unrecorded project-root repo) and paste its
+  output verbatim.
+- The fingerprint covers the files under `analyzed.paths` as they are on disk,
+  committed or not. It leaves out ignored files, .NET `bin/`, `obj/` and `out/`
+  beside a project file, and, when the repository is the workspace root,
+  AI-DLC's own workspace, install and settings. So `./` is right for a full
+  scan that left build output unopened.
+- `shallow.paths` is a record for people; no tool hashes or compares it. The
+  next run's coverage compare reads `analyzed.paths` and `components`. A list
+  with nothing in it is written `paths: []`.
+- `intent:` is shown back by the tools and checked by none; write the
+  intent's `slug` from `intents.json`.
+- Publishing checks that the staging directory holds exactly the nine files,
+  that this block parses under the rules below, that the snapshot paths cover
+  `analyzed.paths`, and that `fingerprint:` equals a fresh mint over
+  `analyzed.paths`. It does not read the Run Record.
+- Check the finished block, in the staged
+  `reverse-engineering-timestamp.md`, with
+  `{{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --check <that file>`
+  (same `--repo` rule as the mint). It prints `VALID`, what it read, and
+  whether the fingerprint matches the source now, or `INVALID` and what to
+  fix. That is the parser publication uses.
 
 Rules:
 - `kind: full` only when the scan genuinely covered the whole repo deeply; `analyzed.paths` MUST include the repo root (`./`). Anything less is `kind: partial`.

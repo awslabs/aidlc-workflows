@@ -410,7 +410,7 @@ export const ROUTES: readonly Route[] = [
       { command: "update [args]", summary: "install and activate a framework release" },
     ],
     all: [
-      "update [--version <version>] [--channel <stable|preview>] [--from <dir>] [--release-base-url <url>] [--release-api-url <url>] [--ca-bundle <path>] [--offline] [--check|--dry-run] [--json|--quiet]",
+      "update [--version <version>] [--channel <stable|preview>] [--from <dir>] [--release-base-url <url>] [--release-api-url <url>] [--ca-bundle <path>] [--offline] [--check|--dry-run] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -427,7 +427,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
-    all: ["rollback [--version <version>|--list] [--allow-harness-loss]"],
+    all: ["rollback [--version <version>|--list] [--allow-harness-loss] [--yes]"],
   },
   {
     id: "top-use",
@@ -445,7 +445,7 @@ export const ROUTES: readonly Route[] = [
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "use <version>", summary: "select an exact machine release" }],
     all: [
-      "use <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--json|--quiet]",
+      "use <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline] [--yes] [--json|--quiet]",
     ],
   },
   {
@@ -763,7 +763,7 @@ export const ROUTES: readonly Route[] = [
     group: "jump",
     kind: "noun-passthrough",
     classification: "passthrough",
-    verbs: ["resolve", "execute"],
+    verbs: ["resolve", "execute", "reopen"],
     tool: TOOLS.jump,
     ...HIDDEN_ENGINE,
   },
@@ -2689,11 +2689,8 @@ async function dispatchPinnedVersion(
   const projectDir = dispatcherProjectDirFrom(argv);
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
-  const {
-    reserveDispatchedVersion,
-    resolvePinnedDispatch,
-  } = await import("./aidlc-lifecycle.ts");
-  const result = resolvePinnedDispatch(argv, projectDir);
+  const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");
+  const result = resolvePinnedDispatch(argv, projectDir, { reserve: true });
   if (result.kind === "none") return null;
   if (result.kind === "failure") {
     return renderDispatcherFailure(
@@ -2703,7 +2700,7 @@ async function dispatchPinnedVersion(
       result.remediation,
     );
   }
-  const releaseReservation = reserveDispatchedVersion(result.version);
+  const releaseReservation = result.release;
   if (!releaseReservation) {
     text(
       2,

@@ -45,6 +45,12 @@ export interface FullSuiteResult extends SuiteIdentity {
   omittedLegs: string[];
 }
 
+/** The legs whose status this run's purpose does not accept: an omitted leg
+ *  must be skipped, every other leg must pass. */
+export function unmetLegs(legs: Record<string, string>, omittedLegs: readonly string[]): Array<[string, string]> {
+  return Object.entries(legs).filter(([job, status]) => status !== (omittedLegs.includes(job) ? "skipped" : "success"));
+}
+
 /** Every purpose has an explicit omission set; all other declared jobs are required. */
 export function fullSuiteResult(
   needs: SuiteNeeds,
@@ -78,7 +84,7 @@ export function fullSuiteResult(
     validTestSelection &&
     VERIFICATION_FAMILIES.includes(verificationFamily) &&
     (purpose === "live-verification" || verificationFamily === "all") &&
-    Object.entries(legs).every(([job, status]) => status === (omittedLegs.includes(job) ? "skipped" : "success"));
+    unmetLegs(legs, omittedLegs).length === 0;
   return {
     ...identity,
     purpose,
@@ -125,8 +131,7 @@ if (import.meta.main) {
       console.error(`::error::${label} requires verificationFamily=all`);
     }
     console.error(`::error::Incomplete full suite for ${result.sha || process.env.FULL_SUITE_REF || "unknown ref"}: ` +
-      Object.entries(result.legs).filter(([job, status]) => status !== (result.omittedLegs.includes(job) ? "skipped" : "success"))
-        .map(([job, status]) => `${job}=${status}`).join(", "));
+      unmetLegs(result.legs, result.omittedLegs).map(([job, status]) => `${job}=${status}`).join(", "));
     process.exitCode = 1;
   }
 }

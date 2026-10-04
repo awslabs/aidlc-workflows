@@ -791,6 +791,123 @@ describe("t304 copied projection configuration", () => {
     }
   }, 180_000);
 
+  // A runtime unpacked outside the project, as the copy channel ships it.
+  function unpackedRuntime(harness: string): string {
+    const root = temp("aidlc-t304-unpacked-");
+    cpSync(join(DIST, harness), join(root, harness), { recursive: true });
+    return join(root, harness, `.${harness}`, "tools", "aidlc.ts");
+  }
+
+  test("a harness added by a runtime unpacked elsewhere prints a fix that runs as shown", async () => {
+    const tool = unpackedRuntime("codex");
+    const release = releaseServer(AIDLC_VERSION);
+    const env = { AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH };
+    try {
+      // The project has no .codex tool yet, so the fix names the tool that ran,
+      // from another folder and from the project alike.
+      const elsewhere = temp("aidlc-t304-unpacked-cwd-");
+      for (const fromProject of [false, true]) {
+        const project = fullCopyProject();
+        const cwd = fromProject ? project : elsewhere;
+        const target = fromProject ? [] : ["--project-dir", project];
+        const result = await runAsync([BUN, tool, "config", "--harness", "codex", ...target, "--yes"], { cwd, env });
+        expect(result.status, result.stdout + result.stderr).toBe(4);
+        const fix = fixLine(result.stdout);
+        expect(fix).toStartWith("bun ");
+        expect(fix).toContain(join("codex", ".codex", "tools", "aidlc.ts"));
+        expect(fix).toEndWith(
+          ` config --harness codex${fromProject ? "" : ` --project-dir ${quoteForShell(project)}`} --yes --download`,
+        );
+        const followed = await followFix(fix, cwd, env);
+        expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+        expect(existsSync(join(project, ".codex", "tools", "data", "harness.json"))).toBe(true);
+      }
+    } finally {
+      release.stop();
+    }
+  }, 240_000);
+
+  test("a printed command names a tool that exists from where it ran", async () => {
+    const elsewhere = temp("aidlc-t304-unpin-cwd-");
+    const runtime = unpackedRuntime("codex");
+    for (const fromRuntime of [true, false]) {
+      const project = fullCopyProject();
+      const own = join(project, ".claude", "tools", "aidlc.ts");
+      writeFileSync(join(project, ".aidlc-version"), "not a release\n");
+      const result = await runAsync([BUN, fromRuntime ? runtime : own, "config", "--project-dir", project], {
+        cwd: elsewhere,
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(2);
+      const line = result.stdout.split("\n").find((item) => item.startsWith("usage: ")) ?? "";
+      const fix = line.slice("usage: ".length);
+      // The project's own tool keeps its path; any other names itself.
+      expect(fix).toStartWith("bun ");
+      expect(fix).toContain(fromRuntime ? join("codex", ".codex", "tools", "aidlc.ts") : quoteForShell(own));
+      expect(fix).toEndWith(` config --unpin --project-dir ${quoteForShell(project)}`);
+      const followed = await followFix(fix, elsewhere, {});
+      expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+      expect(existsSync(join(project, ".aidlc-version"))).toBe(false);
+    }
+  }, 120_000);
+
+  test("a harness override pointing at the runtime never turns its printed command into the project's tool", async () => {
+    const runtime = unpackedRuntime("codex");
+    const project = fullCopyProject();
+    // The project ships its own .codex dispatcher, which must never run.
+    mkdirSync(join(project, ".codex", "tools"), { recursive: true });
+    writeFileSync(
+      join(project, ".codex", "tools", "aidlc.ts"),
+      'import { writeFileSync } from "node:fs";\nwriteFileSync(new URL("./ran", import.meta.url), "");\n',
+    );
+    writeFileSync(join(project, ".aidlc-version"), "not a release\n");
+    const env = { AIDLC_HARNESS_DIR: relative(project, join(runtime, "..", "..")) };
+    const result = await runAsync([BUN, runtime, "config"], { cwd: project, env });
+    expect(result.status, result.stdout + result.stderr).toBe(2);
+    const fix = result.stdout.split("\n").find((item) => item.startsWith("usage: "))?.slice("usage: ".length) ?? "";
+    expect(fix).toContain(join("codex", ".codex", "tools", "aidlc.ts"));
+    expect(fix).toEndWith(" config --unpin");
+    const followed = await followFix(fix, project, env);
+    expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+    expect(existsSync(join(project, ".codex", "tools", "ran"))).toBe(false);
+    expect(existsSync(join(project, ".aidlc-version"))).toBe(false);
+  }, 120_000);
+
+  test("the models view run from another project prints commands for the project it shows", async () => {
+    const shown = fullCopyProject();
+    const caller = fullCopyProject();
+    const runtime = unpackedRuntime("claude");
+    const show = [BUN, runtime, "config", "models", "--show", "--project-dir", shown];
+    const result = await runAsync(show, { cwd: caller });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const run = /nothing yet - run '(.+)'$/m.exec(result.stdout)?.[1] ?? "";
+    expect(run).toEndWith(` config models --preset balanced --project --yes --project-dir ${quoteForShell(shown)}`);
+    const callerBefore = transactionState(caller);
+    const followed = await followFix(run, caller, {});
+    expect(followed.status, followed.stdout + followed.stderr).toBe(0);
+    expect(transactionState(caller)).toEqual(callerBefore);
+    expect((await runAsync(show, { cwd: caller })).stdout).not.toContain("nothing yet");
+  }, 120_000);
+
+  test("in a project with two harnesses, the models view's commands name the harness it shows", async () => {
+    const project = fullCopyProject();
+    const added = runCopied(project, ["config", "--harness", "codex", "--from", join(DIST, "codex"), "--yes"]);
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    const tool = join(project, ".claude", "tools", "aidlc.ts");
+    const show = [BUN, tool, "config", "models", "--show", "--harness", "codex"];
+    const result = await runAsync(show, { cwd: project });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const preset = /nothing yet - run '(.+)'$/m.exec(result.stdout)?.[1] ?? "";
+    expect(preset).toBe("bun .claude/tools/aidlc.ts config models --preset balanced --project --yes --harness codex");
+    const list = /Full per-agent list: (.+)$/m.exec(result.stdout)?.[1] ?? "";
+    expect(list).toBe("bun .claude/tools/aidlc.ts config models --show --json --harness codex");
+    const listed = await followFix(list, project, {});
+    expect(listed.status, listed.stdout + listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).data.harness).toBe("codex");
+    const recorded = await followFix(preset, project, {});
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    expect((await runAsync(show, { cwd: project })).stdout).not.toContain("nothing yet");
+  }, 120_000);
+
   // A workflow left running, as a stage question leaves one.
   function startWorkflow(project: string): string {
     const intents = join(project, "aidlc", "spaces", "default", "intents");

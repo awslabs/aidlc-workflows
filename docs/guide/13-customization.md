@@ -458,7 +458,7 @@ Creation with an explicit `relaxed` flag says:
 
 Other fence names and `off` use the corresponding name or value; unattended runs append the driver guidance. Memory-held strict refuses before applying a switch or checking a bypass and instead names the memory file to edit. A human-presence refusal names no switch; it says no reply from the person is on record and what happened to one they already sent (the harness's hook steps, or `/aidlc --doctor`), and never asks them to reply again.
 
-Human presence is the strictest of the five. It is what makes your approval yours, so neither Guard Policy nor a per-work setting lowers it: only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower the fence.
+Human presence is the strictest of the five. It is what makes your approval yours, so neither Guard Policy nor a per-work setting lowers it: only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does, set machine-wide or recorded with `aidlc config flags --bypass`, and AI-DLC tells you while it is off. `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower the fence.
 
 ### Who asked for this: the authority chain
 
@@ -553,15 +553,15 @@ The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code
 ```json
 "permissions": {
   "allow": [
-    "Read", "Edit", "Write",
+    "Edit(/**)",
     "Bash(bun .claude/tools/*)",
     "Bash(date -u *)",
-    "Glob", "Grep", "Task", "WebSearch"
+    "Task", "WebSearch"
   ]
 }
 ```
 
-The copy channel pre-approves `Bash(bun .claude/tools/*)`; the native release rewrites that entry to `Bash(aidlc engine *)`. `Bash(date -u *)` covers the timestamps the protocol asks the conductor to take. There is no bare `Bash`: Claude Code matches every subcommand of a compound command on its own and strips only a fixed set of known-safe environment variables, so an engine command stays pre-approved only when it runs bare. A `cd ... &&` prefix, an absolute `$CLAUDE_PROJECT_DIR` path, a `VAR=1` prefix, a pipe into `jq`, or a `$(...)` capture all prompt. A project's own build and test commands sit outside the list and prompt once; answering "Yes, and don't ask again" saves a rule for them in `.claude/settings.local.json`.
+`Edit(/**)` covers creating and changing files anywhere in the project: in project settings Claude Code anchors a leading `/` at the project root. Writes outside the project ask, as they do in Claude Code by default. Reading and searching inside the project needs no entry. The copy channel pre-approves `Bash(bun .claude/tools/*)`; the native release rewrites that entry to `Bash(aidlc engine *)`. `Bash(date -u *)` covers the timestamps the protocol asks the conductor to take. There is no bare `Bash`: Claude Code matches every subcommand of a compound command on its own and strips only a fixed set of known-safe environment variables, so an engine command stays pre-approved only when it runs bare. A `cd ... &&` prefix, an absolute `$CLAUDE_PROJECT_DIR` path, a `VAR=1` prefix, a pipe into `jq`, or a `$(...)` capture all prompt. A project's own build and test commands sit outside the list and prompt once; answering "Yes, and don't ask again" saves a rule for them in `.claude/settings.local.json`.
 
 ### How permissions work
 

@@ -102,17 +102,14 @@ import {
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
+  activeWorkflowDescriptions,
   DEFAULT_SPACE,
-  getField,
-  listIntents,
-  listSpaces,
+  fileIdentity,
   normalizeProjectFlagsRecord,
   RECORDABLE_PROJECT_BYPASSES,
-  stateFilePath,
-  isArchivedIntent,
-  isCompletedIntent,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -127,6 +124,7 @@ import {
   aidlcInvocation,
   discoverProjectHarnesses,
   isCompiledExecutable,
+  projectedDispatcher,
   type ProjectHarness,
   hasControlCharacters,
   quoteCommandArgument,
@@ -162,6 +160,8 @@ import {
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
   harnessOwnsModelAccess,
+  providerAnswerIsTheSession,
+  sessionModelAccessFact,
   availableScopeNames,
   completionInstruction,
   copilotCliTrust,
@@ -225,6 +225,7 @@ import {
   type ResolvedAidlcSettings,
   type SettingsTarget,
 } from "./aidlc-settings.ts";
+import { recordSwitchChange, switchesOffLines } from "./aidlc-recorded-switches.ts";
 
 type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -888,7 +889,7 @@ export function validatePublicConfigArgs(input: readonly string[]): string | nul
 }
 
 function modelPolicyHelp(): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   return [
     "Choose model and effort policy for each agent",
@@ -985,6 +986,14 @@ function modelStateData(
   };
 }
 
+// A `config models` command about one harness of the project, run as shown
+// from where the user is: it names that harness when the project has more
+// than one, since config would otherwise ask which.
+function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
+  const named = discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+  return `${configInvocationFor(projectDir)} config models ${args}${named}${projectTarget(projectDir)}`;
+}
+
 function showModels(
   policy: ModelPolicyRecord | null,
   tiers: AgentTiers,
@@ -1055,13 +1064,13 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
-      : `nothing yet - run '${aidlcInvocation()} config models --preset balanced --project --yes'`
+      : `nothing yet - run '${modelsCommand(projectDir, harness, "--preset balanced --project --yes")}'`
   }\n`;
   writeMenuText(output);
   for (
     const line of commandRowLines(
       "Full per-agent list: ",
-      `${aidlcInvocation()} config models --show --json`,
+      modelsCommand(projectDir, harness, "--show --json"),
       menuWidth(),
     )
   ) {
@@ -1375,7 +1384,7 @@ function validateDiagnosticArgs(
 }
 
 function diagnosticHelp(section: DiagnosticSection): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   const common = [
     heading("Inspection:", out),
@@ -1717,6 +1726,12 @@ function checkDiagnosticSection(
   const providersUnrecorded = section === "providers" && records.providers === null;
   const cleanMessage = section === "providers" && harnessOwnsModelAccess(selected.harness)
     ? `providers needs no answer for ${selected.harness}; its model access is harness-managed`
+    : providersUnrecorded && providerAnswerIsTheSession(selected.harness)
+    ? `providers needs no answer for ${selected.harness}; ` +
+      sessionProvidersDetail(
+        selected.harness,
+        `'${configInvocationFor(projectDir)} config providers --harness ${selected.harness}${projectTarget(projectDir)}'`,
+      )
     : providersUnrecorded
     ? `providers has no recorded answer for ${selected.harness}; the shipped fallback is in use. ` +
       `Record one with '${configCommand("providers")}'`
@@ -2157,7 +2172,7 @@ function configInputIsTty(): boolean {
 }
 
 function configCommand(args = ""): string {
-  return `${aidlcInvocation()} config${args ? ` ${args}` : ""}`;
+  return `${configInvocationFor()} config${args ? ` ${args}` : ""}`;
 }
 
 function commandToken(value: string): string {
@@ -2178,19 +2193,42 @@ function projectTarget(projectDir: string): string {
     : ` --project-dir ${quoteCommandArgument(projectDir)}`;
 }
 
+// Whether two paths reach one file. File identity settles it, since one file
+// has several spellings (a link, or a Windows 8.3 short name Bun's realpath
+// keeps) and two files can differ only in case. A missing path reaches none.
+function sameFile(left: string, right: string): boolean {
+  try {
+    const identity = fileIdentity(left);
+    return identity.ino !== 0n && sameFileIdentity(identity, fileIdentity(right));
+  } catch {
+    return false;
+  }
+}
+
 // How a printed command starts so it runs from where the user is: `aidlc`, or
-// a Bun projection's tool path, rooted at the project when not run from it.
-function configInvocationFor(projectDir: string): string {
-  return aidlcInvocation() === "aidlc"
-    ? "aidlc"
-    : ranFromProject(projectDir)
-    ? aidlcInvocation()
-    : `bun ${quoteCommandArgument(join(projectDir, runtimeHarnessDir(), "tools", "aidlc.ts"))}`;
+// the Bun tool that ran this command. The project's own tool is named from the
+// project when run there and by its path in the project when not. Any other
+// tool (a runtime unpacked elsewhere, which may be adding a harness the project
+// does not have yet) is named by its own path, unless it is the one under the
+// working directory. In the source tree the project's own tool stands in.
+function configInvocationFor(projectDir = process.cwd()): string {
+  const invocation = aidlcInvocation();
+  if (invocation === "aidlc") return invocation;
+  const ran = projectedDispatcher();
+  // A projection's relative invocation names the harness directory it was
+  // built for, whatever the environment says the harness is.
+  const harnessDir = ran === null ? runtimeHarnessDir() : basename(dirname(dirname(ran)));
+  const toolIn = (root: string) => join(root, harnessDir, "tools", "aidlc.ts");
+  if (ran === null || sameFile(ran, toolIn(projectDir))) {
+    return ranFromProject(projectDir)
+      ? invocation
+      : `bun ${quoteCommandArgument(toolIn(projectDir))}`;
+  }
+  return sameFile(ran, toolIn(process.cwd())) ? invocation : `bun ${quoteCommandArgument(ran)}`;
 }
 
 // The command the user ran, printed again with the flags that resolve it, so
-// it runs as shown from where they are. A Bun projection's tool path is
-// relative to the project, so from elsewhere it is rooted there instead.
+// it runs as shown from where they are.
 function configRerunWith(
   input: readonly string[],
   projectDir: string,
@@ -2281,11 +2319,13 @@ function setupMapRows(
   const workspace = outstanding.filter((action) => action.section === "workspace");
   // Harness-owned model access is complete regardless of a legacy answer.
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
-  const providerNeeds = providerManaged &&
-    (providers.length > 0 || records.providers === null);
   // Where the session sets every agent, there is no policy to ask for: the
   // row names the host's session as the lever and is never walked.
   const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  const sessionAccess = records.providers === null &&
+    providerAnswerIsTheSession(modelHarness(distribution));
+  const providerNeeds = providerManaged && !sessionAccess &&
+    (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
   const modelDetail = sessionSet
     ? sessionModelsDetail(modelHarness(distribution), policy)
@@ -2326,6 +2366,11 @@ function setupMapRows(
     : "no unmet host trust";
   const providerDetail = !providerManaged
     ? `model access comes with ${projectionProductName(root, distribution)}; nothing for AI-DLC to configure`
+    : sessionAccess
+    ? sessionProvidersDetail(
+      modelHarness(distribution),
+      `\`${configCommandForHarness(harnessDir, "providers")}\``,
+    )
     : records.providers === null
     ? "no recorded answers; provider access unverified"
     : providers.length > 0
@@ -2466,6 +2511,15 @@ function existingProjectionOutstanding(
   ];
 }
 
+// What setup and `config providers --check` say where no answer means the
+// session's own model access (providerAnswerIsTheSession).
+function sessionProvidersDetail(harness: ModelHarness, command: string): string {
+  // Cursor takes Bedrock keys only in the IDE; its CLI always uses Cursor's backend.
+  const where = harness === "cursor" ? " in the Cursor IDE" : "";
+  return `${sessionModelAccessFact(harness)}; ` +
+    `to use your own Amazon Bedrock access${where} instead, run ${command}`;
+}
+
 function setupLedgerActions(
   projectDir: string,
   harnessDir: string,
@@ -2498,7 +2552,7 @@ function setupLedgerActions(
     // Only chase a missing answer where AI-DLC configures the model provider.
     // Asking a subscription-harness user to "choose and configure a model
     // provider" is a instruction they cannot complete and never needed.
-    if (record === null && !harnessOwnsModelAccess(harness)) {
+    if (record === null && !harnessOwnsModelAccess(harness) && !providerAnswerIsTheSession(harness)) {
       next.push({
         section: "providers",
         id: "provider-record-missing",
@@ -2807,7 +2861,7 @@ function validateChoiceArgs(
 }
 
 function choiceHelp(section: ChoiceSection): string {
-  const invoke = aidlcInvocation();
+  const invoke = configInvocationFor();
   const out = process.stdout;
   const specific = section === "flags"
     ? [
@@ -3076,6 +3130,7 @@ function showChoiceSection(
         resolved.flags,
         resolved,
       ),
+      switches: switchesOffLines(projectDir),
     };
   } else {
     const completion = records.project?.completions;
@@ -3164,6 +3219,7 @@ function showChoiceSection(
     for (const bypass of resolved.flags?.bypasses ?? []) {
       output += `  Bypass enabled: ${bypass} ${sourceLabel(bypass)}\n`;
     }
+    for (const line of data.switches as string[]) output += `  ${line}\n`;
     const files = data.files as ReturnType<typeof flagFiles>;
     if (files.length === 0) {
       output += "  Files carrying flags: none\n";
@@ -4565,7 +4621,7 @@ function prepareRefreshSource(
       throw new Error(
         `${currentHarnessData}: harness.json contains legacy policy key(s) ${policyKeys.join(", ")}. ` +
           `Remove ${policyKeys.join(", ")} from ${currentHarnessData}, then run ` +
-          `'${aidlcInvocation()} config' to record policy in aidlc.settings.json.`,
+          `'${configCommand()}' to record policy in aidlc.settings.json.`,
       );
     }
     for (const [key, value] of Object.entries(current)) {
@@ -4917,26 +4973,6 @@ function prepareRefreshSource(
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
   }
-}
-
-function activeWorkflowDescriptions(projectDir: string): string[] {
-  const active: string[] = [];
-  for (const space of listSpaces(projectDir)) {
-    for (const intent of listIntents(projectDir, space.name)) {
-      if (
-        isCompletedIntent(intent) ||
-        isArchivedIntent(intent) ||
-        !intent.dirName
-      ) continue;
-      const path = stateFilePath(projectDir, intent.dirName, space.name);
-      if (regularFile(path)) {
-        const status = getField(readFileSync(path, "utf-8"), "Status");
-        if (status === "Completed" || status === "Archived") continue;
-      }
-      active.push(`${space.name}/${intent.dirName}`);
-    }
-  }
-  return active;
 }
 
 function assertRefreshSafe(projectDir: string): void {
@@ -6923,8 +6959,84 @@ function planManagedFiles(
       continue;
     }
     operations.push({ kind: "remove", path: rel, expected: expected(target) });
-    actions.push({ path: rel, action: "remove" });
+    actions.push({ path: rel, action: "remove", detail: NO_LONGER_SHIPPED });
   }
+}
+
+// A refresh names every file it removes because the release no longer ships
+// it, on dry run and apply alike. Several files in one folder are one line, so
+// a retired skill or knowledge folder stays readable.
+const NO_LONGER_SHIPPED = "no longer shipped";
+const RETIRED_LIST_LINES = 10;
+
+function retiredFilesReport(
+  projectDir: string,
+  actions: readonly PlannedAction[],
+  version: string,
+  removed: boolean,
+): string[] {
+  const paths = actions
+    .filter((item) => item.action === "remove" && item.detail === NO_LONGER_SHIPPED)
+    .map((item) => item.path)
+    .sort();
+  if (paths.length === 0) return [];
+  const byFolder = new Map<string, string[]>();
+  for (const path of paths) {
+    const folder = path.slice(0, path.lastIndexOf("/") + 1);
+    byFolder.set(folder, [...(byFolder.get(folder) ?? []), path]);
+  }
+  // Each path is shown as it would be typed, so no control character in a
+  // recorded name reaches the terminal.
+  const rows = [...byFolder].flatMap(([folder, files]) =>
+    folder && files.length > 1
+      ? [{ line: `${quoteCommandArgument(folder)} (${files.length} files)`, files: files.length }]
+      : files.map((file) => ({ line: quoteCommandArgument(file), files: 1 }))
+  );
+  const shown = rows.length > RETIRED_LIST_LINES ? rows.slice(0, RETIRED_LIST_LINES - 1) : rows;
+  const more = rows.slice(shown.length).reduce((sum, row) => sum + row.files, 0);
+  const lines = [
+    `${removed ? "Removed" : "Will remove"} ${
+      paths.length === 1 ? "1 file that is" : `${paths.length} files that are`
+    } no longer part of AI-DLC ${version}:`,
+    ...shown.map((row) => `  ${row.line}`),
+    ...(more > 0 ? [`  and ${more} more files`] : []),
+  ];
+  // The command runs from the same shell, so it names the project when this
+  // did not run from it, and is printed only when it means exactly what it
+  // says: every name is plain text the shell and git read literally (as every
+  // release's are), and the project can be written out.
+  const plain = (path: string) => quoteCommandArgument(path) === path && !/^[-:]/.test(path);
+  if (
+    paths.every(plain) &&
+    (ranFromProject(projectDir) || !hasControlCharacters(projectDir)) &&
+    insideGitRepository(projectDir) &&
+    gitTracksEvery(projectDir, paths)
+  ) {
+    const git = ranFromProject(projectDir) ? "git" : `git -C ${quoteCommandArgument(projectDir)}`;
+    lines.push(
+      paths.length === 1
+        ? `To get it back, run \`${git} restore ${paths[0]}\`.`
+        : `To get one back, run \`${git} restore <path>\`.`,
+    );
+  }
+  return lines;
+}
+
+// The way back is named only when it works: git tracks every removed file.
+function gitTracksEvery(projectDir: string, paths: readonly string[]): boolean {
+  const env = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
+  // One pathspec per top-level entry keeps the command line short.
+  const tops = [...new Set(paths.map((path) => path.split("/")[0]))];
+  const listed = spawnSync(
+    "git",
+    // A repository's fsmonitor program is never run just to word this line.
+    ["--literal-pathspecs", "-c", "core.fsmonitor=false", "-C", projectDir, "ls-files", "-z", "--", ...tops],
+    { encoding: "utf-8", env, timeout: 10_000 },
+  );
+  if (listed.status !== 0) return false;
+  const tracked = new Set(listed.stdout.split("\0"));
+  return paths.every((path) => tracked.has(path));
 }
 
 function planRootIntegrations(
@@ -7390,7 +7502,7 @@ function planRemovedRootIntegrations(
         continue;
       }
       operations.push({ kind: "remove", path, expected: expected(targetPath) });
-      actions.push({ path, action: "remove" });
+      actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       continue;
     }
     const text = readFileSync(targetPath, "utf-8");
@@ -7415,7 +7527,7 @@ function planRemovedRootIntegrations(
       value = value.replace(/^\r?\n/, "").replace(/\r?\n\r?\n$/, "\n");
       if (!value) {
         operations.push({ kind: "remove", path, expected: expected(targetPath) });
-        actions.push({ path, action: "remove" });
+        actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
         operations.push(writeOperation(path, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired managed block" });
@@ -7465,7 +7577,7 @@ function planRemovedRootIntegrations(
         actions.push({ path, action: "preserve", detail: "retired settings were changed or already removed" });
       } else if (contribution.created && jsoncRootMembers(value)?.members.length === 0 && value.replace(/\s/g, "") === "{}") {
         operations.push({ kind: "remove", path, expected: expected(targetPath) });
-        actions.push({ path, action: "remove" });
+        actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
       } else {
         operations.push(writeOperation(path, value, expected(targetPath)));
         actions.push({ path, action: "merge", detail: "removed retired settings" });
@@ -7500,7 +7612,7 @@ function planRemovedRootIntegrations(
       continue;
     }
     operations.push({ kind: "remove", path, expected: expected(targetPath) });
-    actions.push({ path, action: "remove" });
+    actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
   }
 }
 
@@ -7593,7 +7705,7 @@ function prepareModelsSection(
         : failure(
             `model policy drift: ${drift.join("; ")}`,
             EXIT.failure,
-            configCommand("models --show"),
+            modelsCommand(projectDir, harness, "--show"),
           ),
       options,
     );
@@ -7770,6 +7882,7 @@ function handleSettingsOnlySection(
             record: resolved.flags,
             effective: effectiveProjectFlagValues(resolved.flags),
             sources: resolved.sources,
+            switches: switchesOffLines(projectDir),
           },
     ), options);
     return true;
@@ -7872,10 +7985,21 @@ function handleSettingsOnlySection(
       if (note) notes.push(note);
       invalidateSettingsCache(path);
     }
-    if (options.mode === "human") writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+    const switchLines = section === "flags"
+      ? recordSwitchChange(projectDir, target, currentFile, nextFile)
+      : [];
+    if (options.mode === "human") {
+      writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", switchLines);
+    }
     emitResult(success(
       `configured ${section} settings in ${path}`,
-      { target, path, ...(notes.length > 0 ? { notes } : {}) },
+      {
+        target,
+        path,
+        ...(notes.length > 0 ? { notes } : {}),
+        ...(switchLines.length > 0 ? { switches: switchLines } : {}),
+      },
     ), options);
   } catch (error) {
     emitResult(usage(
@@ -8045,11 +8169,18 @@ function recordBypassesOnly(
         );
       }
     }
+    // Which of the person's checks is now off or back on, in plain words.
+    // The lines above already name any other file that still records a
+    // cleared switch.
+    const switchLines = [...new Set(mutations.flatMap((change) =>
+      recordSwitchChange(projectDir, change.target, change.previous, change.next, { otherFiles: false })
+    ))];
     if (options.mode === "human") {
       writeMenuLines("", context.summaryLines);
       writeMenuLines("", context.notes.map((note) => `  Note: ${note}`));
       writeMenuLines("", changes.map((line) => `  ${line}`));
       writeMenuLines("", notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", switchLines.map((line) => `  ${line}`));
     }
     // With several harnesses and none named, no one harness's setup is the
     // person's to finish here.
@@ -8073,6 +8204,7 @@ function recordBypassesOnly(
         changes,
         outstandingActions,
         choices,
+        ...(switchLines.length > 0 ? { switches: switchLines } : {}),
       },
     ), options);
   } catch (error) {
@@ -8965,6 +9097,7 @@ export async function main(
         for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
       }
       if (options.mode === "human") {
+        writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, false));
         for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
       }
       const configuredSection = diagnosticsContext?.section ??
@@ -9057,6 +9190,10 @@ export async function main(
     } else {
       executeSettingsAndProjectMutation(settingsMutation, plan);
     }
+    // Said as soon as it is done, so no later step can leave it unsaid.
+    if (options.mode === "human") {
+      writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true));
+    }
     const excludeNote = excludeLocalSettingsFromClone(settingsExclude);
     if (excludeNote) prepared.notes.push(excludeNote);
     // The new routing is published only now that the project matches it: a
@@ -9087,6 +9224,14 @@ export async function main(
     if (settingsMutation && settingsMutation.target !== "global") {
       invalidateSettingsCache(settingsMutation.path);
     }
+    const switchLines = choicesContext?.section === "flags" && choicesContext.settings
+      ? recordSwitchChange(
+          projectDir,
+          choicesContext.settings.target,
+          choicesContext.settings.previous,
+          choicesContext.settings.next,
+        )
+      : [];
     if (modelsContext && options.mode === "human") {
       writeMenuLines("", modelsContext.summaryLines);
       writeMenuLines("", modelsContext.notes.map((note) => `  Note: ${note}`));
@@ -9098,6 +9243,7 @@ export async function main(
     if (choicesContext && options.mode === "human") {
       writeMenuLines("", choicesContext.summaryLines);
       writeMenuLines("", choicesContext.notes.map((note) => `  Note: ${note}`));
+      writeMenuLines("", switchLines);
     }
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -9192,6 +9338,7 @@ export async function main(
               },
             }
           : {}),
+        ...(switchLines.length > 0 ? { switches: switchLines } : {}),
       },
     ), options);
     if (

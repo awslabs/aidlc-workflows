@@ -131,6 +131,14 @@ then use the ignored local `dist/copilot/` output.
 - **One install, two surfaces.** Skills, personas, instructions, and hooks
   behave identically on the CLI and in VS Code agent mode; the divergences
   below are called out explicitly.
+- **Runners start only when you type them.** Every generated runner
+  (`/aidlc-bugfix`, `/aidlc-<stage>`, `/aidlc-init`, and the rest, plugin
+  runners included) carries `disable-model-invocation: true`, so the agent
+  never starts one on its own and the runners' descriptions stay out of
+  Copilot's skill list. Typing one works as before in VS Code chat and the
+  interactive CLI. A headless `copilot -p "/aidlc-bugfix ..."` hands your line
+  to the agent as plain text; the root `AGENTS.md` tells it to read that
+  runner's file and follow it, so the runner still runs.
 - **Questions render as numbered prose options.** Although both surfaces expose
   native picker tools, picker answers return as tool results and do not fire
   the trusted `UserPromptSubmit` event required by the human-presence guard.

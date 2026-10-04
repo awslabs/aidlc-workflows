@@ -61,6 +61,7 @@ import { dirname, join } from "node:path";
 import {
   errorMessage,
   frontmatterBlock,
+  hasRunnerGenMarker,
   isPluginEnabled,
   loadScopeMetadataAll,
   loadStageGraphAll,
@@ -387,20 +388,7 @@ function handleWrite(): string[] {
   return slugs;
 }
 
-const RUNNER_GEN_MARKER_KEY = "generated-by";
-const RUNNER_GEN_MARKER_VALUE = "aidlc-runner-gen";
-
 type RunnerSlugParser = (body: string) => string | null;
-
-function leadingFrontmatter(body: string): string | null {
-  return frontmatterBlock(body);
-}
-
-function hasRunnerGenMarker(body: string): boolean {
-  const frontmatter = leadingFrontmatter(body);
-  if (!frontmatter) return false;
-  return new RegExp(`^${RUNNER_GEN_MARKER_KEY}:\\s*${RUNNER_GEN_MARKER_VALUE}\\s*$`, "m").test(frontmatter);
-}
 
 function isLegacyGeneratedRunnerDirName(
   dirName: string,
