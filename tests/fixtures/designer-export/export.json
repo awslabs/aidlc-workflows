@@ -3344,6 +3344,7 @@
       "description": "Fix a specific bug",
       "runner": true,
       "skeleton": false,
+      "existingCode": true,
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
@@ -3750,6 +3751,7 @@
       ],
       "description": "Clean up existing code",
       "skeleton": false,
+      "existingCode": true,
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
@@ -3804,6 +3806,7 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false,
+      "existingCode": true,
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
