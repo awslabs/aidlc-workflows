@@ -9,8 +9,8 @@
 // replace the person's whole personal map inside the project, so AI-DLC writes
 // none there.
 //
-// Everything goes through Kiro's own CLI, so KIRO_HOME and Kiro's file format are
-// Kiro's concern:
+// Everything goes through Kiro's own CLI, so KIRO_HOME (unless a project's .env
+// sets it, see kiroEnv) and Kiro's file format are Kiro's concern:
 //   - models:  `kiro-cli chat --list-models --format json`
 //   - current: `kiro-cli settings list --format json`, run in an empty folder so
 //              no project file joins in
@@ -113,6 +113,14 @@ export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
   });
 }
 
+// The environment Kiro runs with. A KIRO_HOME that a project's .env sets is
+// dropped, so Kiro reads and writes the person's own settings, never a folder a
+// repository chose.
+export function kiroEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!setByDotenvFile("KIRO_HOME")) return env;
+  return Object.fromEntries(Object.entries(env).filter(([name]) => name.toUpperCase() !== "KIRO_HOME"));
+}
+
 function kiroSessionTestSeam(env: NodeJS.ProcessEnv = process.env): KiroSessionSeam | null {
   const raw = env.AIDLC_TEST_KIRO_SESSION_JSON;
   if (raw === undefined || setByDotenvFile("AIDLC_TEST_KIRO_SESSION_JSON")) return null;
@@ -146,7 +154,7 @@ export function kiroCliPath(env: NodeJS.ProcessEnv = process.env): string | null
 
 // Where Kiro keeps personal settings, for display only (Kiro owns the file).
 export function kiroPersonalSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
-  const path = join(env.KIRO_HOME || join(homedir(), ".kiro"), "settings", "cli.json");
+  const path = join(kiroEnv(env).KIRO_HOME || join(homedir(), ".kiro"), "settings", "cli.json");
   const home = homedir();
   return process.platform !== "win32" && path.startsWith(`${home}/`)
     ? `~${path.slice(home.length)}`
@@ -234,7 +242,7 @@ export function listKiroModels(
   }
   const result = spawnSync(cli, ["chat", "--list-models", "--format", "json"], {
     encoding: "utf-8",
-    env,
+    env: kiroEnv(env),
     timeout: timeoutMs,
   });
   if (result.status !== 0) return { ok: false, reason: "Kiro did not answer" };
@@ -256,7 +264,7 @@ export function readKiroPersonalSession(
       spawnSync(cli, ["settings", "list", "--format", "json"], {
         cwd: folder,
         encoding: "utf-8",
-        env,
+        env: kiroEnv(env),
         timeout: timeoutMs,
       })
     );
@@ -272,6 +280,11 @@ export function readKiroPersonalSession(
   }
   const model = values["chat.defaultModel"];
   const defaults = values["chat.modelDefaults"];
+  // The saved model is printed and passed back to Kiro, so settings that name
+  // anything but a plain model id are left alone, as if unreadable.
+  if (typeof model === "string" && model && model !== "auto" && !isPlainKiroId(model)) {
+    return { ok: false, reason: "Kiro settings were not readable" };
+  }
   return {
     ok: true,
     model: typeof model === "string" && model && model !== "auto" ? model : null,
@@ -315,7 +328,7 @@ export async function kiroEffortLevels(
     const levels = await new Promise<KiroEffort[] | null>((resolveLevels) => {
       const child = spawn(cli, ["acp", "--model", model], {
         cwd: folder,
-        env,
+        env: kiroEnv(env),
         stdio: ["pipe", "pipe", "ignore"],
       });
       let answer: KiroEffort[] | null = null;
@@ -391,7 +404,7 @@ export async function kiroEffortLevels(
       spawnSync(cli, ["chat", "--delete-session", sessionId], {
         cwd: folder,
         encoding: "utf-8",
-        env,
+        env: kiroEnv(env),
         timeout: SETTINGS_TIMEOUT_MS,
       });
     }
@@ -465,7 +478,7 @@ export function writeKiroPersonalSession(
     const failed = seam
       ? seam.failWrite === args[1]
       : withEmptyFolder((folder) =>
-        spawnSync(cli, args, { cwd: folder, encoding: "utf-8", env, timeout: SETTINGS_TIMEOUT_MS })
+        spawnSync(cli, args, { cwd: folder, encoding: "utf-8", env: kiroEnv(env), timeout: SETTINGS_TIMEOUT_MS })
       ).status !== 0;
     if (failed) {
       return {
