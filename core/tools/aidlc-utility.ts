@@ -316,6 +316,7 @@ import {
   readSessionIntentUuid,
   recordSessionIntentSwitch,
   clearSessionIntentHandoff,
+  markEngineTouch,
   LONE_INTENT_PREFIX,
   recordIntentKey,
   writeSessionIntentUuid,
@@ -8187,6 +8188,9 @@ ${stageProgress}
   failIntentCreateAt("before-state");
   writeStateFile(projectDir, stateContent, createdDir, createdSpace);
   failIntentCreateAt("after-state");
+  // Creating the work started its first stage. Record that advance on the new
+  // work itself, so a later chat on it that only talks ends like any other.
+  markEngineTouch(projectDir, createdDir, createdSpace);
 
   // Combined stdout summary (intent created + state-build). The state file and
   // every row above name the created record explicitly.

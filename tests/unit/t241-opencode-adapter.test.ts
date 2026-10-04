@@ -852,6 +852,42 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
   });
 
+  // A live run: new work made from one chat, then a new chat on it. A plain
+  // question there was followed by a hidden nudge that started the new work's
+  // first stage. The question ends the turn; an advance still leads to the nudge.
+  test("in a new chat on work made from another chat, a plain question gets no nudge, and an advance still does", async () => {
+    const root = freshInstalledProject();
+    const engine = (session: string, ...args: string[]) => {
+      const run = Bun.spawnSync({
+        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", ...args, "--project-dir", root],
+        cwd: root,
+        env: { ...process.env, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      return run.stdout.toString();
+    };
+    const offer = JSON.parse(engine("other-chat", "orchestrate", "next", "--scope", "poc", "build a lunch poll")) as { message?: string };
+    const request = /--request ([0-9a-f]{8})/.exec(String(offer.message))?.[1];
+    expect(request, String(offer.message)).toBeDefined();
+    engine("other-chat", "intent", "create", "--scope", "poc", "--request", request ?? "", "--label", "lunch-poll");
+
+    const { client, prompts } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "what does the lunch poll do?" }] });
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(0);
+
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "carry on" }] });
+    await Bun.sleep(20);
+    expect(JSON.parse(engine("main", "orchestrate", "next")).kind).not.toBe("print");
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+  });
+
   test("idle suppresses its nudge for an open logged question and restores it after the answer", async () => {
     const root = freshInstalledProject();
     seedStateFile(root, "state-brownfield-feature.md");
