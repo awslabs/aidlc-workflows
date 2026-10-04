@@ -216,7 +216,7 @@ switch to unit-major iteration or checkpoints, and one recorded while unit-major
 flooring was in force stays ignored by a Unit receipt's floor after a switch back to
 stage-major with checkpoints off, so Units finished before either switch keep their
 receipts. A Unit with its own reopen (a Unit-tagged `GATE_REJECTED`) has its receipts
-floored on that Unit in every mode, so the reopen stays its boundary across either switch. `UNIT_SKIPPED` settles one
+floored on that Unit in every mode, so the reopen stays its boundary across either switch. A stage's first `STAGE_STARTED` recorded after its Units finished in a unit-major walk (the late gate cascade, possibly after a switch back) is not a restart of it. `UNIT_SKIPPED` settles one
 unit's beat when the stage's condition does not apply to that unit: the unit
 owes the stage nothing in that attempt (like a unit whose kind prunes every
 output), while every other unit still does. The stage is marked skipped only

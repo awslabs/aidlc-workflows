@@ -1071,6 +1071,29 @@ describe("t260 finished Units keep their receipts across a Construction policy c
     expect(runNext(proj).out).not.toMatch(/"kind":"run-stage"[^\n]*"unit":"unit-a"/);
   });
 
+  // A unit-major walk finishes a later stage's Units before its first
+  // STAGE_STARTED; the late gate cascade can record that start after a switch.
+  test("a later stage's first start recorded after the switch back keeps its finished Units", () => {
+    policyProject("stage-major");
+    writeUnitArtifacts(proj, "unit-a");
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n") +
+        block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`) +
+        switchBack("2026-01-04T00:00:00Z") +
+        block("STAGE_STARTED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    // A second start is a real restart and starts the Units' work again.
+    appendFileSync(seededAuditShard(proj), block("STAGE_STARTED", "2026-01-06T00:00:00Z", `**Stage**: ${SLUG}\n`));
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+  });
+
   test("a switch and a stage start in the same second in different shards count as a restart", () => {
     policyProject("unit-major");
     appendFileSync(seededAuditShard(proj), switchBack("2026-01-05T00:00:00Z"));

@@ -31651,6 +31651,14 @@ function stageStartsUnderStageFlooring(
   return counted;
 }
 
+const UNIT_LIFECYCLE_EVENTS = new Set([
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
+  "UNIT_SKIPPED",
+]);
+
 // The stage starts recorded while unit-major flooring was in force, which a
 // Unit receipt's stage-major floor leaves out so a switch back keeps the Units
 // finished under unit-major. A start after the last change follows the current
@@ -31673,6 +31681,30 @@ function stageStartsUnderUnitFlooring(
       !after.some((other) => before(start, other) && before(other, change)));
     const candidates = firstAfter.length > 0 ? firstAfter : after;
     if (candidates.every((change) => before(start, change) && constructionPolicyFoundUnitMajor(change))) {
+      ignored.add(start);
+    }
+  }
+  // A unit-major walk finishes a later stage's Units before that stage's first
+  // STAGE_STARTED, which the late gate cascade records only when the earlier
+  // stage is approved, possibly after a switch back. That first start of the
+  // stage in its attempt, after a change that found unit-major flooring and
+  // after Unit rows of the stage, is not a restart of it.
+  const unitRows = rows.filter((row) => UNIT_LIFECYCLE_EVENTS.has(row.event));
+  const boundaries = rows.filter((row) => row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED");
+  for (const start of rows) {
+    if (start.event !== "STAGE_STARTED" || ignored.has(start)) continue;
+    const slug = auditBlockField(start.block, "Stage");
+    if (!slug || auditBlockField(start.block, "Workflow")?.startsWith("single-stage:")) continue;
+    const opened = (row: AuditShardEvent): boolean =>
+      before(row, start) && !boundaries.some((boundary) => before(row, boundary) && before(boundary, start));
+    const first = !rows.some((other) =>
+      other !== start && other.event === "STAGE_STARTED" &&
+      auditBlockField(other.block, "Stage") === slug && opened(other));
+    if (
+      first &&
+      changes.some((change) => before(change, start) && constructionPolicyFoundUnitMajor(change)) &&
+      unitRows.some((row) => auditBlockField(row.block, "Stage") === slug && opened(row))
+    ) {
       ignored.add(start);
     }
   }
