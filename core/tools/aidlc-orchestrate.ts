@@ -827,6 +827,7 @@ function attachLegacyKiroPlanApprovalChoices(
       directive.stage === "code-generation" &&
       directive.swarm_settled !== true &&
       directive.gate_only !== true &&
+      directive.build_settled !== true &&
       directive.construction_checkpoint === undefined &&
       directive.swarm_checkpoint === undefined &&
       directive.construction_policy?.completion_only !== true
@@ -3893,6 +3894,8 @@ type SteeringTokenPayload = {
   y?: { batch: number; units: string[] };
   // The step carries the person's Redo answer to the re-use question.
   e?: true;
+  // Every Unit on the step was built in this attempt (build_settled).
+  t?: true;
   h: string | null;
   // How the rules were cut into parts (steeringLayout). A part cut under one
   // limit is never continued with parts cut under another.
@@ -5300,6 +5303,7 @@ function markerSteeringPayload(
       !p.y.units.every((unit) => typeof unit === "string")
     )) ||
     (p.e !== undefined && p.e !== true) ||
+    (p.t !== undefined && p.t !== true) ||
     (p.h !== null && typeof p.h !== "string") ||
     (p.l !== undefined && typeof p.l !== "string")
   ) {
@@ -5348,6 +5352,7 @@ function steeringTokenPayload(
       ? { batch: directive.swarm_checkpoint.batch, units: directive.swarm_checkpoint.units }
       : undefined,
     e: directive.artifact_reuse ? true : undefined,
+    t: directive.build_settled === true ? true : undefined,
     h: route.stateHash,
     l: layout,
   };
@@ -8459,6 +8464,14 @@ function emitPerUnitRunStage(
       kinds?.get(lastUnit) ?? null,
     );
     directive.unit = lastUnit;
+    // When every Unit was built in this attempt, nothing on this beat plans or
+    // builds, so the plans they were built from are not asked about again. A
+    // beat whose Units have no completion receipt in this attempt (a loop-back
+    // over artifacts alone) may still apply a fix, so it is not marked.
+    const built = units.filter((u) => !ledger.skipped.has(u));
+    if (built.length > 0 && built.every((u) => ledger.receipts.has(u))) {
+      directive.build_settled = true;
+    }
     if (stateContent !== null) {
       const preflight = preflightDirective(
         projectDir,
@@ -12765,6 +12778,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
   if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");
+  if (payload.t === true) directive.build_settled = true;
   if (payload.j !== undefined && payload.u !== null && liveState !== null) {
     applyConstructionCheckpointShape(
       directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),

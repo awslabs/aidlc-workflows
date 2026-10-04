@@ -151,6 +151,14 @@ The same gate-only shape survives rule-delivery `continue` calls. Repeating
 `next` leaves the stage unchanged and follows the normal directive republication
 rules.
 
+When a per-Unit stage's grid is covered and every Unit it applies to has a
+`UNIT_COMPLETED` receipt in the current attempt, the gate beat on the last Unit
+carries `build_settled: true`: nothing on it plans or builds, so Code Generation
+does not route it through Plan Approval and the plans those Units were built from
+are not asked about again. The flag rides along on rule-delivery `continue` calls.
+A covered grid without those receipts (a Build-and-Test loop-back over artifacts
+alone) is not marked, because that beat can still apply a fix.
+
 | Transition | Trigger | Emitter |
 |---|---|---|
 | `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |

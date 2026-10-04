@@ -349,6 +349,10 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  // Every Unit this per-Unit stage covers was built in the current attempt, so
+  // the beat presents the stage gate with nothing left to plan or build. Set by
+  // the engine only; the conductor handles the beat as before.
+  build_settled?: true;
   // Gate-only re-entry after every autonomous swarm Unit and reviewer receipt
   // converged. Present only as literal true; the conductor must not rerun the
   // stage body or reviewer.
@@ -786,6 +790,7 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "build_settled",
   "conductor_persona",
   "next_stage",
   "unit",
@@ -817,6 +822,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
+      field !== "build_settled" &&
       field !== "legacy_plan_approval_choices" &&
       field !== "plan_approval",
   ),
@@ -1351,6 +1357,7 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalTrue(o, "build_settled", kind, errors);
   }
   // unit: optional on a run-stage directive (present only on a per-unit
   // Construction directive resolved to a concrete Unit of Work). A present
