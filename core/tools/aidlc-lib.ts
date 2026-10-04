@@ -31457,7 +31457,9 @@ export function teamUnitGateStatus(
 // unit-major block. A Construction policy change is not a boundary either: a
 // stage start recorded while stage-major flooring was in force (per the
 // CONSTRUCTION_POLICY_SET rows) keeps counting after a switch to unit-major
-// flooring, so the Units finished before the switch stay finished.
+// flooring, and a start recorded under unit-major flooring stays ignored after a
+// switch back to stage-major flooring, so the Units finished before either
+// switch stay finished.
 //
 // The no-boundary sentinel keeps fixture/recovery flows deterministic while
 // unstamped legacy rows still fail closed.
@@ -31527,6 +31529,7 @@ function latestMainWorkflowStageRunFloorFromRows(
   // flooring count, each with the ordinal it had there (its place among all of
   // this stage's starts), so its floor token is unchanged by the switch.
   const stageFloored = unitMajor ? stageStartsUnderStageFlooring(rowsInput) : null;
+  const unitFloored = unitMajor ? null : stageStartsUnderUnitFlooring(rowsInput);
   const startOrdinals = new Map(
     sortAttemptEvents(rowsInput.filter(stageStart)).map((row, index) => [row, index + 1]),
   );
@@ -31539,7 +31542,9 @@ function latestMainWorkflowStageRunFloorFromRows(
       if (row.event === "GATE_REJECTED") {
         return gateRejectionMatchesAttempt(row.block, slug, unit);
       }
-      return stageStart(row) && (stageFloored === null || stageFloored.has(row));
+      return stageStart(row) &&
+        (stageFloored === null || stageFloored.has(row)) &&
+        (unitFloored === null || !unitFloored.has(row));
     });
   rows.sort((a, b) => {
     if (a.timestamp !== b.timestamp) {
@@ -31618,6 +31623,31 @@ function stageStartsUnderStageFlooring(
     if (candidates.some((change) => !constructionPolicyFoundUnitMajor(change))) counted.add(start);
   }
   return counted;
+}
+
+// The stage starts recorded while unit-major flooring was in force, which
+// stage-major flooring leaves out so a switch back keeps the Units finished
+// under unit-major. A start after the last change follows the caller's current
+// stage-major flooring and counts; when same-second rows in different shards
+// leave the first change after a start unknown, it is left out only when every
+// candidate found unit-major flooring, the same reading as above.
+function stageStartsUnderUnitFlooring(
+  rows: readonly AuditShardEvent[],
+): Set<AuditShardEvent> {
+  const ignored = new Set<AuditShardEvent>();
+  const changes = rows.filter((row) => row.event === "CONSTRUCTION_POLICY_SET" && constructionPolicyRowComplete(row));
+  if (changes.length === 0) return ignored;
+  const before = attemptEventDefinitelyBefore;
+  for (const start of rows) {
+    if (start.event !== "STAGE_STARTED") continue;
+    const after = changes.filter((change) => !before(change, start));
+    if (after.length === 0) continue;
+    const firstAfter = after.filter((change) =>
+      !after.some((other) => before(start, other) && before(other, change)));
+    const candidates = firstAfter.length > 0 ? firstAfter : after;
+    if (candidates.every((change) => constructionPolicyFoundUnitMajor(change))) ignored.add(start);
+  }
+  return ignored;
 }
 
 // A policy row the typed setters wrote in full: a known field with a value,

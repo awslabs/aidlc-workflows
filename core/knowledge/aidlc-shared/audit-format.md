@@ -212,8 +212,9 @@ Unit-major stages key the floor to workflow/jump/rejection boundaries because
 their work can precede their own `STAGE_STARTED`. A changed Construction policy
 is not a boundary: a `STAGE_STARTED` recorded while stage-major flooring was in
 force (the policy the next `CONSTRUCTION_POLICY_SET` found) stays one after a
-switch to unit-major iteration or checkpoints, so Units finished before the
-switch keep their receipts. `UNIT_SKIPPED` settles one
+switch to unit-major iteration or checkpoints, and one recorded while unit-major
+flooring was in force stays ignored after a switch back to stage-major with
+checkpoints off, so Units finished before either switch keep their receipts. `UNIT_SKIPPED` settles one
 unit's beat when the stage's condition does not apply to that unit: the unit
 owes the stage nothing in that attempt (like a unit whose kind prunes every
 output), while every other unit still does. The stage is marked skipped only
@@ -223,7 +224,7 @@ once no unit owes it.
 |-------|------|-----------------|---------|
 | `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts | Timestamp, Mode | `tools/aidlc-state.ts set-unit-ownership` |
 | `UNIT_GATE_RHYTHM_SET` | Team-owned gate rhythm is set before unit activity starts | Timestamp, Rhythm | `tools/aidlc-state.ts set-unit-gate-rhythm` |
-| `CONSTRUCTION_POLICY_SET` | A typed setter applied a changed Construction Iteration, Checkpoints, or Execution value; the attempt floor reads it so switching to unit-major iteration or turning checkpoints on keeps finished Units' receipts | Timestamp, Field, Value, Previous Value, Construction Iteration, Construction Checkpoints | `tools/aidlc-state.ts set-construction-iteration`, `set-construction-checkpoints`, `set-construction-execution` |
+| `CONSTRUCTION_POLICY_SET` | A typed setter applied a changed Construction Iteration, Checkpoints, or Execution value; the attempt floor reads it so a switch in either direction (to unit-major iteration or checkpoints on, or back to stage-major with checkpoints off) keeps finished Units' receipts | Timestamp, Field, Value, Previous Value, Construction Iteration, Construction Checkpoints | `tools/aidlc-state.ts set-construction-iteration`, `set-construction-checkpoints`, `set-construction-execution` |
 | `UNIT_STARTED` | A unit's work begins on an inline per-unit stage; refused while another unit of the stage is open | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit start` |
 | `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Run floor, Reason, Next Action; optional Attempt Generation, Set Aside For (the Unit the person asked for meanwhile; the walk takes it first) | `tools/aidlc-state.ts unit pause` |
 | `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit, Run floor; optional Attempt Generation | `tools/aidlc-state.ts unit resume` |
