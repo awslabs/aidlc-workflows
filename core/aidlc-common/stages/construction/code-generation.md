@@ -294,8 +294,8 @@ Turning it back on (`config set plan-approval on`) is fine whenever they ask.
 #### When the workspace source cannot be read
 
 If `next` returns an error saying the workspace source cannot be bound, show it
-to the person. The fix is its first remedy: repair the source boundary it names,
-then run `next`. Only when the person themselves types `Override Plan Approval:
+to the person. The fix is its first remedy: repair the source boundary it names
+(`{{INVOKE}} doctor` names the path; run it yourself), then run `next`. Only when the person themselves types `Override Plan Approval:
 <reason>` in chat (never suggest it), record the break glass: this is the one
 case where you write the approval record yourself. Print the tags (use
 `--stage-level` instead of `--unit` for zero-Unit work):

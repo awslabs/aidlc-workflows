@@ -20378,12 +20378,12 @@ export function lastWorkspaceSourceFailure(): WorkspaceSourceFailure | null {
 }
 
 /** ` (reason: <code> at <path>)` for the last failed walk, or "" when none is recorded. */
+// The path is the workspace's own name, so the refusals that carry this
+// suffix leave it to the doctor, which names it on its source boundary row.
 export function workspaceSourceFailureSuffix(): string {
   const failure = lastSourceFailure;
   if (failure === null) return "";
-  const where = failure.path === undefined
-    ? ""
-    : ` at ${failure.repo === undefined ? failure.path : `${failure.repo}/${failure.path}`}`;
+  const where = failure.path === undefined ? "" : `; ${aidlcInvocation()} doctor names the path`;
   return ` (reason: ${failure.code}${where})`;
 }
 
