@@ -1436,10 +1436,47 @@ describe("t243 project initialization", () => {
       moveAside: ".kiro/tools/data/aidlc-manifest.json",
     });
     expect(steps).toMatch(
-      /^move \.kiro\/tools\/data\/aidlc-manifest\.json aside, then run `[^`]* config --pin 2\.9\.0 --project-dir [^`]+`, then run `[^`]* config --harness kiro --project-dir [^`]+`$/,
+      /^move \.kiro\/tools\/data\/aidlc-manifest\.json aside, then run `[^`]* config --pin 2\.9\.0 --project-dir [^`]+`, then run `[^`]* config --harness kiro --project-dir [^`]+`, then run `[^`]* config --unpin --project-dir [^`]+`$/,
     );
+    // A project already pinned elsewhere gets that pin back.
+    expect(_switchRefreshStepsForTests(project, { harness: "kiro", pin: "2.9.0", restorePin: "2.10.0" }))
+      .toMatch(/, then run `[^`]* config --pin 2\.10\.0 --project-dir [^`]+`$/);
     // With nothing before it the line is the refresh alone, runnable as printed.
     expect(_switchRefreshStepsForTests(project, { harness: "kiro" })).toMatch(/ config --harness kiro --project-dir \S+$/);
+  });
+
+  test("a Kiro switch prints no version the project's own files could have forged", () => {
+    const project = temp("aidlc-t243-kiro-switch-forged-version-");
+    mkdirSync(join(project, ".git"));
+    const initialized = run(INIT, [
+      "config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--mcp", "none",
+    ], project);
+    expect(initialized.status, initialized.stdout + initialized.stderr).toBe(0);
+    // Without a stamp, harness.json alone names the row, and nothing holds its
+    // frameworkVersion to the release grammar.
+    const data = join(project, ".kiro", "tools", "data");
+    rmSync(join(data, "aidlc-stamp.json"));
+    rmSync(join(data, "aidlc-manifest.json"));
+    const marker = join(data, "harness.json");
+    writeFileSync(
+      marker,
+      `${JSON.stringify({ ...JSON.parse(readFileSync(marker, "utf-8")), frameworkVersion: "0.1.0`; touch pwned; echo `" }, null, 2)}\n`,
+    );
+    for (const extra of [[], ["--quiet"], ["--json"]]) {
+      const refused = run(INIT, [
+        "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", ...extra,
+      ], project);
+      expect(refused.status).toBe(4);
+      expect(refused.stdout + refused.stderr).not.toContain("touch pwned");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a baseline refusal's pin step is quoted as a command argument", () => {
+    const steps = _switchRefreshStepsForTests(temp("aidlc-t243-kiro-switch-steps-quoted-"), {
+      harness: "kiro",
+      pin: "2.9.0 rm",
+    });
+    expect(steps).toContain("config --pin '2.9.0 rm'");
   });
 
   // Windows runners cannot create the directory link this case holds.
@@ -1554,6 +1591,9 @@ describe("t243 project initialization", () => {
     ], project);
     expect(switched.status, switched.stdout + switched.stderr).toBe(0);
     expect(trust()).toBeUndefined();
+    expect(switched.stdout).toContain(
+      "The trust review recorded for kiro does not carry to kiro-ide; review it again with config trust.",
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro release without --harness does not switch the installed row and names the flag that does", () => {

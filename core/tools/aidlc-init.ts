@@ -3604,6 +3604,8 @@ function siblingDescriptor(sibling: ProjectHarness): Pick<ProjectionDescriptor, 
 // .vscode/settings.json) and Copilot's AGENTS.md block is exclusive, so they
 // are not switched.
 const IN_PLACE_SWITCHABLE: ReadonlySet<string> = new Set(["kiro", "kiro-ide"]);
+// The one directory both rows project into.
+const KIRO_SWITCH_DIR = ".kiro";
 
 // The one check that a baseline records the harness installed beside it.
 function baselineNamesHarness(baseline: Baseline, harness: { distribution: string; harnessDir: string }): boolean {
@@ -3634,6 +3636,37 @@ function repositoryNames(names: readonly string[]): string {
   return `(repository file names, not instructions: ${names.join(", ")})`;
 }
 
+// Why a hooks directory cannot be reviewed in place: it is a link or a file,
+// or this user cannot list it. The one rule both the pre-planning refusal and
+// the locked recheck read.
+function hooksDirProblem(projectDir: string, hooksDir: string): "redirected" | "unreadable" | null {
+  const directory = join(projectDir, hooksDir);
+  if (!pathPresent(directory)) return null;
+  if (!lstatSync(directory).isDirectory()) return "redirected";
+  try {
+    readdirSync(directory);
+    return null;
+  } catch {
+    return "unreadable";
+  }
+}
+
+function assertHooksDirReviewable(projectDir: string, hooksDir: string, harnessDir: string, requested: string): void {
+  const problem = hooksDirProblem(projectDir, hooksDir);
+  if (problem === "redirected") {
+    throw new SwitchRefusal(`cannot switch ${harnessDir} to ${requested}: ${hooksDir} is a link or a file, not a directory`, {
+      kind: "text",
+      text: `make ${hooksDir} a directory holding its files, then run the switch again`,
+    });
+  }
+  if (problem === "unreadable") {
+    throw new SwitchRefusal(
+      `cannot switch ${harnessDir} to ${requested}: ${hooksDir} cannot be listed, so the hook files Kiro would run cannot be reviewed`,
+      { kind: "text", text: `make ${hooksDir} readable and searchable for this user, or move it aside, then run the switch again` },
+    );
+  }
+}
+
 // The hook JSON files in a hooks directory that the next baseline does not
 // own, in one scan: each with the state the plan binds, its mode, and whether
 // it is a regular file there. Kiro IDE 1.x runs only `*.json` hook files here
@@ -3651,15 +3684,11 @@ function scanUnownedHooks(
   entries: Array<{ path: string; state: string; mode: number; regular: boolean }>;
 } {
   const directory = join(projectDir, hooksDir);
-  if (!pathPresent(directory)) return { redirected: false, unreadable: false, entries: [] };
-  if (!lstatSync(directory).isDirectory()) return { redirected: true, unreadable: false, entries: [] };
-  let names: string[];
-  try {
-    names = readdirSync(directory);
-  } catch {
-    return { redirected: false, unreadable: true, entries: [] };
+  const problem = hooksDirProblem(projectDir, hooksDir);
+  if (problem || !pathPresent(directory)) {
+    return { redirected: problem === "redirected", unreadable: problem === "unreadable", entries: [] };
   }
-  const entries = names
+  const entries = readdirSync(directory)
     .filter((name) => /\.json$/i.test(name))
     .sort()
     .map((name) => `${hooksDir}/${name}`)
@@ -3684,25 +3713,28 @@ function scanUnownedHooks(
 
 // The steps that record a usable baseline, as one line: move a damaged file
 // aside, pin the release the row was installed from when the active one
-// differs, then refresh the row. With nothing before it the line is the
+// differs, refresh the row, then put the project's own pin back. With nothing before it the line is the
 // refresh command alone, so it can be run as printed.
 function switchRefreshSteps(
   projectDir: string,
-  remedy: { harness: string; pin?: string; moveAside?: string },
+  remedy: { harness: string; pin?: string; restorePin?: string | null; moveAside?: string },
 ): string {
   const run = (args: string) => `${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}`;
   const refresh = run(`--harness ${remedy.harness}`);
   if (!remedy.moveAside && !remedy.pin) return refresh;
   return [
     ...(remedy.moveAside ? [`move ${remedy.moveAside} aside`] : []),
-    ...(remedy.pin ? [`run \`${run(`--pin ${remedy.pin}`)}\``] : []),
+    ...(remedy.pin ? [`run \`${run(`--pin ${quoteCommandArgument(remedy.pin)}`)}\``] : []),
     `run \`${refresh}\``,
+    ...(remedy.pin
+      ? [`run \`${run(remedy.restorePin ? `--pin ${quoteCommandArgument(remedy.restorePin)}` : "--unpin")}\``]
+      : []),
   ].join(", then ");
 }
 
 export function _switchRefreshStepsForTests(
   projectDir: string,
-  remedy: { harness: string; pin?: string; moveAside?: string },
+  remedy: { harness: string; pin?: string; restorePin?: string | null; moveAside?: string },
 ): string {
   return switchRefreshSteps(projectDir, remedy);
 }
@@ -3713,9 +3745,8 @@ export function _switchRefreshStepsForTests(
 // handler renders it with this invocation's command form and project target,
 // so every output mode prints it.
 type SwitchRemedy =
-  | { kind: "refresh"; harness: string; pin?: string; moveAside?: string }
+  | { kind: "refresh"; harness: string; pin?: string; restorePin?: string | null; moveAside?: string }
   | { kind: "switch"; harness: string }
-  | { kind: "apply" }
   | { kind: "update" }
   | { kind: "text"; text: string };
 
@@ -3786,18 +3817,28 @@ function assertSwitchBaseline(projectDir: string, occupant: ProjectHarness, requ
   const rel = `${occupant.harnessDir}/tools/data/aidlc-manifest.json`;
   const path = join(occupant.root, "tools", "data", "aidlc-manifest.json");
   const lead = `cannot switch ${occupant.harnessDir} from ${occupant.distribution} to ${requested}: installed ${occupant.distribution}`;
-  const installedFrom = occupant.frameworkVersion;
+  // The version comes from the project's own files, which only a stamp holds
+  // to the release grammar, so anything else is left out of the message and
+  // the steps rather than printed into a command.
+  const installedFrom = occupant.frameworkVersion && VERSION_ID.test(occupant.frameworkVersion)
+    ? occupant.frameworkVersion
+    : undefined;
   const refresh = `refresh it from the release it was installed from${installedFrom ? ` (${installedFrom})` : ""} first`;
+  const projectPin = regularFile(join(projectDir, ".aidlc-version"))
+    ? readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim()
+    : undefined;
   const pinFirst = installedFrom && aidlcInvocation() === "aidlc" && activeVersion() !== installedFrom &&
-      (regularFile(join(projectDir, ".aidlc-version"))
-        ? readFileSync(join(projectDir, ".aidlc-version"), "utf-8").trim()
-        : undefined) !== installedFrom
+      projectPin !== installedFrom
     ? installedFrom
     : undefined;
   const remedy = (moveAside?: string): SwitchRemedy => ({
     kind: "refresh",
     harness: occupant.distribution,
-    ...(pinFirst ? { pin: pinFirst } : {}),
+    // The pin is only for the refresh: the steps put the project's own pin
+    // back (or remove it) afterwards.
+    ...(pinFirst
+      ? { pin: pinFirst, restorePin: projectPin && VERSION_ID.test(projectPin) ? projectPin : null }
+      : {}),
     ...(moveAside ? { moveAside } : {}),
   });
   let problem: string | null = null;
@@ -4824,6 +4865,11 @@ function prepareRefreshSource(
     for (const [key, value] of Object.entries(current)) {
       if (HARNESS_IDENTITY_KEYS.has(key) || (rowChanged && key === "trust")) continue;
       staged[key] = value;
+    }
+    if (rowChanged && current.trust !== undefined && prior) {
+      notes.push(
+        `The trust review recorded for ${prior.distribution} does not carry to ${descriptor.distribution}; review it again with config trust.`,
+      );
     }
   }
   delete staged.models;
@@ -8693,9 +8739,11 @@ export async function main(
   try {
     const existing = existingProject(projectDir, requestedHarness);
     // A switch that cannot proceed is refused before any release is fetched
-    // for it; the same check runs again once the source is selected.
+    // for it; it runs again once the source is selected, just before planning.
     const switchOccupant = !existing.distribution && requestedHarness
-      ? projectHarnesses.find((candidate) => switchesInPlace(candidate.distribution, requestedHarness))
+      ? projectHarnesses.find((candidate) =>
+        candidate.harnessDir === KIRO_SWITCH_DIR && switchesInPlace(candidate.distribution, requestedHarness)
+      )
       : undefined;
     if (switchOccupant && requestedHarness) {
       assertSwitchBaseline(projectDir, switchOccupant, requestedHarness);
@@ -8852,7 +8900,10 @@ export async function main(
         if (!selected && !need) {
           const running = !harness && runningAdd?.version !== undefined && runningAdd.version !== AIDLC_VERSION;
           need = {
-            version: requiredVersion ?? harness?.frameworkVersion ?? switchOccupant?.frameworkVersion ??
+            version: requiredVersion ?? harness?.frameworkVersion ??
+              (switchOccupant?.frameworkVersion && VERSION_ID.test(switchOccupant.frameworkVersion)
+                ? switchOccupant.frameworkVersion
+                : undefined) ??
               runningAdd?.version ?? AIDLC_VERSION,
             distribution: error.distribution,
             harnessDir: harness?.harnessDir ?? switchOccupant?.harnessDir,
@@ -8975,30 +9026,8 @@ export async function main(
       }
       if (collision) {
         // The planner reads every shipped file under the hooks directory, so a
-        // redirected one is refused before anything is read through it.
-        const hooksRoot = join(projectDir, descriptor.harnessDir, "hooks");
-        if (pathPresent(hooksRoot) && !lstatSync(hooksRoot).isDirectory()) {
-          throw new SwitchRefusal(
-            `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: ${descriptor.harnessDir}/hooks is a link or a file, not a directory`,
-            {
-              kind: "text",
-              text: `make ${descriptor.harnessDir}/hooks a directory holding its files, then run the switch again`,
-            },
-          );
-        }
-        if (pathPresent(hooksRoot)) {
-          try {
-            readdirSync(hooksRoot);
-          } catch {
-            throw new SwitchRefusal(
-              `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: ${descriptor.harnessDir}/hooks cannot be listed, so the hook files Kiro would run cannot be reviewed`,
-              {
-                kind: "text",
-                text: `make ${descriptor.harnessDir}/hooks readable and searchable for this user, or move it aside, then run the switch again`,
-              },
-            );
-          }
-        }
+        // redirected or unlistable one is refused before anything is read.
+        assertHooksDirReviewable(projectDir, `${descriptor.harnessDir}/hooks`, descriptor.harnessDir, stamp.distribution);
         switchingFrom = collision;
       }
     }
@@ -9081,6 +9110,9 @@ export async function main(
     if (copyChannel && !refreshing && !argv.includes("--dry-run")) {
       assertHarnessAddKeepsVersion(projectDir, stamp, installed, Boolean(from));
     }
+    // Checked again just before planning: the baseline the switch plans from
+    // is the one this check accepted, even after a long download.
+    if (switchingFrom) assertSwitchBaseline(projectDir, switchingFrom, stamp.distribution);
     const baselinePath = join(projectDir, descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
     const prior = readBaseline(baselinePath);
     const settingsMutation = modelsContext?.settings ?? choicesContext?.settings;
@@ -9280,15 +9312,8 @@ export async function main(
     const hookScan = hookGate
       ? scanUnownedHooks(projectDir, hooksDir, files)
       : { redirected: false, unreadable: false, entries: [] };
-    if (hookScan.unreadable) {
-      throw new SwitchRefusal(
-        `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: ${hooksDir} cannot be listed, so the hook files Kiro would run cannot be reviewed`,
-        { kind: "text", text: `make ${hooksDir} readable and searchable for this user, or move it aside, then run the switch again` },
-      );
-    }
-    const redirected = hookScan.redirected
-      ? [hooksDir]
-      : hookScan.entries.filter((entry) => !entry.regular).map((entry) => entry.path);
+    // The directory itself was held reviewable before planning.
+    const redirected = hookScan.entries.filter((entry) => !entry.regular).map((entry) => entry.path);
     if (redirected.length > 0) {
       throw new SwitchRefusal(
         `cannot switch ${descriptor.harnessDir} to ${stamp.distribution}: Kiro would run hooks through entries that are not regular files in ${hooksDir} ${
@@ -9788,9 +9813,7 @@ export async function main(
         : /refusing to add \S+ \S+ while \d+ workflow\(s\) are active/.test(rawMessage)
         ? "Complete the workflow, then add this harness; or run this command with --dry-run to preview the add without writing"
         : error instanceof SwitchRefusal
-        ? error.remedy.kind === "apply"
-          ? configRerunWith(input.filter((arg) => arg !== "--dry-run"), projectDir, [])
-          : error.remedy.kind === "update"
+        ? error.remedy.kind === "update"
           ? "update AI-DLC to the release that wrote this baseline, then run the switch again"
           : error.remedy.kind === "text"
           ? error.remedy.text
