@@ -12151,9 +12151,9 @@ function emitTypedResumeChoice(
     emit(errorDirective("--target goes only with --choice jump: it names the stage to jump to."));
     return;
   }
-  if ((flags.unit !== undefined || flags.everyUnit) && choice !== "jump") {
+  if ((flags.unit !== undefined || flags.everyUnit) && choice !== "jump" && choice !== "redo") {
     emit(errorDirective(
-      "--unit and --every-unit go only with --choice jump: they name the Units the jump is for.",
+      "--unit and --every-unit go only with --choice redo or jump: they name the Units the request is for.",
     ));
     return;
   }
@@ -12169,6 +12169,21 @@ function emitTypedResumeChoice(
   if (choice === "resume") {
     emit(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
+    ));
+    return;
+  }
+  // The Units the person named travel with the move, so it is their work that
+  // is redone or reopened.
+  const units = flags.unit !== undefined
+    ? ` --unit ${flags.unit}`
+    : flags.everyUnit ? " --every-unit" : "";
+  if (choice === "redo" && units !== "") {
+    // Redoing a step for named Units is reopening that step for them: the
+    // step the walk is on, as a jump back to it would.
+    const unitStage = getField(stateContent, "Unit Stage")?.trim();
+    const step = unitStage && nodeForSlug(unitStage) ? unitStage : slug;
+    emit(printDirective(
+      `Redo accepted. Run \`next --stage ${step}${units}\`; it reopens that step for the Units named and says plainly if it cannot.`,
     ));
     return;
   }
@@ -12193,10 +12208,6 @@ function emitTypedResumeChoice(
       ));
       return;
     }
-    // The Units the person named travel with the jump, so it reopens their work.
-    const units = flags.unit !== undefined
-      ? ` --unit ${flags.unit}`
-      : flags.everyUnit ? " --every-unit" : "";
     emit(printDirective(
       `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.`,
     ));
@@ -12280,6 +12291,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   ) {
     emit(errorDirective(
       "--choice, --target, and --every-unit go only with --result resumed: a redo, jump, or start-fresh request on re-entry.",
+    ));
+    return;
+  }
+  if (
+    flags.result && RESUME_RESULTS.has(flags.result) &&
+    (flags.single || flags.skeletonStance !== undefined)
+  ) {
+    emit(errorDirective(
+      "A re-entry request is a report of its own: drop --single and --skeleton-stance.",
     ));
     return;
   }

@@ -1379,6 +1379,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(stale).toEqual([]);
+    // Always-loaded onboarding waits for the person: it never starts work itself.
+    expect(readFileSync(join(REPO_ROOT, "core/templates/onboarding.md"), "utf-8")).toContain(
+      "If found, load prior context and wait for the person: when they invoke AI-DLC, the work carries on",
+    );
   });
 
   test("a re-entry request is typed by the conductor and the hint is one SAY line", () => {

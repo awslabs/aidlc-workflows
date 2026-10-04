@@ -459,9 +459,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(forBeta.message).toContain("Run `next --stage requirements-analysis --unit beta`");
     const forEvery = report("--choice", "jump", "--target", "requirements-analysis", "--every-unit");
     expect(forEvery.message).toContain("Run `next --stage requirements-analysis --every-unit`");
+    // Redoing the step for a named Unit reopens that step for it.
+    const redoBeta = report("--choice", "redo", "--unit", "beta");
+    expect(redoBeta.kind).toBe("print");
+    expect(redoBeta.message).toMatch(/Run `next --stage [a-z-]+ --unit beta`/);
     for (const [extra, refusal] of [
-      [["--choice", "redo", "--unit", "beta"], "go only with --choice jump"],
-      [["--choice", "fresh", "--every-unit"], "go only with --choice jump"],
+      [["--choice", "fresh", "--every-unit"], "go only with --choice redo or jump"],
+      [["--choice", "resume", "--unit", "beta"], "go only with --choice redo or jump"],
+      [["--choice", "jump", "--target", "requirements-analysis", "--skeleton-stance", "on"], "a report of its own"],
+      [["--choice", "redo", "--single"], "a report of its own"],
       [["--choice", "jump", "--target", "requirements-analysis", "--unit", "beta", "--every-unit"], "not both"],
       [["--choice", "jump", "--target", "requirements-analysis", "--unit", "../beta"], "Invalid Unit name"],
     ] as const) {

@@ -155,6 +155,7 @@ const manifest: HarnessManifest = {
           "sha256:d35dbc2ff6a2cad09144e8a625144bfbce4c0e91212a2da39d45da11198474f4",
           // The pre-person-drives shipped variant (its Guards section named a
           // command for the person to type; now the agent runs the setter).
+          // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:33c0f4b7fc213c3bddcc81d33de244e07a05659d1fc8ac474da63f4b4d19b2d6",
           // The variant whose Guards section had no checks table and no
           // per-project route for a check the person asks to switch.
