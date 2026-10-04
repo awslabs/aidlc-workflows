@@ -1779,30 +1779,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:askTurnEndIsOpen",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:askTurnEndMarkerPath",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:asReviewClass",
       "minMechanism": "none",
       "coveredBy": [],
@@ -6172,18 +6148,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:markAskTurnEnd",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:markdownBlocks",
       "minMechanism": "none",
       "coveredBy": [
@@ -6261,6 +6225,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markTurnEnd",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -10799,6 +10775,30 @@
       "coveredBy": [
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:turnEndIsOpen",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:turnEndMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "cli"
         }
       ],

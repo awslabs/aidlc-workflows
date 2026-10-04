@@ -1,4 +1,4 @@
-// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markAskTurnEnd, function:askTurnEndIsOpen, function:askTurnEndMarkerPath
+// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markTurnEnd, function:turnEndIsOpen, function:turnEndMarkerPath
 //
 // The turn-shape marker family: the transcript-free reading of the Stop hook's
 // tier-3 conversational carve-out. On harnesses that deliver no
@@ -31,11 +31,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  askTurnEndIsOpen,
-  askTurnEndMarkerPath,
+  turnEndIsOpen,
+  turnEndMarkerPath,
   engineTouchMarkerPath,
   humanTurnMarkerPath,
-  markAskTurnEnd,
+  markTurnEnd,
   markEngineTouch,
   markHumanTurn,
   STOP_HOOK_PROBE_ENV,
@@ -218,32 +218,32 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
   });
 });
 
-describe("t259 the engine's last word was a question for the person", () => {
+describe("t259 the engine's last word ended the turn", () => {
   test("an ask sets the marker, any other step clears it, and the Stop hook's own probe changes nothing", () => {
     const proj = makeCreatedProject();
-    markAskTurnEnd(proj, true);
-    expect(statSync(askTurnEndMarkerPath(proj)).isFile()).toBe(true);
+    markTurnEnd(proj, true);
+    expect(statSync(turnEndMarkerPath(proj)).isFile()).toBe(true);
     process.env[STOP_HOOK_PROBE_ENV] = "1";
-    markAskTurnEnd(proj, false);
-    expect(existsSync(askTurnEndMarkerPath(proj))).toBe(true);
+    markTurnEnd(proj, false);
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(true);
     delete process.env[STOP_HOOK_PROBE_ENV];
-    markAskTurnEnd(proj, false);
-    expect(existsSync(askTurnEndMarkerPath(proj))).toBe(false);
+    markTurnEnd(proj, false);
+    expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
   });
 
   test("the question is open only while it is newer than the person's last message", () => {
     const proj = makeCreatedProject();
     const base = Math.floor(Date.now() / 1000) - 600;
-    expect(askTurnEndIsOpen(proj)).toBe(false);
+    expect(turnEndIsOpen(proj)).toBe(false);
     markHumanTurn(proj);
-    markAskTurnEnd(proj, true);
+    markTurnEnd(proj, true);
     utimesSync(humanTurnMarkerPath(proj), base, base);
-    utimesSync(askTurnEndMarkerPath(proj), base + 60, base + 60);
-    expect(askTurnEndIsOpen(proj)).toBe(true);
+    utimesSync(turnEndMarkerPath(proj), base + 60, base + 60);
+    expect(turnEndIsOpen(proj)).toBe(true);
     utimesSync(humanTurnMarkerPath(proj), base + 120, base + 120);
-    expect(askTurnEndIsOpen(proj)).toBe(false);
+    expect(turnEndIsOpen(proj)).toBe(false);
     rmSync(humanTurnMarkerPath(proj), { force: true });
-    expect(askTurnEndIsOpen(proj)).toBe(false);
+    expect(turnEndIsOpen(proj)).toBe(false);
   });
 
   // A live run: mid-Feasibility the person typed unrelated new work, got "Work
@@ -275,4 +275,49 @@ describe("t259 the engine's last word was a question for the person", () => {
     expect(JSON.parse(run(["engine", "orchestrate", "next"]).stdout).kind).toBe("run-stage");
     expect(stop().stdout).toContain('"decision":"block"');
   });
+
+  // Live runs: after a read-only /aidlc --status, and after a scope change at a
+  // gate, the reminder sent the agent into the next stage with no word from the
+  // person. A print the agent stops after now ends the turn; one that hands the
+  // agent back to `next` still does not.
+  for (const copilot of [false, true]) {
+    test(`the Stop hook lets the turn end after a print the agent stops after${copilot ? ", in a Copilot session" : ""}`, async () => {
+      const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+      tempDirs.push(proj);
+      const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+      delete env[STOP_HOOK_PROBE_ENV];
+      const run = (args: string[], input?: string, extra: Record<string, string> = {}) =>
+        spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], {
+          cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra },
+        });
+      const stop = () =>
+        run(
+          ["engine", "hook", "continue-workflow"],
+          JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }),
+          copilot ? { AIDLC_COPILOT_SESSION_ID: "t259-stop" } : {},
+        );
+      for (const [args, said] of [
+        [["--status"], "print its output verbatim, then stop"],
+        [["--scope", "mvp"], "to change scope, then print its output verbatim and stop"],
+        [["--depth", "minimal"], "to update the configuration, then print its output verbatim and stop"],
+      ] as const) {
+        markHumanTurn(proj);
+        await Bun.sleep(20);
+        const printed = JSON.parse(run(["engine", "orchestrate", "next", ...args]).stdout);
+        expect(printed.kind).toBe("print");
+        expect(printed.message).toContain(said);
+        const atEnd = stop();
+        expect(atEnd.status, atEnd.stderr).toBe(0);
+        expect(atEnd.stdout, args.join(" ")).not.toContain('"decision":"block"');
+      }
+      // A jump's print hands the agent back to `next`, so the turn goes on.
+      markHumanTurn(proj);
+      await Bun.sleep(20);
+      const jump = JSON.parse(run(["engine", "orchestrate", "next", "--stage", "requirements-analysis"]).stdout);
+      expect(jump.kind).toBe("print");
+      expect(jump.message).toContain("then re-run `next`");
+      expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
+      if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
+    });
+  }
 });
