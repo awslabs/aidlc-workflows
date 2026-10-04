@@ -60,14 +60,16 @@ export function codexPersonTurn(proj: string, prompt: string): PersonTurnLedger 
   return turn;
 }
 
+// Every live exec passes its turn (codexPersonTurn, before the spawn), so no
+// journey can record a decision the check never sees.
 export function recordCodexExec(
   label: string,
   cwd: string,
   argv: string[],
   result: CodexExecution,
-  turn?: PersonTurnLedger,
+  turn: PersonTurnLedger,
 ): void {
-  const unbacked = turn?.unbacked() ?? [];
+  const unbacked = turn.unbacked();
   const decisions = unbacked.length > 0
     ? `Unbacked decisions (no turn from the person after the gate or question opened):\n${unbacked.map((line) => `  ${line}`).join("\n")}\n`
     : "";

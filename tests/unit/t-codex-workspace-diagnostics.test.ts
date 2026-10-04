@@ -6,7 +6,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sanitizeLogs } from "../../scripts/ci-sanitize-logs.ts";
-import { recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { createCodexWorkspaceFailureCapture } from "../harness/codex-turn-evidence.ts";
 
 const ID = "00000000-0000-4000-8000-000000000001";
@@ -76,7 +76,7 @@ test("workspace diagnostics retain only the root CLI call/output pairs and activ
       rmSync(f.root, { recursive: true, force: true });
       cleaned = true;
     }, () => {
-      recordCodexExec("diagnostic-unit", f.root, ["codex", "exec", "--json"], { rc: 0, stdout, stderr: "" });
+      recordCodexExec("diagnostic-unit", f.root, ["codex", "exec", "--json"], { rc: 0, stdout, stderr: "" }, codexPersonTurn(f.root, "exec"));
       throw primary;
     }, undefined, capture)).rejects.toBe(primary);
     expect(cleaned).toBe(true);
