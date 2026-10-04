@@ -543,6 +543,39 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
+  test("5b: an active-space pointer naming no space reads as the default space, as in the engine", () => {
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const record = seededRecordDir(proj);
+    clearLedger(proj);
+    writeFileSync(join(proj, "aidlc", "active-space"), "ghost\n");
+    mkdirSync(join(record, "construction", "unit-b"), { recursive: true });
+    mkdirSync(dirname(join(record, ".aidlc-engine/reviewer-dispatch.json")), { recursive: true });
+    writeFileSync(
+      join(record, ".aidlc-engine/reviewer-dispatch.json"),
+      JSON.stringify({
+        reviewer: "aidlc-architecture-reviewer-agent",
+        stage: "functional-design",
+        unit: "unit-a",
+        exempt: [],
+      }),
+    );
+    registerTaskParent(proj);
+    expectAllowJson(runAdapter(proj, "guards", payload("preToolUseTask", proj)));
+    expect(runAdapter(proj, "audit-and-sensors", payload("postToolUseTask", proj)).code).toBe(0);
+    expect(ledgerFilesFor(proj)).toHaveLength(0);
+    // With the ledger cleared, the dispatch record in the default space still
+    // scopes an unknown conversation's reads.
+    const sibling = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseSubagentRead", proj, {
+        tool_input: { file_path: join(record, "construction", "unit-b", "design.md") },
+      }),
+    );
+    expect(JSON.parse(sibling.stdout).permission).toBe("deny");
+  });
+
   test("5: Task attribution binds unknown conversations only; registered mains are never conflated", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");

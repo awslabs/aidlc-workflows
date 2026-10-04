@@ -1,4 +1,4 @@
-import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
+import { type Dirent, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -568,4 +568,21 @@ export function resolveDistributionPath(
     ),
     ...segments,
   );
+}
+
+// A space name: one plain path segment, a lowercase letter, then lowercase
+// letters, digits and hyphens (the shape `space create` gives a name).
+export const SPACE_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
+
+// The space the active-space cursor names: its text, when that is a space name
+// whose folder exists under <workspace>/spaces/; anything else is the default
+// space.
+export function knownActiveSpace(workspaceRootDir: string, cursorText: string | null | undefined): string {
+  const name = (cursorText ?? "").trim();
+  if (!SPACE_NAME_REGEX.test(name)) return "default";
+  try {
+    return statSync(join(workspaceRootDir, "spaces", name)).isDirectory() ? name : "default";
+  } catch {
+    return "default";
+  }
 }

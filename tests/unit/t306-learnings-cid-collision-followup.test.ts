@@ -206,6 +206,8 @@ function clearActiveIntentCursor(pd: string): void {
  *  cursor practiceFilePath's pre-fix bug read live instead of using the
  *  space PINNED in the selections-json at surface() time. */
 function switchActiveSpaceTo(pd: string, space: string): void {
+  // The cursor names a space only when the project has it.
+  mkdirSync(join(pd, "aidlc", "spaces", space, "memory"), { recursive: true });
   writeFileSync(join(pd, "aidlc", "active-space"), `${space}\n`, "utf-8");
 }
 

@@ -10038,18 +10038,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:SPACE_NAME_REGEX",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t286-read-write-boundary.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:SPACE_VERBS",
       "minMechanism": "none",
       "coveredBy": [],

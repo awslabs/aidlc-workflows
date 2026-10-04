@@ -1155,17 +1155,10 @@ function setRowContentFields(row: DocumentRow, text: string | Buffer | undefined
 // a human deliberated, promotion happened after, and the cursor moved in
 // between. Pinning at entry makes that impossible by construction.
 export function resolveSpaceFlag(raw: string | undefined, projectDir: string): string {
-  // The FALLBACK is validated exactly like an explicit flag, not trusted raw.
-  // `activeSpace()` (aidlc-lib.ts) reads the `aidlc/active-space` cursor with no
-  // shape check of its own -- unlike an explicit `--space`, which always went
-  // through `validSpaceFlag` below. Measured: a hand-edited cursor holding `..`
-  // or `../../evil` made `knowledgeDir`/`documentkbDir` resolve ABOVE
-  // `aidlc/spaces/`, because every downstream path in this file is a plain
-  // `join()` off whatever string `space` turned out to be. This tool has exactly
-  // one entry point for that string -- here -- so validating the cursor's value
-  // at THIS boundary closes it for every verb without widening `activeSpace()`
-  // for the other ~14 call sites across the framework that read it, which is a
-  // larger, separately-owned change.
+  // The FALLBACK is validated exactly like an explicit flag, not trusted raw:
+  // every downstream path in this file is a plain `join()` off `space`. The
+  // cursor itself already reads as "default" unless it names a space this
+  // project has (activeSpace in aidlc-lib.ts), so this keeps one rule for both.
   const raw_ = raw === undefined;
   const candidate = raw ?? resolveWorkflowSelection(projectDir).space;
   const valid = validSpaceFlag(candidate);

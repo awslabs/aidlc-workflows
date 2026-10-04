@@ -1435,16 +1435,18 @@ describe("t289 a descendant of documentkb/ is ITSELF a symlink: refused, nothing
 // wrote the catalog outside the space tree entirely. A third `../` level is
 // separately refused by `resolveContainedPath`'s existing lexical check, so the
 // escape was bounded to within `projectDir` — still a real corruption of the
-// project tree from a file the tool itself is supposed to own.
+// project tree from a file the tool itself is supposed to own. The cursor now
+// reads as the default space unless it names a space this project has
+// (activeSpace in aidlc-lib.ts), and the fallback is still validated here.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("t289 the active-space cursor is validated at the SAME boundary as an explicit --space", () => {
-  test("a cursor holding `..` is refused before any path is built", () => {
+describe("t289 the active-space cursor resolves to a space this project has", () => {
+  test("a cursor holding `..` reads as the default space", () => {
     const p = scratchProject();
     writeFileSync(join(p, "aidlc", "active-space"), "..\n");
-    expect(() => resolveSpaceFlag(undefined, p)).toThrow(/active-space cursor/);
+    expect(resolveSpaceFlag(undefined, p)).toBe(SPACE);
   });
 
-  test("a cursor holding `../../evil` is refused, and nothing is written above spaces/", () => {
+  test("a cursor holding `../../evil` onboards into the default space, and nothing is written above spaces/", () => {
     const p = mkdtempSync(join(tmpdir(), "t289-cursor-"));
     proj = p;
     mkdirSync(documentsDir(p, SPACE), { recursive: true });
@@ -1456,16 +1458,16 @@ describe("t289 the active-space cursor is validated at the SAME boundary as an e
       [join(AIDLC_TOOLS, "aidlc-knowledge.ts"), "onboard", "--project-dir", p],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env, AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1" } },
     );
-    expect(r.status, `expected a refusal, got stdout: ${r.stdout}`).not.toBe(0);
-    expect(r.stdout + r.stderr).toMatch(/active-space cursor/);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
     expect(existsSync(join(p, "evil"))).toBe(false);
     expect(existsSync(join(p, "..", "evil"))).toBe(false);
+    expect(existsSync(documentkbDir(p, SPACE))).toBe(true);
   });
 
-  test("a well-formed but unknown cursor value is refused, naming the remedy", () => {
+  test("a well-formed but unknown cursor value reads as the default space", () => {
     const p = scratchProject();
     writeFileSync(join(p, "aidlc", "active-space"), "no-such-space\n");
-    expect(() => resolveSpaceFlag(undefined, p)).toThrow(/unknown space/i);
+    expect(resolveSpaceFlag(undefined, p)).toBe(SPACE);
   });
 
   test("an explicit --space still overrides a poisoned cursor", () => {

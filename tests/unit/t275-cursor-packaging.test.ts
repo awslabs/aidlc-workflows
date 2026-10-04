@@ -861,6 +861,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       ).toBe(0);
 
       const receiptPath = join(project, ".cursor", "aidlc-install.json");
+      // The pointer names a space only when the project has it.
+      mkdirSync(join(project, "aidlc", "spaces", "myspace", "memory"), { recursive: true });
       writeFileSync(join(project, "aidlc", "active-space"), "myspace\n");
       expect(
         spawnSync("bun", [installer, project], {
