@@ -289,7 +289,10 @@ the valid roots, and exits 0.
 An enabled plugin may ship `tools/<plugin>-doctor.ts`. `/aidlc --doctor`
 discovers that script in the composed harness tools directory and runs it
 directly with Bun, no shell, with `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
-`AIDLC_PLUGIN_NAME` set. A disabled plugin's script remains inert. When
+`AIDLC_PLUGIN_NAME` set. On a native install that Bun is the `aidlc` binary
+run with `BUN_BE_BUN=1`, which the script inherits, so an `aidlc` command the
+script runs would start Bun instead: check with Bun APIs, not by running
+`aidlc`. A disabled plugin's script remains inert. When
 `harness.json` has no `plugins` selection, every installed plugin known from the
 full stage/scope metadata is eligible. Discovery requires that the plugin own at
 least one stage or scope; a plugin that ships only tools, sensors, or knowledge
