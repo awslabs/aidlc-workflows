@@ -3100,15 +3100,17 @@ export function recordPlanApprovalHumanResponse(
   });
 }
 
-// A picker reply answers the protected question when the picker asked it: its
-// recorded text, or, however the conductor worded it, a single pick from a
-// picker offering one of its choices ("(Recommended)" stripped). Several picks,
-// or a picker offering none of its choices, answer some other question.
+// A picker reply answers the protected question when it is a single pick and
+// the picker asked it: its recorded text, or, however the conductor worded it,
+// a picker offering one of its choices ("(Recommended)" stripped). Several
+// picks are no one choice, whatever the question; a picker offering none of its
+// choices answers some other question.
 function pickerAsksProtectedQuestion(
   question: ProtectedQuestion, questionText: string, picker: PlanApprovalPickerQuestion | undefined,
 ): boolean {
+  if (picker?.severalPicks) return false;
   if (createHash("sha256").update(questionText, "utf-8").digest("hex") === question.promptDigest) return true;
-  if (!picker?.options?.length || picker.severalPicks) return false;
+  if (!picker?.options?.length) return false;
   const own = APPROVAL_GATE_CHOICES.map((choice) => choice.toLowerCase());
   return picker.options.some((label) => own.includes(stripRecommendedDecorator(label).trim().toLowerCase()));
 }

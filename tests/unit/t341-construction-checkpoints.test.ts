@@ -1616,20 +1616,25 @@ describe("t341 protected question interleaving", () => {
   test("a picker approval answers the question however the agent worded it; several picks or other labels do not", () => {
     const pd = project();
     const shown = `${prompt} \`bun test\``;
-    const pick = (labels: string[], picked: string, multiSelect = false) => {
+    const pick = (labels: string[], picked: string | string[], multiSelect = false, question = shown) => {
       const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
         input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,
-          tool_input: { questions: [{ question: shown, multiSelect, options: labels.map((label) => ({ label })) }] },
-          tool_response: { answers: { [shown]: picked } } }),
+          tool_input: { questions: [{ question, multiSelect, options: labels.map((label) => ({ label })) }] },
+          tool_response: { answers: { [question]: picked } } }),
       });
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     };
     ask(pd);
     pick(["Approve", "Request Changes"], "Approve", true);
     pick(["Yes", "No"], "Yes");
+    // Several picks are no one choice, even under the exact recorded question.
+    pick(["Approve", "Request Changes"], "Approve", true, prompt);
+    pick(["Approve", "Request Changes"], ["Approve", "Request Changes"], false, prompt);
     expect(readProtectedResponse(pd, session)).toBeNull();
+    expect(answer(pd).code).not.toBe(0);
+    expect(receipts(pd)).toEqual([]);
     pick(["Approve (Recommended)", "Request Changes"], "Approve");
     expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
     const accepted = answer(pd);
