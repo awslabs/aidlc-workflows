@@ -202,13 +202,15 @@ describe("the stage gate records the choice the agent read, with the person's wo
   // asked for a change"; the skip it asks for is the agent's next command. A
   // Claude Code CLI approval at Reverse Engineering was refused as not matching
   // an offered choice, and the person had to type "Approve". On Copilot, "move
-  // on" was read as Request Changes, and "keep going" and "next" as unclear.
+  // on" was read as Request Changes, and "keep going" and "next" as unclear;
+  // in VS Code Copilot, "fix" (a noun) made an approval a change request.
   test.each([
     "approve, and skip the deployment stuff, there is nothing to deploy for this fix",
     "ok that makes sense, approve",
     "move on",
     "keep going",
     "next",
+    "ok, approve the date fix, then set up the CSV export one as its own separate work",
   ])("%s records the approval with their words and asks nothing again", (words) => {
     expect(exactOptionPick(words, ["Approve", "Request Changes"])).toBeNull();
     says(proj, words);
