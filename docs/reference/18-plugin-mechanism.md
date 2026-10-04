@@ -271,8 +271,11 @@ invalid/ambiguous, or inventory unavailable.
 regenerates graph and runner surfaces, writes composition and ownership records,
 diffs the staged project, and submits one project transaction. Expected-state
 checks reject concurrent live edits; a commit failure rolls back all bytes,
-modes, stamps, and ownership records. A supported host hook with an injected
-current root uses the same implementation for only that plugin. Plain sync never
+modes, stamps, and ownership records. The staged copy holds no links: a link on
+the way to or inside AI-DLC's own folders, or on the way to a file sync would
+write, stops sync before anything changes and names the link. A supported host
+hook with an injected current root uses the same implementation for only that
+plugin. Plain sync never
 deletes content for a missing installed source. Explicit
 `aidlc engine plugin sync --prune-missing` requires a proved full inventory,
 `--yes` when non-interactive, and hash-proven ownership; it refuses locally

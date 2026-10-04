@@ -1027,50 +1027,127 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     )).toContain("| test-pro-integration |");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // A data folder that links elsewhere would take the removal of the plugin's
-  // records outside this project, so prune leaves them there, prunes the
-  // rest, and says what it left and why.
-  test("prune leaves the records in a linked data folder alone and prunes the rest", async () => {
+  // AI-DLC writes its own files only into real folders. A folder a repository
+  // links elsewhere (here the data folder, moved outside the project) would
+  // take the plugin's records, the stage graph and the scope grid with it, so
+  // the command changes nothing, says which folder, and works once it is real.
+  const linkedLine = (folder: string) =>
+    `${folder} is a link, so AI-DLC changed nothing there. Replace it with a real folder, then run this again.`;
+
+  function linkElsewhere(folder: string): string {
+    const outside = temp("aidlc-t242-linked-");
+    if (existsSync(folder)) {
+      cpSync(folder, outside, { recursive: true });
+      rmSync(folder, { recursive: true, force: true });
+    }
+    symlinkSync(outside, folder, process.platform === "win32" ? "junction" : "dir");
+    return outside;
+  }
+
+  // What the person sees from `aidlc engine plugin`, both streams, and its exit code.
+  async function pluginOutput(argv: string[]): Promise<{ printed: string; code: number }> {
+    const saved = { exitCode: process.exitCode, out: process.stdout.write, err: process.stderr.write };
+    let printed = "";
+    const capture = ((chunk: string | Uint8Array) => {
+      printed += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
+      return true;
+    }) as typeof process.stdout.write;
+    process.exitCode = 0;
+    process.stdout.write = capture;
+    process.stderr.write = capture;
+    let code = 0;
+    try {
+      await pluginMain(argv);
+      code = Number(process.exitCode ?? 0);
+    } finally {
+      process.stdout.write = saved.out;
+      process.stderr.write = saved.err;
+      process.exitCode = saved.exitCode ?? 0;
+    }
+    return { printed, code };
+  }
+
+  test("sync writes nothing through a data folder that links outside the project and names it", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const outside = linkElsewhere(join(project, ".claude", "tools", "data"));
+    const outsideBefore = surfaceSnapshot(outside);
+    const { printed, code } = await pluginOutput(["sync", "--project-dir", project]);
+    expect(code).toBe(1);
+    expect(printed).toContain(linkedLine(join(".claude", "tools", "data")));
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+    expect(existsSync(join(
+      project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md",
+    ))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("prune changes nothing when the data folder is a link, and prunes once it is a real folder", async () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);
     await syncPlugins(project, [], ".claude");
     const data = join(project, ".claude", "tools", "data");
-    const outside = mkdtempSync(join(tmpdir(), "aidlc-t242-linked-data-"));
-    TEMP.push(outside);
-    cpSync(data, outside, { recursive: true });
-    rmSync(data, { recursive: true, force: true });
-    symlinkSync(outside, data, process.platform === "win32" ? "junction" : "dir");
-    const outsideRecord = join(outside, "plugin-files-test-pro.json");
-    const before = readFileSync(outsideRecord, "utf-8");
-    // Every record of the plugin's outside the project.
-    const snapshot = () =>
-      readdirSync(outside).filter((name) => /^plugin-[a-z]+-test-pro\.json$/.test(name)).sort()
-        .map((name) => `${name}\n${readFileSync(join(outside, name), "utf-8")}`);
-    const outsideBefore = snapshot();
-    expect(outsideBefore.some((entry) => entry.startsWith("plugin-contrib-test-pro.json\n"))).toBe(true);
+    const outside = linkElsewhere(data);
+    const outsideBefore = surfaceSnapshot(outside);
+    expect(Object.keys(outsideBefore)).toContain("plugin-contrib-test-pro.json");
     writeFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "{\"version\":2,\"plugins\":{}}\n");
     const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
     expect(existsSync(stage)).toBe(true);
-    const saved = { exitCode: process.exitCode, write: process.stdout.write };
-    let printed = "";
-    process.stdout.write = ((chunk: string | Uint8Array) => {
-      printed += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
-      return true;
-    }) as typeof process.stdout.write;
-    try {
-      await pluginMain(["sync", "--prune-missing", "--yes", "--project-dir", project]);
-    } finally {
-      process.stdout.write = saved.write;
-      process.exitCode = saved.exitCode ?? 0;
-    }
-    expect(printed).toContain("pruned 1 missing plugin(s)");
-    expect(printed).toContain(
-      `Left plugin files in ${join(".claude", "tools", "data")} alone: that folder links outside this project.`,
-    );
-    // None of them was removed or changed, and the rest of the prune happened.
-    expect(readFileSync(outsideRecord, "utf-8")).toBe(before);
-    expect(snapshot()).toEqual(outsideBefore);
+    const { printed, code } = await pluginOutput(["sync", "--prune-missing", "--yes", "--project-dir", project]);
+    expect(code).toBe(1);
+    expect(printed).toContain(linkedLine(join(".claude", "tools", "data")));
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+    expect(existsSync(stage)).toBe(true);
+    // The way out the line names: a real folder in its place, then the same command.
+    rmSync(data, { recursive: true, force: true });
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+    cpSync(outside, data, { recursive: true });
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
     expect(existsSync(stage)).toBe(false);
+    expect(existsSync(join(data, "plugin-contrib-test-pro.json"))).toBe(false);
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a plugin file that would land behind a person's link changes nothing and names the folder", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const knowledge = join(project, ".claude", "knowledge");
+    const outside = linkElsewhere(knowledge);
+    const outsideBefore = surfaceSnapshot(outside);
+    const { printed, code } = await pluginOutput(["sync", "--project-dir", project]);
+    expect(code).toBe(1);
+    expect(printed).toContain(linkedLine(join(".claude", "knowledge")));
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+    expect(existsSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a person's own linked skill stays theirs and sync goes ahead", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const mine = join(project, ".claude", "skills", "mine");
+    const outside = linkElsewhere(mine);
+    writeFileSync(join(outside, "SKILL.md"), "---\nname: mine\ndescription: my own skill\n---\nMine.\n");
+    const outsideBefore = surfaceSnapshot(outside);
+    const result = await syncPlugins(project, [], ".claude");
+    expect(result.synced).toEqual(["test-pro"]);
+    expect(lstatSync(mine).isSymbolicLink()).toBe(true);
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("graph compile writes nothing through a linked data folder and names it", () => {
+    const project = installedProject();
+    const outside = linkElsewhere(join(project, ".claude", "tools", "data"));
+    const outsideBefore = surfaceSnapshot(outside);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" };
+    for (const key of ["AIDLC_STAGE_GRAPH", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_STAGES_DIR"]) delete env[key];
+    const result = spawnSync(
+      process.execPath,
+      [join(project, ".claude", "tools", "aidlc-graph.ts"), "compile"],
+      { cwd: project, encoding: "utf-8", env },
+    );
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(linkedLine(join(".claude", "tools", "data")));
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("prune strips object-form consumes a plugin contributed to a core stage", async () => {
