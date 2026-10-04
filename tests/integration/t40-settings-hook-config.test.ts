@@ -42,6 +42,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { copyChannelDispatcherCommands, copyChannelToolScripts } from "../../core/tools/aidlc.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS = join(AIDLC_SRC, "settings.json");
@@ -94,12 +95,13 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(readSettings().statusLine?.command).toBe(`${SOURCE_INVOKE} engine statusline`);
   });
 
-  test("T5: permissions.allow has exactly 8 entries incl. project edits, AI-DLC's own commands and date [.sh test 5]", () => {
+  test("T5: permissions.allow has project edits, AI-DLC's own commands one by one, and date [.sh test 5]", () => {
     const allow = readSettings().permissions?.allow ?? [];
-    expect(allow.length).toBe(8);
+    expect(allow.length).toBe(5 + copyChannelDispatcherCommands().length + 2 * copyChannelToolScripts().length);
     expect(allow).toContain("Edit(/**)");
     expect(allow).toContain("Bash(bun .claude/tools/aidlc.ts engine *)");
-    expect(allow).toContain("Bash(bun .claude/tools/aidlc-*)");
+    expect(allow).toContain("Bash(bun .claude/tools/aidlc-log.ts *)");
+    expect(allow).not.toContain("Bash(bun .claude/tools/aidlc-*)");
     expect(allow).toContain("Bash(date -u *)");
     expect(allow).not.toContain("Bash");
   });

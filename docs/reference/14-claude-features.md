@@ -214,17 +214,11 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
   "permissions": {
     "allow": [
       "Edit(/**)",
-      "Bash(bun .claude/tools/aidlc.ts engine *)", "Bash(bun .claude/tools/aidlc.ts config *)",
-      "Bash(bun .claude/tools/aidlc.ts --doctor*)", "Bash(bun .claude/tools/aidlc-*)",
+      "Bash(bun .claude/tools/aidlc.ts engine *)",
+      "Bash(bun .claude/tools/aidlc.ts doctor)", "...",
+      "Bash(bun .claude/tools/aidlc-log.ts)", "Bash(bun .claude/tools/aidlc-log.ts *)", "...",
       "Bash(date -u *)",
       "Task", "WebSearch"
-    ],
-    "ask": [
-      "Bash(bun .claude/tools/aidlc-doctor.ts*)", "Bash(bun .claude/tools/aidlc-init.ts*)",
-      "Bash(bun .claude/tools/aidlc-lifecycle.ts*)", "Bash(bun .claude/tools/aidlc-machine-config.ts*)",
-      "Bash(bun .claude/tools/aidlc.ts config *--pin*)", "Bash(bun .claude/tools/aidlc.ts config *--unpin*)",
-      "Bash(bun .claude/tools/aidlc.ts config *--channel*)", "Bash(bun .claude/tools/aidlc.ts config *--download*)",
-      "Bash(bun .claude/tools/aidlc.ts config *--global*)"
     ]
   }
 }

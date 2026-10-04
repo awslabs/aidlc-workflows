@@ -999,6 +999,7 @@ function buildTree(
     });
   }
   expandCursorToolAllows(treeRoot, m);
+  expandClaudeToolAllows(treeRoot, m);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1078,27 +1079,49 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   if (m.tierFlavor !== "claude") return;
   const settingsPath = join(outRoot, m.harnessDir, "settings.json");
   const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-    permissions?: { allow?: unknown; ask?: unknown };
+    permissions?: { allow?: unknown };
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
   // The copy channel's AI-DLC command entries (the tool rewrite above has
   // already turned their `bun <dir>/tools/aidlc...` into `aidlc engine ...`)
-  // give way to the one trusted prefix. The machine-changing scripts they
-  // held back are not run through the dispatcher's engine namespace, so the
-  // native release needs no ask for them.
-  const aidlcEntry = (entry: unknown): boolean =>
-    typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc "));
+  // give way to the one trusted prefix.
   value.permissions!.allow = [
-    ...allow.filter((entry) => entry !== "Bash" && !aidlcEntry(entry)),
+    ...allow.filter((entry) =>
+      entry !== "Bash" &&
+      !(typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc ")))
+    ),
     `Bash(${trustedCommand("*")})`,
   ];
-  const ask = value.permissions?.ask;
-  if (Array.isArray(ask)) {
-    const kept = ask.filter((entry) => !aidlcEntry(entry));
-    if (kept.length > 0) value.permissions!.ask = kept;
-    else delete value.permissions!.ask;
+  writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Claude's authored settings.json names AI-DLC's tool scripts with one glob.
+// The projection lists, in its place, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// each tool script it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then shows Claude
+// Code's own prompt. Both trees get it; the native rewrite then drops every
+// bun entry.
+function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "claude") return;
+  const settingsPath = join(treeRoot, "settings.json");
+  const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions?: { allow?: unknown } };
+  const allow = value.permissions?.allow;
+  const glob = `Bash(bun ${m.harnessDir}/tools/aidlc-*)`;
+  if (!Array.isArray(allow) || !allow.includes(glob)) {
+    throw new Error(`[claude] settings.json has no ${glob} entry to expand`);
   }
+  const tool = (script: string) => `Bash(bun ${m.harnessDir}/tools/${script}`;
+  value.permissions!.allow = allow.flatMap((entry) =>
+    entry === glob
+      ? [
+        ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+        ...copyChannelToolScripts().flatMap((script) => [`${tool(script)})`, `${tool(script)} *)`]),
+      ]
+      : [entry]
+  );
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 

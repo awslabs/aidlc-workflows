@@ -1803,12 +1803,12 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | Allow entry | AI-DLC Usage |
 |-------------|-------------|
 | `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
-| `Bash(bun .claude/tools/aidlc.ts engine *)`, `Bash(bun .claude/tools/aidlc.ts config *)`, `Bash(bun .claude/tools/aidlc.ts --doctor*)`, `Bash(bun .claude/tools/aidlc-*)` | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
+| `Bash(bun .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
 | `Bash(date -u *)` | Timestamps |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 
-Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`) and a `config` command holding `--pin`, `--unpin`, `--channel`, `--download` or `--global`: the copy channel's `permissions.ask` names those config flags and the scripts behind a machine-changing command (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`), which the `aidlc-*` entry would otherwise cover.
+Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do a `config` change and the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`), with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`): the packager lists the copy channel's entries from the same command and script lists the Cursor copy channel uses, and those are not on them.
 
 `AskUserQuestion` is always permitted by default and does not require explicit approval.
 

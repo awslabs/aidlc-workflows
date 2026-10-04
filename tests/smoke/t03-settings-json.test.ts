@@ -52,7 +52,8 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { ROUTES } from "../../core/tools/aidlc.ts";
+import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES } from "../../core/tools/aidlc.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS_PATH = join(AIDLC_SRC, "settings.json");
@@ -62,7 +63,7 @@ const RAW = readFileSync(SETTINGS_PATH, "utf-8");
 // on malformed JSON, so a successful parse here IS the "valid JSON" assertion;
 // the test below also asserts it does not throw, making the guarantee explicit.
 interface Settings {
-  permissions?: { allow?: string[]; ask?: string[] };
+  permissions?: { allow?: string[] };
   statusLine?: { command?: string };
   model?: string;
   effortLevel?: string;
@@ -106,35 +107,38 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     const fileEntries = allow.filter((entry) => /^(Read|Edit|Write|Glob|Grep)\(/.test(entry));
     expect(fileEntries).toEqual(["Edit(/**)"]);
   });
-  test("permissions.allow grants AI-DLC's own workflow commands on the copy channel", () => {
-    for (const entry of [
+  // The copy channel lists AI-DLC's own commands one by one, each spelled as
+  // AI-DLC runs it, so a longer name or a machine-wide change matches none.
+  test("permissions.allow lists AI-DLC's own commands exactly on the copy channel", () => {
+    expect(allow).toEqual([
+      "Edit(/**)",
       "Bash(bun .claude/tools/aidlc.ts engine *)",
-      "Bash(bun .claude/tools/aidlc.ts config *)",
-      "Bash(bun .claude/tools/aidlc.ts --doctor*)",
-      "Bash(bun .claude/tools/aidlc-*)",
-    ]) {
-      expect(allow).toContain(entry);
-    }
-    expect(allow).not.toContain("Bash(bun .claude/tools/*)");
-    expect(allow).not.toContain("Bash");
-    expect(allow).not.toContain("Bash(aidlc *)");
+      ...copyChannelDispatcherCommands().map((command) => `Bash(bun .claude/tools/aidlc.ts ${command})`),
+      ...copyChannelToolScripts().flatMap((script) => [
+        `Bash(bun .claude/tools/${script})`,
+        `Bash(bun .claude/tools/${script} *)`,
+      ]),
+      "Bash(date -u *)",
+      "Task",
+      "WebSearch",
+    ]);
+    expect(settings.permissions).not.toHaveProperty("ask");
   });
 
-  // Claude Code's Bash rules: `*` matches any sequence, and ask outranks
-  // allow; a command no rule names asks too.
-  const ask = settings.permissions?.ask ?? [];
-  function claudeBashEffect(command: string): "ask" | "allow" | "none" {
-    const matches = (rules: readonly string[]) => rules.some((rule) => {
+  // Claude Code's Bash rules: `*` matches any sequence; a command no rule
+  // names shows Claude Code's own prompt.
+  function claudeBashEffect(command: string): "allow" | "prompt" {
+    return allow.some((rule) => {
       const m = /^Bash\((.*)\)$/.exec(rule);
       if (!m) return false;
       const glob = m[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*");
       return new RegExp(`^${glob}$`).test(command);
-    });
-    if (matches(ask)) return "ask";
-    return matches(allow) ? "allow" : "none";
+    })
+      ? "allow"
+      : "prompt";
   }
 
-  test("a command that changes the machine's AI-DLC install shows Claude Code's own prompt", () => {
+  test("a command that changes the machine's AI-DLC install, or any setting, shows Claude Code's own prompt", () => {
     for (const command of [
       "bun .claude/tools/aidlc.ts use 2.10.0",
       "bun .claude/tools/aidlc.ts update",
@@ -143,28 +147,34 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "bun .claude/tools/aidlc.ts uninstall --yes",
       "bun .claude/tools/aidlc.ts system config global set offline true",
       "bun .claude/tools/aidlc.ts --yes update",
-      // The two scripts behind those commands, which the aidlc-* entry
-      // would otherwise cover.
+      // The scripts behind those commands.
       "bun .claude/tools/aidlc-lifecycle.ts use 2.10.0",
       "bun .claude/tools/aidlc-lifecycle.ts",
       "bun .claude/tools/aidlc-machine-config.ts set offline true",
       "bun .claude/tools/aidlc-init.ts --pin 2.10.0",
       "bun .claude/tools/aidlc-doctor.ts",
-      // A config flag that reaches the whole machine, wherever it sits.
+      // Every config change, however its flags are spelled.
       "bun .claude/tools/aidlc.ts config --pin 2.10.0",
       "bun .claude/tools/aidlc.ts config --unpin",
+      "bun .claude/tools/aidlc.ts config --channel",
       "bun .claude/tools/aidlc.ts config --channel preview",
       "bun .claude/tools/aidlc.ts config project --plugins all --download --yes",
       "bun .claude/tools/aidlc.ts config models --deciding-effort high --global --yes",
-      "bun .claude/tools/aidlc.ts config models --global",
+      "bun .claude/tools/aidlc.ts config models --gl\"obal\" --yes",
+      "bun .claude/tools/aidlc.ts config models --deciding-effort high --project --yes",
+      "bun .claude/tools/aidlc.ts config depth --depth minimal --yes",
+      "bun .claude/tools/aidlc.ts config models --show --json --global",
+      // A longer file name than any AI-DLC script.
+      "bun .claude/tools/aidlc-log.tsx",
+      "bun .claude/tools/aidlc-log.ts.bak run",
     ]) {
-      expect(claudeBashEffect(command), command).not.toBe("allow");
+      expect(claudeBashEffect(command), command).toBe("prompt");
     }
   });
 
-  // Every script behind a route that can change the machine asks, so a new
-  // one cannot slip under the aidlc-* entry.
-  test("the scripts behind every machine-changing command ask", () => {
+  // Every script behind a route that can change the machine prompts, so a new
+  // one cannot slip in.
+  test("the scripts behind every machine-changing command prompt", () => {
     const machine = new Set(
       ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
         .map((route) => route.tool)
@@ -172,7 +182,8 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     );
     expect(machine.size).toBeGreaterThan(0);
     for (const tool of machine) {
-      expect(claudeBashEffect(`bun .claude/tools/${tool} x`), tool).toBe("ask");
+      expect(claudeBashEffect(`bun .claude/tools/${tool}`), tool).toBe("prompt");
+      expect(claudeBashEffect(`bun .claude/tools/${tool} x`), tool).toBe("prompt");
     }
   });
 
@@ -180,12 +191,10 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     for (const command of [
       "bun .claude/tools/aidlc.ts engine orchestrate next",
       "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'",
-      "bun .claude/tools/aidlc.ts config depth --show --json",
-      "bun .claude/tools/aidlc.ts config depth --depth minimal --yes",
-      "bun .claude/tools/aidlc.ts config models --deciding-effort high --project --yes",
       "bun .claude/tools/aidlc.ts config providers --show --json",
       "bun .claude/tools/aidlc.ts --doctor",
       "bun .claude/tools/aidlc-utility.ts codekb-path",
+      "bun .claude/tools/aidlc-utility.ts",
       "date -u +%Y-%m-%dT%H:%M:%SZ",
     ]) {
       expect(claudeBashEffect(command), command).toBe("allow");
@@ -205,8 +214,17 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     };
     visit(AIDLC_SRC);
     expect(named.size).toBeGreaterThan(20);
-    for (const command of named) {
-      expect(claudeBashEffect(command), command).toBe("allow");
+    // A config change is the person's to approve in Claude Code's prompt; its
+    // read-only forms run as they are, for every section.
+    const configChange = (command: string) =>
+      /^bun \.claude\/tools\/aidlc\.ts config\b/.test(command) && !/ --(?:show --json|help)$/.test(command);
+    for (const span of named) {
+      const commands = span.includes("<section>")
+        ? CONFIG_SECTIONS.map((section) => span.replace("<section>", section))
+        : [span];
+      for (const command of commands) {
+        expect(claudeBashEffect(command), command).toBe(configChange(command) ? "prompt" : "allow");
+      }
     }
   });
 });
