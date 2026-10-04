@@ -11182,7 +11182,7 @@ function literalConstructionPolicySetter(command: string): { field: string; valu
 // approval uses) does not need them, and the one Construction policy setter
 // their recorded choice authorizes (the setter's own check) runs while a gate
 // stays open for its later approval. Neither lets through what the engine
-// would refuse.
+// would refuse, and either one that cannot be read leaves the floor holding.
 export function presenceFloorHolds(
   projectDir: string,
   stateContent: string | null,
@@ -11191,13 +11191,19 @@ export function presenceFloorHolds(
   if (!stateContent || !hasOpenGate(stateContent)) return false;
   if (humanActedSinceGate(projectDir)) return false;
   const setter = literalConstructionPolicySetter(command);
-  if (setter !== null && constructionPolicyReceiptApplies(projectDir, setter.field, setter.value)) {
-    return false;
-  }
+  try {
+    if (setter !== null && constructionPolicyReceiptApplies(projectDir, setter.field, setter.value)) {
+      return false;
+    }
+  } catch { /* an unreadable receipt authorizes nothing */ }
   return parseCheckboxes(stateContent).some((entry) => {
     if (entry.state !== "awaiting-approval") return false;
-    const stage = findStageBySlug(entry.slug);
-    return stage === undefined || !isAutonomousConstructionGate(stateContent, stage, projectDir);
+    try {
+      const stage = findStageBySlug(entry.slug);
+      return stage === undefined || !isAutonomousConstructionGate(stateContent, stage, projectDir);
+    } catch {
+      return true; // a gate that cannot be classified is the person's
+    }
   });
 }
 

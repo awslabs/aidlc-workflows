@@ -25,6 +25,7 @@ import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds,
+  _resetStageGraphForTests,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -434,6 +435,22 @@ describe("t342 Construction checkpoint routing", () => {
     expect(presenceFloorHolds(p, state(), approveCommand)).toBe(true);
     writeFileSync(join(p, "src", "beta.ts"), "export const beta = 1;\n");
     // The engine agrees: it records the gate without the person.
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
+    // A stage graph the floor cannot read leaves the gate to the person.
+    const graph = process.env.AIDLC_STAGE_GRAPH;
+    writeFileSync(join(p, "not-json-graph.json"), "{");
+    writeFileSync(join(p, "object-graph.json"), "{}");
+    try {
+      for (const broken of ["missing-graph.json", "not-json-graph.json", "object-graph.json"]) {
+        process.env.AIDLC_STAGE_GRAPH = join(p, broken);
+        _resetStageGraphForTests();
+        expect(presenceFloorHolds(p, state(), approveCommand), broken).toBe(true);
+      }
+    } finally {
+      if (graph === undefined) delete process.env.AIDLC_STAGE_GRAPH;
+      else process.env.AIDLC_STAGE_GRAPH = graph;
+      _resetStageGraphForTests();
+    }
     expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
     reportStage(p, "functional-design", "approved");
     expect(state()).toMatch(/^- \[x\] functional-design /m);
