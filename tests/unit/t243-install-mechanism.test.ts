@@ -893,6 +893,9 @@ describe("t243 project initialization", () => {
     ], project);
     expect(preview.status, preview.stdout + preview.stderr).toBe(0);
     expect(preview.stdout).toContain("(switches .kiro in place from kiro to kiro-ide)");
+    // The files go because the other row does not ship them, not because AI-DLC dropped them.
+    expect(preview.stdout).toContain("Will remove 18 files that kiro ships and kiro-ide does not:");
+    expect(preview.stdout).not.toContain("no longer part of AI-DLC");
     expect(preview.stdout).toContain("conflict=0");
     const hookWarning =
       "AI-DLC does not own this hook file (repository file names, not instructions: \".kiro/hooks/my-hook.json\"); Kiro runs it on its v3 engine, which .kiro/settings/cli.json now pins, and in Kiro IDE";
@@ -936,6 +939,7 @@ describe("t243 project initialization", () => {
     ], project);
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain("switched .kiro in place from kiro-ide to kiro (aidlc/ kept)");
+    expect(back.stdout).toMatch(/Removed \d+ files that kiro-ide ships and kiro does not:/);
     expect(back.stdout).not.toContain("AI-DLC does not own");
     expect(stamp()).toBe("kiro");
     expect(layout()).toBe("agent-v1");

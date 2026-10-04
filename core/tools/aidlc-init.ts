@@ -7181,6 +7181,9 @@ function retiredFilesReport(
   actions: readonly PlannedAction[],
   version: string,
   removed: boolean,
+  // On an in-place switch the files go because the other row does not ship
+  // them, not because AI-DLC dropped them.
+  switched?: { from: string; to: string },
 ): string[] {
   const paths = actions
     .filter((item) => item.action === "remove" && item.detail === NO_LONGER_SHIPPED)
@@ -7202,9 +7205,13 @@ function retiredFilesReport(
   const shown = rows.length > RETIRED_LIST_LINES ? rows.slice(0, RETIRED_LIST_LINES - 1) : rows;
   const more = rows.slice(shown.length).reduce((sum, row) => sum + row.files, 0);
   const lines = [
-    `${removed ? "Removed" : "Will remove"} ${
-      paths.length === 1 ? "1 file that is" : `${paths.length} files that are`
-    } no longer part of AI-DLC ${version}:`,
+    switched
+      ? `${removed ? "Removed" : "Will remove"} ${paths.length === 1 ? "1 file" : `${paths.length} files`} that ${
+        switched.from
+      } ships and ${switched.to} does not:`
+      : `${removed ? "Removed" : "Will remove"} ${
+        paths.length === 1 ? "1 file that is" : `${paths.length} files that are`
+      } no longer part of AI-DLC ${version}:`,
     ...shown.map((row) => `  ${row.line}`),
     ...(more > 0 ? [`  and ${more} more files`] : []),
   ];
@@ -8984,6 +8991,7 @@ export async function main(
       }
     }
     const refreshing = Boolean(existing.distribution || switchingFrom);
+    const switchedRows = switchingFrom ? { from: switchingFrom.distribution, to: stamp.distribution } : undefined;
     for (const sibling of installed) {
       if (sibling.harnessDir === descriptor.harnessDir) continue;
       const siblingProjection = siblingDescriptor(sibling);
@@ -9369,7 +9377,7 @@ export async function main(
         for (const note of choicesContext.notes) process.stdout.write(`  Note: ${note}\n`);
       }
       if (options.mode === "human") {
-        writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, false));
+        writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, false, switchedRows));
         for (const note of prepared.notes) process.stdout.write(`  Note: ${note}\n`);
       }
       const configuredSection = diagnosticsContext?.section ??
@@ -9507,7 +9515,7 @@ export async function main(
     }
     // Said as soon as it is done, so no later step can leave it unsaid.
     if (options.mode === "human") {
-      writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true));
+      writeMenuLines("", retiredFilesReport(projectDir, actions, stamp.frameworkVersion, true, switchedRows));
     }
     const excludeNote = excludeLocalSettingsFromClone(settingsExclude);
     if (excludeNote) prepared.notes.push(excludeNote);
