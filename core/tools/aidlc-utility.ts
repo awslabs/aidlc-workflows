@@ -130,6 +130,7 @@ import {
   staleStageLine,
   activeWorkflowDescriptions,
   runningWorkflows,
+  workflowDisplayName,
   readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
@@ -1298,7 +1299,16 @@ function activeWorkflowDependencyViolations(
   projectDir: string,
   enabled: ReadonlySet<string>,
 ): string[] {
-  const violations: string[] = [];
+  return activeWorkflowPluginDependencies(projectDir, enabled).map((dependency) => dependency.text);
+}
+
+// The same check, with the plugin each dependency needs, for a command that
+// says what a selection change stops instead of refusing it.
+export function activeWorkflowPluginDependencies(
+  projectDir: string,
+  enabled: ReadonlySet<string>,
+): Array<{ plugin: string; workflow: string; text: string }> {
+  const violations: Array<{ plugin: string; workflow: string; text: string }> = [];
   const scopeOwner = new Map<string, string>();
   for (const [name, meta] of Object.entries(loadScopeMetadataAll())) {
     scopeOwner.set(name, meta.plugin ?? "aidlc");
@@ -1327,7 +1337,11 @@ function activeWorkflowDependencyViolations(
       if (scope) {
         const owner = scopeOwner.get(scope);
         if (owner && !enabled.has(owner)) {
-          violations.push(`${where} runs under scope "${scope}" owned by plugin "${owner}"`);
+          violations.push({
+            plugin: owner,
+            workflow: workflowDisplayName(space.name, intent),
+            text: `${where} runs under scope "${scope}" owned by plugin "${owner}"`,
+          });
         }
       }
       // Pending/active plugin-owned stages in the plan (EXECUTE rows that are
@@ -1338,7 +1352,11 @@ function activeWorkflowDependencyViolations(
         if (!cb.suffix.startsWith("EXECUTE")) continue;
         const owner = stageOwner.get(cb.slug);
         if (owner && !enabled.has(owner)) {
-          violations.push(`${where} has pending stage "${cb.slug}" owned by plugin "${owner}"`);
+          violations.push({
+            plugin: owner,
+            workflow: workflowDisplayName(space.name, intent),
+            text: `${where} has pending stage "${cb.slug}" owned by plugin "${owner}"`,
+          });
         }
       }
     }

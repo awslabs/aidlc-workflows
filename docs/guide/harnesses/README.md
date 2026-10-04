@@ -74,9 +74,9 @@ Do not copy generated trees from a repository checkout. Framework developers may
 instructions under a clearly labeled alternative.
 
 After `aidlc update`, run `aidlc doctor` to see project/runtime version skew
-and refresh each project with `aidlc config` between workflows. Config refuses an
-active-workflow refresh, protecting running work from changed stage or graph
-definitions.
+and refresh each project with `aidlc config`. A refresh while a workflow is open
+is done, says whether that work carries on, and names the command that goes
+back to the earlier release.
 
 This set is open: a new harness gets its own chapter here, added from the same
 template. For *building* a new harness (the source contract — manifest, hook

@@ -3906,11 +3906,16 @@ export function runningWorkflows(projectDir: string): Array<{ space: string; dir
 // agents: committed names pass the model-facing name rules, else the intent's
 // slug or a placeholder stands in.
 export function activeWorkflowDescriptions(projectDir: string): string[] {
-  return runningWorkflows(projectDir).map(({ space, dirName, slug }) =>
-    `${SPACE_NAME_REGEX.test(space) ? space : "(unnamed space)"}/${
-      isSafeIntentRecordName(dirName) ? dirName : intentDisplayLabel({ slug })
-    }`
-  );
+  return runningWorkflows(projectDir).map(({ space, dirName, slug }) => workflowDisplayName(space, { dirName, slug }));
+}
+
+// A workflow as `<space>/<record dir>`, printed for the person and read by
+// agents: committed names pass the model-facing name rules, else the intent's
+// slug or a placeholder stands in.
+export function workflowDisplayName(space: string, intent: { dirName?: unknown; slug?: unknown }): string {
+  return `${SPACE_NAME_REGEX.test(space) ? space : "(unnamed space)"}/${
+    isSafeIntentRecordName(intent.dirName) ? intent.dirName : intentDisplayLabel({ slug: intent.slug })
+  }`;
 }
 
 // Materialize the active-space cursor without overwriting a concurrent explicit

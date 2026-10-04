@@ -128,15 +128,21 @@ describe("config --pin while a workflow is running (#1418)", () => {
   });
 
   test("files that did not record their version, or harnesses on different versions, say to finish too", () => {
-    for (const prepare of [dropStamp, (dir: string) => addKiro(dir, OTHER_VERSION)]) {
-      const proj = project(true);
-      prepare(proj.dir);
-      writeFileSync(join(proj.installRoot, "active-version"), `${AIDLC_VERSION}\n`);
-      writeFileSync(join(proj.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
-      const result = config(proj, ["--unpin"]);
-      expect(result.status, result.output).toBe(0);
-      expect(result.output).toContain(FINISH);
-    }
+    const stampless = project(true);
+    dropStamp(stampless.dir);
+    writeFileSync(join(stampless.installRoot, "active-version"), `${AIDLC_VERSION}\n`);
+    writeFileSync(join(stampless.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const result = config(stampless, ["--unpin"]);
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(FINISH);
+    // With two harnesses each is named, since config would otherwise ask which.
+    const proj = project(true);
+    addKiro(proj.dir, OTHER_VERSION);
+    writeFileSync(join(proj.installRoot, "active-version"), `${AIDLC_VERSION}\n`);
+    writeFileSync(join(proj.dir, ".aidlc-version"), `${AIDLC_VERSION}\n`);
+    const both = config(proj, ["--unpin"]);
+    expect(both.status, both.output).toBe(0);
+    expect(both.output).toMatch(/Run `[^`]* config --harness claude` and `[^`]* config --harness kiro` to finish updating this project\./);
   });
 
   test("a pin while work is open is never refused, and its dry run plans it the usual way", () => {

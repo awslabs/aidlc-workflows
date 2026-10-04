@@ -3772,6 +3772,20 @@ describe("t243 project initialization", () => {
     expect(JSON.parse(
       readFileSync(join(project, ".claude", "tools", "data", "aidlc-stamp.json"), "utf-8"),
     ).frameworkVersion).toBe(AIDLC_VERSION);
+    // With two harnesses the way back names the one it refreshed, since
+    // config would otherwise ask which.
+    const later = temp("aidlc-t243-add-version-later-");
+    cpSync(CLAUDE_RELEASE, later, { recursive: true });
+    const laterStamp = join(later, ".claude", "tools", "data", "aidlc-stamp.json");
+    writeFileSync(laterStamp, `${JSON.stringify({
+      ...JSON.parse(readFileSync(laterStamp, "utf-8")),
+      frameworkVersion: NEXT_VERSION,
+    }, null, 2)}\n`);
+    const moved = run(INIT, [
+      "config", "--project-dir", project, "--from", later, "--harness", "claude", "--force", "--yes",
+    ], project);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    expect(moved.stdout).toContain("config --from <that file> --yes --harness claude`.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a copied harness added beside a release that predates sharing a project is added, as with no open work", () => {

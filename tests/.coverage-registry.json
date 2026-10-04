@@ -11717,6 +11717,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workflowDisplayName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:workflowParticipation",
       "minMechanism": "none",
       "coveredBy": [

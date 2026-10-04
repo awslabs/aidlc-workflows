@@ -2439,8 +2439,8 @@ export function holdPinnedRelease(version: string): () => void {
 export interface ProjectPinOptions {
   /** Workflows still running in the project, as `space/intent` names. */
   activeWorkflows?: (projectDir: string) => string[];
-  /** The `config` command that refreshes the project, as the person types it. */
-  refreshCommand?: (projectDir: string) => string;
+  /** The `config` commands that refresh the project, as the person types them (one per harness). */
+  refreshCommands?: (projectDir: string) => string[];
 }
 
 // A pin changes which engine serves the project at once, while the project's
@@ -2460,7 +2460,11 @@ function pinSplitsRunningWorkflow(
 }
 
 function finishUpdate(projectDir: string, options: ProjectPinOptions): string {
-  return ` Run \`${options.refreshCommand?.(projectDir) ?? "aidlc config"}\` to finish updating this project.`;
+  const commands = (options.refreshCommands?.(projectDir) ?? ["aidlc config"]).map((command) => `\`${command}\``);
+  const listed = commands.length <= 1
+    ? commands.join("")
+    : `${commands.slice(0, -1).join(", ")} and ${commands[commands.length - 1]}`;
+  return ` Run ${listed} to finish updating this project.`;
 }
 
 export async function configureProjectPin(

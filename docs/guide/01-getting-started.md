@@ -226,9 +226,9 @@ aidlc doctor
 aidlc config
 ```
 
-Config preserves project-owned content and refuses to refresh while a workflow
-is active. Projects using plugins should run `/aidlc plugin sync` after an
-engine refresh.
+Config preserves project-owned content, and a refresh while a workflow is open
+is done and says whether that work carries on. Projects using plugins should run
+`/aidlc plugin sync` after an engine refresh.
 
 For version selection, project pins, offline installation, mirrors, custom CAs,
 release authentication, automation, and uninstall, see

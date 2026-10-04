@@ -130,6 +130,7 @@ import {
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import {
+  activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
   canonicalStageTableRegion,
   renderScopeTable,
@@ -1028,12 +1029,17 @@ function modelStateData(
   };
 }
 
+// A printed config command about one harness of the project names that
+// harness when the project has more than one, since config would otherwise
+// ask which.
+function namedHarness(projectDir: string, harness: string | undefined): string {
+  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+}
+
 // A `config models` command about one harness of the project, run as shown
-// from where the user is: it names that harness when the project has more
-// than one, since config would otherwise ask which.
+// from where the user is.
 function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
-  const named = discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
-  return `${configInvocationFor(projectDir)} config models ${args}${named}${projectTarget(projectDir)}`;
+  return `${configInvocationFor(projectDir)} config models ${args}${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
 }
 
 function showModels(
@@ -9288,7 +9294,11 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
 // A setting that was not there before has no flag that removes it, so its undo
 // is the section's --reset, offered only when that resets nothing else the
 // file records; otherwise the line says it was not set there before.
-function settingsChangeLines(projectDir: string, mutations: readonly SettingsMutation[]): string[] {
+function settingsChangeLines(
+  projectDir: string,
+  mutations: readonly SettingsMutation[],
+  harness?: string,
+): string[] {
   const fileOf = (target: SettingsTarget): string => {
     const path = settingsPathForTarget(projectDir, target);
     return target === "global" ? path : relative(projectDir, path);
@@ -9296,7 +9306,7 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget): string =>
     `${configInvocationFor(projectDir)} config ${section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    } --${target} --yes${projectTarget(projectDir)}`;
+    } --${target} --yes${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
@@ -9376,7 +9386,7 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
   const command = (args: string[]): string =>
     `${configInvocationFor(projectDir)} config ${context.section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    } --yes${projectTarget(projectDir)}`;
+    } --yes${namedHarness(projectDir, context.harness)}${projectTarget(projectDir)}`;
   if (context.previous === null) {
     return [`Recorded the ${context.section} answer in ${file}. To undo: ${command(["--reset"])}`];
   }
@@ -9485,11 +9495,32 @@ function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutati
 // that removes it, so its line names the folder it added.
 function refreshDoneLines(
   projectDir: string,
-  change: { added?: string; from?: string; to: string; pinned: boolean; copyChannel: boolean; releaseBaseUrl?: string },
+  change: {
+    added?: string;
+    from?: string;
+    to: string;
+    pinned: boolean;
+    copyChannel: boolean;
+    releaseBaseUrl?: string;
+    harness: string;
+    // Open work that needs a plugin this change turned off, by plugin.
+    pluginsOff: ReadonlyArray<{ plugin: string; workflow: string }>;
+  },
 ): string[] {
   const open = activeWorkflowDescriptions(projectDir);
   if (open.length === 0) return [];
-  const carriesOn = `Your open work (${open.join(", ")}) carries on.`;
+  const listed = (items: readonly string[]): string =>
+    items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  const stopped = [...new Set(change.pluginsOff.map((item) => item.workflow))].sort();
+  const plugins = [...new Set(change.pluginsOff.map((item) => item.plugin))].sort();
+  const going = open.filter((name) => !stopped.includes(name));
+  const carriesOn = stopped.length === 0
+    ? `Your open work (${open.join(", ")}) carries on.`
+    : `${going.length > 0 ? `Your open work (${going.join(", ")}) carries on. ` : ""}${stopped.join(", ")} ${
+      stopped.length === 1 ? "needs" : "need"
+    } the ${listed(plugins)} plugin${plugins.length === 1 ? "" : "s"}, which ${plugins.length === 1 ? "is" : "are"} now off, so ${
+      stopped.length === 1 ? "it continues" : "they continue"
+    } once ${plugins.length === 1 ? "it is" : "they are"} on again.`;
   if (change.added) return [`Added ${change.added}. ${carriesOn}`];
   // The earlier version is read from the project's committed manifest, so it
   // is printed only when it is a release id.
@@ -9499,7 +9530,7 @@ function refreshDoneLines(
     `Updated. ${carriesOn}`,
     change.copyChannel
       ? `To go back: get ${copyRuntimeUrl(change.from, change.releaseBaseUrl)} and its .sha256 into one folder, then run ${
-        command("--from <that file> --yes")
+        command(`--from <that file> --yes${namedHarness(projectDir, change.harness)}`)
       }.`
       : change.pinned
       ? `To go back: ${command(`--pin ${quoteCommandArgument(change.from)} --yes`)}.`
@@ -9537,7 +9568,7 @@ function projectChangeLines(projectDir: string, context: ChoicesMutationContext)
   if (!undo || !printableArgs(undo)) return [`Changed the project choices in ${file}.`];
   return [`Changed the project choices in ${file}. To undo: ${configInvocationFor(projectDir)} config project ${
     undo.map((arg) => quoteCommandArgument(arg)).join(" ")
-  } --yes${projectTarget(projectDir)}`];
+  } --yes${namedHarness(projectDir, context.distribution)}${projectTarget(projectDir)}`];
 }
 
 // The machine settings file lives outside the project, so its change runs as
@@ -9896,7 +9927,13 @@ export async function main(
   if (argv.includes("--pin") || argv.includes("--unpin")) {
     emitResult(await configureProjectPin(argv, {
       activeWorkflows: activeWorkflowDescriptions,
-      refreshCommand: (dir) => `${configInvocationFor(dir)} config${projectTarget(dir)}`,
+      // A project with several harnesses refreshes each one by name.
+      refreshCommands: (dir) => {
+        const harnesses = discoverProjectHarnesses(dir).map((harness) => harness.distribution).sort();
+        return harnesses.length > 1
+          ? harnesses.map((name) => `${configInvocationFor(dir)} config --harness ${name}${projectTarget(dir)}`)
+          : [`${configInvocationFor(dir)} config${projectTarget(dir)}`];
+      },
     }), options);
     return;
   }
@@ -10845,6 +10882,13 @@ export async function main(
     const hookChecks = hookGate
       ? { validateLocked: () => checkHooks(false), validateCommitted: () => checkHooks(true) }
       : {};
+    // Open work that needs a plugin this change turns off stops until it is on
+    // again; the same check select-plugins uses, read before the plugin's
+    // stages leave the graph.
+    const pluginsOff = choicesContext?.section === "project" && choicesContext.nextPlugins !== null &&
+        canonical(choicesContext.previousPlugins) !== canonical(choicesContext.nextPlugins)
+      ? activeWorkflowPluginDependencies(projectDir, new Set(choicesContext.nextPlugins))
+      : [];
     if (refreshing) {
       withAuditLock(
         projectDir,
@@ -10921,7 +10965,7 @@ export async function main(
     // What a recorded setting changed, the command that undoes it, and who
     // picks it up.
     const changes = [
-      ...(settingsMutation ? settingsChangeLines(projectDir, [settingsMutation]) : []),
+      ...(settingsMutation ? settingsChangeLines(projectDir, [settingsMutation], descriptor.distribution) : []),
       ...(diagnosticsContext ? recordChangeLines(projectDir, diagnosticsContext) : []),
     ];
     // A model policy reaches running work only through the agent files it
@@ -10943,6 +10987,8 @@ export async function main(
         pinned: requiredVersion !== undefined,
         copyChannel,
         releaseBaseUrl: releaseSettings.baseUrl,
+        harness: descriptor.distribution,
+        pluginsOff,
       }));
     }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));

@@ -871,7 +871,8 @@ top-level `plugins` array in `harness.json`, so graph and runner regeneration
 use the same selection seam as plugin composition. A project change while a
 workflow is open is done, like any refresh (see "Refresh Safety"), and says
 what changed with the command that puts the earlier choice back when one
-command can say it. Add `--dry-run` to the same command to preview its plan
+command can say it. Turning off a plugin that open work needs names that work:
+it continues once the plugin is on again. Add `--dry-run` to the same command to preview its plan
 without changing project or settings files.
 
 MCP consent remains `defaults` or `none`. A non-interactive project mutation
