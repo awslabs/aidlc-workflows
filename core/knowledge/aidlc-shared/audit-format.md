@@ -215,8 +215,8 @@ force (the policy the next `CONSTRUCTION_POLICY_SET` found) stays one after a
 switch to unit-major iteration or checkpoints, and one recorded while unit-major
 flooring was in force stays ignored by a Unit receipt's floor after a switch back to
 stage-major with checkpoints off, so Units finished before either switch keep their
-receipts. Each Unit's receipts carry its own floor in every mode, so a Unit-tagged
-`GATE_REJECTED` (a reopen of that Unit) stays its boundary across either switch. `UNIT_SKIPPED` settles one
+receipts. A Unit with its own reopen (a Unit-tagged `GATE_REJECTED`) has its receipts
+floored on that Unit in every mode, so the reopen stays its boundary across either switch. `UNIT_SKIPPED` settles one
 unit's beat when the stage's condition does not apply to that unit: the unit
 owes the stage nothing in that attempt (like a unit whose kind prunes every
 output), while every other unit still does. The stage is marked skipped only

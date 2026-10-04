@@ -31510,23 +31510,26 @@ export function latestMainWorkflowStageRunFloorForProject(
 // The floor a Unit's lifecycle receipt carries and is read against. Unlike the
 // stage's other attempt floors, stage-major flooring here leaves out a stage
 // start recorded while unit-major flooring was in force, so a switch back to
-// stage-major keeps the Units finished before it. Writers and readers pass the
-// Unit, so a Unit reopened before the switch (its own Unit-tagged rejection)
-// still owes the work after it.
+// stage-major keeps the Units finished before it. A Unit floored per Unit
+// (`unitScoped`), or one with its own reopen (a Unit-tagged rejection, such
+// as one made before such a switch), is floored on that Unit, so the reopened
+// Unit still owes its redo after the switch; every other floor is unchanged.
 export function unitLifecycleRunFloorForProject(
   projectDir: string,
   slug: string,
   unitMajor: boolean,
   unit?: string,
   auditRows?: readonly AuditShardEvent[],
+  unitScoped = unit !== undefined,
 ): string {
-  return latestMainWorkflowStageRunFloorFromRows(
-    auditRows ?? readAuditShardEvents(projectDir),
-    slug,
-    unitMajor,
-    unit,
-    true,
-  );
+  const rows = auditRows ?? readAuditShardEvents(projectDir);
+  const ownReopen = (name: string): boolean =>
+    rows.some((row) =>
+      row.event === "GATE_REJECTED" &&
+      auditBlockField(row.block, "Unit") === name &&
+      gateStagesFromBlock(row.block).includes(slug));
+  const floored = unit !== undefined && (unitScoped || ownReopen(unit)) ? unit : undefined;
+  return latestMainWorkflowStageRunFloorFromRows(rows, slug, unitMajor, floored, true);
 }
 
 // Callers may hand in raw readAuditShardEvents rows, which are shard-major,
@@ -32278,6 +32281,7 @@ function currentUnitLifecycleRows(
   slug: string,
   unitMajor: boolean,
   auditRows?: readonly AuditShardEvent[],
+  stateContent?: string,
 ): UnitLifecycleRow[] {
   const sourceRows = auditRows ?? readAuditShardEvents(projectDir);
   const startedAt = auditRows
@@ -32308,13 +32312,20 @@ function currentUnitLifecycleRows(
         auditBlockField(row.block, "Stage") === slug &&
         !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:") &&
         !ignoredStarts.has(row))).at(-1)?.timestamp ?? "";
-  // Each Unit's receipts are read against its own floor, which keeps a reopen
-  // of that Unit (a Unit-tagged rejection) as a boundary in every mode.
+  let unitScoped = false;
+  try {
+    const state = stateContent ?? readStateFile(projectDir);
+    unitScoped = unitScopedLifecycleFloors(state);
+  } catch {
+    // No readable state means legacy stage-scoped flooring.
+  }
+  // Each Unit's receipts are read against the floor its writer stamps, which
+  // keeps a reopen of that Unit as a boundary in every mode.
   const floorByUnit = new Map<string, string>();
   const floorFor = (unit: string): string => {
     const existing = floorByUnit.get(unit);
     if (existing) return existing;
-    const floor = unitLifecycleRunFloorForProject(projectDir, slug, unitMajor, unit, sourceRows);
+    const floor = unitLifecycleRunFloorForProject(projectDir, slug, unitMajor, unit, sourceRows, unitScoped);
     floorByUnit.set(unit, floor);
     return floor;
   };
@@ -32488,6 +32499,7 @@ export function unitLifecycleSnapshot(
     slug,
     unitMajor,
     auditRows,
+    stateContent,
   );
   const stage = resolveStage(slug);
   const receipts = new Set<string>();
@@ -32607,7 +32619,7 @@ export function unitSkippedUnits(
       getField(stateContent, "Construction Checkpoints") === "enabled"
     : unitMajorLifecycleMode(projectDir);
   const skipped = new Map<string, string>();
-  for (const row of currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows ?? readAuditShardEvents(projectDir))) {
+  for (const row of currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows ?? readAuditShardEvents(projectDir), stateContent)) {
     if (row.event === "UNIT_SKIPPED") {
       skipped.set(row.unit, auditBlockField(row.block, "Reason") ?? "");
     } else {

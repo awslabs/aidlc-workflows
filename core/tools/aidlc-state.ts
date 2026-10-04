@@ -116,6 +116,7 @@ import {
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
   unitLifecycleRunFloorForProject,
+  unitScopedLifecycleFloors,
   loadScopeMapping,
   loadStageGraph,
   nextInScopeStage,
@@ -2379,6 +2380,8 @@ function handleUnit(args: string[]): void {
         getField(content, "Construction Iteration")?.trim() === "unit-major" ||
           getField(content, "Construction Checkpoints") === "enabled",
         unit,
+        undefined,
+        unitScopedLifecycleFloors(content),
       ),
       ...claimAttemptFields(pd, unit),
       ...(waveMode
@@ -6645,10 +6648,10 @@ function handleSkip(args: string[]): void {
     if (!owes(unit)) {
       error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
     }
-    // Floored per Unit wherever its other lifecycle rows are (every solo mode);
-    // team-owned Units keep their own rule.
+    // Floored per Unit wherever its other lifecycle rows are (solo unit-major
+    // too); team-owned Units keep their own rule.
     const checkpoints = getField(content, "Construction Checkpoints") === "enabled" ||
-      !isTeamUnitOwnership(content);
+      (!isTeamUnitOwnership(content) && getField(content, "Construction Iteration")?.trim() === "unit-major");
     try {
       emitAudit(pd, "UNIT_SKIPPED", {
         Stage: slug,
@@ -6658,7 +6661,9 @@ function handleSkip(args: string[]): void {
           pd,
           slug,
           true,
-          checkpoints ? unit : undefined,
+          unit,
+          undefined,
+          checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
       });
