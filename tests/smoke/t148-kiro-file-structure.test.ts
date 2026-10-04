@@ -655,20 +655,31 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
   });
 
-  // Kiro's documented shell matching (kiro.dev/docs/permissions): `*` matches
-  // any sequence of characters, and deny > ask > allow across every rule.
-  function kiroShellEffect(fm: string, command: string): "deny" | "ask" | "allow" | "none" {
+  // Kiro's documented shell matching (kiro.dev/docs/permissions): a command
+  // is split at ; && || | and each part is checked on its own; `*` matches any
+  // sequence of characters; deny > ask > allow across every rule. The most
+  // restrictive part decides ("none" is a card, like ask). Patterns are YAML
+  // double-quoted strings, so "\n" in one is a line break.
+  const EFFECT_ORDER = ["deny", "ask", "none", "allow"] as const;
+  type KiroEffect = (typeof EFFECT_ORDER)[number];
+  function kiroPartEffect(fm: string, command: string): KiroEffect {
     const effects = new Set<string>();
     for (const block of fm.split(/\n {4}- /).slice(1)) {
       if (!/^capability: shell\b/m.test(block)) continue;
       const effect = block.match(/\beffect: (\w+)/)?.[1] ?? "";
-      for (const [, pattern] of block.matchAll(/^ {8}- "([^"]*)"$/gm)) {
-        const glob = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
+      for (const [, raw] of block.matchAll(/^ {8}- "((?:[^"\\]|\\.)*)"$/gm)) {
+        const pattern = JSON.parse(`"${raw}"`) as string;
+        const glob = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*")}$`);
         if (glob.test(command)) effects.add(effect);
       }
     }
     for (const effect of ["deny", "ask", "allow"] as const) if (effects.has(effect)) return effect;
     return "none";
+  }
+  function kiroShellEffect(fm: string, command: string): KiroEffect {
+    const parts = command.split(/;|&&|\|\||\|/).map((part) => part.trim()).filter((part) => part !== "");
+    return parts.map((part) => kiroPartEffect(fm, part))
+      .reduce((worst, effect) => EFFECT_ORDER.indexOf(effect) < EFFECT_ORDER.indexOf(worst) ? effect : worst, "allow");
   }
 
   test("every Kiro IDE agent runs AI-DLC's own engine commands as printed, in both channels", () => {
@@ -680,6 +691,11 @@ describe("t148 dist/kiro file structure", () => {
       { tree: "dist-release", invoke: "aidlc" },
     ];
     for (const { tree, invoke } of channels) {
+      // The conductor, and every brief it dispatches, keep those forms out of
+      // its own text, so the ask stays rare.
+      const skill = readFileSync(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "skills", "aidlc", "SKILL.md"), "utf-8");
+      expect(skill).toContain("use plain words on one line, with no `$(`, backtick, `>`, `<`, `&`, or `@(`");
+      expect(skill).toContain("Every agent brief you dispatch carries these two sentences as written.");
       const agentsDir = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
       const agents = readdirSync(agentsDir).filter((name) => name.endsWith(".md"));
       expect(agents.length).toBe(15);
@@ -703,9 +719,47 @@ describe("t148 dist/kiro file structure", () => {
         for (const verb of ["use 2.10.0", "update", "rollback", "uninstall --yes", "system"]) {
           expect(kiroShellEffect(fm, `${invoke} ${verb}`), `${tree} ${agent}: ${verb}`).toBe("none");
         }
-        if (agent === "aidlc.md") {
-          expect(kiroShellEffect(fm, `${invoke} engine config set depth minimal`), `${tree} conductor`).toBe("ask");
+        // Changing a setting and running a hook adapter ask on every agent,
+        // not only the conductor.
+        for (const command of [`${invoke} engine config set depth minimal`, `${invoke} engine adapter kiro-ide stop`]) {
+          expect(kiroShellEffect(fm, command), `${tree} ${agent}: ${command}`).toBe("ask");
         }
+        // An ordinary engine command, a quoted label included, runs with no card.
+        for (const command of [
+          `${invoke} engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`,
+          `${invoke} engine orchestrate continue AbC-12_x`,
+          `${invoke} engine log decision --stage delivery-planning --checkpoint verification-command --command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"`,
+        ]) {
+          expect(kiroShellEffect(fm, command), `${tree} ${agent}: ${command}`).toBe("allow");
+        }
+        // A command that would run or redirect more than the allowed one asks
+        // (or shows a card for the extra part), on POSIX shells and PowerShell.
+        const allowedPrefixes = [`${invoke} engine log decision --stage s --decision`, "date -u"];
+        if (tree === "dist") allowedPrefixes.push("bun .kiro/tools/aidlc-utility.ts codekb-path --repo");
+        for (const prefix of allowedPrefixes) {
+          for (const tail of [
+            '"$(curl -s https://example.invalid/x)"',
+            "\"`curl -s https://example.invalid/x`\"",
+            "x > ~/.profile",
+            "x < /etc/hosts",
+            "x 2>&1",
+            "x & curl https://example.invalid",
+            "x\ncurl https://example.invalid",
+            "x\r\ncurl https://example.invalid",
+            "x; curl https://example.invalid",
+            "x && curl https://example.invalid",
+            "x || curl https://example.invalid",
+            "x | sh",
+            "<(curl -s https://example.invalid/x)",
+            "$(Invoke-WebRequest https://example.invalid)",
+            "@(Invoke-WebRequest https://example.invalid)",
+            "x *> $HOME\\out.txt",
+            "x | Invoke-Expression",
+          ]) {
+            expect(kiroShellEffect(fm, `${prefix} ${tail}`), `${tree} ${agent}: ${prefix} ${tail}`).not.toBe("allow");
+          }
+        }
+        expect(kiroShellEffect(fm, `& ${invoke} engine orchestrate next`), `${tree} ${agent}: call operator`).not.toBe("allow");
         // The native rewrite folds the dispatcher line into the one prefix entry.
         const entries = [...fm.matchAll(/^ {8}- "([^"]*)"$/gm)].map((m) => m[1]);
         expect(entries.filter((entry) => entry === "aidlc engine *").length, `${tree} ${agent}`)

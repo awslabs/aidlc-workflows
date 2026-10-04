@@ -16,6 +16,14 @@ permissions:
       match:
         - "{{INVOKE}} engine config set *"
         - "{{INVOKE}} engine adapter *"
+        - "*$(*"
+        - "*`*"
+        - "*>*"
+        - "*<*"
+        - "*&*"
+        - "*@(*"
+        - "*\n*"
+        - "*\r*"
     - capability: shell
       effect: deny
       match:

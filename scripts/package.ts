@@ -1031,12 +1031,13 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
       // copy channel's dispatcher line (`{{INVOKE}} engine *` on the conductor,
       // `bun <dir>/tools/aidlc.ts engine *` on a persona, which the tool
       // rewrite above turned into `aidlc engine engine *`) is that same
-      // prefix, so the pair collapses to one entry.
+      // prefix, so the pair collapses to one entry. A persona's ask lines get
+      // the same doubled prefix and lose it the same way.
       const value = readFileSync(file, "utf-8");
       const trusted = `- "${trustedCommand("*")}"`;
       const rewritten = value
         .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, trusted)
-        .replaceAll(`- "${trustedCommand("engine *")}"`, trusted)
+        .replaceAll(`- "${trustedCommand("engine ")}`, `- "${trustedCommand("")} `)
         .replaceAll(`${trusted}\n        ${trusted}`, trusted);
       if (rewritten !== value) writeFileSync(file, rewritten);
       continue;

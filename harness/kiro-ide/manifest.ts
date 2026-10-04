@@ -52,6 +52,13 @@ const copyShellDeny = new Map<string, string[]>(
   DELEGATION_AGENTS.map((agent) => [agent, shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent))]),
 );
 
+// Shell forms that can run or redirect more than the one command a rule
+// names: Kiro checks each part of a ; && || | chain on its own, but not these.
+// Ask beats every allow, so a command holding one asks the person whatever it
+// starts with. "\n" and "\r" are YAML escapes for a line break. The
+// conductor (agents/aidlc.md) carries the same list; t148 checks every agent.
+const SHELL_FORM_ASKS = ["*$(*", "*`*", "*>*", "*<*", "*&*", "*@(*", "*\\n*", "*\\r*"];
+
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
 // conductor's tools list selects those (agents/aidlc.md). On that path its
@@ -78,6 +85,14 @@ function personaFrontmatter(agent: string): string[] {
     // A read-only version check the personas run before a project's tests;
     // the tests themselves keep asking.
     `        - "bun --version"`,
+    // The conductor's asks: changing a setting and running a hook adapter
+    // stay the person's to approve, whichever agent runs them.
+    "    - capability: shell",
+    "      effect: ask",
+    "      match:",
+    `        - "bun .kiro/tools/aidlc.ts engine config set *"`,
+    `        - "bun .kiro/tools/aidlc.ts engine adapter *"`,
+    ...quoted(SHELL_FORM_ASKS),
     ...(copyShellDeny.get(agent) ?? []),
     "    - capability: fs_read",
     "      effect: allow",

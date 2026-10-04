@@ -70,11 +70,13 @@ For an air-gapped package, use
 `& $installer -From <release-directory> -Offline` on Windows.
 
 `aidlc config` projects the Kiro shell before the project is opened. The native
-`aidlc engine *` trust grant ships inside the conductor's permissions
-(`.kiro/agents/aidlc.md`). Two command families are held back from it:
-`aidlc engine config set *` changes a setting of your piece of work, and
-`aidlc engine adapter *` is the entry the IDE's own hooks run. When the agent
-runs either one, Kiro IDE asks you first. Earlier releases also merged it into
+`aidlc engine *` trust grant ships inside the permissions of the conductor
+(`.kiro/agents/aidlc.md`) and of every agent it hands work to. Some commands are
+held back from it: `aidlc engine config set *` changes a setting of your piece
+of work, `aidlc engine adapter *` is the entry the IDE's own hooks run, and a
+command holding `$(`, a backtick, `>`, `<`, `&`, `@(`, or a line break can run or
+redirect more than the one command. When an agent runs one of these, Kiro IDE
+asks you first. Earlier releases also merged it into
 `.vscode/settings.json` `kiroAgent.trustedCommands`; Kiro IDE 1.x no longer
 reads that key, so the entry can be removed. Before the first workflow, follow
 [First run](#first-run): open `your-project/` in Kiro IDE, trust the folder and
