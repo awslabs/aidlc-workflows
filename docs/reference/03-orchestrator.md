@@ -793,7 +793,7 @@ At phase transitions (init→ideation / inception / …, ideation→inception, i
 
 ## Task Tracking
 
-The orchestrator uses Claude Code's TaskCreate/TaskUpdate/TaskList tools to maintain a visible progress sidebar throughout the workflow. In a session that does not offer those tools, the agent skips the sidebar silently.
+The orchestrator uses Claude Code's TaskCreate/TaskUpdate/TaskList tools to maintain a visible progress sidebar throughout the workflow. Other harnesses map these steps onto their own plan or todo tool, as their skill says. In a session that offers neither, the agent skips the sidebar silently.
 
 ### Stage-Level Tasks
 
