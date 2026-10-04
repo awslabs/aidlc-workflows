@@ -7440,7 +7440,7 @@ function handleReuseArtifact(args: string[]): void {
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
-  const repo = getFlagValue(rest, "--repo");
+  const repoFlag = getFlagValue(rest, "--repo");
   const singleRun = rest.includes("--single");
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
@@ -7456,6 +7456,12 @@ function handleReuseArtifact(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
 
   const pd = resolveProjectDir(projectDir);
+  // With no registered repo, the project root's store goes by the name
+  // codekb-path prints; that name as --repo is the root.
+  const repo = repoFlag && slug === "reverse-engineering" && intentRepos(pd).length === 0 &&
+      repoFlag === codekbRepoName(pd)
+    ? undefined
+    : repoFlag;
   if (singleRun) {
     if (!singleStageAttemptIsOpen(pd, slug)) {
       error(

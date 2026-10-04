@@ -2193,8 +2193,9 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
   return isReadOnlyNextArgv(args);
 }
 
-// A modifier-only next can initialize work or dispatch configuration depending
-// on state. Its own successful result must prove the terminal branch ran; the
+// A modifier-only next, or one naming a scope, can initialize work or dispatch
+// configuration or a scope change depending on state. Its own successful
+// result must prove the terminal branch ran; the
 // transcript reader owns call/result identity, ordering and human-turn binding.
 function isTerminalConfigurationDispatch(
   invocation: { command: string; args: string[] },
@@ -2229,7 +2230,13 @@ function isTerminalConfigurationDispatch(
   };
   const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
   const values = new Map<string, string>();
+  // A scope change names its own command, carrying any setting typed with it.
+  let scope: string | undefined;
   for (let i = 0; i < args.length; i += 2) {
+    if (args[i] === "--scope" && scope === undefined) {
+      scope = args[i + 1];
+      continue;
+    }
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
     // The engine names the parsed value: the guard policy and ceremony words,
@@ -2246,8 +2253,10 @@ function isTerminalConfigurationDispatch(
     values.set(name, value);
   }
   const named = order.filter((name) => values.has(name));
-  const expected = ["config", "set", named[0], values.get(named[0])];
-  for (const name of named.slice(1)) expected.push(`--${name}`, values.get(name));
+  const expected = scope !== undefined
+    ? ["scope", "change", "--scope", scope]
+    : ["config", "set", named[0], values.get(named[0])];
+  for (const name of scope !== undefined ? named : named.slice(1)) expected.push(`--${name}`, values.get(name));
   // Git Bash can prefix captured stdout with this non-fatal startup diagnostic.
   // Remove only the observed diagnostic line; never search arbitrary output
   // for a convenient JSON fragment or discard an unknown prefix/suffix.
@@ -2264,7 +2273,9 @@ function isTerminalConfigurationDispatch(
     const { validateDirective } = require("./aidlc-directive.ts") as typeof import("./aidlc-directive.ts");
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
-    const match = /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/.exec(validated.data.message);
+    const match = (scope !== undefined
+      ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
+      : /^Run `([^`]+)` to update the configuration, then print its output verbatim and stop\.$/).exec(validated.data.message);
     if (!match) return false;
     const literal = parseLiteralShellInvocation(match[1]);
     if (!literal || literal.directory !== null) return false;
@@ -3391,6 +3402,22 @@ export function codekbStoreGeneration(storeDir: string): string {
   return `sha256:${generation}`;
 }
 
+// The folder a repo's knowledge base describes. A registered repo is its
+// sibling folder under the workspace; with none registered the project root is
+// the one repo, even when it holds a folder of the same name (a Python package
+// named after its project, for one).
+export function codekbSourceRoot(projectDir: string, repo: string, space?: string): string {
+  let registered: string[];
+  try {
+    registered = intentRepos(projectDir, undefined, space);
+  } catch {
+    registered = [];
+  }
+  if (registered.length === 0) return projectDir;
+  const sibling = repoDir(projectDir, repo);
+  return existsSync(sibling) && statSync(sibling).isDirectory() ? sibling : projectDir;
+}
+
 // True only when the durable CodeKB store for `repo` carries a valid scope
 // block whose recorded fingerprint still matches the current source tree.
 // This is the programmatic form of `codekb-scope-diff`'s CURRENT verdict, used
@@ -3415,11 +3442,7 @@ export function codekbStoreIsCurrent(
     return false;
   }
   if (!parsed.ok || parsed.scope.fingerprint === null) return false;
-  const sibling = repoDir(projectDir, repo);
-  const sourceRoot =
-    existsSync(sibling) && statSync(sibling).isDirectory()
-      ? sibling
-      : projectDir;
+  const sourceRoot = codekbSourceRoot(projectDir, repo, sp);
   const current = codekbScopeFingerprint(
     sourceRoot,
     parsed.scope.analyzedPaths,

@@ -97,6 +97,7 @@ import {
   pruneExpiredQuestions,
   QUESTION_UNAVAILABLE,
   type QuestionAskedAbout,
+  type QuestionSettings,
   questionTargetSelected,
   readComposeEntry,
   readQuestion,
@@ -1692,6 +1693,36 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
 // it stored, read back through the same parser, never the narrower set its
 // answer command happened to carry. A stored value the parser refuses keeps
 // nothing (null), so no partial plan is asked about again.
+// What a routing question stores of the settings carried on its answers: the
+// tokens its new-work answers carry (stage changes included) and those its
+// answers about existing work carry.
+function routingSettings(carried: RoutingCarried): QuestionSettings {
+  const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
+  return {
+    newWork: tokens(`${carried.newWork}${carried.planChanges}`),
+    existingWork: tokens(carried.existingWork),
+  };
+}
+
+// An answer that names a routing question gets the settings typed with its
+// request that the answer does not set itself: those for new work, or for
+// the work it acts on when it continues or reshapes. A stored value the parser
+// refuses answers false, and nothing runs.
+function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boolean {
+  if (question.origin !== "routing" || !question.settings) return true;
+  const existing = flags.continue === true || flags.compose === true;
+  const kept = parseNextFlags(existing ? question.settings.existingWork : question.settings.newWork);
+  if (kept.parseError) return false;
+  flags.depth ??= kept.depth;
+  flags.testStrategy ??= kept.testStrategy;
+  flags.projectType ??= kept.projectType;
+  flags.review ??= kept.review;
+  flags.changeControl ??= kept.changeControl;
+  if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
+  if (!existing && !flags.planChanges && kept.planChanges) flags.planChanges = kept.planChanges;
+  return true;
+}
+
 function carriedFromQuestion(question: StoredQuestion, flags: ParsedFlags): RoutingCarried | null {
   if (!question.settings) return carriedRoutingFlags(flags);
   const kept = parseNextFlags(question.settings.newWork);
@@ -2064,11 +2095,10 @@ function newWorkRoutingAskDirective(
   // The route commands travel as fields, never inside the human-facing text.
   // Its own question: this ask is about work that exists, so its continue and
   // reshape routes act only on the item(s) it names, and ask again otherwise.
-  const tokens = (carriedFlags: string): string[] => carriedFlags.split(" ").filter((token) => token.length > 0);
-  const stored = saveQuestion(projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256, {
-    newWork: tokens(`${carried.newWork}${carried.planChanges}`),
-    existingWork: tokens(carried.existingWork),
-  }, approvedRequest);
+  const stored = saveQuestion(
+    projectDir, description, proposedScope, "routing", askedAbout, false, undefined, stateSha256,
+    routingSettings(carried), approvedRequest,
+  );
   const tool = aidlcToolInvocation("orchestrate");
   return {
     kind: "ask",
@@ -5779,22 +5809,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       flags.scope = routingAnswer.question.proposedScope;
     }
     // The settings typed with the request ride this answer as they ride the
-    // option's command, read back through the same parser.
-    const settings = routingAnswer.question.settings;
-    if (settings) {
-      const replay = parseNextFlags(routingAnswer.route === "separate" ? settings.newWork : settings.existingWork);
-      if (replay.parseError) {
-        emit(errorDirective(QUESTION_UNAVAILABLE));
-        return;
-      }
-      flags.planChanges = replay.planChanges;
-      flags.depth = replay.depth;
-      flags.testStrategy = replay.testStrategy;
-      flags.projectType = replay.projectType;
-      flags.review = replay.review;
-      flags.changeControl = replay.changeControl;
-      flags.ceremony = replay.ceremony;
-    }
+    // option's command: the question it names fills them in below.
   }
 
   // An answer names its question by id. The copy is removed once the answer
@@ -5838,6 +5853,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (started) {
       pruneQuestions();
       emit(started);
+      return;
+    }
+    // An answer that arrived without its option's command (a reply naming the
+    // option, or the plain `next --request` an open stage question hands on)
+    // gets the stored settings; the ask's own commands already carry theirs.
+    const bare = routingAnswer !== null ||
+      (!flags.newIntent && !flags.continue && !flags.compose && flags.record === undefined);
+    if (bare && !fillStoredSettings(flags, found)) {
+      emit(errorDirective(QUESTION_UNAVAILABLE));
       return;
     }
     question = found;
@@ -6921,7 +6945,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   ) {
     const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
-      const words = saveQuestion(pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() });
+      // The settings typed with these words ride on with them.
+      const words = saveQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carriedRoutingFlags(flags)),
+      );
       emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));
       return;
     }

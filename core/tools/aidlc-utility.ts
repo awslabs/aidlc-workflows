@@ -196,6 +196,7 @@ import {
   codekbDir,
   intentsDir,
   codekbFingerprintExcludes,
+  codekbSourceRoot,
   codekbRepoName,
   codekbScopeFingerprint,
   codekbSourceFingerprint,
@@ -3327,11 +3328,15 @@ export function firingHooksLastFired(projectDir: string, now = Date.now()): stri
 // A hook failure this recent is a doctor warning; an older one is history.
 const HOOK_FAILURE_RECENT_MS = 24 * 60 * 60 * 1000;
 
-// Before the Stop hook wrote its normal waits to continue-workflow.trace it
-// wrote them to its .drops file, each carrying one of these fixed fragments,
-// which none of its failure reasons carries. A record upgraded mid-workflow
-// keeps those lines, so doctor skips them rather than report them as failures.
+// Before the Stop hook wrote its normal waits and its interactive
+// recursion-guard release to continue-workflow.trace it wrote them to its
+// .drops file, each carrying one of these fixed fragments, which none of its
+// failure reasons carries. A record upgraded mid-workflow keeps those lines, so
+// doctor skips them rather than report them as failures. An interactive run
+// released at cap 2; an autonomous run's release (cap 8) is a stall and stays
+// a failure.
 const LEGACY_STOP_HOOK_TRACE_FRAGMENTS = [
+  "recursion guard released the stop (no-progress block cap 2 reached",
   "is waiting on the human; allowing the stop before the shared next probe",
   "at the exact post-create fresh-session handoff boundary",
   "at the exact intent handoff boundary (create or switch)",
@@ -9374,11 +9379,7 @@ function resolveCodekbRepo(
   if (!isValidRepoName(repo)) {
     die(`Invalid --repo "${repo}": a repo name must be one path segment.`);
   }
-  const siblingDir = join(projectDir, repo);
-  const sourceDir =
-    existsSync(siblingDir) && statSync(siblingDir).isDirectory()
-      ? siblingDir
-      : projectDir;
+  const sourceDir = codekbSourceRoot(projectDir, repo, space);
   return {
     space,
     repo,
@@ -9799,12 +9800,10 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
   const storeDir = relativeCodekbDir(projectDir, repo, space);
   const storePath = join(projectDir, ...storeDir.split("/"), "reverse-engineering-timestamp.md");
 
-  // The repo's source root: the sibling dir `<workspace>/<repo>/` when it
-  // exists (the multi-repo layout reverse-engineering.md Step 1 scans), else
-  // the workspace root itself (the lone-repo case, where codekbRepoName is
-  // basename(projectDir)).
-  const siblingDir = join(projectDir, repo);
-  const repoDir = existsSync(siblingDir) && statSync(siblingDir).isDirectory() ? siblingDir : projectDir;
+  // The repo's source root: a registered repo's sibling dir `<workspace>/<repo>/`
+  // (the multi-repo layout reverse-engineering.md Step 1 scans), else the
+  // workspace root itself (the lone-repo case).
+  const repoDir = codekbSourceRoot(projectDir, repo, space);
   // In the lone-repo layout AI-DLC's workspace and install live under the
   // repository root. Leave them out of full-root fingerprints, so writing the
   // scope draft, codekb, audit, or state cannot stale its own hash, and an
@@ -10504,7 +10503,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
       for (const c of existingCheckboxes) {
         if (c.state === "awaiting-approval" && skips(c.slug)) {
-          skippedNow.push({ slug: c.slug, was: "it was waiting for approval" });
+          skippedNow.push({ slug: c.slug, was: "it was waiting for your approval" });
         }
       }
       const skippedNowSlugs = new Set(skippedNow.map((s) => s.slug));
@@ -10606,16 +10605,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           },
         })),
       );
+      // What happened and how to go back, then each stage it skipped and each
+      // setting whose value changed. Nothing runs until the person asks.
       outputLines = [
-        `Scope changed: ${oldScope} -> ${newScope}`,
-        `Stages in scope: ${executeStages.length} (${deltaStr})`,
-        `Approval gates: ${gates}${ceremonyOffClause(summary)}`,
-        `Depth: ${effectiveDepth}`,
-        ...(flags.review === undefined ? [] : [`Review override: ${getField(content, "Review Override") || "scope default"}`]),
-        `Completed: ${completedCount}/${executeStages.length}`,
+        `Switched to ${newScope}: ${executeStages.length} stages (${completedCount} done), ` +
+          `${gates} approval gates${ceremonyOffClause(summary)}. ` +
+          `To go back, type \`${entrySkillInvocation()} --scope ${oldScope}\`.`,
         ...skippedNow.map(({ slug, was }) =>
-          `Skipped ${slug} (${was}): ${newScope} does not run it. To run it on its own, type ` +
-            `\`${entrySkillInvocation()} --stage ${slug} --single\`.`),
+          `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
+            `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
         ...update.lines,
       ];
     }

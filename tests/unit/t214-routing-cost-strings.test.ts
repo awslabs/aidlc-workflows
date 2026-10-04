@@ -246,15 +246,15 @@ describe("t214 creation print carries the cost parenthetical", () => {
   }
 });
 
-describe("t214 scope-change stdout carries the Approval gates line", () => {
-  test("scope change --scope mvp prints Stages in scope AND Approval gates", () => {
+describe("t214 scope-change stdout carries the stage and gate counts", () => {
+  test("scope change --scope mvp says its stages and approval gates in one line", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);
     expect(r.rc).toBe(0);
     // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
     const mvp = counts(GRID.mvp.stages, true);
-    expect(r.out).toContain(`Stages in scope: ${mvp.execute}`);
-    expect(r.out).toContain(`Approval gates: ${mvp.gates}`);
+    expect(r.out).toContain(`Switched to mvp: ${mvp.execute} stages (`);
+    expect(r.out).toContain(`, ${mvp.gates} approval gates`);
   });
 });

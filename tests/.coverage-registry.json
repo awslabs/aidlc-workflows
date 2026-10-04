@@ -2738,6 +2738,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:codekbSourceRoot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:codekbStoreGeneration",
       "minMechanism": "none",
       "coveredBy": [

@@ -59,8 +59,9 @@
 //          (stage, stable state digest, and directive fingerprint from
 //          aidlc-continue-workflow.ts:247) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
-//          appends the drop record "recursion guard released the stop"
-//          (aidlc-continue-workflow.ts:370) to .aidlc-engine/hooks-health/continue-workflow.drops - a stuck loop
+//          appends the trace line "recursion guard released the stop"
+//          to .aidlc-engine/hooks-health/continue-workflow.trace, not to its
+//          .drops, since a release is the guard working - a stuck loop
 //          can never trap the session even with the directive genuinely pending.
 //          Deterministically confirmed on this fixture with the real engine
 //          directive and matching composite signature.
@@ -114,7 +115,7 @@
 //   - progress signature:        aidlc-continue-workflow.ts:247
 //   - resetGuard on done/allow:  aidlc-continue-workflow.ts:241-248 (count 0), invoked :357
 //   - block JSON + reason:       aidlc-continue-workflow.ts:104,298-307
-//   - release + drop record:     aidlc-continue-workflow.ts:364-371 ("recursion guard released the stop")
+//   - release + trace line:      aidlc-continue-workflow.ts ("recursion guard released the stop")
 //   - block cap env:             aidlc-continue-workflow.ts:69 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8)
 //   - status stdout:             aidlc-utility.ts:296-310 ("Status:         Completed")
 //   - fixtures: state-completed.md (Status=Completed, 32/32) /
@@ -175,11 +176,13 @@ const heartbeatPath = (proj: string): string =>
   join(hooksHealthDir(proj), "continue-workflow.last");
 const dropsPath = (proj: string): string =>
   join(hooksHealthDir(proj), "continue-workflow.drops");
+const tracePath = (proj: string): string =>
+  join(hooksHealthDir(proj), "continue-workflow.trace");
 
 // Known-answer literals from the SHIPPED handlers (see header for cites).
 const STATUS_COMPLETED_LINE = "Status:         Completed"; // utility.ts:302 (padEnd shape confirmed by direct run)
 const PENDING_STAGE = "feedback-optimization"; // state-final-stage.md:90 ([-] final stage)
-const DROP_RECORD = "recursion guard released the stop"; // aidlc-continue-workflow.ts:370
+const RELEASE_RECORD = "recursion guard released the stop";
 
 /** Pipe a real Stop payload into the SHIPPED hook with the project's REAL
  *  engine resolved via CLAUDE_PROJECT_DIR. Returns exit code + trimmed stdout
@@ -478,11 +481,11 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
   // =========================================================================
   // (6) RECURSION RELEASE against the REAL engine (light re-confirm; t121
   // owns the exhaustive matrix). Real PENDING engine + counter seeded AT the
-  // cap + stop_hook_active:true -> RELEASE with a drop record. A stuck loop
+  // cap + stop_hook_active:true -> RELEASE with a trace line. A stuck loop
   // never traps the session even when the directive is genuinely pending.
   // =========================================================================
   test(
-    "(real engine) the recursion guard releases a genuinely-pending stop at the cap: no block, exit 0, drop record written",
+    "(real engine) the recursion guard releases a genuinely-pending stop at the cap: no block, exit 0, trace line written",
     () => {
       const proj = setupIntegrationProject({
         withState: "state-final-stage.md",
@@ -501,9 +504,9 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // but the cap wins — decideBlock :231 returns false at count >= cap).
         expect(r.rc).toBe(0);
         expect(r.out).toBe("");
-        // The drop record documents the release (aidlc-continue-workflow.ts:364-371).
-        const drops = readFileSync(dropsPath(proj), "utf-8");
-        expect(drops).toContain(DROP_RECORD);
+        // The trace documents the release; it is not a failure, so no drop.
+        expect(readFileSync(tracePath(proj), "utf-8")).toContain(RELEASE_RECORD);
+        expect(existsSync(dropsPath(proj)) ? readFileSync(dropsPath(proj), "utf-8") : "").not.toContain(RELEASE_RECORD);
       } finally {
         cleanupTestProject(proj);
       }
