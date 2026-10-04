@@ -1125,12 +1125,29 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
   rmSync(sidecar, { force: true });
 }
 
+// The harness's data folder, or a folder on the way to it, that links
+// elsewhere: a removal there would land outside this project and outside the
+// transaction, so prune leaves the plugin records in it alone and says so.
+function linkedDataFolder(stagedProject: string, harnessDir: string): string | null {
+  let path = stagedProject;
+  for (const part of [harnessDir, "tools", "data"]) {
+    path = join(path, part);
+    try {
+      if (lstatSync(path).isSymbolicLink()) return join(harnessDir, "tools", "data");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+// Returns the data folder it left alone, or null.
 function pruneOwnedPlugin(
   stagedProject: string,
   harnessDir: string,
   key: string,
   ownership: OwnershipRecord | undefined,
-): void {
+): string | null {
   if (!ownership) {
     throw new Error(`cannot prune ${key}: no composition ownership record proves its files`);
   }
@@ -1145,10 +1162,13 @@ function pruneOwnedPlugin(
   for (const file of ownership.files) {
     rmSync(assertOwnedPath(stagedProject, file.path), { force: true });
   }
+  const linked = linkedDataFolder(stagedProject, harnessDir);
+  if (linked !== null) return linked;
   const dataDir = harnessDataDir(stagedProject, harnessDir);
   rmSync(join(dataDir, `plugin-owned-${key}.json`), { force: true });
   rmSync(join(dataDir, `plugin-compose-${key}.json`), { force: true });
   rmSync(join(dataDir, `plugin-files-${key}.json`), { force: true });
+  return null;
 }
 
 function replaceOwnedPluginPrimitives(
@@ -1349,7 +1369,7 @@ export async function syncPlugins(
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
   lockRetry = 0,
-): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
+): Promise<{ synced: string[]; pruned: string[]; operations: number; leftAlone?: string }> {
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
@@ -1417,8 +1437,9 @@ export async function syncPlugins(
       );
       await runComposer(plugin, stagedProject, harnessDir);
     }
+    let leftAlone: string | null = null;
     for (const key of pruned) {
-      pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key));
+      leftAlone = pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key)) ?? leftAlone;
     }
     const claimedPaths = new Set<string>();
     for (const plugin of plugins) {
@@ -1473,6 +1494,7 @@ export async function syncPlugins(
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned,
       operations: plan.operations.length,
+      ...(leftAlone !== null ? { leftAlone } : {}),
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -1511,7 +1533,10 @@ export async function main(argv: string[]): Promise<void> {
     if (command === "sync") {
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
-        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "");
+        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
+        (result.leftAlone
+          ? `\nLeft plugin files in ${result.leftAlone} alone: that folder links outside this project.`
+          : "");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;
