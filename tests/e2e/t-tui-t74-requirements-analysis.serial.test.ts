@@ -132,7 +132,9 @@ function remainingCleanupMs(): number {
 
 // The shared state fixture only says "Todo app bug fix". Supply the actual
 // defect and acceptance input: a menu-only answer loop cannot follow a choice
-// such as "I'll describe it" with the missing free-text reproduction.
+// such as "I'll describe it" with the missing free-text reproduction. The
+// request leaves how to answer the questions to the person, so the agent asks
+// it and the driver picks, as a person does.
 // TodoList already guards the form; useTodos.addTodo accepts raw titles.
 const PROJECT_DESCRIPTION = [
   "Fix title validation in the React/TypeScript Todo app's useTodos hook.",
@@ -142,7 +144,6 @@ const PROJECT_DESCRIPTION = [
   "Calling addTodo('  Buy milk  ') must append exactly one incomplete todo titled 'Buy milk' with a unique id.",
   "Add a targeted automated regression test for these hook calls and preserve valid adds, toggling, and deletion.",
   "Limit the fix to hook title validation; persistence, new features, and UI redesign are out of scope.",
-  "Guide me through the remaining scope and regression-test choices.",
 ].join(" ");
 
 interface Run {
