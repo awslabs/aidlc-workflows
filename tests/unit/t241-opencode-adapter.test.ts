@@ -1160,7 +1160,14 @@ writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
     expect(readFileSync(statePath, "utf-8")).toBe(before);
     expect(ceremonyRows()).toHaveLength(0);
 
-    await runCommand(adapter, "main", template, "config set summary-confirmation off");
+    // A nudge that arrives between the command and its message does not take
+    // the command's place.
+    const args = "config set summary-confirmation off";
+    const parts: Array<Record<string, unknown>> = [{ type: "text", text: template.replace("$ARGUMENTS", args).trim() }];
+    await adapter["command.execute.before"]({ command: "aidlc", sessionID: "main", arguments: args }, { parts });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_n", type: "text", text: "[aidlc-forwarding-nudge] keep going", synthetic: true }] });
+    parts.forEach((part, i) => { part.id = `prt_c${i}`; });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts });
     expect(readFileSync(statePath, "utf-8")).toContain("- **Summary Confirmation**: off (set by you)");
     const rows = ceremonyRows();
     expect(rows).toHaveLength(1);

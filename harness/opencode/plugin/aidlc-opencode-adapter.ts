@@ -450,11 +450,12 @@ export default async ({
     ) => {
       if (input.agent) sessionAgent.set(input.sessionID, input.agent);
       const command = typedCommands.get(input.sessionID);
-      typedCommands.delete(input.sessionID);
       const typed = command !== undefined &&
           output.parts.some((p) => p.type === "text" && p.ignored === true && p.text === command)
         ? command
         : null;
+      // Another message (a nudge sent at the same moment) leaves it for the command's own.
+      if (typed !== null) typedCommands.delete(input.sessionID);
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
       const first = output.parts.find((p) => p.type === "text");
       if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
