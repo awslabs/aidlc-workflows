@@ -23,7 +23,9 @@
 // What this proves on the SHIPPED tree, structurally:
 //   - skill discovery at .agents/skills/aidlc under a real codex session;
 //   - the engine's print-directive terminal arm (status names no workflow);
-//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature).
+//   - nothing is scaffolded by a read-only utility (no aidlc-docs creature);
+//   - the trust `package.ts codex trust` seeds is the trust Codex checks, so
+//     the project's hooks run, matched ones included.
 //
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
 // (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
@@ -40,6 +42,7 @@ import {
   setupCodexProject,
 } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
 import { codexExecDiagnostic, codexExecTimeout, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -152,6 +155,12 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
         // workspace signals are the state file and the scaffold tree.
         expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
         expect(existsSync(join(proj, "aidlc-docs", "ideation"))).toBe(false);
+        // The seeded trust is the trust Codex checks: the project's hooks ran,
+        // a matched one (PostToolUse on Bash) as well as SessionStart. With a
+        // seed Codex did not recognise, none of them ran and this run passed.
+        const health = hooksHealthReadDir(proj);
+        expect(existsSync(join(health, "session-start.last")), codexExecDiagnostic(r)).toBe(true);
+        expect(existsSync(join(health, "rebuild-stage-graph.last")), codexExecDiagnostic(r)).toBe(true);
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

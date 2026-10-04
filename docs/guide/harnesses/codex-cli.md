@@ -141,8 +141,9 @@ then set `RUNTIME_ROOT` to the extracted `runtime/` directory.
 
    The command prints ready-to-paste `[hooks.state]` entries for
    `$CODEX_HOME/config.toml`
-   (the hash covers the hook identity, not the path — the printed entries are
-   exact for the shipped `hooks.json`). The command serializes the complete
+   (each hash covers the hook's event, its matcher, its command, and its
+   timeout, as Codex hashes them, not the path: the printed entries are exact
+   for the copied `hooks.json`). The command serializes the complete
    output as TOML, so quoted paths, spaces, and Windows backslashes are
    preserved. If the hook manifest is not at `<project>/.codex/hooks.json`,
    pass its exact path explicitly:

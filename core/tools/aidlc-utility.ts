@@ -87,6 +87,7 @@ import {
 } from "./aidlc-graph.ts";
 import { addRootBlocks, repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
+  codexHookTrustHash,
   HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_COMMAND_TOKENS,
@@ -2184,17 +2185,7 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
     Stop: "stop",
   };
   const parsed = JSON.parse(readFileSync(hooksPath, "utf-8")) as {
-    hooks?: Record<string, Array<{ hooks?: Array<{ command?: unknown; timeout?: unknown }> }>>;
-  };
-  const sortKeys = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(sortKeys);
-    if (value && typeof value === "object") {
-      const record = value as Record<string, unknown>;
-      return Object.fromEntries(
-        Object.keys(record).sort().map((key) => [key, sortKeys(record[key])]),
-      );
-    }
-    return value;
+    hooks?: Record<string, Array<{ matcher?: unknown; hooks?: Array<{ command?: unknown; timeout?: unknown }> }>>;
   };
   const hashes: string[] = [];
   for (const [event, groups] of Object.entries(parsed.hooks ?? {})) {
@@ -2212,20 +2203,12 @@ function codexNativeTrustHashes(hooksPath: string): string[] {
         if (typeof timeout !== "number" || !Number.isSafeInteger(timeout) || timeout < 0) {
           throw new Error("Codex command-hook timeout must be a nonnegative integer in seconds");
         }
-        const identity = {
-          event_name: eventName,
-          hooks: [{
-            async: false,
-            command: hook.command,
-            timeout,
-            type: "command",
-          }],
-        };
-        hashes.push(
-          `sha256:${
-            createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")
-          }`,
-        );
+        hashes.push(codexHookTrustHash(
+          eventName,
+          hook.command,
+          timeout,
+          typeof group.matcher === "string" ? group.matcher : undefined,
+        ));
       }
     }
   }

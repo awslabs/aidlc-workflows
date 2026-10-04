@@ -1543,6 +1543,63 @@ describe("t294 trust diagnostics", () => {
     }
   });
 
+  test("Codex doctor hashes a hook group's matcher, as Codex does", async () => {
+    const project = temp("aidlc-t294-trust-matcher-");
+    cpSync(join(DIST_RELEASE, "codex"), project, { recursive: true });
+    const harnessRoot = join(project, ".codex");
+    const hooksPath = join(harnessRoot, "hooks.json");
+    const seedPath = join(harnessRoot, "trust-seed.toml");
+    const machine = temp("aidlc-t294-trust-matcher-machine-");
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".codex",
+      AIDLC_HARNESS_NAME: "codex",
+      AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      CODEX_HOME: machine,
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    const nativeTrust = async () => {
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    };
+    try {
+      Object.assign(process.env, overrides);
+      // The shipped seed and hooks agree, matched groups included.
+      const shipped = await nativeTrust();
+      expect(shipped.pass, shipped.label).toBe(true);
+      writeFileSync(hooksPath, JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{
+          type: "command",
+          command: "aidlc engine adapter codex bind-bash-session",
+          timeout: 1800,
+        }] }] },
+      }));
+      // Fixed canonical JSON hashes, with and without the "Bash" matcher.
+      const seedFor = (hash: string) =>
+        `[hooks.state."fixture:pre_tool_use:0:0"]\ntrusted_hash = "sha256:${hash}"\n`;
+      writeFileSync(seedPath, seedFor("300611f50500fcc20cc68c0d72dfe8aab2804e596f333f271ea170570a876d1e"));
+      const withMatcher = await nativeTrust();
+      expect(withMatcher.pass, withMatcher.label).toBe(true);
+      writeFileSync(seedPath, seedFor("86e3fee54b13fecc85ee6d26c95d0f7d5cb72166070e2af57f274d2e36c4cdca"));
+      const withoutMatcher = await nativeTrust();
+      expect(withoutMatcher.pass, withoutMatcher.label).toBe(false);
+      expect(withoutMatcher.label).toContain("native permission/trust missing");
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   test("Kiro native trust reads the conductor's grant, not a persona's", async () => {
     const project = temp("aidlc-t294-trust-kiro-conductor-");
     cpSync(join(DIST_RELEASE, "kiro-ide"), project, { recursive: true });
@@ -1612,6 +1669,39 @@ describe("t294 trust diagnostics", () => {
     })).toEqual([]);
     expect(readFileSync(join(project, ".codex", "trust-seed.toml"), "utf-8"))
       .toBe(seed);
+  });
+
+  test("Codex counts the trust Codex itself writes after Trust all as complete", () => {
+    const project = temp("aidlc-t294-trust-codex-all-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-all-home-");
+    // Codex writes one entry per hook in the hooks.json it reads, hashed over
+    // the event, the group's matcher when it has one, and the hook. Counting
+    // against a seed that left the matcher out reported 6 of 15 missing here.
+    const wiring = JSON.parse(readFileSync(join(project, ".codex", "hooks.json"), "utf-8")) as {
+      hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string; timeout: number }> }>>;
+    };
+    const sorted = (value: unknown): unknown =>
+      Array.isArray(value) ? value.map(sorted)
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted((value as Record<string, unknown>)[key])]))
+        : value;
+    const hooksPath = `${project.replaceAll("\\", "/")}/.codex/hooks.json`;
+    const tables = Object.entries(wiring.hooks).flatMap(([event, groups]) => {
+      const name = event.replace(/[A-Z]/g, (c, i) => `${i ? "_" : ""}${c.toLowerCase()}`);
+      return groups.map((group, index) => {
+        const identity = {
+          event_name: name,
+          ...(group.matcher === undefined ? {} : { matcher: group.matcher }),
+          hooks: [{ async: false, command: group.hooks[0].command, timeout: group.hooks[0].timeout, type: "command" }],
+        };
+        return `[hooks.state.${JSON.stringify(`${hooksPath}:${name}:${index}:0`)}]\n` +
+          `trusted_hash = "${sha256Bytes(JSON.stringify(sorted(identity)))}"\n`;
+      });
+    });
+    expect(Object.values(wiring.hooks).flat().some((group) => group.matcher !== undefined)).toBe(true);
+    writeFileSync(join(home, "config.toml"), tables.join("\n"));
+    expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([]);
   });
 
   test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {

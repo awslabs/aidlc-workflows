@@ -1548,13 +1548,15 @@ if (argv[0] === "codex" && argv[1] === "trust") {
       trustedNamespace: string,
     ) => string;
   };
+  // The checkout's dist/codex runs its hooks as `bun .codex/tools/aidlc.ts ...`,
+  // so hash those commands: a native `aidlc ...` hash trusts none of them.
   console.log(
     trustEntries(
       resolvedProject,
       hooksJson ?? undefined,
       ".codex",
       "codex",
-      "aidlc",
+      substituteInvocationTokens("{{INVOKE}}", ".codex"),
       TRUSTED_ROUTE_NAMESPACE,
     ),
   );

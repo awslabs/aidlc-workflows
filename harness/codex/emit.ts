@@ -15,7 +15,6 @@
 // in .codex/skills/ (Codex discovers skills at <project>/.agents/skills/), so
 // the manifest sets skipRunnerGen and emit composes the runners here.
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
@@ -24,6 +23,7 @@ import {
   absorbReviewerKnowledge,
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
+import { codexHookTrustHash } from "../../core/tools/aidlc-command.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import {
@@ -207,29 +207,6 @@ prefix_rule(pattern = ["git", "add"], decision = "allow")
 `;
 }
 
-// S9a trust-hash recipe. Identity = {event_name: <snake>, hooks: [{async:false,
-// command, timeout:<emitted seconds>, type:"command"}]} → canonical JSON
-// (sorted keys, compact) → sha256.
-function trustHash(eventSnake: string, command: string, timeout: number): string {
-  const identity = {
-    event_name: eventSnake,
-    hooks: [{ async: false, command, timeout, type: "command" }],
-  };
-  const sortKeys = (o: unknown): unknown => {
-    if (Array.isArray(o)) return o.map(sortKeys);
-    if (o !== null && typeof o === "object") {
-      return Object.fromEntries(
-        Object.keys(o as Record<string, unknown>)
-          .sort()
-          .map((k) => [k, sortKeys((o as Record<string, unknown>)[k])]),
-      );
-    }
-    return o;
-  };
-  const blob = JSON.stringify(sortKeys(identity));
-  return "sha256:" + createHash("sha256").update(blob, "utf-8").digest("hex");
-}
-
 const SNAKE: Record<string, string> = {
   SessionStart: "session_start",
   UserPromptSubmit: "user_prompt_submit",
@@ -266,13 +243,13 @@ export function trustEntries(
   const path = hooksJsonPath ?? projectPath.join(projectDir, harnessDir, "hooks.json");
   const counters: Record<string, number> = {};
   const state: Record<string, { trusted_hash: string }> = {};
-  for (const { event, target } of HOOK_WIRING) {
+  for (const { event, matcher, target } of HOOK_WIRING) {
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
     const command = adapterCmd(harnessName, target, trustedNamespace)
       .replace("{{INVOKE}}", invoke);
-    const hash = trustHash(snake, command, hookTimeoutSeconds(target));
+    const hash = codexHookTrustHash(snake, command, hookTimeoutSeconds(target), matcher);
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });
@@ -295,7 +272,7 @@ export function emitTrustSeed(
     `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
     `# If entries for that hooks.json path already exist, replace the full set;\n` +
     `# appending a second set creates invalid TOML. The hash covers the\n` +
-    `# normalized hook identity (event + command + defaults), NOT the path —\n` +
+    `# normalized hook identity (event + matcher + command + defaults), NOT the path —\n` +
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +

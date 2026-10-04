@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readSync } from "node:fs";
 import {
   colorEnabled,
@@ -35,6 +36,34 @@ export const UNTRUSTED_ROUTE_NAMESPACES = Object.keys(ROUTE_NAMESPACE_DECLARATIO
 
 export function trustedCommand(suffix = ""): string {
   return suffix ? `${TRUSTED_COMMAND_PREFIX} ${suffix}` : TRUSTED_COMMAND_PREFIX;
+}
+
+// The hash Codex records in [hooks.state] when a person trusts one hook. The
+// identity is {event_name: <snake>, matcher: <the group's, when it has one>,
+// hooks: [{async: false, command, timeout: <seconds>, type: "command"}]} as
+// sorted compact JSON, then sha256 (checked against the hashes Codex 0.160.0
+// wrote after "Trust all"). The shipped trust seed and the doctor both hash
+// through here, so they count what Codex trusts.
+export function codexHookTrustHash(
+  eventName: string,
+  command: string,
+  timeout: number,
+  matcher?: string,
+): string {
+  const identity = {
+    event_name: eventName,
+    ...(matcher === undefined ? {} : { matcher }),
+    hooks: [{ async: false, command, timeout, type: "command" }],
+  };
+  const sortKeys = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(sortKeys);
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      return Object.fromEntries(Object.keys(record).sort().map((key) => [key, sortKeys(record[key])]));
+    }
+    return value;
+  };
+  return `sha256:${createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")}`;
 }
 
 // Lightweight dispatcher grammar. aidlc-lib.ts retains the same public
