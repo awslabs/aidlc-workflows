@@ -409,27 +409,36 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     };
     const plain = 'bun .aidlc/tools/aidlc.ts engine orchestrate next --scope feature "Staff see today\'s rooms"';
     // cmd.exe reads a single quote as a plain character, and neither cmd.exe
-    // nor PowerShell reads a backslash as an escape: under them, and when the
-    // setting cannot be read, these POSIX forms are refused.
-    for (const config of [
-      { get: async () => ({ data: { shell: "pwsh" } }) },
-      { get: async () => ({ data: { shell: "C:\\Windows\\System32\\cmd.exe" } }) },
-      { get: async () => ({ data: undefined }) },
-      { get: async () => { throw new Error("offline"); } },
-    ]) {
+    // nor PowerShell reads a backslash as an escape: under them these POSIX
+    // forms are refused, and cmd.exe ends a command at a line break.
+    for (const [shell, config] of [
+      ["pwsh", { get: async () => ({ data: { shell: "pwsh" } }) }],
+      ["cmd", { get: async () => ({ data: { shell: "C:\\Windows\\System32\\cmd.exe" } }) }],
+    ] as const) {
       const invoke = await adapterWith(config);
-      await expect(invoke("strict-plain", plain)).resolves.toBeUndefined();
+      await expect(invoke(`${shell}-plain`, plain)).resolves.toBeUndefined();
       for (const [i, command] of [
         START_SINGLE,
-        START_DOUBLE,
+        ...(shell === "cmd" ? [START_DOUBLE] : []),
         "aidlc engine orchestrate next today\\'s",
         "aidlc engine orchestrate next a\\;b",
         "aidlc engine orchestrate next '\"' ; touch x ; '\"'",
         "aidlc engine orchestrate next \"a\\\" ; touch x ; \\\"\"",
         "aidlc engine orchestrate next \"%PATH%\"",
       ].entries()) {
-        await expect(invoke(`strict-${i}`, command)).rejects.toThrow("one direct invocation");
+        await expect(invoke(`${shell}-${i}`, command)).rejects.toThrow(/one direct invocation|reads its arguments again/);
       }
+    }
+    // A shell it cannot learn, or a setting it cannot read, passes no AIDLC
+    // command, and the refusal names the setting to change.
+    for (const [i, config] of [
+      { get: async () => ({ data: { shell: "rc" } }) },
+      { get: async () => ({ data: undefined }) },
+      { get: async () => { throw new Error("offline"); } },
+    ].entries()) {
+      const invoke = await adapterWith(config);
+      await expect(invoke(`unknown-plain-${i}`, plain)).rejects.toThrow("could not confirm that here");
+      await expect(invoke(`unknown-aidlc-${i}`, 'aidlc engine orchestrate next "a; touch x"')).rejects.toThrow("could not confirm that here");
     }
     // A POSIX shell set by path reads the usual quoting.
     const bash = await adapterWith({ get: async () => ({ data: { shell: "C:\\Program Files\\Git\\bin\\bash.exe" } }) });
@@ -443,6 +452,9 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ["aidlc engine orchestrate report --stage x --result approved --user-input 'Approve'", ["Approve"]],
     ["bun .aidlc/tools/aidlc.ts engine orchestrate next 'Staff see today''s rooms; 50% booked!'", ["Staff see today's rooms; 50% booked!"]],
     ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
+    // Bun is a program of its own: nothing reads its arguments again.
+    ["bun .aidlc/tools/aidlc.ts engine orchestrate next 'R&D books rooms | QA\nat 50% of %TEMP%'", ["R&D books rooms | QA\nat 50% of %TEMP%"]],
+    [START_DOUBLE, ["--scope", "feature", SPEC]],
   ];
   const CMD_OK: Array<[string, string[]]> = [
     ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
@@ -466,25 +478,33 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     const cmd = await adapterWith("cmd.exe");
     for (const [i, [command]] of PWSH_OK.entries()) await expect(pwsh(`ps-ok-${i}`, command)).resolves.toBeUndefined();
     for (const [i, [command]] of CMD_OK.entries()) await expect(cmd(`cmd-ok-${i}`, command)).resolves.toBeUndefined();
-    // PowerShell ends a quote at a typographic or doubled quote, joins a word
-    // to a quote, and passes a quoted word with no space on bare for cmd.exe
-    // to read again, so these do not reach the tool as written.
+    // PowerShell ends a quote at a typographic or doubled quote and joins a
+    // word to a quote, so these do not reach the tool as written.
     for (const [i, command] of [
       'aidlc engine orchestrate next "fix \u201d; New-Item x; \u201c"',
       "aidlc engine orchestrate next 'fix \u2019; New-Item x; \u2018'",
       'aidlc engine orchestrate next "a""; New-Item x; ""b"',
       "aidlc engine orchestrate next 'a''; New-Item x; ''b'x",
       "aidlc engine orchestrate next 'a'b",
-      "aidlc engine orchestrate next 'R&D'",
       "aidlc engine orchestrate next 'Rename \"Tasks\"'",
       "aidlc engine orchestrate next 'C:\\dir\\'",
       "aidlc engine orchestrate next ''",
-      "aidlc engine orchestrate next '%APPDATA% and %TEMP%'",
       "aidlc engine orchestrate next a,b",
       "aidlc engine orchestrate next *",
       "aidlc engine orchestrate next a\u00a0b",
     ].entries()) {
       await expect(pwsh(`ps-no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // The aidlc launcher hands its arguments to cmd.exe on Windows, and
+    // PowerShell passes a word with no space on bare: the refusal names cmd.exe
+    // as the shell that keeps these.
+    for (const [i, command] of [
+      "aidlc engine orchestrate next 'R&D'",
+      "aidlc engine orchestrate next 'Book rooms\nfor R and D'",
+      "aidlc engine orchestrate next '%APPDATA% and %TEMP%'",
+      "aidlc engine orchestrate next '50%' 'of %TEMP'",
+    ].entries()) {
+      await expect(pwsh(`ps-launcher-${i}`, command)).rejects.toThrow("Set \"shell\" in opencode's settings to cmd.exe");
     }
     // cmd.exe reads a single quote as a plain character, replaces %NAME% even
     // inside quotes, and a program reads \" as a quote inside a word.
@@ -496,10 +516,6 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ].entries()) {
       await expect(cmd(`cmd-no-${i}`, command)).rejects.toThrow("one direct invocation");
     }
-    // A shell it cannot learn gets both readings' refusals.
-    const unknown = await adapterWith("nu");
-    await expect(unknown("strict-typographic", 'aidlc engine orchestrate next "a\u201d b"')).rejects.toThrow("one direct invocation");
-    await expect(unknown("strict-single", "aidlc engine orchestrate next 'Approve'")).rejects.toThrow("one direct invocation");
   });
 
   // What cmd.exe and Windows PowerShell hand the program, through the same
