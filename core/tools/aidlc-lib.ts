@@ -17053,6 +17053,8 @@ export interface ReviewAttemptAccounting {
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
+      // An earlier request at this pass was dispatched on other bytes.
+      replaced: boolean;
     }
   >;
   recoveryIteration: number | null;
@@ -17329,6 +17331,7 @@ export function reviewAttemptAccounting(
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
+      replaced: boolean;
     }
   >();
   for (let i = floor + 1; i < events.length; i++) {
@@ -17384,6 +17387,7 @@ export function reviewAttemptAccounting(
           (previous?.retried === true ||
             (auditBlockField(entry.block, "Retry") === "pending-request" &&
               modernBinding)),
+        replaced: replacement || previous?.replaced === true,
       });
     } else {
       const pending = pendingRequests.get(iteration);

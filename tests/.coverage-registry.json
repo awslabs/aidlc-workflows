@@ -7118,6 +7118,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:pendingRequestCurrency",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:pendingReviewRequestStatus",
       "minMechanism": "none",
       "coveredBy": [
@@ -9405,6 +9412,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewRequestReplaces",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

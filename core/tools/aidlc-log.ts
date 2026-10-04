@@ -119,7 +119,8 @@ import {
   reviewAttemptAccounting,
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
-  REVIEW_RECORDS_DIR,
+  fileIdentity,
+  sameFileIdentity,
   serializeReviewRecord,
   resolveProjectDir,
   resolveProjectFlag,
@@ -3249,36 +3250,33 @@ function handleReview(args: string[]): void {
         );
       }
 
-      // A review slot belongs to one request: an explicit review file in the
-      // review folder must be this request's own slot, never the slot of a
-      // request it replaced, whose reviewer read other bytes.
-      if (reviewFileFlag !== undefined) {
-        const named = toPosix(
-          relative(realpathSync(recordDir(pd) as string), resolve(pd, reviewFileFlag)),
-        ).toLowerCase();
-        if (
-          named.startsWith(`${REVIEW_RECORDS_DIR.toLowerCase()}/`) &&
-          named !== slot.draftRelativeToRecord.toLowerCase()
-        ) {
-          refuseReview(
-            `Cannot record review for "${flags.stage}": ${reviewFileFlag} is another review ` +
-              `request's file, not iteration ${iteration}'s. Have the reviewer write its review ` +
-              `to ${slot.draftRelative}, then record the verdict again.`,
-          );
-        }
-      }
-
       // The review file is read the way the record will be read back: no
       // symlinked container or leaf, no hardlink, no oversize file. A slot
       // draft that is absent is an incomplete review; one that is anything but
-      // a plain file is refused, never silently treated as missing.
+      // a plain file is refused, never silently treated as missing. A request
+      // with an id is reviewed in its own file only; one never replaced may
+      // still find its review in the pass's shared file, where a release
+      // before per-request files had its reviewer write it.
+      const sharedSlot = requestBinding.requestId !== null && !pendingRequest.replaced
+        ? reviewSlot(attempt.floor, iteration, null)
+        : null;
+      let readFrom = slot;
       let body: Buffer | null = null;
       try {
+        const recordRoot = realpathSync(recordDir(pd) as string);
+        let target: string | null = null;
+        for (const candidate of sharedSlot === null ? [slot] : [slot, sharedSlot]) {
+          const path = assertNoSymlinkInChainOrThrow(recordRoot, candidate.draftRelativeToRecord);
+          if (lstatExists(path)) {
+            target = path;
+            readFrom = candidate;
+            break;
+          }
+        }
         if (reviewFileFlag !== undefined) {
           // An explicit review file must live inside the active intent record,
           // where the reviewer's slot lives, reached through no symlink: a
           // path outside it is not the reviewer's output.
-          const recordRoot = realpathSync(recordDir(pd) as string);
           const relativeToRecord = toPosix(relative(recordRoot, resolve(pd, reviewFileFlag)));
           if (
             relativeToRecord === "" ||
@@ -3288,24 +3286,27 @@ function handleReview(args: string[]): void {
           ) {
             throw new Error("the path is outside the active intent record");
           }
-          body = readRegularFileNoFollowOrThrow(
-            assertNoSymlinkInChainOrThrow(recordRoot, relativeToRecord),
-            "review file",
-            REVIEW_RECORD_MAX_BYTES,
-          );
-        } else {
-          const target = assertNoSymlinkInChainOrThrow(
-            realpathSync(recordDir(pd) as string),
-            slot.draftRelativeToRecord,
-          );
-          if (lstatExists(target)) {
-            body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+          const named = assertNoSymlinkInChainOrThrow(recordRoot, relativeToRecord);
+          if (requestBinding.requestId === null) {
+            target = named;
+          } else if (target === null || !sameFileIdentity(fileIdentity(named), fileIdentity(target))) {
+            // Named here, it must be that same file, never another request's
+            // review or a copy of one.
+            refuseReview(
+              `Cannot record review for "${flags.stage}": ${reviewFileFlag} is not the review ` +
+                `file for iteration ${iteration}. Have the reviewer write its review to ` +
+                `${slot.draftRelative}, then record the verdict again.`,
+            );
           }
         }
+        if (target !== null) {
+          body = readRegularFileNoFollowOrThrow(target, "review file", REVIEW_RECORD_MAX_BYTES);
+        }
       } catch (readError) {
+        if (readError instanceof ReviewRefusal) throw readError;
         refuseReview(
           `Cannot record review for "${flags.stage}": the review file ` +
-            `${reviewFileFlag ?? slot.draftRelative} is not a plain readable file ` +
+            `${reviewFileFlag ?? readFrom.draftRelative} is not a plain readable file ` +
             `(${errorMessage(readError)}).`,
         );
       }
@@ -3327,7 +3328,7 @@ function handleReview(args: string[]): void {
         refuseReview(
           `Cannot record review for "${flags.stage}": no review was written for ` +
             `iteration ${iteration}. The reviewer writes its review to ` +
-            `${slot.draftRelative} (or pass --review-file <path>); a retried ` +
+            `${slot.draftRelative}; a retried ` +
             "incomplete attempt records --verdict NOT-READY without a review.",
         );
       }
@@ -3576,7 +3577,7 @@ function handleReview(args: string[]): void {
       // The draft was the reviewer's input; the record now holds it. The
       // chain was verified when the draft was read, so this cannot redirect.
       if (body !== null && reviewFileFlag === undefined) {
-        removeRecordFileNoFollow(recordDir(pd) as string, slot.draftRelativeToRecord);
+        removeRecordFileNoFollow(recordDir(pd) as string, readFrom.draftRelativeToRecord);
       }
       // A readable copy for people, beside the artifact the review is about:
       // `<stage dir>/reviews/review-NN.md`, numbered in the order verdicts land.

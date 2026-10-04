@@ -1910,12 +1910,77 @@ describe("t271 review iteration ceiling", () => {
       { AIDLC_TEST_NO_REVIEW_FILE: "1" },
     );
     expect(named.status).not.toBe(0);
-    expect(named.stderr).toContain("is another review request's file");
+    expect(named.stderr).toContain("is not the review file for iteration 1");
     expect(named.stderr).toContain(secondSlot);
+    // Nor does a copy of it elsewhere in the record, or (where file names keep
+    // their case) a case variant of the replacement's own file name.
+    const copied = join(seededRecordDir(proj), "copied-review.md");
+    writeFileSync(copied, readFileSync(late));
+    const variant = secondSlot.replace(/[0-9a-f]{32}/, (hex) => hex.toUpperCase());
+    const caseSensitive = !existsSync(join(proj, firstSlot.toUpperCase()));
+    if (caseSensitive) writeFileSync(join(proj, variant), readFileSync(late));
+    for (const candidate of caseSensitive ? [toPosix(relative(proj, copied)), variant] : [toPosix(relative(proj, copied))]) {
+      const other = runReview(
+        proj,
+        [...request, "--verdict", "READY", "--review-file", candidate],
+        { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+      );
+      expect(other.status, candidate).not.toBe(0);
+      expect(other.stderr, candidate).toContain("is not the review file for iteration 1");
+    }
+    if (caseSensitive) unlinkSync(join(proj, variant));
+    // The pass's shared file, where a release before per-request files had its
+    // reviewer write, is never read for a replacement.
+    const shared = join(proj, dirname(secondSlot), "1.review.md");
+    writeFileSync(shared, readFileSync(late));
+    const viaShared = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(viaShared.status).not.toBe(0);
+    expect(viaShared.stderr).toContain("no review was written for iteration 1");
+    unlinkSync(shared);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
 
     // The replacement's own review records.
     const recorded = runReview(proj, [...request, "--verdict", "READY"]);
+    expect(recorded.status, recorded.stderr).toBe(0);
+  });
+
+  test("a review requested before an update finds its review in the pass's shared file", () => {
+    const proj = seedProject("bugfix");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    const requested = runReview(proj, request);
+    expect(requested.status, requested.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
+    // The reviewer, dispatched by the earlier release, wrote the shared file.
+    const shared = join(proj, dirname(reviewFile), "1.review.md");
+    mkdirSync(dirname(shared), { recursive: true });
+    writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
+    expect(recorded.status, recorded.stderr).toBe(0);
+    expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(1);
+    expect(existsSync(shared)).toBe(false);
+  });
+
+  test("a retried review requested before an update finds its review in the pass's shared file", () => {
+    const proj = seedProject("bugfix");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const request = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+      "--iteration", "1",
+    ];
+    expect(runReview(proj, request).status).toBe(0);
+    const retried = runReview(proj, [...request, "--retry-pending"]);
+    expect(retried.status, retried.stderr).toBe(0);
+    const { reviewFile } = JSON.parse(retried.stdout) as { reviewFile: string };
+    const shared = join(proj, dirname(reviewFile), "1.review.md");
+    mkdirSync(dirname(shared), { recursive: true });
+    writeFileSync(shared, reviewAppendix("aidlc-product-lead-agent", 1, "READY").trimStart(), "utf-8");
+    const recorded = runReview(proj, [...request, "--verdict", "READY"], { AIDLC_TEST_NO_REVIEW_FILE: "1" });
     expect(recorded.status, recorded.stderr).toBe(0);
   });
 
@@ -2134,9 +2199,17 @@ describe("t271 review iteration ceiling", () => {
       expect(refused.status, name).not.toBe(0);
       expect(refused.stderr, name).toContain("outside the active intent record");
     }
-    // Inside the record, an explicit plain file records.
+    // Inside the record, a file that is not this request's own review file is
+    // refused too: a request with an id is reviewed in its own file only.
     const inside = join(seededRecordDir(proj), "inside-review.md");
     writeFileSync(inside, readFileSync(elsewhere), "utf-8");
+    const notOwn = runReview(
+      proj,
+      [...request, "--verdict", "READY", "--review-file", toPosix(relative(proj, inside))],
+      { AIDLC_TEST_NO_REVIEW_FILE: "1" },
+    );
+    expect(notOwn.status).not.toBe(0);
+    expect(notOwn.stderr).toContain("is not the review file for iteration 1");
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
     // A symlinked container for the slot is refused too.
     const attemptDir = dirname(draft);
@@ -2152,7 +2225,8 @@ describe("t271 review iteration ceiling", () => {
     unlinkSync(attemptDir);
     renameSync(detached, attemptDir);
     expect(auditBlocks(proj, "REVIEW_COMPLETED")).toHaveLength(0);
-    // The plain file named explicitly, inside the project, records normally.
+    // The request's own review file, named explicitly, records normally.
+    writeFileSync(draft, readFileSync(elsewhere), "utf-8");
     const completed = runReview(
       proj,
       [
@@ -2160,7 +2234,7 @@ describe("t271 review iteration ceiling", () => {
         "--verdict",
         "READY",
         "--review-file",
-        toPosix(relative(proj, inside)),
+        reviewFile,
       ],
       { AIDLC_TEST_NO_REVIEW_FILE: "1" },
     );

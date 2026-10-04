@@ -1115,8 +1115,8 @@ change. See
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
 3. **Verdict and decision brief.** The conductor records the verdict with the
    same `aidlc-log.ts review` command plus `--verdict`. The logger reads the
-   review from the request's `reviewFile` (or `--review-file <path>`, never
-   another request's review file),
+   review from the request's `reviewFile` (a `--review-file <path>` must
+   name that same file),
    validates it, rechecks current summary confirmation and output admission,
    proves the review manifest and request-time source identity are unchanged,
    and writes the review record
