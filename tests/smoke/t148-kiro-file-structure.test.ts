@@ -655,6 +655,65 @@ describe("t148 dist/kiro file structure", () => {
     expect(fm).toContain(`        - "aidlc/.aidlc-compose-pending"`);
   });
 
+  // Kiro's documented shell matching (kiro.dev/docs/permissions): `*` matches
+  // any sequence of characters, and deny > ask > allow across every rule.
+  function kiroShellEffect(fm: string, command: string): "deny" | "ask" | "allow" | "none" {
+    const effects = new Set<string>();
+    for (const block of fm.split(/\n {4}- /).slice(1)) {
+      if (!/^capability: shell\b/m.test(block)) continue;
+      const effect = block.match(/\beffect: (\w+)/)?.[1] ?? "";
+      for (const [, pattern] of block.matchAll(/^ {8}- "([^"]*)"$/gm)) {
+        const glob = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
+        if (glob.test(command)) effects.add(effect);
+      }
+    }
+    for (const effect of ["deny", "ask", "allow"] as const) if (effects.has(effect)) return effect;
+    return "none";
+  }
+
+  test("every Kiro IDE agent runs AI-DLC's own engine commands as printed, in both channels", () => {
+    // Every engine command goes through the dispatcher's engine namespace; a
+    // copy-channel run once asked the person to approve nearly every step
+    // because only `aidlc-*` tool files were allowed.
+    const channels = [
+      { tree: "dist", invoke: "bun .kiro/tools/aidlc.ts" },
+      { tree: "dist-release", invoke: "aidlc" },
+    ];
+    for (const { tree, invoke } of channels) {
+      const agentsDir = join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents");
+      const agents = readdirSync(agentsDir).filter((name) => name.endsWith(".md"));
+      expect(agents.length).toBe(15);
+      for (const agent of agents) {
+        const fm = frontmatter(join(agentsDir, agent));
+        for (const command of [
+          // Also on the conductor: a subagent's shell call may be checked
+          // against the conductor's rules rather than its own.
+          "bun --version",
+          `${invoke} engine orchestrate next`,
+          `${invoke} engine orchestrate report --stage requirements-analysis --result awaiting-approval`,
+          `${invoke} engine log answer --stage requirements-analysis --details "A"`,
+        ]) {
+          expect(kiroShellEffect(fm, command), `${tree} ${agent}: ${command}`).toBe("allow");
+        }
+        if (tree === "dist") {
+          expect(kiroShellEffect(fm, "bun .kiro/tools/aidlc-utility.ts codekb-path"), `${agent}`).toBe("allow");
+        }
+        // Only the engine namespace: the verbs that change the machine's
+        // install still ask the person, as on the native install.
+        for (const verb of ["use 2.10.0", "update", "rollback", "uninstall --yes", "system"]) {
+          expect(kiroShellEffect(fm, `${invoke} ${verb}`), `${tree} ${agent}: ${verb}`).toBe("none");
+        }
+        if (agent === "aidlc.md") {
+          expect(kiroShellEffect(fm, `${invoke} engine config set depth minimal`), `${tree} conductor`).toBe("ask");
+        }
+        // The native rewrite folds the dispatcher line into the one prefix entry.
+        const entries = [...fm.matchAll(/^ {8}- "([^"]*)"$/gm)].map((m) => m[1]);
+        expect(entries.filter((entry) => entry === "aidlc engine *").length, `${tree} ${agent}`)
+          .toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
   test("Kiro IDE first-run guidance sends the user to the aidlc agent in the agent picker", () => {
     // Kiro IDE opens new chats on its Default agent, and chat.defaultAgent in
     // cli.json only reaches Kiro CLI, so the config next step and the

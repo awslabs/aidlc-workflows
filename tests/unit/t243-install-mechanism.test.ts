@@ -7833,7 +7833,10 @@ describe("t243 projection channel", () => {
     expect(ideConductor).toContain(
       `      effect: ask\n      match:\n        - "${trustedCommand("config set *")}"\n        - "${trustedCommand("adapter *")}"\n`,
     );
-    expect(ideConductor).not.toMatch(/^\s*- "bun /m);
+    // No bun-run AI-DLC command survives native projection; the project's own
+    // read-only `bun --version` check is not one.
+    expect(ideConductor).not.toMatch(/^\s*- "bun (?!--version")/m);
+    expect(ideConductor).toContain(`        - "bun --version"`);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
       expect(ideConductor).not.toContain(`aidlc ${namespace} *`);
     }

@@ -70,6 +70,10 @@ function personaFrontmatter(agent: string): string[] {
     "      effect: allow",
     "      match:",
     `        - "bun .kiro/tools/aidlc-*"`,
+    // Every engine command goes through the dispatcher, which the hyphen
+    // pattern above does not reach. Its engine namespace only: the public
+    // verbs that change the machine's install keep asking, as on native.
+    `        - "bun .kiro/tools/aidlc.ts engine *"`,
     `        - "date -u *"`,
     // A read-only version check the personas run before a project's tests;
     // the tests themselves keep asking.
