@@ -979,12 +979,21 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(existsSync(filesRecord)).toBe(true);
     // Without a terminal or --yes the command is used the wrong way, which
     // exits 2 like every other usage refusal, and removes nothing.
-    const saved = { exitCode: process.exitCode, harness: process.env.AIDLC_HARNESS_DIR };
+    const saved = { exitCode: process.exitCode, harness: process.env.AIDLC_HARNESS_DIR, write: process.stdout.write };
     process.env.AIDLC_HARNESS_DIR = ".claude";
+    let printed = "";
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      printed += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
+      return true;
+    }) as typeof process.stdout.write;
     try {
       await pluginMain(["sync", "--prune-missing", "--project-dir", project, "--json"]);
+      process.stdout.write = saved.write;
       expect(process.exitCode).toBe(2);
+      // Its JSON says so too.
+      expect(JSON.parse(printed)).toMatchObject({ ok: false, code: 2, status: "usage" });
     } finally {
+      process.stdout.write = saved.write;
       // Bun keeps a set exit code when it is assigned undefined.
       process.exitCode = saved.exitCode ?? 0;
       if (saved.harness === undefined) delete process.env.AIDLC_HARNESS_DIR;

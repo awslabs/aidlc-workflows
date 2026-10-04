@@ -38,6 +38,7 @@ import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
 import {
   activate,
+  humanLifecycleNarration,
   previousWindowsShimHelpers,
   previousWindowsShimHelperState,
   replacePreviousWindowsShimHelper,
@@ -1284,12 +1285,12 @@ describe("t244 management lifecycle", () => {
     expect(run(LIFECYCLE, ["uninstall"], project, env).status).toBe(2);
     const uninstall = run(LIFECYCLE, ["uninstall", "--yes"], project, env);
     expect(uninstall.status, `${uninstall.stdout}\n${uninstall.stderr}`).toBe(0);
-    // Windows says so too, and that its last files go once the command ends.
-    const finish = process.platform === "win32"
-      ? " Windows removes the last files a moment after this command ends."
-      : "";
+    // Windows removes the files once the command ends, and says so.
+    const removes = (what: string) => process.platform === "win32"
+      ? `Windows removes ${what} a moment after this command ends.`
+      : `Removed ${what}.`;
     expect(uninstall.stdout).toContain(
-      `Removed aidlc and all retained releases.${finish} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`,
+      `${removes("aidlc and all retained releases")} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`,
     );
     // Windows restores retained files before retiring the mutation fence.
     // Wait for that final marker too; visible files alone do not mean reinstall
@@ -1316,7 +1317,7 @@ describe("t244 management lifecycle", () => {
     const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, env);
     expect(purge.status, `${purge.stdout}\n${purge.stderr}`).toBe(0);
     expect(purge.stdout).toContain(
-      `Removed aidlc, all retained releases, machine settings, update cache, pins, harness default, and release channel.${finish} Project files were kept.`,
+      `${removes("aidlc, all retained releases, machine settings, update cache, pins, harness default, and release channel")} Project files were kept.`,
     );
     await waitForAbsent([
       join(machine, "versions"),
@@ -1488,6 +1489,27 @@ function atTerminal(
 }
 
 describe("t244 removal commands say what they remove and ask nothing", () => {
+  // Windows removes the files only once the uninstall command has ended, so
+  // its line says what Windows is about to remove, never that it is gone; and
+  // with files kept, purge still names every machine record it removes.
+  test("the uninstall line says what Windows is about to remove and what purge removes", () => {
+    const narrate = (data: Record<string, unknown>) =>
+      humanLifecycleNarration("uninstall", ["uninstall"], null, { ok: true, code: 0, status: "ok", message: "", data } as never);
+    const state = "machine settings, update cache, pins, harness default, and release channel";
+    expect(narrate({ purge: false, deferred: true })).toContain(
+      "Windows removes aidlc and all retained releases a moment after this command ends. Machine settings,",
+    );
+    expect(narrate({ purge: true, deferred: true })).toContain(
+      `Windows removes aidlc, all retained releases, ${state} a moment after this command ends. Project files were kept.`,
+    );
+    expect(narrate({ purge: true, deferred: false })).toContain(`Removed aidlc, all retained releases, ${state}.`);
+    for (const deferred of [true, false]) {
+      const kept = narrate({ purge: true, deferred, preservedUnowned: ["versions/1.0.0/notes.txt"] }) ?? "";
+      expect(kept).toContain(deferred ? `Windows removes owned aidlc files and ${state} a moment` : `Removed owned aidlc files and ${state}.`);
+      expect(kept).not.toContain(deferred ? "Removed" : "Windows removes");
+    }
+  });
+
   test("versions prune lists the versions before it removes them, and needs --yes without a terminal", () => {
     const release = fixture(AIDLC_VERSION, { binary: "executable" });
     const removableRelease = fixture(REMOVABLE_VERSION, { binary: "bytes" });

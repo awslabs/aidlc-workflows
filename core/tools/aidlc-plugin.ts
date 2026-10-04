@@ -1488,7 +1488,7 @@ function jsonEnvelope(
     schemaVersion: 1,
     ok: code === 0,
     code,
-    status: code === 0 ? "ok" : "failed",
+    status: code === 0 ? "ok" : code === 2 ? "usage" : "failed",
     message,
     data,
   })}\n`;

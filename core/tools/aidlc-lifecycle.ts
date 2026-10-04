@@ -2651,7 +2651,7 @@ function installProfileCommand(argv: string[]): CommandResult {
   return success(`updated ${profile} with an owned AI-DLC PATH block`, { profile, bin });
 }
 
-function humanLifecycleNarration(
+export function humanLifecycleNarration(
   command: string | undefined,
   argv: readonly string[],
   before: string | null,
@@ -2738,15 +2738,18 @@ function humanLifecycleNarration(
     } | undefined;
     // A resumed cleanup keeps its own line.
     if (data?.recovered !== undefined) return null;
-    // On Windows the last files go once this command has exited.
-    const finish = data?.deferred ? " Windows removes the last files a moment after this command ends." : "";
+    // On Windows the files go once this command has exited, so the line says
+    // what Windows is about to remove rather than that it is gone.
+    const removes = (what: string): string =>
+      data?.deferred ? `Windows removes ${what} a moment after this command ends.` : `Removed ${what}.`;
     const warnings = data?.deferred && data.warnings?.length ? `${data.warnings.join("\n")}\n` : "";
+    const machineState = "machine settings, update cache, pins, harness default, and release channel";
     if (data?.preservedUnowned?.length) {
       return successText(
-        `${warnings}Removed owned aidlc files.${finish}${
+        `${warnings}${
           data.purge
-            ? " Removed owned machine settings and cache files."
-            : " Machine settings, update cache, pins, harness default, and release channel were kept."
+            ? removes(`owned aidlc files and ${machineState}`)
+            : `${removes("owned aidlc files")} Machine settings, update cache, pins, harness default, and release channel were kept.`
         } Project files were kept.${
           preservedUninstallPaths(data.preservedUnowned)
         }`,
@@ -2755,8 +2758,8 @@ function humanLifecycleNarration(
     }
     return successText(
       `${warnings}${data?.purge
-        ? `Removed aidlc, all retained releases, machine settings, update cache, pins, harness default, and release channel.${finish} Project files were kept.`
-        : `Removed aidlc and all retained releases.${finish} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`}`,
+        ? `${removes(`aidlc, all retained releases, ${machineState}`)} Project files were kept.`
+        : `${removes("aidlc and all retained releases")} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`}`,
       process.stdout,
     );
   }
