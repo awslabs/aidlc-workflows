@@ -209,8 +209,9 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   still marks that picker as under development, so the shipped
   `.codex/config.toml` turns it on and turns off Codex's start-up warning
   about it; while you work in this project, that also hides the warning for
-  any other under-development feature. For numbered prose gates instead, set
-  `default_mode_request_user_input = false` under `[features]`.
+  any other under-development feature. For numbered prose gates in one
+  session, start Codex with
+  `codex -c features.default_mode_request_user_input=false`.
 - **No custom statusline** — workflow position rides the `update_plan` tool
   (the `task-progress` statusline item) and `$aidlc --status`.
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only

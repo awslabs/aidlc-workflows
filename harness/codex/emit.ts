@@ -135,8 +135,9 @@ sandbox_mode = "workspace-write"
 # Codex still marks as under development; [features] below turns it on. Codex
 # then warns at every start and points at ~/.codex/config.toml, so this turns
 # that warning off. It also hides the warning for any other under-development
-# feature while you work in this project. For numbered prose gates instead,
-# set default_mode_request_user_input = false under [features].
+# feature while you work in this project. For numbered prose gates in one
+# session, start Codex with -c features.default_mode_request_user_input=false
+# (editing [features] here reads as a local change on the next aidlc config).
 suppress_unstable_features_warning = true
 
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
