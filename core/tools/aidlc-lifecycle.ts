@@ -2181,6 +2181,26 @@ export function configureChannel(argv: readonly string[]): CommandResult {
   }
 }
 
+// The version the person typed, as `rollback <version>` or `--version
+// <version>`; null when they typed none, so the recorded one is used.
+function typedRollbackVersion(argv: readonly string[]): string | null {
+  const typed = new Set<string>();
+  for (let index = 1; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--version" || arg === "--project-dir") {
+      const value = argv[index + 1];
+      if (arg === "--version" && value && !value.startsWith("--")) typed.add(value);
+      index += 1;
+    } else if (!arg.startsWith("--")) {
+      typed.add(arg);
+    }
+  }
+  if (typed.size > 1) {
+    commandError(`rollback takes one version; you typed ${[...typed].join(" and ")}`, EXIT.usage);
+  }
+  return [...typed][0] ?? null;
+}
+
 function rollbackCommand(argv: string[]): ReturnType<typeof success> {
   if (argv.includes("--list")) {
     const { versions, pinWarnings } = retainedVersions();
@@ -2193,12 +2213,13 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
       { versions: eligible, pinWarnings },
     );
   }
-  const target = valueAfter(argv, "--version") ||
+  const typed = typedRollbackVersion(argv);
+  const target = typed ||
     (existsSync(rollbackVersionPath()) ? readFileSync(rollbackVersionPath(), "utf-8").trim() : "");
   if (!target) {
     commandError("no prior version is recorded; run aidlc use <version>", EXIT.failure);
   }
-  if (valueAfter(argv, "--version")) {
+  if (typed) {
     requestedVersion(target);
   } else {
     try {
@@ -2221,7 +2242,12 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
     );
   }
   activate(target, { replaceLauncher: windowsPosixLauncherReplacement(argv) });
-  return success(`rolled back to ${target}`, { version: target });
+  return success(
+    !typed && active && active !== target
+      ? `rolled back to ${target}, the version you used before ${active}`
+      : `rolled back to ${target}`,
+    { version: target },
+  );
 }
 
 // Whether the version store already holds this release for this harness, so

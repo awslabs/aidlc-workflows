@@ -25,6 +25,13 @@ const GITIGNORE_BEGIN = "# BEGIN AIDLC CURSOR";
 const GITIGNORE_END = "# END AIDLC CURSOR";
 const RECEIPT_REL = ".cursor/aidlc-install.json";
 
+// The copy runtime leaves the root .gitignore and AGENTS.md out (a copy would
+// replace the team's own); their shipped text is in the harness folder.
+function shippedRootFile(name: string, marker: string): string {
+  const root = join(DIST_ROOT, name);
+  return existsSync(root) ? root : join(DIST_ROOT, ".cursor", "tools", "data", "root-blocks", marker);
+}
+
 type JsonObject = Record<string, unknown>;
 type WriteAction =
   | { kind: "copy"; source: string; target: string }
@@ -1154,7 +1161,7 @@ export async function install(targetDir: string): Promise<void> {
   actions.push({ kind: "write", target: hooksTarget, content: hooks });
   actions.push({ kind: "write", target: cliTarget, content: cli });
 
-  const agentsSource = readFileSync(join(DIST_ROOT, "AGENTS.md"), "utf-8");
+  const agentsSource = readFileSync(shippedRootFile("AGENTS.md", "agents"), "utf-8");
   const agentsTarget = join(targetRoot, "AGENTS.md");
   const agentsExisting = existsSync(agentsTarget) ? readFileSync(agentsTarget, "utf-8") : "";
   if (agentsExisting.includes("<!-- BEGIN AI-DLC:agents -->")) {
@@ -1173,7 +1180,7 @@ export async function install(targetDir: string): Promise<void> {
     ),
   });
 
-  const gitignoreSource = readFileSync(join(DIST_ROOT, ".gitignore"), "utf-8");
+  const gitignoreSource = readFileSync(shippedRootFile(".gitignore", "gitignore"), "utf-8");
   const aidlcBlockStart = gitignoreSource.indexOf("# AI-DLC");
   if (aidlcBlockStart === -1) throw new Error("shipped .gitignore has no AI-DLC section");
   const gitignoreTarget = join(targetRoot, ".gitignore");

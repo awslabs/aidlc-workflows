@@ -85,7 +85,7 @@ import {
   validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
-import { repointHarnessIncludes } from "./aidlc-includes.ts";
+import { addRootBlocks, repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
   HUMAN_PRESENCE_NO_SWITCH,
   TRUSTED_COMMAND_PREFIX,
@@ -7301,6 +7301,10 @@ function ensureWorkspaceDirs(
       }
     }
   }
+  // A copy that config never ran in gets AI-DLC's part of .gitignore and
+  // AGENTS.md, after the team's own content. Before the includes are aligned,
+  // so a part written here points at the active space too.
+  addRootBlocks(projectDir);
   // Align the harness-native includes with the active space at bootstrap (first
   // /aidlc). A no-op when they already point there (the common default-cursor
   // case) — so this never dirties a single-team committed tree; it self-heals a

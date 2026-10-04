@@ -152,7 +152,7 @@ function copyCore(root: string, relativePath: string): void {
 }
 
 function fakeClient(parentBySession: Record<string, string | undefined> = {}) {
-  const prompts: Array<{ id: string; text: string }> = [];
+  const prompts: Array<{ id: string; text: string; synthetic?: boolean }> = [];
   const client: PluginInput["client"] = {
     session: {
       get: async ({ path }) => ({
@@ -161,7 +161,7 @@ function fakeClient(parentBySession: Record<string, string | undefined> = {}) {
           : {},
       }),
       prompt: async ({ path, body }) => {
-        prompts.push({ id: path.id, text: body.parts[0]?.text ?? "" });
+        prompts.push({ id: path.id, text: body.parts[0]?.text ?? "", synthetic: body.parts[0]?.synthetic });
       },
     },
   };
@@ -1007,5 +1007,170 @@ if (n === 0) process.stdout.write(JSON.stringify({ decision: "block", reason: "c
     });
 
     expect(readFileSync(stopCount, "utf-8")).toBe("2");
+  });
+});
+
+describe("t241 OpenCode adapter: what the person sees", () => {
+  function nudgingProject(): { root: string; stopCount: string } {
+    const root = freshProject();
+    const stopCount = join(root, "stop-count");
+    writeHook(
+      root,
+      "aidlc-session-start.ts",
+      `await Bun.stdin.text();
+process.stdout.write(JSON.stringify({ additionalContext: "active" }) + "\\n");
+`,
+    );
+    writeHook(root, "aidlc-record-human-turn.ts", "await Bun.stdin.text();\n");
+    writeHook(
+      root,
+      "aidlc-continue-workflow.ts",
+      `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const countFile = ${JSON.stringify(stopCount)};
+const n = existsSync(countFile) ? Number(readFileSync(countFile, "utf-8")) : 0;
+writeFileSync(countFile, String(n + 1), "utf-8");
+await Bun.stdin.text();
+process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) + "\\n");
+`,
+    );
+    return { root, stopCount };
+  }
+  const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
+
+  test("the end-of-turn nudge is a synthetic part, so the person's chat does not show it", async () => {
+    const { root } = nudgingProject();
+    const { client, prompts } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toStartWith("[aidlc-forwarding-nudge]");
+    expect(prompts[0].synthetic).toBe(true);
+  });
+
+  test("after the person stops a turn with Esc, no nudge follows until they write again", async () => {
+    const { root, stopCount } = nudgingProject();
+    const { client, prompts } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+    await adapter.event({
+      event: {
+        type: "session.error",
+        properties: { sessionID: "main", error: { name: "MessageAbortedError", data: { message: "Aborted" } } },
+      },
+    });
+    await adapter.event(idle);
+    await adapter.event(idle);
+    expect(existsSync(stopCount)).toBe(false);
+    expect(prompts).toHaveLength(0);
+
+    // Another error is not the person stopping.
+    await adapter.event({
+      event: { type: "session.error", properties: { sessionID: "other", error: { name: "APIError" } } },
+    });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "go on" }] });
+    await adapter.event(idle);
+    expect(readFileSync(stopCount, "utf-8")).toBe("1");
+    expect(prompts).toHaveLength(1);
+  });
+
+  // What opencode does for a typed /aidlc: its command hook gets the command
+  // name and arguments with the template part, then chat.message gets the
+  // same parts with ids.
+  async function runCommand(
+    adapter: Awaited<ReturnType<typeof createTestAdapter>>,
+    sessionID: string,
+    template: string,
+    args: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const parts: Array<Record<string, unknown>> = [{ type: "text", text: template.replace("$ARGUMENTS", args).trim() }];
+    await adapter["command.execute.before"]({ command: "aidlc", sessionID, arguments: args }, { parts });
+    parts.forEach((part, i) => { part.id = `prt_${i}`; });
+    await adapter["chat.message"]({ sessionID }, { parts });
+    return parts;
+  }
+  function commandTemplate(root: string): string {
+    const commandFile = join(REPO_ROOT, "dist", "opencode", ".opencode", "command", "aidlc.md");
+    mkdirSync(join(root, ".opencode", "command"), { recursive: true });
+    copyFileSync(commandFile, join(root, ".opencode", "command", "aidlc.md"));
+    return readFileSync(commandFile, "utf-8").replace(/^---\n[\s\S]*?\n---\n/, "");
+  }
+
+  test("/aidlc shows what the person typed and keeps the command text for the agent", async () => {
+    const root = freshProject();
+    const template = commandTemplate(root);
+    const recorded = join(root, "prompt.json");
+    writeHook(root, "aidlc-session-start.ts", "await Bun.stdin.text();\n");
+    writeHook(
+      root,
+      "aidlc-record-human-turn.ts",
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
+`,
+    );
+    const expanded = template.replace("$ARGUMENTS", "fix the sales report end date").trim();
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+
+    const parts = await runCommand(adapter, "main", template, "fix the sales report end date");
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatchObject({ type: "text", text: expanded, synthetic: true });
+    expect(parts[1]).toMatchObject({ type: "text", text: "/aidlc fix the sales report end date", ignored: true });
+    expect(parts[1].synthetic).toBeUndefined();
+    // The person's turn is what they typed, as on every other harness.
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc fix the sales report end date");
+
+    const bare = await runCommand(adapter, "main", template, "");
+    expect(bare[1]).toMatchObject({ text: "/aidlc", ignored: true });
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe("/aidlc");
+
+    // Another command is left as opencode sent it.
+    const other: Array<Record<string, unknown>> = [{ type: "text", text: "Review the diff." }];
+    await adapter["command.execute.before"]({ command: "review", sessionID: "main", arguments: "" }, { parts: other });
+    expect(other).toEqual([{ type: "text", text: "Review the diff." }]);
+
+    // A message that only reads like the command is shown and recorded as it is.
+    const pasted: Array<Record<string, unknown>> = [{ id: "prt_9", type: "text", text: expanded }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: pasted });
+    expect(pasted).toEqual([{ id: "prt_9", type: "text", text: expanded }]);
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe(expanded);
+  });
+
+  test("a setting typed through /aidlc reaches the real human-turn hook as the person's choice", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
+    const template = commandTemplate(root);
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const statePath = join(seededRecordDir(root), "aidlc-state.md");
+    const ceremonyRows = () => readAuditShardEvents(root).filter((entry) => entry.event === "CEREMONY_SET");
+
+    // Text that reads like the command, typed or sent without running it,
+    // changes nothing; neither does a command run in another chat.
+    const before = readFileSync(statePath, "utf-8");
+    await adapter["chat.message"](
+      { sessionID: "main" },
+      { parts: [{ id: "prt_1", type: "text", text: template.replace("$ARGUMENTS", "config set summary-confirmation off").trim() }] },
+    );
+    await adapter["command.execute.before"](
+      { command: "aidlc", sessionID: "other", arguments: "config set summary-confirmation off" },
+      { parts: [{ type: "text", text: template.replace("$ARGUMENTS", "config set summary-confirmation off").trim() }] },
+    );
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+    expect(ceremonyRows()).toHaveLength(0);
+
+    // A nudge that arrives between the command and its message does not take
+    // the command's place.
+    const args = "config set summary-confirmation off";
+    const parts: Array<Record<string, unknown>> = [{ type: "text", text: template.replace("$ARGUMENTS", args).trim() }];
+    await adapter["command.execute.before"]({ command: "aidlc", sessionID: "main", arguments: args }, { parts });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_n", type: "text", text: "[aidlc-forwarding-nudge] keep going", synthetic: true }] });
+    parts.forEach((part, i) => { part.id = `prt_c${i}`; });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts });
+    expect(readFileSync(statePath, "utf-8")).toContain("- **Summary Confirmation**: off (set by you)");
+    const rows = ceremonyRows();
+    expect(rows).toHaveLength(1);
+    expect(auditBlockField(rows[0].block, "Source")).toBe("you");
   });
 });

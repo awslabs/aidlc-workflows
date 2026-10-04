@@ -1,28 +1,3 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
 # AI-DLC — the committed-vs-ignored split (workspace layout, re-rooted under aidlc/).
 # Rule of thumb (vision §5.1): per-user session CURSORS and machine-local
 # runtime/derived state are ignored; everything that is the shared work —

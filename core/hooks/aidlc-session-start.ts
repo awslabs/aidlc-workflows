@@ -34,7 +34,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
-import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
+import { addRootBlocks, repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -241,8 +241,11 @@ if (sessionId) {
 }
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
-// harness-native includes before the no-workflow early exit.
+// harness-native includes before the no-workflow early exit. A copy that
+// config never ran in first gets AI-DLC's part of .gitignore and AGENTS.md,
+// after the team's own content, so a part written here is aligned too.
 ensureActiveSpaceCursor(projectDir);
+addRootBlocks(projectDir);
 try {
   repointHarnessIncludes(projectDir, selection.space);
 } catch {

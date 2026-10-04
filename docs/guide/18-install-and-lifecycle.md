@@ -1061,6 +1061,15 @@ workflow runs, config does not refresh a tree, so the warning names the tool
 whose files are on that release to continue in, and the commands to run after
 the workflow completes.
 
+AI-DLC's `.gitignore` lines are its own entries only. Earlier releases also
+put a generic template (logs, `node_modules`, `dist`, editor files) at the top
+of that block; the first refresh after upgrading keeps those lines in your part
+of the file, above AI-DLC's, and says so once, so nothing they ignored becomes
+visible to git. A copy that config never ran in gets the same AI-DLC block, and
+an `AGENTS.md` block, from the copy's own `tools/data/root-blocks/` when its
+first chat starts or work is first created; config later treats a block that
+is exactly what a release shipped as its own.
+
 Known unmarked files and JSON entries from historical shipped projections are
 adopted only when their exact recorded SHA-256 signature matches. Unknown or
 modified unmarked `.gitignore` content remains user-owned, including AI-DLC
@@ -1502,10 +1511,12 @@ run it twice.
 The supported manual-copy payload is the versioned `aidlc-copy-runtime-X.Y.Z.tar.gz`
 release asset. Download one exact release, extract it, and copy the complete
 `runtime/<harness>/` root so the harness tree, `aidlc/` workspace shell, and
-project-root files stay together. The copy runtime leaves out files a team's
-editor owns, such as Copilot's `.vscode/settings.json`, so copying never
-replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
-names the one setting to add yourself. It also leaves out the team's memory
+any project-root files the harness needs stay together. The copy runtime leaves
+out files a team's editor owns, such as Copilot's `.vscode/settings.json`, so
+copying never replaces them; the [Copilot guide](harnesses/copilot.md#vs-code-request-cap)
+names the one setting to add yourself. It leaves out your `.gitignore` and
+`AGENTS.md` too: AI-DLC adds its own lines to them, after everything already
+there, or creates them when the project has none. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
 learnings go) and your chosen space (`aidlc/active-space`). Copying a newer
@@ -1537,7 +1548,14 @@ gh attestation verify "$tmp/$runtime_asset" \
 tar -xzf "$tmp/$runtime_asset" -C "$tmp"
 RUNTIME_ROOT="$tmp/runtime"
 cp -R "$RUNTIME_ROOT/claude/." your-project/
+cd your-project && bun .claude/tools/aidlc.ts config --from "$RUNTIME_ROOT" --harness claude
 ```
+
+The last line is the copy's own setup, run once from the extracted runtime: it
+adds AI-DLC's lines to your `.gitignore` and `AGENTS.md` before the first chat
+and checks the rest of the setup. Without it, AI-DLC adds them when the first
+chat starts, or at the latest when you start work. On GitHub Copilot, leave
+that line out for now: AI-DLC adds them when the first chat starts.
 
 Later, a copied project fetches releases itself. When a config command needs
 files the project does not have (a teammate's newer pin, a harness you add,

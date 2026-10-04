@@ -311,8 +311,8 @@ then re-add the affected entry or run `aidlc config --force` to restore the
 shipped wiring. An ordinary refresh reports a conflict when a shipped key is
 missing or changed. For a manual copy,
 replace the complete harness root from the same versioned
-`runtime/<harness>/` archive while preserving project root integrations; do
-not patch one hook command in isolation. The manual archive is Bun-shaped and
+`runtime/<harness>/` archive (a copy never replaces your `.gitignore` or
+`AGENTS.md`); do not patch one hook command in isolation. The manual archive is Bun-shaped and
 does not require the native `aidlc` executable.
 
 ### Hooks disabled globally (`disableAllHooks`)
