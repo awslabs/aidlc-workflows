@@ -162,6 +162,16 @@ export function kiroRateLabel(rate: number | null): string {
   return `${Number.isInteger(rate) ? rate.toFixed(1) : String(rate)}x`;
 }
 
+// Model ids and agent names AI-DLC prints: anything else a project file holds is
+// named by a fixed phrase, so a repository cannot put its own words into doctor.
+export function isPlainKiroId(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(value);
+}
+
+function shownKiroId(value: string): string {
+  return isPlainKiroId(value) ? value : "a model id AI-DLC does not print";
+}
+
 export function parseKiroModelList(raw: string): KiroModelList {
   let parsed: unknown;
   try {
@@ -175,7 +185,7 @@ export function parseKiroModelList(raw: string): KiroModelList {
   for (const row of rows) {
     const id = (row as { model_id?: unknown })?.model_id;
     // A model id is printed and passed to kiro-cli, so only a plain one is kept.
-    if (typeof id !== "string" || id === "auto" || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/.test(id)) continue;
+    if (typeof id !== "string" || id === "auto" || !isPlainKiroId(id)) continue;
     const rate = (row as { rate_multiplier?: unknown }).rate_multiplier;
     models.push({
       id,
@@ -661,8 +671,8 @@ export async function kiroSessionDoctorFindings(input: {
   if (pin && pin !== model) {
     findings.push({
       pass: false,
-      label: `Session model: this project's ${projectFile} pins ${pin}, which overrides your ${
-        model ?? "Kiro auto"
+      label: `Session model: this project's ${projectFile} pins ${shownKiroId(pin)}, which overrides your ${
+        model === null ? "Kiro auto" : shownKiroId(model)
       } here`,
       fix: `remove "chat.defaultModel" from ${projectFile}, or run \`${input.configCommand}\` to refresh it`,
     });
@@ -740,9 +750,10 @@ export async function kiroSessionDoctorFindings(input: {
       const pinned = readJsonObject(join(harnessRoot, "agents", file)).model;
       if (typeof pinned !== "string" || !pinned || list.models.some((item) => item.id === pinned)) continue;
       const name = kiroAgentName(file);
+      if (!isPlainKiroId(name)) continue;
       findings.push({
         pass: false,
-        label: `Agent ${name} pins ${pinned}, which your Kiro account does not offer; Kiro rejects that agent with "Invalid model ID"`,
+        label: `Agent ${name} pins ${shownKiroId(pinned)}, which your Kiro account does not offer; Kiro rejects that agent with "Invalid model ID"`,
         fix: `run \`${input.modelsCommand} --agent ${name} --model <id> --effort <level>\` with a model from your list, or remove the pin`,
       });
     }
