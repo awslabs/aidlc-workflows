@@ -1328,7 +1328,7 @@ describe("t243 project initialization", () => {
       .toBe("kiro");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a Kiro switch while work is open is done, like any refresh", () => {
+  test("a Kiro switch while work is open is done, like any refresh, and the work carries on in the new row", () => {
     const project = temp("aidlc-t243-kiro-switch-active-");
     mkdirSync(join(project, ".git"));
     const initialized = run(INIT, [
@@ -1347,21 +1347,38 @@ describe("t243 project initialization", () => {
         status: "in-flight",
       }], null, 2)}\n`,
     );
+    const statePath = join(intentsDir, "active-switch-probe", "aidlc-state.md");
     writeFileSync(
-      join(intentsDir, "active-switch-probe", "aidlc-state.md"),
-      "# AI-DLC State Tracking\n\n## Current Status\n- **Status**: Running\n",
+      statePath,
+      "# AI-DLC State Tracking\n\n## Current Status\n- **Lifecycle Phase**: INCEPTION\n" +
+        "- **Current Stage**: requirements-analysis\n- **Status**: Running\n",
     );
-    const switched = run(INIT, [
-      "config", "--project-dir", project, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none",
-    ], project);
-    expect(switched.status, switched.stdout + switched.stderr).toBe(0);
-    expect(switched.stdout + switched.stderr).not.toContain("refusing to refresh");
-    expect(switched.stdout).toContain("switched .kiro in place from kiro to kiro-ide (aidlc/ kept)");
-    expect(switched.stdout).toContain("Updated. Your open work (default/active-switch-probe) carries on.");
-    expect(switched.stdout).not.toContain("Added .kiro");
-    expect(switched.stdout).not.toContain("To go back");
-    expect(JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution)
-      .toBe("kiro-ide");
+    const state = readFileSync(statePath, "utf-8");
+    // The project's own engine, from whichever row .kiro/ now holds.
+    const status = () => run(join(project, ".kiro", "tools", "aidlc.ts"), ["engine", "status"], project);
+    const row = () =>
+      JSON.parse(readFileSync(join(project, ".kiro", "tools", "data", "aidlc-stamp.json"), "utf-8")).distribution;
+    for (const [from, to, release] of [
+      ["kiro", "kiro-ide", KIRO_IDE_RELEASE],
+      ["kiro-ide", "kiro", KIRO_RELEASES[0]],
+    ] as const) {
+      const switched = run(INIT, [
+        "config", "--project-dir", project, "--from", release, "--harness", to, "--mcp", "none",
+      ], project);
+      expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+      expect(switched.stdout + switched.stderr).not.toContain("refusing to refresh");
+      expect(switched.stdout).toContain(`switched .kiro in place from ${from} to ${to} (aidlc/ kept)`);
+      expect(switched.stdout).toContain("Updated. Your open work (default/active-switch-probe) carries on.");
+      expect(switched.stdout).not.toContain("Added .kiro");
+      expect(switched.stdout).not.toContain("To go back");
+      expect(row()).toBe(to);
+      // The open work is where it was, and the new row's engine reads it there.
+      expect(readFileSync(statePath, "utf-8")).toBe(state);
+      const read = status();
+      expect(read.status, read.stdout + read.stderr).toBe(0);
+      expect(read.stdout).toMatch(/Current Stage:\s+Requirements Analysis/);
+      expect(read.stdout).toMatch(/Status:\s+Running/);
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a copied Kiro project that needs release files for a switch names the switch, not an add", () => {
