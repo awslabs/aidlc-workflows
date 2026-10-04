@@ -5,9 +5,10 @@
 // answer that no human turn backs, and the agent can append HUMAN_TURN rows
 // itself, so neither proves a person acted. The driver knows what it sent: it
 // records an audit cursor each time it sends a turn (the opening prompt, a
-// menu answer, a typed reply). Every gate resolution, question answer and
-// project-type change written during the drive must then have a driver turn
-// after its gate or question opened and before the row itself. A live run on
+// menu answer, a typed reply). Every gate resolution, question answer (and
+// checkpoint receipt that closes a question) and project-type change written
+// during the drive must then have a driver turn after its gate or question
+// opened and before the row itself. A live run on
 // Kiro CLI recorded an approval when the person had typed only a slash command
 // at the open gate; this catches that kind.
 
@@ -27,10 +28,13 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-type AuditReader = Pick<typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"), "auditBlockField" | "readAuditShardEvents">;
+type AuditReader = Pick<
+  typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"),
+  "auditBlockField" | "readAuditShardEvents" | "nextOpenDecision" | "decisionAnsweredBy" | "DECISION_CLOSING_EVENTS"
+>;
 let reader: AuditReader | undefined;
-// The engine's own audit reader, loaded on first use: runner fixtures that load
-// the drivers without a generated tree never reach it.
+// The engine's own audit reader and question pairing, loaded on first use:
+// runner fixtures that load the drivers without a generated tree never reach it.
 function audit(): AuditReader {
   reader ??= require("../../dist/claude/.claude/tools/aidlc-lib.ts") as AuditReader;
   return reader;
@@ -73,73 +77,77 @@ export function auditCursor(projectDir: string): AuditCursor {
   return new Map([...readTrail(projectDir)].map(([key, events]) => [key, events.length]));
 }
 
-/**
- * What a row opens or decides, and for which item. `reply` decisions are the
- * person's approvals and answers: only a reply backs them, never a turn that
- * was only a command (it starts with "/"), as the human-turn hook marks it. A
- * command still backs what it asks for: a stage reopened by a jump, a changed
- * project type.
- */
-function role(row: AuditShardEvent): { item: string; opens: boolean; decides: boolean; reply: boolean } | undefined {
-  // A question is also told apart by its checkpoint (plan approval, summary confirmation, ...).
-  const item = (kind: string) =>
-    [kind, ...["Stage", "Unit", "Workflow", ...(kind === "answer" ? ["Checkpoint"] : [])]
-      .map((field) => auditBlockField(row.block, field) ?? "")].join("\0");
-  switch (row.event) {
-    case "STAGE_AWAITING_APPROVAL":
-      return { item: item("gate"), opens: true, decides: false, reply: false };
-    case "GATE_APPROVED":
-      return { item: item("gate"), opens: false, decides: true, reply: true };
-    case "GATE_REJECTED":
-      return { item: item("gate"), opens: false, decides: true, reply: false };
-    case "DECISION_RECORDED":
-      return { item: item("answer"), opens: true, decides: false, reply: false };
-    case "QUESTION_ANSWERED":
-      return { item: item("answer"), opens: false, decides: true, reply: true };
-    // The project type is set when the work is created and on each change.
-    case "WORKSPACE_INITIALISED":
-      return { item: "workspace", opens: true, decides: false, reply: false };
-    case "WORKSPACE_RECLASSIFIED":
-      return { item: "workspace", opens: true, decides: true, reply: false };
-    default:
-      return undefined;
-  }
-}
-
 const isCommand = (words: string) => words.trim().startsWith("/");
 
+/** A gate is one per stage, Unit and workflow. */
+const gateItem = (row: AuditShardEvent) =>
+  ["Stage", "Unit", "Workflow"].map((field) => auditBlockField(row.block, field) ?? "").join("\0");
+
 /**
- * Decisions written after `start` that no driver turn backs. Each decision
- * takes the latest question of its item still open (one gate per item; several
- * questions can be open at once), or else follows the item's previous
- * decision, so a second answer to one question needs a newer turn. A turn
- * backs it when it was sent after that point (or at the drive's start, when the
- * point is earlier than the drive) and before the row.
+ * Decisions written after `start` that no driver turn backs. What a decision
+ * answers is found the way the engine pairs them (nextOpenDecision): a
+ * question's answer, or a checkpoint's own gate row, closes the stage's open
+ * DECISION_RECORDED, and a later question supersedes an earlier one. A stage
+ * gate follows its STAGE_AWAITING_APPROVAL; a project-type change follows the
+ * work's creation or the last change. With nothing open, a decision follows
+ * the previous one of its stage or gate, so a second answer needs a newer turn.
+ * A turn backs it when it was sent after that point (or at the drive's start,
+ * when the point is earlier than the drive) and before the row. Approvals and
+ * answers need a reply: a turn that was only a command (it starts with "/", as
+ * the human-turn hook reads it) does not count. A command still backs what it
+ * can ask for: a stage reopened by a jump, a changed project type.
  */
 export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
+  const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
   const problems: string[] = [];
   for (const [key, events] of readTrail(projectDir)) {
     const first = start.get(key) ?? 0;
-    const open = new Map<string, number[]>();
-    const decided = new Map<string, number>();
+    const open = new Map<string, { block: string; index: number }>();
+    const answered = new Map<string, number>();
+    const gates = new Map<string, number>();
+    const gated = new Map<string, number>();
+    let workspace = -1;
     for (let index = 0; index < events.length; index++) {
       const row = events[index];
-      const part = role(row);
-      if (!part) continue;
-      if (part.decides) {
-        const since = open.get(part.item)?.pop() ?? decided.get(part.item) ?? -1;
-        decided.set(part.item, index);
+      const stage = auditBlockField(row.block, "Stage") ?? "";
+      const pending = open.get(stage);
+      const closes = DECISION_CLOSING_EVENTS.has(row.event);
+      const gate = row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED";
+      let since: number | undefined;
+      let reply = true;
+      if (closes) {
+        since = pending?.index ?? answered.get(stage) ?? -1;
+        answered.set(stage, index);
+      } else if (gate) {
+        reply = row.event === "GATE_APPROVED";
+        if (pending && decisionAnsweredBy(pending.block, row.event, row.block)) {
+          since = pending.index;
+          answered.set(stage, index);
+        } else {
+          since = gates.get(gateItem(row)) ?? gated.get(gateItem(row)) ?? -1;
+          gates.delete(gateItem(row));
+          gated.set(gateItem(row), index);
+        }
+      } else if (row.event === "WORKSPACE_RECLASSIFIED") {
+        since = workspace;
+        reply = false;
+      }
+      if (since !== undefined && index >= first) {
         const after = Math.max(since + 1, first);
-        const backed = index < first || turns.some((turn) => {
+        const needsReply = reply;
+        const backed = turns.some((turn) => {
           const at = turn.cursor.get(key) ?? 0;
-          return at >= after && at <= index && !(part.reply && isCommand(turn.words));
+          return at >= after && at <= index && !(needsReply && isCommand(turn.words));
         });
         if (!backed) problems.push(describe(row, key, turns));
       }
-      if (part.opens) {
-        const questions = open.get(part.item) ?? [];
-        open.set(part.item, row.event === "DECISION_RECORDED" ? [...questions, index] : [index]);
+      if (row.event === "DECISION_RECORDED" || closes || gate) {
+        const next = nextOpenDecision(pending?.block ?? null, row.event, row.block);
+        if (next === null) open.delete(stage);
+        else if (row.event === "DECISION_RECORDED") open.set(stage, { block: row.block, index });
       }
+      if (row.event === "STAGE_AWAITING_APPROVAL") gates.set(gateItem(row), index);
+      if (row.event === "WORKSPACE_INITIALISED" || row.event === "WORKSPACE_RECLASSIFIED") workspace = index;
     }
   }
   return problems;

@@ -136,32 +136,50 @@ describe("person-turn check", () => {
     expect(problems[0]).toContain("GATE_APPROVED requirements-analysis");
   });
 
-  test("a second answer to one question needs a newer turn; one menu answers several questions", () => {
+  test("one entry answers a question the person answered once; a second answer needs a newer turn", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
     drive.sent("start");
-    for (const question of ["scale", "auth", "region"]) {
-      row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: question });
-    }
+    row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Q1-Q3: scale, auth, region" });
     drive.sent('{"scale":"small","auth":"Cognito","region":"us-east-1"}');
-    for (const answer of ["small", "Cognito", "us-east-1"]) {
-      row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: answer });
-    }
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: small; Q2: Cognito; Q3: us-east-1" });
     expect(drive.unbacked()).toEqual([]);
     row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "plan-approval" });
     drive.sent("rename the handler first");
     row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "plan-approval", Details: "Request Changes" });
     row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "plan-approval", Details: "Approve Plan" });
     expect(drive.unbacked()).toHaveLength(1);
-    expect(drive.unbacked()[0]).toContain('QUESTION_ANSWERED code-generation');
+    expect(drive.unbacked()[0]).toContain("QUESTION_ANSWERED code-generation");
     drive.sent("now approve it");
     row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "plan-approval", Details: "Approve Plan" });
     expect(drive.unbacked()).toHaveLength(1);
-    // A question another checkpoint opened later on the same stage is not this one's.
+  });
+
+  test("a later question supersedes an earlier one, as the engine pairs them", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
     row(dir, "DECISION_RECORDED", { Stage: "build-and-test", Checkpoint: "plan-approval" });
     drive.sent("approve the plan");
+    // A second question opened after the reply is the one an answer now closes.
     row(dir, "DECISION_RECORDED", { Stage: "build-and-test", Checkpoint: "summary-confirmation" });
-    row(dir, "QUESTION_ANSWERED", { Stage: "build-and-test", Checkpoint: "plan-approval", Details: "Approve Plan" });
+    row(dir, "SUMMARY_CONFIRMATION_RECORDED", { Stage: "build-and-test", Details: "Looks correct" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("SUMMARY_CONFIRMATION_RECORDED build-and-test");
+  });
+
+  test("a Unit checkpoint's gate row answers its own question, and needs a reply after it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("carry on with the build");
+    const question = { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "alpha", Kind: "unit" };
+    row(dir, "DECISION_RECORDED", question);
+    row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "alpha" });
+    expect(drive.unbacked()).toHaveLength(1);
+    row(dir, "DECISION_RECORDED", { ...question, Unit: "beta" });
+    drive.sent('{"Approve Unit beta?":"Approve"}');
+    row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "beta" });
     expect(drive.unbacked()).toHaveLength(1);
   });
 
