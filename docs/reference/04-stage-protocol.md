@@ -525,7 +525,9 @@ Before beginning any stage, transition sidebar tasks:
 1. Previous stage task `in_progress` -> mark `completed`
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
-Rules: task must be `in_progress` for spinner to display. Update BEFORE
+Only when `TaskCreate`/`TaskUpdate` are in the agent's tool list; otherwise
+the agent skips task transitions silently. Rules: task must be `in_progress`
+for spinner to display. Update BEFORE
 reading stage file. Applies to all 33 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`

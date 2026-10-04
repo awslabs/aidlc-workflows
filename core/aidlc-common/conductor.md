@@ -153,4 +153,5 @@ current one `in_progress` with an `activeForm` that includes the `[slug]`
 suffix (a PostToolUse hook parses it to sync the statusline). A task must be
 `in_progress` for its spinner to show. After compaction, task IDs may be lost —
 recover them via `TaskList`, matching by subject. Task IDs are sidebar-only;
-they are never stored in state.
+they are never stored in state. Use `TaskCreate`/`TaskUpdate` only when those
+tools are in your tool list; otherwise skip the sidebar silently.

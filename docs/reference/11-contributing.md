@@ -320,7 +320,7 @@ because it runs the extractor.
 
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
-1. **Task tracking** -- Create tasks via `TaskCreate` for each logical step, transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code.
+1. **Task tracking** -- When the session offers `TaskCreate` and `TaskUpdate`, create tasks via `TaskCreate` for each logical step and transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code; without those tools the step is skipped silently.
 2. **Statusline update** -- If the active intent's `aidlc-state.md` exists, temporarily set `Current Stage` to describe the running utility (e.g., `running health check`), then restore the original value when done. The `aidlc-statusline.ts` hook reads this field for the terminal status bar.
 3. **Audit logging** -- Invoke the appropriate semantic native dispatcher route, whose backing handler calls `appendAuditEntry` internally. Never hand-write `**Event**:` markdown blocks from LLM prose — see [State Machine: Forbidden patterns](12-state-machine.md).
 
