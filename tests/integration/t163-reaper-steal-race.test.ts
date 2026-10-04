@@ -56,6 +56,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const LIB = join(REPO_ROOT, "core", "tools", "aidlc-lib.ts");
+const PREDECESSOR_HOLD = join(REPO_ROOT, "tests", "harness", "predecessor-hold.ts");
 
 // Per-intent bucket the contenders race on (a concrete intent so auditLockDir
 // keys a per-intent dir; the sentinel would work too — the reaper logic is
@@ -88,10 +89,9 @@ let driver: string;
 // freed PID to a new process within a second, so process.kill(pid, 0) would
 // call that unrelated process the robbed holder (the product's reaper compares
 // the PID's creation time for the same reason). Each winner therefore renames a
-// release record into place after its hold, just before it exits. A
-// predecessor with a record was robbed only if this winner acquired before that
-// record's time. A predecessor without one has not finished holding, so its PID
-// cannot have been reused yet and process.kill(pid, 0) is exact.
+// release record into place after its hold, just before it exits, and
+// predecessorStillHeld (tests/harness/predecessor-hold.ts) lets that record
+// decide whenever it exists, reading it again after the PID probe.
 //
 // A WINNER then SLEEPS (HOLD_MS) BEFORE exiting. The hold widens the observation
 // window so an overlapping winner finds a predecessor that is still holding. It
@@ -99,6 +99,7 @@ let driver: string;
 // contender may correctly reap a dead winner and report aliveAfterSteal=false.
 const DRIVER_SRC = (
   libPath: string,
+  holdPath: string,
   pd: string,
   intent: string,
   space: string,
@@ -110,6 +111,7 @@ const DRIVER_SRC = (
     `import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";`,
     `import { join } from "node:path";`,
     `import { acquireAuditLock, auditLockDir } from ${JSON.stringify(libPath)};`,
+    `import { predecessorStillHeld } from ${JSON.stringify(holdPath)};`,
     `const lockDir = auditLockDir(${JSON.stringify(pd)}, ${JSON.stringify(intent)}, ${JSON.stringify(space)});`,
     `const epochMs = () => performance.timeOrigin + performance.now();`,
     `const releasedPath = (pid: number) => join(${JSON.stringify(releasedDir)}, \`released-\${pid}.json\`);`,
@@ -134,14 +136,11 @@ const DRIVER_SRC = (
     `} finally {`,
     `  rmSync(${JSON.stringify(evidenceLock)}, { recursive: true, force: true });`,
     `}`,
-    `let aliveAfterSteal = false;`,
-    `let predecessorReleasedAtMs: number | null = null;`,
-    `try { predecessorReleasedAtMs = JSON.parse(readFileSync(releasedPath(reapedPid), "utf-8")).releasedAtMs; } catch {}`,
-    `if (predecessorReleasedAtMs !== null) {`,
-    `  aliveAfterSteal = acquiredAtMs < predecessorReleasedAtMs;`,
-    `} else {`,
-    `  try { process.kill(reapedPid, 0); aliveAfterSteal = true; } catch {}`,
-    `}`,
+    `const aliveAfterSteal = predecessorStillHeld(`,
+    `  acquiredAtMs,`,
+    `  () => { try { return JSON.parse(readFileSync(releasedPath(reapedPid), "utf-8")).releasedAtMs; } catch { return null; } },`,
+    `  () => { try { process.kill(reapedPid, 0); return true; } catch { return false; } },`,
+    `);`,
     `process.stdout.write(\`WON \${reapedPid} \${aliveAfterSteal}\`);`,
     // A winner holds (stays alive) so concurrent losers see a LIVE holder they
     // must not rob; the harness rm's the dir between generations.
@@ -215,7 +214,7 @@ beforeEach(() => {
   driver = join(proj, "reap-driver.ts");
   writeFileSync(
     driver,
-    DRIVER_SRC(LIB, proj, INTENT, SPACE, evidenceStatePath(), evidenceLockPath(), releasedDirPath()),
+    DRIVER_SRC(LIB, PREDECESSOR_HOLD, proj, INTENT, SPACE, evidenceStatePath(), evidenceLockPath(), releasedDirPath()),
     "utf-8",
   );
 });
