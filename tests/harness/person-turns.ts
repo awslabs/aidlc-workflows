@@ -13,7 +13,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 type AuditReader = Pick<typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"), "auditBlockField" | "readAuditShardEvents">;
@@ -47,7 +47,7 @@ function readTrail(projectDir: string): AuditTrail {
     for (const entry of readdirSync(intents, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
       for (const event of audit().readAuditShardEvents(projectDir, entry.name, space)) {
-        const key = `${space}/${entry.name}/${event.shard}`;
+        const key = `${space}/${entry.name}/${basename(event.shard)}`;
         const events = trail.get(key) ?? [];
         events.push(event);
         trail.set(key, events);
@@ -135,7 +135,8 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
 function describe(row: AuditShardEvent, key: string, turns: readonly PersonTurn[]): string {
   const stage = auditBlockField(row.block, "Stage");
   const unit = auditBlockField(row.block, "Unit");
-  const words = auditBlockField(row.block, "Person Reply") ?? auditBlockField(row.block, "User Input");
+  const words = auditBlockField(row.block, "Person Reply") ?? auditBlockField(row.block, "User Input") ??
+    auditBlockField(row.block, "Details");
   const sent = turns.slice(-8).map((turn) => JSON.stringify(turn.words.slice(0, 60))).join(", ");
   return [
     `${row.event}${stage ? ` ${stage}` : ""}${unit ? ` (Unit ${unit})` : ""} at ${row.timestamp} in ${key}`,
