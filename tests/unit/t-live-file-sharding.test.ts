@@ -147,7 +147,7 @@ describe("bounded live file sharding", () => {
     expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1 });
     expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(21);
     expect(selectedLiveFiles("claude-sdk", "linux", "1/2").length).toBeGreaterThan(1);
-    expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(5);
+    expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(6);
     const file = selectedLiveFiles("claude-sdk", "linux", "2/2")[0];
     expect(() => selectedLiveFiles("claude-sdk", "linux", "1/2", file)).toThrow("outside the selected shard");
   });

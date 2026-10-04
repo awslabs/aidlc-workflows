@@ -1053,7 +1053,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   const target = installedExecutablePath(version);
   const windows = process.platform === "win32";
   const shim = windows ? windowsShim() : unixShim();
-  const shimHelper = windows ? windowsShimHelper() : null;
+  const shimHelper = windows ? windowsShimHelperFor(version) : null;
   // The Git Bash launcher guard runs first among the Windows integrity checks,
   // so a foreign or directory bin/aidlc is named as itself.
   const posixCommand = windows ? windowsPosixCommandPath() : null;
@@ -1093,7 +1093,7 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   if (
     windows &&
     existsSync(windowsShimPath()) &&
-    ![shimHelper, ...previousWindowsShimHelpers()].includes(
+    ![windowsShimHelper(), ...previousWindowsShimHelpers()].includes(
       readFileSync(windowsShimPath(), "utf-8"),
     )
   ) {
@@ -1406,6 +1406,38 @@ function windowsShimHelper(): string {
   ].join("\r\n");
 }
 
+// A release from before FIRST_RELEASE_WITH_CURRENT_HELPER (2.10.0 among them)
+// accepts only the helpers it wrote itself, so while it is the active version
+// it keeps its own helper; with the current one it could never switch to
+// another version again. 2.8.0 and 2.8.1 wrote the stable-only helper; 2.8.2
+// on wrote the shared-marker one.
+const FIRST_RELEASE_WITH_CURRENT_HELPER = "2.10.1-preview.20261003.1";
+const FIRST_RELEASE_WITH_SHARED_MARKER_HELPER = "2.8.2";
+const STABLE_ONLY_HELPER_PATTERN = "(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)";
+
+function predatesCurrentHelper(version: string): boolean {
+  // This binary's own version always has the current helper: only a release
+  // built before the cutoff ever wrote an older one.
+  if (version === AIDLC_VERSION) return false;
+  try {
+    return compareVersions(version, FIRST_RELEASE_WITH_CURRENT_HELPER) < 0;
+  } catch {
+    return false;
+  }
+}
+
+function windowsShimHelperFor(version: string): string {
+  if (!predatesCurrentHelper(version)) return windowsShimHelper();
+  try {
+    if (compareVersions(version, FIRST_RELEASE_WITH_SHARED_MARKER_HELPER) < 0) {
+      return renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN);
+    }
+  } catch {
+    // An unparsable version cannot be older than 2.8.2.
+  }
+  return renderSilentWindowsShimHelper(VERSION_ID_PATTERN);
+}
+
 // The helper every installer wrote before refusals carried a reason.
 function renderSilentWindowsShimHelper(versionPattern: string): string {
   const pointer = activeExecutablePath().replaceAll("'", "''");
@@ -1444,7 +1476,7 @@ export function previousWindowsShimHelpers(): string[] {
   const root = versionsRoot().replaceAll("'", "''");
   return [
     renderSilentWindowsShimHelper(VERSION_ID_PATTERN),
-    renderSilentWindowsShimHelper("(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)"),
+    renderSilentWindowsShimHelper(STABLE_ONLY_HELPER_PATTERN),
     [
       "$ErrorActionPreference = 'Stop'",
       `$pointer = '${pointer}'`,
@@ -1547,6 +1579,8 @@ export function previousWindowsShimHelperState(): PreviousShimHelperState {
   } catch {
     return null;
   }
+  // That release's own helper is the right one for it.
+  if (predatesCurrentHelper(target)) return null;
   if (!runningActiveExecutable(active)) {
     return {
       kind: "blocked",
@@ -1570,17 +1604,63 @@ export function previousWindowsShimHelperState(): PreviousShimHelperState {
 export function replacePreviousWindowsShimHelper(): void {
   try {
     const expected = transactionState(windowsShimPath());
-    if (previousWindowsShimHelperState()?.kind !== "replace") return;
+    const repair = olderReleaseHelperRepair();
+    const wanted = (): string | null => repair ??
+      (previousWindowsShimHelperState()?.kind === "replace" ? windowsShimHelper() : null);
+    const helper = wanted();
+    if (helper === null) return;
     const root = machineTransactionRoot();
     executePlan({
       schemaVersion: 1,
       root,
       operations: [
-        writeOperation(relative(root, windowsShimPath()), windowsShimHelper(), expected, 0o700),
+        writeOperation(relative(root, windowsShimPath()), helper, expected, 0o700),
+        ...(repair === null ? gitBashLauncherCatchUp(root) : []),
       ],
+    }, {
+      // A switch that finished just before the lock was taken can leave the
+      // same helper bytes beside another active release: choose again under
+      // the lock, and leave the helper if the answer changed.
+      validateLocked: () => {
+        if (olderReleaseHelperRepair() !== repair || wanted() !== helper) {
+          throw new Error("the active release changed before the launcher helper was replaced");
+        }
+      },
     });
   } catch {
     // The previous helper still starts aidlc; a later command retries.
+  }
+}
+
+// An older release that updated this machine wrote no Git Bash launcher, so
+// hooks run through Git Bash could not find `aidlc`. The first command of this
+// release writes it with the helper, when it is missing or one an earlier
+// release wrote; a file of anyone else's stays, and doctor names it.
+function gitBashLauncherCatchUp(root: string): ReturnType<typeof writeOperation>[] {
+  const path = windowsPosixCommandPath();
+  if (path === null || !windowsPosixLauncherOwnedByInstaller()) return [];
+  const body = windowsPosixShim();
+  if (existsSync(path) && readFileSync(path, "utf-8") === body) return [];
+  return [writeOperation(relative(root, path), body, transactionState(path), 0o700)];
+}
+
+// While a release from before the current helper is active, it needs the
+// helper it wrote itself. An installer-owned helper of another era (2.8.2
+// switching to 2.8.1 left its own) is put back to that one by any newer binary
+// that runs, a pinned project's for example; anything else is left alone.
+function olderReleaseHelperRepair(): string | null {
+  try {
+    const active = readActiveExecutable();
+    if (!active) return null;
+    const target = basename(dirname(active));
+    if (!predatesCurrentHelper(target) || readVersionMarker(activeVersionPath()) !== target) return null;
+    if (!completeVersion(target) || readFileSync(commandPath(), "utf-8") !== windowsShim()) return null;
+    const installed = readFileSync(windowsShimPath(), "utf-8");
+    const wanted = windowsShimHelperFor(target);
+    if (installed === wanted) return null;
+    return [windowsShimHelper(), ...previousWindowsShimHelpers()].includes(installed) ? wanted : null;
+  } catch {
+    return null;
   }
 }
 

@@ -36,7 +36,13 @@ import {
 } from "../../core/tools/aidlc-install-paths.ts";
 import { sha256File, walkFiles } from "../../core/tools/aidlc-distribution.ts";
 import { doctorUpdateState } from "../../core/tools/aidlc-doctor.ts";
-import { activate, previousWindowsShimHelpers } from "../../core/tools/aidlc-lifecycle.ts";
+import {
+  activate,
+  previousWindowsShimHelpers,
+  previousWindowsShimHelperState,
+  replacePreviousWindowsShimHelper,
+  windowsPosixShim,
+} from "../../core/tools/aidlc-lifecycle.ts";
 import {
   channelPath,
   readMachineChannel,
@@ -1619,6 +1625,122 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     );
     expect(active()).toBe(AIDLC_VERSION);
   });
+
+  // A release accepts only the Windows helpers it wrote itself: 2.8.0 and
+  // 2.8.1 the stable-only one, 2.8.2 to 2.10.0 the shared-marker one. Switched
+  // back to one, a machine keeps that release's own helper, or it could never
+  // switch to another version again. (2.9.0 stands for that second era: this
+  // source still calls itself 2.10.0 until its release, and a binary's own
+  // version always gets the current helper.)
+  test.skipIf(process.platform !== "win32").each([
+    ["2.8.1", 1],
+    ["2.9.0", 0],
+  ] as const)(
+    "switching back to %s leaves the helper that release wrote, and switching forward the current one",
+    (older, era) => {
+      const newer = patchVersion(1);
+      const machine = temp("aidlc-t244-older-helper-");
+      const project = temp("aidlc-t244-older-helper-project-");
+      mkdirSync(join(project, ".git"));
+      const env = envFor(machine);
+      for (const version of [older, newer]) {
+        const installed = run(LIFECYCLE, [
+          "update", "--version", version, "--from", fixture(version, { binary: "executable" }),
+        ], project, env);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      }
+      const helper = () => readFileSync(join(machine, "aidlc-shim.ps1"), "utf-8");
+      const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const olderHelper = previousWindowsShimHelpers()[era];
+        expect(helper()).not.toBe(olderHelper);
+
+        const back = run(LIFECYCLE, ["use", older], project, env);
+        expect(back.status, back.stdout + back.stderr).toBe(0);
+        expect(helper()).toBe(olderHelper);
+        // A newer release's binary, as a pinned project runs it, leaves it too.
+        expect(previousWindowsShimHelperState()).toBeNull();
+        replacePreviousWindowsShimHelper();
+        expect(helper()).toBe(olderHelper);
+
+        const forward = run(LIFECYCLE, ["use", newer], project, env);
+        expect(forward.status, forward.stdout + forward.stderr).toBe(0);
+        expect(helper()).not.toBe(olderHelper);
+        expect(helper()).toContain("Stop-Launcher");
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+  );
+
+  // 2.8.2 switching a machine to 2.8.1 left its own shared-marker helper,
+  // which 2.8.1 does not accept. A newer binary that runs while 2.8.1 is
+  // active, a pinned project's say, puts 2.8.1's own helper back; a helper
+  // AI-DLC did not write is left alone.
+  test.skipIf(process.platform !== "win32")(
+    "a newer binary gives an older active release back its own helper, and leaves a hand-edited one",
+    () => {
+      const older = "2.8.1";
+      const newer = patchVersion(1);
+      const machine = temp("aidlc-t244-older-helper-repair-");
+      const project = temp("aidlc-t244-older-helper-repair-project-");
+      mkdirSync(join(project, ".git"));
+      const env = envFor(machine);
+      for (const version of [older, newer]) {
+        const installed = run(LIFECYCLE, [
+          "update", "--version", version, "--from", fixture(version, { binary: "executable" }),
+        ], project, env);
+        expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+      }
+      const helperPath = join(machine, "aidlc-shim.ps1");
+      const current = readFileSync(helperPath, "utf-8");
+      expect(run(LIFECYCLE, ["use", older], project, env).status).toBe(0);
+      const saved = { root: process.env.AIDLC_INSTALL_ROOT, bin: process.env.AIDLC_BIN_DIR };
+      process.env.AIDLC_INSTALL_ROOT = machine;
+      process.env.AIDLC_BIN_DIR = join(machine, "bin");
+      try {
+        const [sharedMarker, stableOnly] = previousWindowsShimHelpers();
+        expect(readFileSync(helperPath, "utf-8")).toBe(stableOnly);
+        writeFileSync(helperPath, sharedMarker);
+        replacePreviousWindowsShimHelper();
+        expect(readFileSync(helperPath, "utf-8")).toBe(stableOnly);
+        const handEdited = `${stableOnly}# a local edit\r\n`;
+        writeFileSync(helperPath, handEdited);
+        replacePreviousWindowsShimHelper();
+        expect(readFileSync(helperPath, "utf-8")).toBe(handEdited);
+
+        // The same through the dispatcher a pinned project's newer binary
+        // runs: beside the older active release, the current helper (which
+        // forwards no @args) is still put back to that release's own.
+        const dispatcher = join(machine, "versions", newer, "aidlc.exe");
+        const built = spawnSync(
+          process.execPath,
+          ["build", "--compile", join(REPO_ROOT, "dist-release", "claude", ".claude", "tools", "aidlc.ts"), "--outfile", dispatcher],
+          { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_COMPILE_TIMEOUT_MS) },
+        );
+        expect(built.status, `${built.stdout}\n${built.stderr}`).toBe(0);
+        writeFileSync(helperPath, current);
+        const ran = spawnSync(dispatcher, ["version"], {
+          cwd: project,
+          env: { ...process.env, ...env },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+        expect(readFileSync(helperPath, "utf-8")).toBe(stableOnly);
+      } finally {
+        if (saved.root === undefined) delete process.env.AIDLC_INSTALL_ROOT;
+        else process.env.AIDLC_INSTALL_ROOT = saved.root;
+        if (saved.bin === undefined) delete process.env.AIDLC_BIN_DIR;
+        else process.env.AIDLC_BIN_DIR = saved.bin;
+      }
+    },
+  );
 });
 
 describe("t244 installer has no machine-level harness selection", () => {
@@ -1804,7 +1926,10 @@ describe("t244 Windows and completion release surfaces", () => {
       const executableFixture = existsSync(output) ? output : `${output}.exe`;
       expect(existsSync(executableFixture)).toBe(true);
 
-      for (const version of ["1.0.0", "1.1.0"]) {
+      // Releases after the first one with the current helper, which is the
+      // helper this test drives.
+      const [older, newer] = [NEXT_VERSION, LIVE_PIN_VERSION];
+      for (const version of [older, newer]) {
         const root = join(machine, "versions", version);
         const runtime = join(root, "runtime", "claude");
         mkdirSync(root, { recursive: true });
@@ -1884,7 +2009,7 @@ describe("t244 Windows and completion release surfaces", () => {
         );
       };
       try {
-        activate("1.0.0");
+        activate(older);
         // Windows PowerShell 5.1 forwarding @args itself drops empty arguments
         // and strips embedded double quotes.
         const argv = [
@@ -1919,15 +2044,17 @@ describe("t244 Windows and completion release surfaces", () => {
         writeFileSync(activeVersionPath(), "not-a-version\n");
         expectRefusal(/^aidlc: active version marker .+active-version is malformed\. /);
         writeFileSync(activeVersionPath(), marker);
-        const retained = join(machine, "versions", "1.0.0", "aidlc.exe");
+        const retained = join(machine, "versions", older, "aidlc.exe");
         renameSync(retained, `${retained}.moved`);
         expectRefusal(/^aidlc: active executable .+aidlc\.exe is missing\. /);
         renameSync(`${retained}.moved`, retained);
         writeFileSync(activeExecutablePath(), "C:\\outside\\aidlc.exe\r\n");
         expectRefusal(
-          /^aidlc: active command target C:\\outside\\aidlc\.exe does not match active version 1\.0\.0 /,
+          new RegExp(
+            `^aidlc: active command target C:\\\\outside\\\\aidlc\\.exe does not match active version ${older.replaceAll(".", "\\.")} `,
+          ),
         );
-        activate("1.1.0");
+        activate(newer);
         const rollback = run(
           LIFECYCLE,
           ["rollback"],
@@ -1936,7 +2063,7 @@ describe("t244 Windows and completion release surfaces", () => {
         );
         expect(rollback.status, rollback.stdout + rollback.stderr).toBe(0);
         expect(readActiveExecutable()).toBe(
-          join(machine, "versions", "1.0.0", "aidlc.exe"),
+          join(machine, "versions", older, "aidlc.exe"),
         );
         const doctor = run(
           DISPATCHER,
@@ -1963,9 +2090,11 @@ describe("t244 Windows and completion release surfaces", () => {
     NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   );
 
+  // A fixed binary's preview id comes after the first release with the current
+  // helper: an earlier id is a release that wrote an older one, and gets it back.
   test.skipIf(process.platform !== "win32").each([
     [AIDLC_VERSION, "short"],
-    [`${NEXT_VERSION}-preview.20260930.1`, "long"],
+    [`${NEXT_VERSION}-preview.20261004.1`, "long"],
   ] as const)(
     "a fixed Windows binary replaces the previous launcher helper an update left (%s, %s install path)",
     (fixtureVersion, spelling) => {
@@ -2224,11 +2353,17 @@ describe("t244 Windows and completion release surfaces", () => {
         expect(readFileSync(helperPath, "utf-8")).toBe(previous);
         rmSync(lock);
 
+        // A release from before the Git Bash launcher, updating this machine,
+        // wrote none; the first command of this one writes it with the helper,
+        // so hooks run through Git Bash find a bare `aidlc`.
+        const gitBashLauncher = join(dirname(commandPath()), "aidlc");
+        rmSync(gitBashLauncher, { force: true });
         const replaced = launch("version");
         expect(replaced.exitCode, replaced.stderr).toBe(0);
         expect(replaced.stdout).toBe(versionLine);
         expect(replaced.stderr).toBe("");
         expect(readFileSync(helperPath, "utf-8")).toBe(current);
+        expect(readFileSync(gitBashLauncher, "utf-8")).toBe(windowsPosixShim());
         expect(existsSync(lock)).toBe(false);
         expect(launcherRows()).toEqual([]);
 

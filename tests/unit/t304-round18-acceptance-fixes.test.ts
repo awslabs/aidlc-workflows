@@ -365,9 +365,8 @@ describe("t304 copied projection configuration", () => {
         "--yes",
       ]);
       expect(nested.status).not.toBe(0);
-      expect(nested.stdout + nested.stderr).toContain(
-        "links and special files are not valid projection content",
-      );
+      expect(nested.stdout + nested.stderr).toContain(".claude/linked-outside is a link");
+      expect(nested.stdout + nested.stderr).toContain("fix: put the file itself at .claude/linked-outside, then run");
     },
   );
 

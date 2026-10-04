@@ -38,6 +38,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     stop-hook/                     # No-progress guard counters
     human-turn                     # Last human prompt marker
     engine-touch                   # Last engine advance marker
+    ask-turn-end                   # Last engine question, until the person replies
     reviewer-dispatch.json         # Active per-unit reviewer scope
     document-input-path            # Document input handoff
     active-directive.json           # Transient execution cursor

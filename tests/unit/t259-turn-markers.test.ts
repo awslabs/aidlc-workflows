@@ -1,4 +1,4 @@
-// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath
+// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markAskTurnEnd, function:askTurnEndIsOpen, function:askTurnEndMarkerPath
 //
 // The turn-shape marker family: the transcript-free reading of the Stop hook's
 // tier-3 conversational carve-out. On harnesses that deliver no
@@ -29,14 +29,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
+  askTurnEndIsOpen,
+  askTurnEndMarkerPath,
   engineTouchMarkerPath,
   humanTurnMarkerPath,
+  markAskTurnEnd,
   markEngineTouch,
   markHumanTurn,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
 } from "../../core/tools/aidlc-lib.ts";
+import { setupIntegrationProject } from "../harness/fixtures.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -210,5 +215,64 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     const path = humanTurnMarkerPath(proj);
     mkdirSync(path, { recursive: true }); // writeFileSync will fail EISDIR
     expect(() => markHumanTurn(proj)).not.toThrow();
+  });
+});
+
+describe("t259 the engine's last word was a question for the person", () => {
+  test("an ask sets the marker, any other step clears it, and the Stop hook's own probe changes nothing", () => {
+    const proj = makeCreatedProject();
+    markAskTurnEnd(proj, true);
+    expect(statSync(askTurnEndMarkerPath(proj)).isFile()).toBe(true);
+    process.env[STOP_HOOK_PROBE_ENV] = "1";
+    markAskTurnEnd(proj, false);
+    expect(existsSync(askTurnEndMarkerPath(proj))).toBe(true);
+    delete process.env[STOP_HOOK_PROBE_ENV];
+    markAskTurnEnd(proj, false);
+    expect(existsSync(askTurnEndMarkerPath(proj))).toBe(false);
+  });
+
+  test("the question is open only while it is newer than the person's last message", () => {
+    const proj = makeCreatedProject();
+    const base = Math.floor(Date.now() / 1000) - 600;
+    expect(askTurnEndIsOpen(proj)).toBe(false);
+    markHumanTurn(proj);
+    markAskTurnEnd(proj, true);
+    utimesSync(humanTurnMarkerPath(proj), base, base);
+    utimesSync(askTurnEndMarkerPath(proj), base + 60, base + 60);
+    expect(askTurnEndIsOpen(proj)).toBe(true);
+    utimesSync(humanTurnMarkerPath(proj), base + 120, base + 120);
+    expect(askTurnEndIsOpen(proj)).toBe(false);
+    rmSync(humanTurnMarkerPath(proj), { force: true });
+    expect(askTurnEndIsOpen(proj)).toBe(false);
+  });
+
+  // A live run: mid-Feasibility the person typed unrelated new work, got "Work
+  // is already in progress on ... How should I handle this?", and picked
+  // "Chat about this". The Stop hook's own `next` returned Feasibility, the
+  // reminder fired, and the agent went back to the old work, dropping the
+  // question. The turn now ends at the question.
+  test("the Stop hook lets the turn end at the new-work question, and nudges again once other work is handed out", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
+    delete env[STOP_HOOK_PROBE_ENV];
+    const run = (args: string[], input?: string) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const stop = () =>
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
+    markHumanTurn(proj);
+    await Bun.sleep(20);
+    const asked = run([
+      "engine", "orchestrate", "next",
+      "build a standalone Python CLI that scrapes NOAA weather data and writes it to a SQLite database",
+    ]);
+    expect(JSON.parse(asked.stdout).ask_type).toBe("new-work-routing");
+    const atQuestion = stop();
+    expect(atQuestion.status, atQuestion.stderr).toBe(0);
+    expect(atQuestion.stdout).not.toContain('"decision":"block"');
+
+    // The agent ran a bare next anyway and was handed the work in progress.
+    expect(JSON.parse(run(["engine", "orchestrate", "next"]).stdout).kind).toBe("run-stage");
+    expect(stop().stdout).toContain('"decision":"block"');
   });
 });

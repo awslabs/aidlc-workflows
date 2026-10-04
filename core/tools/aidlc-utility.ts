@@ -221,6 +221,7 @@ import {
   unlistedRecordForQuestion,
   readIntentRegistry,
   recordDirMatches,
+  updateIntentScope,
   updateIntentStatus,
   type IntentInfo,
   type IntentLifecycleVerb,
@@ -10438,7 +10439,9 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const selection = resolveWorkflowSelection(projectDir, { intent: flags.intent, space: flags.space });
   const intent = selection.intent ?? undefined;
   const space = selection.space;
-  withAuditLock(projectDir, () => {
+  // The workspace lock first, since the work's intents.json row records the
+  // new scope (invariant 2), then the work's own.
+  withAuditLock(projectDir, () => withAuditLock(projectDir, () => {
     const contentBefore = readConfigState(projectDir, { intent, space });
     const scopeMapping = loadScopeMapping();
     const newScopeDef = scopeMapping[newScope];
@@ -10670,9 +10673,11 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
       }
       writeStateFile(projectDir, setField(content, "Last Updated", isoTimestamp()), intent, space);
+      // The work list and a restart offer name the scope it runs on now.
+      if (intent && oldScope !== newScope) updateIntentScope(projectDir, intent, newScope, space);
     }
     process.stdout.write(`${outputLines.join("\n")}\n`);
-  }, intent, space);
+  }, intent, space));
 }
 
 // ---------------------------------------------------------------------------

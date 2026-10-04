@@ -1309,6 +1309,14 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/e2e/t-exec-codex-journey-code-arrives.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-code-arrives.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"
         }
@@ -1756,6 +1764,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:askTurnEndIsOpen",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:askTurnEndMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3631,7 +3663,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4901,7 +4933,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6105,6 +6137,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:markAskTurnEnd",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markdownBlocks",
       "minMechanism": "none",
       "coveredBy": [
@@ -6122,7 +6166,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6134,7 +6178,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10663,7 +10707,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -11086,6 +11130,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:updateIntentScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t171-creation-gate-registry.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -15932,6 +15988,14 @@
       "unitId": "aidlc-utility reclassify",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t-exec-codex-journey-code-arrives.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-code-arrives.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/unit/t352-workspace-reclassify.test.ts",
           "mechanism": "cli"

@@ -535,6 +535,28 @@ export function sha256File(path: string): string {
   return sha256Bytes(readFileSync(path));
 }
 
+// What a host tool installs for itself inside a directory AI-DLC manages:
+// a package manager's dependencies and their records (opencode, for one,
+// installs its plugin dependencies under .opencode/ at first start), and a
+// nested .gitignore it writes for them. No release ships any of these, so
+// config never copies them as release files, never owns them, and never
+// removes them.
+const HOST_TOOL_NAMES = new Set([
+  "node_modules",
+  "package.json",
+  "package-lock.json",
+  "bun.lock",
+  "bun.lockb",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+]);
+
+export function hostToolPath(rel: string): boolean {
+  return rel.split(/[\\/]/).some((segment, index) =>
+    HOST_TOOL_NAMES.has(segment) || (segment === ".gitignore" && index > 0)
+  );
+}
+
 export function walkFiles(root: string): string[] {
   const files: string[] = [];
   const visit = (dir: string): void => {
