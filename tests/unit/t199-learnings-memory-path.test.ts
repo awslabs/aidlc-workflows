@@ -434,6 +434,30 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(surfaced.stderr).toContain(`slug mismatch: requested "${recordName}" but Current Stage is "user-stories"`);
     expect(surfaced.stderr).toContain("Run it again with --slug user-stories.");
 
+    // Another stage's slug, or a Current Stage that is no stage, gets the
+    // plain refusal: neither names a value to retry with.
+    const surface = (slug: string) => spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", slug, "--project-dir", pd],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    const otherStage = surface("code-generation");
+    expect(otherStage.status).toBe(1);
+    expect(otherStage.stderr).toContain('slug mismatch: requested "code-generation" but Current Stage is "user-stories"');
+    expect(otherStage.stderr).not.toContain("Run it again");
+    writeFileSync(
+      seededStateFile(pd),
+      "# AI-DLC State Tracking\n- **Current Stage**: user-stories; touch x\n- **Scope**: feature\n",
+    );
+    const notAStage = surface(recordName);
+    expect(notAStage.status).toBe(1);
+    expect(notAStage.stderr).toContain("slug mismatch");
+    expect(notAStage.stderr).not.toContain("Run it again");
+    writeFileSync(
+      seededStateFile(pd),
+      "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n",
+    );
+
     const logged = spawnSync(
       BUN,
       [
