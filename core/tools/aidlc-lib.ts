@@ -10734,6 +10734,36 @@ export function isReplyTurn(row: { event: string; block: string }): boolean {
   return row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== COMMAND_TURN_REPLY;
 }
 
+// Where the audit trail stood when a question was shown: the shard and its
+// size then, so the turns after it are the replies it can have.
+export interface AuditMark {
+  shard: string;
+  offset: number;
+}
+
+export function auditMark(projectDir: string): AuditMark {
+  const shardPath = auditFilePath(projectDir);
+  return {
+    shard: projectRelativePath(projectDir, shardPath),
+    offset: existsSync(shardPath) ? statSync(shardPath).size : 0,
+  };
+}
+
+// The person replied after the mark: a human turn that is more than a command
+// to AIDLC (isReplyTurn) is on record after it. A decision on an open question
+// needs this; presence for what a command asks for does not. A trail that
+// cannot be read, or a mark from another shard, proves no reply.
+export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean {
+  try {
+    const shardPath = auditFilePath(projectDir);
+    if (projectRelativePath(projectDir, shardPath) !== mark.shard) return false;
+    const after = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").subarray(mark.offset).toString("utf-8");
+    return auditShardBlocks(after).some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+  } catch {
+    return false;
+  }
+}
+
 export function humanTurnState(projectDir: string, options: { replies?: boolean } = {}): HumanTurnState {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an

@@ -11,7 +11,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "
 import { isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  humanActedSinceGate,
+  humanRepliedSinceGate,
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
   releaseTakenGuardRecoveryReply,
@@ -1440,10 +1440,10 @@ function answerEnginePlanApproval(
     );
   }
   if (picked.choice === PLAN_REVIEW_CHOICE) {
-    if (!humanPresenceGuardDisabled() && !humanActedSinceGate(pd)) {
+    if (!humanPresenceGuardDisabled() && !humanRepliedSinceGate(pd)) {
       error(
         "No reply from the person has arrived since the last decision. Record their request once they ask " +
-          `to review the plan.${unattendedHumanPresenceHint()}`,
+          `to review the plan.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
       );
     }
     const message = requestPlanApprovalReviewNow(pd);

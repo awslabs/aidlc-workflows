@@ -278,7 +278,7 @@ After approval:
 or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` can turn the plan
 stop off for this piece of work; the engine then routes straight to the build
 with the notice above. When the person asks for it, in their own words or with
-`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set plan-approval off`
+`/aidlc --plan-approval off`, run `{{INVOKE}} engine config set guard.plan-approval off`
 and say in one line that it is off. Never suggest turning it off yourself.
 Turning it back on (`config set plan-approval on`) is fine whenever they ask.
 - A new stage attempt (a jump, a rejected gate, a workflow restart) needs its own

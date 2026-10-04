@@ -1862,3 +1862,30 @@ describe("stopping for now at Code Generation", () => {
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
   });
 });
+
+// From a live run under production guards: at the plan question the person
+// asked "skip plan approval?", a question about the switch the hook marks as a
+// command turn, and nothing else. The agent recorded "Approve Plan" from it and
+// built the code. A question or a command is no answer: the choice is refused,
+// the question stays open, and the refusal names the real switch.
+describe("a question about the switch is no answer to the plan question", () => {
+  test.each(["off", "relaxed", "strict"] as const)("under Guard Policy %s, \"Approve Plan\" after only \"skip plan approval?\" is refused", (policy) => {
+    const proj = project(policy);
+    askFor(proj);
+    reply(proj, "skip plan approval?");
+    const result = answer(proj, "Approve Plan");
+    expect(result.code, result.message).not.toBe(0);
+    expect(result.recorded).toBeUndefined();
+    expect(result.message).toContain("not an answer");
+    expect(result.message).toContain("engine config set guard.plan-approval off");
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    const ask = next(proj);
+    expect(ask.kind, JSON.stringify(ask)).toBe("ask");
+    expect(ask.ask_type).toBe("plan-approval");
+    // Their answer, when it comes, is recorded.
+    reply(proj, "ok, approve it");
+    const approved = answer(proj, "Approve Plan");
+    expect(approved.code, approved.message).toBe(0);
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+});

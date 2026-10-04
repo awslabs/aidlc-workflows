@@ -25,12 +25,15 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
   auditBlockField,
+  auditMark,
+  type AuditMark,
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   errorMessage,
   getField,
   isReplyTurn,
+  personRepliedAfter,
   latestMainWorkflowStageRunFloorForProject,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -71,7 +74,7 @@ import {
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
 import { exactOptionPick, isNonAnswer, stripRecommendedDecorator } from "./aidlc-reply-reader.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
@@ -138,6 +141,8 @@ export interface PlanApprovalAskRecord {
    * them and records the choice the person made.
    */
   replies?: PlanApprovalAskReply[];
+  /** Where the audit trail stood when the question was shown: an answer needs a reply after it. */
+  repliesFrom?: AuditMark;
   /** A grouped change request that named no Unit, waiting for "which one". */
   pendingChange?: string;
   results?: PlanApprovalAskResult[];
@@ -784,6 +789,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
           mode: "ask",
           bound: true,
           issuedAt: new Date().toISOString(),
+          repliesFrom: auditMark(projectDir),
         };
     writePlanApprovalAsk(projectDir, record);
     directive.plan_approval.targets.forEach((view, index) => {
@@ -1369,6 +1375,16 @@ export function recordPlanApprovalAnswer(
           "reply, then record the choice they made.",
       );
     }
+    // Words kept since the question can be a question or a command to AIDLC
+    // ("skip plan approval?"), which answers nothing: a choice needs a reply.
+    if (record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
+      throw new Error(
+        "The person has not answered the plan question since it was shown: their message since then was a " +
+          "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +
+          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")}\` and say ` +
+          "so in one line. Then record the choice they make.",
+      );
+    }
     // A reply that is exactly Request Changes is the person's pick for these
     // plans: it binds until a later reply says otherwise.
     if (answer.choice !== "request-changes" && exactOptionPick(replies[replies.length - 1].text, record.choices) === 1) {
@@ -1408,6 +1424,8 @@ export function recordPlanApprovalAnswer(
       next.mode = "editing";
       delete next.replies;
       delete next.results;
+      // Their "done" comes in a later reply.
+      next.repliesFrom = auditMark(projectDir);
       writePlanApprovalAsk(projectDir, next);
       const files = record.targets.flatMap((target) => {
         const view = targetView(projectDir, target.unit);
