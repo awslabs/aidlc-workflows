@@ -1736,13 +1736,20 @@ function pendingDuration(ageMs: number): string {
   return words(Math.floor(hours / 24), "day");
 }
 
-// A persona's display name for status. Persona files are repository text, so
-// a name outside plain words, or a persona set that fails to load, leaves the
-// stored name.
-function agentDisplayName(slug: string): string {
+// A persona's name for status. The state file and persona files are
+// repository text, so status says only the persona's own name: its display
+// name when that is its slug's words recased ("AWS Platform Agent" for
+// aidlc-aws-platform-agent), else the slug. A stored value outside the slug
+// shape is not shown.
+function agentDisplayName(slug: string): string | null {
+  if (!/^[a-z0-9][a-z0-9-]{0,79}$/.test(slug)) return null;
+  const words = (text: string): string =>
+    text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-agent$/, "");
   try {
     const display = loadAgents().find((agent) => agent.slug === slug)?.display_name;
-    if (display && /^[A-Za-z0-9][A-Za-z0-9 &/()'.,+-]{0,63}$/.test(display)) return display;
+    if (display && /^[A-Za-z0-9 &]{1,64}$/.test(display) && words(display) === words(slug.replace(/^aidlc-/, ""))) {
+      return display;
+    }
   } catch {
     // A malformed or duplicate persona file is doctor's to report.
   }
@@ -2028,11 +2035,16 @@ To get started:
   // Other work still running in this space, so the person sees it and how to
   // reach it: the same list config and doctor use, so archived and finished
   // work stays out. A record named outside the record-name shape is not listed.
-  const others = selection.intent === null
-    ? []
-    : runningWorkflows(projectDir)
-      .filter((run) => run.space === selection.space && run.dirName !== selection.intent && isSafeIntentRecordName(run.dirName))
-      .map((run) => run.dirName);
+  let others: string[] = [];
+  try {
+    others = selection.intent === null
+      ? []
+      : runningWorkflows(projectDir)
+        .filter((run) => run.space === selection.space && run.dirName !== selection.intent && isSafeIntentRecordName(run.dirName))
+        .map((run) => run.dirName);
+  } catch {
+    // Other work that cannot be read is left out; this work's status still shows.
+  }
   const alsoOpen = others.length === 0
     ? ""
     : `Also open:      ${others.join(", ")} (type \`${entrySkillInvocation()} intent ${others.length === 1 ? others[0] : "<name>"}\` to switch)\n`;
