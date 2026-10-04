@@ -1613,7 +1613,7 @@ describe("t341 protected question interleaving", () => {
   // in the picker with the command added. The person's Approve there was not
   // kept, so the checkpoint asked again, refused that picker too, and they had
   // to type it: three answers to one question.
-  test("a picker approval answers the question however the agent worded it; several picks or other labels do not", () => {
+  test("a picker approval answers the question however the agent worded it; several picks or other options do not", () => {
     const pd = project();
     const shown = `${prompt} \`bun test\``;
     const pick = (labels: string[], picked: string | string[], multiSelect = false, question = shown) => {
@@ -1629,6 +1629,10 @@ describe("t341 protected question interleaving", () => {
     ask(pd);
     pick(["Approve", "Request Changes"], "Approve", true);
     pick(["Yes", "No"], "Yes");
+    // A picker sharing one label with the question is some other question,
+    // whichever option the person picked there.
+    pick(["Approve", "Rename it"], "Rename it");
+    pick(["Approve", "Rename it"], "Approve");
     // Several picks are no one choice, even under the exact recorded question.
     pick(["Approve", "Request Changes"], "Approve", true, prompt);
     pick(["Approve", "Request Changes"], ["Approve", "Request Changes"], false, prompt);

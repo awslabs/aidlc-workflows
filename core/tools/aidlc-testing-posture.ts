@@ -3102,17 +3102,19 @@ export function recordPlanApprovalHumanResponse(
 
 // A picker reply answers the protected question when it is a single pick and
 // the picker asked it: its recorded text, or, however the conductor worded it,
-// a picker offering one of its choices ("(Recommended)" stripped). Several
-// picks are no one choice, whatever the question; a picker offering none of its
-// choices answers some other question.
+// a picker offering only its choices ("(Recommended)" stripped) with one of
+// them picked. Several picks are no one choice, whatever the question; a picker
+// offering anything else, or a pick outside its choices, answers some other
+// question.
 function pickerAsksProtectedQuestion(
-  question: ProtectedQuestion, questionText: string, picker: PlanApprovalPickerQuestion | undefined,
+  question: ProtectedQuestion, questionText: string, picker: PlanApprovalPickerQuestion | undefined, picked: string,
 ): boolean {
   if (picker?.severalPicks) return false;
   if (createHash("sha256").update(questionText, "utf-8").digest("hex") === question.promptDigest) return true;
   if (!picker?.options?.length) return false;
   const own = APPROVAL_GATE_CHOICES.map((choice) => choice.toLowerCase());
-  return picker.options.some((label) => own.includes(stripRecommendedDecorator(label).trim().toLowerCase()));
+  const label = (text: string) => stripRecommendedDecorator(text).trim().toLowerCase();
+  return picker.options.every((option) => own.includes(label(option))) && own.includes(label(picked));
 }
 
 // The person's reply to a construction policy, verification command, or
@@ -3128,7 +3130,7 @@ export function recordProtectedHumanResponse(
     const question = readProtectedQuestion(projectDir, session);
     if (!question) return { recorded: false };
     const picked = question.promptDigest !== undefined && questionText !== null;
-    if (picked && !pickerAsksProtectedQuestion(question, questionText, picker)) {
+    if (picked && !pickerAsksProtectedQuestion(question, questionText, picker, responseText)) {
       return { recorded: false };
     }
     const text = responseText.trim();
