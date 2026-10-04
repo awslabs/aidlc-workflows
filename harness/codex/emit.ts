@@ -272,7 +272,7 @@ export function emitTrustSeed(
     `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
     `# If entries for that hooks.json path already exist, replace the full set;\n` +
     `# appending a second set creates invalid TOML. The hash covers the\n` +
-    `# normalized hook identity (event + matcher + command + defaults), NOT the path —\n` +
+    `# normalized hook identity (event + matcher + command + defaults), NOT the path;\n` +
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
