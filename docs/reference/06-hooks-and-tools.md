@@ -110,9 +110,10 @@ appropriate.
 Memory-held strict refuses with the memory file named; otherwise the hook
 uses `applyIntentSettings` with `typedByPerson: true` under the audit lock,
 appends the audit rows, and writes state.
-The outcome is `{ applied, lines }`; the hook prints
-`{"additionalContext":"AIDLC Guard Policy: ..."}` with the same result lines the
-CLI prints, and harnesses that inject hook context deliver it to the conductor.
+The outcome is `{ applied, lines }`; the hook prints a context line
+(`hookContextLine`, below) carrying `AIDLC Guard Policy: ...` with the same
+result lines the CLI prints, and harnesses that inject hook context deliver it
+to the conductor.
 An unrecognized prompt returns `null` and applies nothing. When
 `AIDLC_UNATTENDED=1` withholds authority, a recognized typed lowering switch
 applies nothing and the hook emits this `additionalContext` line:
@@ -761,7 +762,7 @@ sequenceDiagram
     SF-->>SS: Phase, Stage, Status, Agent
     SS->>AF: Append SESSION_STARTED or SESSION_RESUMED
     SS->>RF: Check recovery breadcrumb
-    SS-->>CC: {"additionalContext": "..."}
+    SS-->>CC: {"hookSpecificOutput": {"additionalContext": "..."}}
 
     Note over CC: Stage execution
     CC->>AL: PostToolUse (Write/Edit)
@@ -1586,7 +1587,7 @@ environment or recorded with `aidlc config flags --bypass`, writes
 6. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope. When a Unit is active it adds an `Active Unit:` line with the Unit's state, pause reason, and next action, naming the Unit's own stage (the `Unit Stage` field `unit start`, `pause`, and `resume` record) when that is not Current Stage. Under solo unit-major Construction, where Current Stage stays on the first per-unit stage while each Unit works through the later ones, it also adds `Current Step: <stage> for unit <unit>`, so a new chat names the step the work is really on.
 7. **Recovery check:** If `.aidlc-engine/recovery.md` exists, includes a compaction warning note.
 7a. **Switched-off checks:** While a recorded switch keeps one of the person's checks off, the context adds a `CHECKS SWITCHED OFF` block, one line per check, for the conductor to say in its first reply. The same block follows the session line when no workflow is active. The lines come from `aidlc-recorded-switches.ts` (see the kill switches in the CLI reference).
-8. **JSON output:** Outputs `{"additionalContext": "..."}` with native JSON serialization.
+8. **JSON output:** Prints one context line from `hookContextLine` in `aidlc-lib.ts`, the single owner for SessionStart and UserPromptSubmit context. The line carries the text twice: under `hookSpecificOutput` (`hookEventName` plus `additionalContext`), the only place Claude Code reads it (a top-level `additionalContext` reaches nothing there), and as a top-level `additionalContext`, which every other harness's adapter, including an older one still installed in a project, reads and rewraps for its host.
 
 **Output format:**
 

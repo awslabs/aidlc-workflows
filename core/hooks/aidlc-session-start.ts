@@ -51,6 +51,7 @@ import {
   harnessDir,
   getField,
   isPerUnitStage,
+  hookContextLine,
   hooksHealthDir,
   writeHookStatusFile,
   humanPresenceGuardDisabled,
@@ -284,13 +285,13 @@ if (!existsSync(stateFile)) {
         );
       }
     }
-    process.stdout.write(`${JSON.stringify({
-      additionalContext:
-        `AIDLC Runtime Session: ${sessionId}\n` +
+    process.stdout.write(hookContextLine(
+      "SessionStart",
+      `AIDLC Runtime Session: ${sessionId}\n` +
         "Use this exact value for any Plan Approval --session argument in this conversation." +
         rejoin +
         (rebindCheckOnly ? "" : switchOffContext(projectDir)),
-    })}\n`);
+    ));
   }
   return 0;
 }
@@ -452,10 +453,7 @@ if (rebindCheckOnly) {
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     }
-    process.stdout.write(`${JSON.stringify({
-      additionalContext:
-        `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`,
-    })}\n`);
+    process.stdout.write(hookContextLine("SessionStart", `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`));
   }
   return 0;
 }
@@ -547,9 +545,7 @@ FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, stage work, or resume menu. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.`;
 
-// Output additionalContext as JSON
-const output = JSON.stringify({ additionalContext: context });
-process.stdout.write(`${output}\n`);
+process.stdout.write(hookContextLine("SessionStart", context));
 return 0;
 }
 

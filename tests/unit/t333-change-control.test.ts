@@ -2100,6 +2100,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const context = JSON.parse(recordHumanPrompt(proj, prompt));
     expect(context.additionalContext).toContain("AIDLC Guard Policy: Guard Policy changed:");
     expect(context.additionalContext).toContain(`${value} (set by you)`);
+    // Claude Code reads the line only from hookSpecificOutput; adapters read the top-level key.
+    expect(context.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", additionalContext: context.additionalContext });
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe(`${value} (set by you)`);
     const rows = guardPolicyRows(proj);
     expect(rows).toHaveLength(1);
@@ -2308,6 +2310,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(context.additionalContext).toContain("AIDLC_UNATTENDED=1");
     expect(context.additionalContext).toContain("withholds human authority");
     expect(context.additionalContext).toContain("attended session");
+    // Claude Code reads the line only from hookSpecificOutput; adapters read the top-level key.
+    expect(context.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", additionalContext: context.additionalContext });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(readAuditShardEvents(proj)).toEqual(allRows);
     const ledger = mutationRows(proj);
