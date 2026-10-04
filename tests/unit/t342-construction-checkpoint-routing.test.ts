@@ -2,7 +2,7 @@
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
-// covers: function:hasPendingDecision
+// covers: function:hasPendingDecision, function:presenceFloorHolds
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -24,7 +24,7 @@ import {
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField,
+  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -409,6 +409,35 @@ describe("t342 Construction checkpoint routing", () => {
     expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
     expect(JSON.parse(report.stdout).kind, report.stdout).not.toBe("error");
   }
+
+  // The Kiro presence floors read the engine's own approval rule: a stage gate
+  // the engine records itself once every Unit's checkpoint is approved never
+  // waits for the person's turn, and a gate that needs them still does.
+  test("the presence floor stands aside only for a gate the engine approves itself", () => {
+    const p = fixture();
+    for (const unit of ["alpha", "beta"]) {
+      cover(p, unit);
+      approve(p, unit);
+    }
+    const gate = next(p);
+    expect(gate.construction_policy?.completion_only, JSON.stringify(gate)).toBe(true);
+    reportStage(p, "functional-design", "awaiting-approval");
+    const approveCommand =
+      `bun .kiro/tools/aidlc.ts engine orchestrate report --stage functional-design --result approved`;
+    const state = () => readFileSync(seededStateFile(p), "utf-8");
+    expect(state()).toMatch(/^- \[\?\] functional-design /m);
+    // The person's last turn went to beta's checkpoint approval.
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
+    // beta's code changes, so its checkpoint needs the person again, and so
+    // does the stage gate.
+    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(true);
+    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 1;\n");
+    // The engine agrees: it records the gate without the person.
+    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
+    reportStage(p, "functional-design", "approved");
+    expect(state()).toMatch(/^- \[x\] functional-design /m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Both Units are approved, so the stage gates run and functional-design is
   // approved and marked [x]. beta's code then changes, so its checkpoint is

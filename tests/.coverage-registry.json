@@ -7353,6 +7353,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:presenceFloorHolds",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:processGeneration",
       "minMechanism": "none",
       "coveredBy": [

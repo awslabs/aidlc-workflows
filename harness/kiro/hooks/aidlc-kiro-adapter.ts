@@ -53,9 +53,8 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
-  hasOpenGate,
+  presenceFloorHolds,
   hookDebug,
-  humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAidlcAgentFile,
   isAutonomousMode,
@@ -654,9 +653,10 @@ if (target === "guard-tool-call") {
       : null;
     if (isAutonomousMode(content)) return 0; // autonomous: never block
     if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
-    if (!hasOpenGate(content)) return 0; // no gate awaits approval
 
-    if (!humanActedSinceGate(cwd)) {
+    // The shared rule: a gate the person must answer, and no turn of theirs
+    // since it opened (see presenceFloorHolds).
+    if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
       process.stderr.write(
         "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
       );

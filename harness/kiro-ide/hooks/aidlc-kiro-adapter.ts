@@ -101,13 +101,12 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
-  hasOpenGate,
+  presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
   getField,
   hookChildEnv,
   hookDebug,
-  humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
@@ -1743,8 +1742,9 @@ function approvalGateAwaitsHuman(): boolean {
     // and no-open-gate (nothing awaits approval, so nothing to floor).
     if (isAutonomousMode(content)) return false;
     if (humanPresenceGuardDisabled()) return false;
-    if (!hasOpenGate(content)) return false;
-    return !humanActedSinceGate(pd); // a human acted at this gate
+    // The shared rule: a gate the person must answer, and no turn of theirs
+    // since it opened (see presenceFloorHolds).
+    return presenceFloorHolds(pd, content, String(ide.toolArgs?.command ?? ""));
   } catch {
     return false; // advisory - any read/parse failure fails open
   } finally {
@@ -1756,14 +1756,12 @@ if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
     const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
     process.stderr.write(
-      "An approval gate is open and no reply from the person is on record since it " +
-        "opened, so no tool call runs until they answer it. If they already replied, " +
-        "that reply was not recorded: Kiro may not have passed it to AI-DLC's hooks in " +
-        "this window. Tell them that, and that trusting the folder if the Restricted Mode " +
-        "banner shows at the top of the window (select Manage, then Trust), running " +
-        `"Developer: Reload Window" from the Command Palette (${palette}), and choosing ` +
-        "the aidlc agent in the chat panel's agent picker should let their next message be " +
-        "recorded; if it still is not, `/aidlc --doctor` shows why. In Kiro CLI, starting " +
+      "An approval is waiting for the person's answer, so nothing runs until they give it: " +
+        "end the turn. If they already answered, tell them to trust the folder if the " +
+        "Restricted Mode banner shows at the top of the window (select Manage, then Trust), " +
+        `run "Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
+        "the aidlc agent in the chat panel's agent picker, so their next message is " +
+        "recorded; `/aidlc --doctor` shows anything else to fix. In Kiro CLI, starting " +
         "`kiro-cli` again in this folder does the same.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.

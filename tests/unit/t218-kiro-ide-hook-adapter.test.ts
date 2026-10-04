@@ -5448,18 +5448,17 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
         AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
       });
       expect(r.code, r.stderr).toBe(2);
-      expect(r.stderr).toContain("no reply from the person is on record since it opened");
+      expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
       expect(r.stderr).toContain(
-        "If they already replied, that reply was not recorded: Kiro may not have passed it to AI-DLC's hooks in this window.",
+        "If they already answered, tell them to trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
       );
+      expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
       expect(r.stderr).toContain(
-        "trusting the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
-      );
-      expect(r.stderr).toContain('running "Developer: Reload Window" from the Command Palette');
-      expect(r.stderr).toContain(
-        "choosing the aidlc agent in the chat panel's agent picker should let their next message be recorded; if it still is not, `/aidlc --doctor` shows why.",
+        "choose the aidlc agent in the chat panel's agent picker, so their next message is recorded; `/aidlc --doctor` shows anything else to fix.",
       );
       expect(r.stderr).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
+      // It says what to do, never how the hooks work, and never asks for the answer again.
+      expect(r.stderr).not.toContain("hooks");
       expect(r.stderr).not.toContain("reply again");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -5564,7 +5563,7 @@ describe("t218 terminal-command-guard runs nothing while an approval gate awaits
         }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
       const gated = gate("sess_gated_chat");
       expect(gated.code, gated.stderr).toBe(2);
-      expect(gated.stderr).toContain("no reply from the person is on record since it opened");
+      expect(gated.stderr).toContain("An approval is waiting for the person's answer");
       const free = gate("sess_free_chat");
       expect(free.code, free.stderr).toBe(0);
     } finally {
