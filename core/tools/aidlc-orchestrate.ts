@@ -3664,6 +3664,11 @@ function unselectedRecords(
   if (intents.length === 0) return null;
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
+  // Where each piece of work stands, in the stage names the person sees.
+  const standing = (state: string): string => {
+    const stage = nodeForSlug((getField(state, "Current Stage") ?? "").trim());
+    return stage ? `at ${stage.name}` : "";
+  };
   const present = intentStates.filter(({ intent }) => intent.dirName);
   const selectable = present.flatMap(({ intent, state }) =>
     isBindableIntentRecordName(intent.dirName)
@@ -3705,6 +3710,7 @@ function unselectedRecords(
         }
       }
     }
+    annotation ||= standing(state);
     const label = intentDisplayLabel(intent);
     // A directory name outside the record-name shape is still selectable through
     // select_commands; the text shows it quoted, as data.
@@ -3794,11 +3800,13 @@ function intentPickPromptIfRecordsExist(
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
   const entry = entrySkillInvocation();
+  // Where each stands, and the other way on: new work is the person's to start.
+  const question = selectable.length === 1
+    ? `This project has one piece of work in progress${spaceLabel}: ${list}. Pick it up, or describe new work to start.`
+    : `This project has ${intents.length} pieces of work in progress${spaceLabel}, and none is selected here: ${list}. ` +
+      "Pick one to carry on, or describe new work to start.";
   return intentPickAskDirective(
-    `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, and none is currently selected ` +
-      `(which one you are on is tracked per-person and does not travel with the repo). ` +
-      `Pick the one to work on with \`${entry} intent <record>\`, naming its record: ${list}. ` +
-      `That selects it; then invoke \`${entry}\` again to carry on where it left off.`,
+    `${question} ${selectable.length === 1 ? "Picking it up" : "Picking one"} selects it; then \`${entry}\` carries on where it left off.`,
     selectors,
   );
 }
@@ -7024,9 +7032,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // just typed `/aidlc <scope>` to type exactly that — circular now that a
   // named scope creates).
   if (!stateContent) {
-    // A conversation that has not joined the record it found asks which intent
-    // to work on rather than being told that none exists.
-    const pick = engineUnjoined ? intentPickPromptIfRecordsExist(pd) : null;
+    // Work in progress here with none selected (a teammate's fresh clone, or a
+    // conversation that has not joined the record it found) is put to the
+    // person by name, never answered as if there were none.
+    const pick = intentPickPromptIfRecordsExist(pd);
     if (pick) {
       emit(pick);
       return;

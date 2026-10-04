@@ -156,6 +156,37 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       return records;
     };
 
+    // A teammate's clone: committed work in progress, no per-user cursor. A bare
+    // /aidlc (or --resume) names each piece and where it stands, never "no work".
+    for (const args of [[], ["--resume"]]) {
+      test(`a clone with work in progress and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` names each piece and where it stands`, () => {
+        const records = seedTwoIntentsNoCursor();
+        const d = JSON.parse(next(args).stdout.trim());
+        expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("ask");
+        expect(d.ask_type).toBe("intent-pick");
+        expect(d.available_intents).toEqual(records);
+        expect(d.question).toContain("This project has 2 pieces of work in progress, and none is selected here:");
+        expect(d.question.match(/\(at [A-Z][^)]*\)/g) ?? []).toHaveLength(2);
+        expect(d.question).toContain("Pick one to carry on, or describe new work to start.");
+        expect(JSON.stringify(d)).not.toContain("No workflow state found");
+        // Read-only: nothing created, nothing selected.
+        expect(recordDirs(proj)).toEqual(records);
+        expect(existsSync(cursorPath(proj))).toBe(false);
+      });
+
+      test(`a clone with one piece of work and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` offers it in one line`, () => {
+        const [first, second] = seedTwoIntentsNoCursor();
+        rmSync(join(intentsDir(proj), second), { recursive: true, force: true });
+        const rows = readIntentRegistry(proj).filter((row) => row.dirName !== second);
+        writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+        const d = JSON.parse(next(args).stdout.trim());
+        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
+        expect(d.available_intents).toEqual([first]);
+        expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. Pick it up, or describe new work to start\./);
+        expect(existsSync(cursorPath(proj))).toBe(false);
+      });
+    }
+
     test("Branch 9a (explicit --scope flag) emits an `ask` listing the existing intents, not a creation print", () => {
       seedTwoIntentsNoCursor();
       const r = next(["--scope", "poc"]);
@@ -166,7 +197,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent create");
       // The engine exposes exact record names accepted by the switch command,
       // with the slug retained only as the human label.
-      expect(d.question).toContain("/aidlc intent <record>");
+      expect(d.question).toContain("Pick one to carry on, or describe new work to start.");
       const records = readIntentRegistry(proj)
         .map((entry) => entry.dirName)
         .filter((name): name is string => typeof name === "string");
@@ -186,7 +217,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       const d = JSON.parse(r.stdout.trim());
       expect(d.kind).toBe("ask");
       expect(d.message ?? "").not.toContain("intent create");
-      expect(d.question).toContain("/aidlc intent <record>");
+      expect(d.question).toContain("Pick one to carry on, or describe new work to start.");
       expect(d.available_intents).toHaveLength(2);
       expect(recordDirs(proj).length).toBe(2); // no duplicate created
     });
@@ -225,7 +256,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         }
         const pick = JSON.parse(next(["--scope", "poc"]).stdout.trim());
         expect(pick.ask_type).toBe("intent-pick");
-        expect(pick.question).toContain("1 piece of work in progress");
+        expect(pick.question).toContain("one piece of work in progress");
         expect(pick.question).toContain(live);
         expect(pick.question).not.toContain(finished);
         expect(pick.available_intents).toEqual([live]);
@@ -287,7 +318,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const d = JSON.parse(next(["--scope", "poc"], proj, orchestrator).stdout.trim());
         expect(d.ask_type).toBe("intent-pick");
         // A Codex user invokes the skill, not a slash command.
-        expect(d.question).toContain(`${harness.name === "codex" ? "$aidlc" : "/aidlc"} intent <record>`);
+        expect(d.question).toContain(`then \`${harness.name === "codex" ? "$aidlc" : "/aidlc"}\` carries on where it left off.`);
       });
     }
 
