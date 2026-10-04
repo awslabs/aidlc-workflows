@@ -48,7 +48,12 @@ import {
   createOrchestrationTestProject,
   runOrchestrateNext,
 } from "../harness/fixtures.ts";
-import { acquireAuditLock, nextInScopeStage, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  acquireAuditLock,
+  DOCUMENT_INPUT_REQUEST_FILE,
+  nextInScopeStage,
+  releaseAuditLock,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   constructionHasStarted,
   declaredProjectType,
@@ -684,7 +689,7 @@ describe("t352 what the person hears after saying it is existing code", () => {
 // The agent passes some steps without speaking (the print that creates the
 // work, the project-type reply) and speaks at the next one, so a line on such
 // a step rides that next one, once, in order. The live runs that dropped them:
-// a creation line lost behind the first stage's own line, and the S13 reply
+// a creation line lost behind the first stage's own line, and the project-type reply
 // lost behind the Reverse Engineering start.
 describe("t352 the lines the person must hear ride the next step the agent speaks from", () => {
   const SESSION = "01995000-7a11-7000-8000-000000000352";
@@ -699,6 +704,15 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     const result = runOrchestrateNext(ORCH, proj, args, { env: chat });
     expect(result.directive, result.out).not.toBeNull();
     return result.directive ?? {};
+  }
+
+  // The person's next prompt marks a new turn on the work.
+  function newerPrompt(proj: string): void {
+    const marker = join(recordDir(proj), ".aidlc-engine", "human-turn");
+    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
+    writeFileSync(marker, "turn\n");
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(marker, later, later);
   }
 
   test("the creation line is said with the first stage, once", () => {
@@ -722,6 +736,21 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(said.split("If the work is on existing code, tell me.")[1]?.trim().length ?? 0).toBeGreaterThan(0);
     // Said once: the same step asked for again does not repeat it.
     expect(String(nextIn(proj).narration ?? "")).not.toContain("Setting up a poc workflow");
+  });
+
+  test("what a bugfix plan leaves out is said with the first stage", () => {
+    const proj = project();
+    const creation = nextIn(proj, ["--scope", "bugfix", "rows dated on the last day are left out of the report"]);
+    expect(creation.kind).toBe("print");
+    const request = /--request ([0-9a-f]{8})/.exec(String(creation.message))?.[1];
+    const created = spawnSync(BUN, [
+      AIDLC, "engine", "intent", "create", "--scope", "bugfix", "--request", request ?? "",
+      "--label", "report-last-day", "--project-dir", proj,
+    ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
+    const said = String(nextIn(proj).narration);
+    expect(said).toStartWith("Setting up a bugfix workflow for this");
+    expect(said).toContain("; no learnings ritual or summary confirmation.");
   });
 
   test("how a pasted document was split is said with the first stage", () => {
@@ -778,13 +807,28 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "show the asset description on hover"], chat).status).toBe(0);
     addRepo(proj);
     expect(run(UTIL, proj, ["reclassify", "--project-type", "brownfield"], chat).status).toBe(0);
-    // The person's next prompt marks a new turn on the work.
-    const marker = join(recordDir(proj), ".aidlc-engine", "human-turn");
-    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
-    writeFileSync(marker, "turn\n");
-    const later = new Date(Date.now() + 5_000);
-    utimesSync(marker, later, later);
+    newerPrompt(proj);
     const after = nextIn(proj);
     expect(String(after.narration ?? "")).not.toContain("Project type is now");
+  });
+
+  // Read inside a stage, the line waits past the person's answers to the
+  // stage's questions, at the latest for its gate.
+  test("which file a stage read is held across the person's turns and said once", () => {
+    const proj = project();
+    expect(run(UTIL, proj, ["intent-create", "--scope", "classic", "--arguments", "build what vision.md describes"], chat).status).toBe(0);
+    mkdirSync(join(proj, "docs"), { recursive: true });
+    writeFileSync(join(proj, "docs", "vision.md"), "# Vision\n");
+    mkdirSync(join(recordDir(proj), ".aidlc-engine"), { recursive: true });
+    writeFileSync(join(recordDir(proj), ".aidlc-engine", DOCUMENT_INPUT_REQUEST_FILE), "vision.md\n");
+    const note = 'I read "docs/vision.md", the only file in the project that matches the name "vision.md".';
+    const read = run(UTIL, proj, ["document-input"], chat);
+    expect(read.status, read.stderr).toBe(0);
+    expect(JSON.parse(read.stdout).selection_note).toBe(note);
+    newerPrompt(proj);
+    expect(String(nextIn(proj).narration)).toStartWith(note);
+    // Read again on the same work, it is not said again.
+    expect(run(UTIL, proj, ["document-input"], chat).status).toBe(0);
+    expect(String(nextIn(proj).narration ?? "")).not.toContain("the only file in the project");
   });
 });

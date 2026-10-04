@@ -314,7 +314,7 @@ import {
   steeringTokenKeyPathFor,
   takeSessionSelectionNotice,
   addPendingPersonLines,
-  takePendingPersonLines,
+  pendingPersonLines,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -573,6 +573,9 @@ function hookHealthNotice(): string | null {
 // Steps whose narration the agent passes through without speaking, so it rides
 // the next step it speaks from (the print that creates the work).
 const carriesNarration = new WeakSet<Directive>();
+// Steps the agent speaks right after, with no line of their own (the print
+// that opens a stage's gate, before the gate is shown).
+const leadsToSpeech = new WeakSet<Directive>();
 
 // A step the agent speaks from: one that ends its turn, or one with its own
 // line. A rules part never is; its run-stage is.
@@ -599,16 +602,17 @@ function sayPendingPersonLines(requested: Directive, transported: Directive): vo
     }
     return;
   }
-  if (!speaksToPerson(transported)) return;
-  const lines = takePendingPersonLines(projectDir, sessionId);
-  if (lines.length === 0) return;
+  if (!leadsToSpeech.has(requested) && !speaksToPerson(transported)) return;
+  const pending = pendingPersonLines(projectDir, sessionId);
+  if (pending.lines.length === 0) return;
   const own = transported.narration;
-  transported.narration = [...lines, ...(own ? [own] : [])].join(" ");
+  transported.narration = [...pending.lines, ...(own ? [own] : [])].join(" ");
   if (Buffer.byteLength(JSON.stringify(transported), "utf-8") > directiveMaxBytes()) {
     if (own) transported.narration = own;
     else delete transported.narration;
-    addPendingPersonLines(projectDir, sessionId, lines);
+    return;
   }
+  pending.said();
 }
 
 function prepareEmission(directive: Directive): PreparedEmission {
@@ -3209,8 +3213,9 @@ function createPrintDirective(
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
   // The agent runs the creation and goes on, so the line rides the first step
-  // it speaks from.
-  carriesNarration.add(directive);
+  // it speaks from. A new, unrelated piece of work stops here instead (the
+  // person starts a fresh chat for it), so the agent speaks from this step.
+  if (!flags.newIntent) carriesNarration.add(directive);
   return directive;
 }
 
@@ -11700,26 +11705,28 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emit(
-      withChangeNotices(
-        printDirective(
-          revalidatingOpenGate
-            ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
-            : completionOpensGate
-            ? completionOpensGateMessage(`"${slug}"`)
-            : flags.result === "rejected" && node.mode === "pipeline"
-            ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
-              `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
-              `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
-              `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
-              `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
-              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
-            : `Recorded ${flags.result} for "${slug}".` +
-              personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
-        ),
-        changeNoticesFromToolOutput(res.stdout),
+    const gateReply = withChangeNotices(
+      printDirective(
+        revalidatingOpenGate
+          ? `Stage "${slug}" is already awaiting approval; gate evidence revalidated.`
+          : completionOpensGate
+          ? completionOpensGateMessage(`"${slug}"`)
+          : flags.result === "rejected" && node.mode === "pipeline"
+          ? `Recorded rejected for "${slug}". The rejection starts a new pipeline attempt; prior receipts no longer apply. ` +
+            `Re-run \`${aidlcToolInvocation("orchestrate")} next\`, then dispatch every missing link in ` +
+            `directive.pipeline order with the exact human feedback. Each link must perform fresh work and return before its ` +
+            `new receipt is recorded. Preserve the configured topology and reviewer policy; a targeted artifact edit does not ` +
+            `permit the conductor to replace the pipeline or reuse its previous handoffs. Report revised only after the fresh chain completes.` +
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout))
+          : `Recorded ${flags.result} for "${slug}".` +
+            personsFeedbackSentence(personsFeedbackFromToolOutput(res.stdout)),
       ),
+      changeNoticesFromToolOutput(res.stdout),
     );
+    // The agent shows the gate next, so lines held from inside the stage are
+    // said with it.
+    if (flags.result === "awaiting-approval" || flags.result === "revised") leadsToSpeech.add(gateReply);
+    emit(gateReply);
     return;
   }
 

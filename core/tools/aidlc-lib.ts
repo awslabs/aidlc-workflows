@@ -5387,67 +5387,131 @@ export function takeSessionSelectionNotice(projectDir: string, sessionId: string
 // order, with the next step the agent speaks from, then cleared. They belong to
 // the person's current turn: a newer prompt on the selected work, or an age
 // past PENDING_PERSON_LINES_MAX_AGE_MS when no prompt hook ran, drops them, so
-// a line never surfaces in a later turn or another chat.
+// a line never surfaces in a later turn or another chat. A line a tool gives
+// inside a stage (which file it read, a file it copied into the project) is
+// held across the person's turns instead, until the next step the agent speaks
+// from on the same work (at the latest, the stage's gate), and is said once per
+// work.
 const PENDING_PERSON_LINES_MAX_AGE_MS = 15 * 60 * 1000;
+const HELD_PERSON_LINES_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const HELD_PERSON_LINES_SAID_MAX = 20;
+
+interface PendingPersonLine {
+  line: string;
+  at: number;
+  // The turn a turn-scoped line belongs to, or the work a held line belongs to.
+  turn?: string;
+  work?: string;
+}
+
+interface PendingPersonLines {
+  lines: PendingPersonLine[];
+  // Held lines already said on this work.
+  said: string[];
+}
 
 function pendingPersonLinesPath(projectDir: string, sessionId: string): string {
   const recordPath = sessionRecordPath(projectDir, sessionId);
   return recordPath ? `${recordPath}.person-lines` : "";
 }
 
-// The person's current turn on the selected work, as the prompt hook marks it.
-function personTurnToken(projectDir: string): string {
+// The selected work, and the person's current turn on it as the prompt hook
+// marks it.
+function personTurnAndWork(projectDir: string): { turn: string; work: string } {
   try {
     const selection = resolveWorkflowSelection(projectDir);
-    if (!selection.intent) return "none";
-    return String(statSync(humanTurnMarkerPath(projectDir, selection.intent, selection.space)).mtimeMs);
-  } catch {
-    return "none";
-  }
-}
-
-function readPendingPersonLines(path: string, turn: string): string[] {
-  try {
-    const saved = JSON.parse(readFileSync(path, "utf-8")) as { turn?: unknown; at?: unknown; lines?: unknown };
-    if (saved.turn !== turn || typeof saved.at !== "number" || Date.now() - saved.at > PENDING_PERSON_LINES_MAX_AGE_MS) {
-      return [];
+    if (!selection.intent) return { turn: "none", work: "none" };
+    const work = `${selection.space}/${selection.intent}`;
+    try {
+      return { turn: String(statSync(humanTurnMarkerPath(projectDir, selection.intent, selection.space)).mtimeMs), work };
+    } catch {
+      return { turn: "none", work };
     }
-    return Array.isArray(saved.lines) ? saved.lines.filter((line): line is string => typeof line === "string") : [];
   } catch {
-    return [];
+    return { turn: "none", work: "none" };
   }
 }
 
-// Keep the lines for the next step the agent speaks from. False when they
-// could not be kept, so the caller says them on its own step instead.
-export function addPendingPersonLines(projectDir: string, sessionId: string, lines: readonly string[]): boolean {
+function readPendingPersonLines(path: string, turn: string, work: string): PendingPersonLines {
+  try {
+    const saved = JSON.parse(readFileSync(path, "utf-8")) as { work?: unknown; lines?: unknown; said?: unknown };
+    const now = Date.now();
+    const lines = (Array.isArray(saved.lines) ? saved.lines : []).filter((entry): entry is PendingPersonLine => {
+      if (!entry || typeof entry !== "object") return false;
+      const { line, at, turn: lineTurn, work: lineWork } = entry as Partial<PendingPersonLine>;
+      if (typeof line !== "string" || typeof at !== "number") return false;
+      return lineWork !== undefined
+        ? lineWork === work && now - at <= HELD_PERSON_LINES_MAX_AGE_MS
+        : lineTurn === turn && now - at <= PENDING_PERSON_LINES_MAX_AGE_MS;
+    });
+    const said = saved.work === work && Array.isArray(saved.said)
+      ? saved.said.filter((line): line is string => typeof line === "string")
+      : [];
+    return { lines, said };
+  } catch {
+    return { lines: [], said: [] };
+  }
+}
+
+function writePendingPersonLines(projectDir: string, path: string, work: string, saved: PendingPersonLines): void {
+  if (saved.lines.length === 0 && saved.said.length === 0) {
+    rmSync(path, { force: true });
+    return;
+  }
+  mkdirSync(sessionsDir(projectDir), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ work, ...saved })}\n`, "utf-8");
+}
+
+// Keep the lines for the next step the agent speaks from; `held` keeps them
+// across the person's turns on the same work. False when they could not be
+// kept, so the caller says them on its own step instead.
+export function addPendingPersonLines(
+  projectDir: string,
+  sessionId: string,
+  lines: readonly string[],
+  held = false,
+): boolean {
   const path = pendingPersonLinesPath(projectDir, sessionId);
   const added = lines.filter((line) => line.trim().length > 0);
   if (!path || added.length === 0) return false;
-  const turn = personTurnToken(projectDir);
+  const { turn, work } = personTurnAndWork(projectDir);
+  if (held && work === "none") return false;
   try {
-    mkdirSync(sessionsDir(projectDir), { recursive: true });
-    writeFileSync(
-      path,
-      `${JSON.stringify({ turn, at: Date.now(), lines: [...readPendingPersonLines(path, turn), ...added] })}\n`,
-      "utf-8",
-    );
+    const saved = readPendingPersonLines(path, turn, work);
+    const at = Date.now();
+    for (const line of added) {
+      if (held && (saved.said.includes(line) || saved.lines.some((entry) => entry.line === line))) continue;
+      saved.lines.push(held ? { line, at, work } : { line, at, turn });
+    }
+    writePendingPersonLines(projectDir, path, work, saved);
     return true;
   } catch {
     return false;
   }
 }
 
-export function takePendingPersonLines(projectDir: string, sessionId: string): string[] {
+// The lines waiting for the next step the agent speaks from. `said()` clears
+// them once the step carries them; until then they stay waiting.
+export function pendingPersonLines(projectDir: string, sessionId: string): { lines: string[]; said(): void } {
   const path = pendingPersonLinesPath(projectDir, sessionId);
-  if (!path || !existsSync(path)) return [];
-  const lines = readPendingPersonLines(path, personTurnToken(projectDir));
-  try {
-    unlinkSync(path);
-  } catch {
-    /* already taken */
-  }
-  return lines;
+  const none = { lines: [], said: () => {} };
+  if (!path || !existsSync(path)) return none;
+  const { turn, work } = personTurnAndWork(projectDir);
+  const saved = readPendingPersonLines(path, turn, work);
+  return {
+    lines: saved.lines.map((entry) => entry.line),
+    said: () => {
+      const heldSaid = saved.lines.filter((entry) => entry.work !== undefined).map((entry) => entry.line);
+      try {
+        writePendingPersonLines(projectDir, path, work, {
+          lines: [],
+          said: [...saved.said, ...heldSaid].slice(-HELD_PERSON_LINES_SAID_MAX),
+        });
+      } catch {
+        /* the next step says them again rather than never */
+      }
+    },
+  };
 }
 
 interface SessionPidEntry {

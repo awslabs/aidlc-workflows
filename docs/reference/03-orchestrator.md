@@ -416,11 +416,11 @@ See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-deliv
 Some person-facing lines arrive on a step the agent passes through without
 speaking: the `print` that creates the work ("Setting up a poc workflow for
 this ... The folder has no code yet, so I'm starting this as a new project
-..."), and the `workspace reclassify` reply. A request typed with its scope
-never passed an ask, so its creation line also says how a pasted document was
-split (the `document_split` line); the stages that read the document do not
-say it again. The agent runs those and goes on,
-then speaks only at a later step, so a line left there was lost. The engine
+..."), and the `workspace reclassify` reply. The agent runs those and goes on,
+then speaks only at a later step, so a line left there was lost. A request
+typed with its scope never passed an ask, so its creation line also says how a
+pasted document was split (the `document_split` line); the stages that read
+the document do not say it again. The engine
 keeps such lines for the chat (`aidlc/.aidlc-sessions/<session>.person-lines`)
 and puts them, in order and once, in front of the `narration` of the next
 directive the agent speaks from: an `ask`, `present-gate`, `parked`, `error`
@@ -428,7 +428,12 @@ or a final `done`, or any other directive that carries its own `narration`.
 A rules part (`load-steering`) never takes them; its `run-stage` does. They
 belong to the person's current turn: a newer prompt on the work, or fifteen
 minutes with no prompt hook, drops them, so a line never surfaces later or in
-another chat. Without a chat to keep them for, a line stays on its own step.
+another chat. A line a tool gives inside a stage (`document-input`'s
+`selection_note` and `onboard_note`) is held across the person's turns on the
+same work instead, and is also said with the `print` that opens or re-opens
+the stage's gate, so it reaches the person at the latest with the gate; it is
+said once per piece of work. Without a chat to keep them for, a line stays on
+its own step.
 A line that would push a step over its size limit waits for the next one.
 
 ### Inline Execution

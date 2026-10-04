@@ -8621,9 +8621,10 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // Refuses symlinks, non-regular files, out-of-project targets, binary input,
 // and content beyond the same 200k-character delivery cap used by DocumentKB.
 // Successful output carries DocumentKB's path/content trust notices in the
-// same JSON object as the bytes they govern. No mkdir, state write, or audit
-// event, except that `--onboard` copies a PDF or Word file into the knowledge
-// base (see onboardDocumentInput).
+// same JSON object as the bytes they govern. No state write or audit event,
+// except that `--onboard` copies a PDF or Word file into the knowledge base
+// (see onboardDocumentInput); the line saying which file it read or copied is
+// kept for the chat's next spoken step (holdDocumentInputLines).
 function handleProjectDescription(projectDir: string): void {
   const recordRoot = dirname(stateFilePath(projectDir));
   const authority = readProjectDescriptionAuthority(recordRoot);
@@ -8642,6 +8643,16 @@ function handleProjectDescription(projectDir: string): void {
         : authority,
     )}\n`,
   );
+}
+
+// Which file was read, and a file copied into the project, are said by AI-DLC
+// itself: the agent reads them inside the stage and goes on, so they are held
+// for the next step it speaks from (at the latest, the stage's gate), once per
+// piece of work.
+function holdDocumentInputLines(projectDir: string, lines: ReadonlyArray<string | undefined>): void {
+  const sessionId = resolveWorkflowSelection(projectDir).sessionId;
+  const said = lines.filter((line): line is string => typeof line === "string" && line.length > 0);
+  if (sessionId && said.length > 0) addPendingPersonLines(projectDir, sessionId, said, true);
 }
 
 // A numbered pick of matching files stays this short; the person can still
@@ -8982,6 +8993,7 @@ async function handleDocumentInput(
     );
   }
 
+  holdDocumentInputLines(projectDir, [selectionNote]);
   process.stdout.write(
     `${JSON.stringify({
       path_notice: UNTRUSTED_PATH_NOTICE,
@@ -9112,6 +9124,7 @@ function onboardDocumentInput(
       ? ` Its text is cut off at ${shown.extraction.chars ?? kb.EXTRACT_OUTPUT_CHAR_CAP} characters.`
       : "");
 
+  holdDocumentInputLines(input.projectDir, [input.selectionNote, onboardNote]);
   process.stdout.write(
     `${JSON.stringify({
       path_notice: kb.UNTRUSTED_PATH_NOTICE,
