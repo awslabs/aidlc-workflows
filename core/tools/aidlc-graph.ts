@@ -48,6 +48,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   aidlcToolInvocation,
+  refuseLinkOnTheWay,
   resolveDistributionPath,
   resolveHarnessPath,
   runtimeProjectDir,
@@ -680,8 +681,10 @@ export function loadComposedScopeRecords(): Record<string, ComposedScopeRecord> 
  *  fallbacks and must never be written to (same discipline as
  *  mutableScopeGridPath). */
 function mutableComposedScopesDir(projectDir: string): string {
-  return process.env.AIDLC_COMPOSED_SCOPES_DIR
-    ?? join(projectDir, ...COMPOSED_SCOPES_SEGMENTS);
+  if (process.env.AIDLC_COMPOSED_SCOPES_DIR) return process.env.AIDLC_COMPOSED_SCOPES_DIR;
+  const dir = join(projectDir, ...COMPOSED_SCOPES_SEGMENTS);
+  refuseLinkOnTheWay(projectDir, dir);
+  return dir;
 }
 
 function mutableScopesDir(projectDir: string): string {

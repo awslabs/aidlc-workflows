@@ -151,7 +151,9 @@ function regularFiles(root: string): string[] {
 }
 
 function surfaceFiles(root: string): string[] {
-  if (!existsSync(root)) return [];
+  // A surface that is itself a link stays out of the staged copy, so it stays
+  // out of the diff too.
+  if (!existsSync(root) || lstatSync(root).isSymbolicLink()) return [];
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory).sort()) {

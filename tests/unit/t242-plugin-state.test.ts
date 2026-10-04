@@ -1134,6 +1134,68 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A repository's own linked folder that AI-DLC does not write, such as a
+  // shared .github, stays theirs and sync goes ahead.
+  test("an unrelated linked surface folder stays as it is and sync goes ahead", async () => {
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    const outside = linkElsewhere(join(project, ".github"));
+    mkdirSync(join(outside, "workflows"), { recursive: true });
+    writeFileSync(join(outside, "workflows", "ci.yml"), "name: ci\n");
+    const outsideBefore = surfaceSnapshot(outside);
+    const result = await syncPlugins(project, [], ".claude");
+    expect(result.synced).toEqual(["test-pro"]);
+    expect(lstatSync(join(project, ".github")).isSymbolicLink()).toBe(true);
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  const projectTool = (project: string, tool: string, args: string[]) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" };
+    for (const key of [
+      "AIDLC_STAGE_GRAPH", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_STAGES_DIR",
+      "AIDLC_SCOPE_MAPPING", "AIDLC_COMPOSED_SCOPES_DIR",
+    ]) delete env[key];
+    return spawnSync(process.execPath, [join(project, ".claude", "tools", tool), ...args], {
+      cwd: project,
+      encoding: "utf-8",
+      env,
+    });
+  };
+
+  test("runner-gen writes nothing through a linked runner folder and names it", () => {
+    const project = installedProject();
+    const runner = join(project, ".claude", "skills", "aidlc-code-generation");
+    expect(existsSync(join(runner, "SKILL.md"))).toBe(true);
+    const outside = linkElsewhere(runner);
+    const outsideBefore = surfaceSnapshot(outside);
+    const result = projectTool(project, "aidlc-runner-gen.ts", ["write"]);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      linkedLine(join(".claude", "skills", "aidlc-code-generation")),
+    );
+    expect(surfaceSnapshot(outside)).toEqual(outsideBefore);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Compile writes a record for a composed scope that has none yet; a linked
+  // records folder is left alone.
+  test("graph compile writes no composed-scope record through a linked scopes folder", () => {
+    const project = installedProject();
+    const scopes = join(project, ".claude", "scopes");
+    writeFileSync(
+      join(scopes, "aidlc-mine.md"),
+      readFileSync(join(scopes, "aidlc-bugfix.md"), "utf-8").replace(/^name: bugfix$/m, "name: mine"),
+    );
+    const gridPath = join(project, ".claude", "tools", "data", "scope-grid.json");
+    const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<string, unknown>;
+    grid.mine = grid.bugfix;
+    writeFileSync(gridPath, `${JSON.stringify(grid, null, 2)}\n`);
+    const outside = linkElsewhere(join(project, "aidlc", "scopes"));
+    const result = projectTool(project, "aidlc-graph.ts", ["compile"]);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(linkedLine(join("aidlc", "scopes")));
+    expect(readdirSync(outside)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("graph compile writes nothing through a linked data folder and names it", () => {
     const project = installedProject();
     const outside = linkElsewhere(join(project, ".claude", "tools", "data"));
