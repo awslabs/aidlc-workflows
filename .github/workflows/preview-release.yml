@@ -661,6 +661,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
@@ -668,18 +669,27 @@ jobs:
         with:
           name: release-candidate
           path: build/release
-      - name: Update from the last release
+      # The token stays in this step: the releases under test never see it.
+      - name: Find the last stable release
+        id: previous
         shell: bash
         env:
           CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
           previous="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
             --limit 20 --json tagName --jq '[.[].tagName | select(. != env.CANDIDATE_TAG)] | .[0] // empty')"
           test -n "$previous"
-          bun scripts/ci-update-from-previous.ts --previous "$previous" --candidate build/release
+          echo "tag=$previous" >>"$GITHUB_OUTPUT"
+      - name: Update from the last release
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
+          bun scripts/ci-update-from-previous.ts --previous "$PREVIOUS_TAG" --candidate build/release
 
   publish:
     needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]

@@ -146,7 +146,8 @@ discovery; its sidecar and release provenance authenticate it independently.
 ## Provenance
 
 The `publish` job receives `id-token: write` and `attestations: write` only
-after the build and lifecycle jobs and the Full Suite gate pass. GitHub generates build provenance for
+after the build, lifecycle and update-from-the-last-release jobs and the Full Suite gate pass
+(a preview's `publish` does not wait for the update job, which only reports there). GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 

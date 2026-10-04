@@ -17,6 +17,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 export const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
@@ -57,6 +58,32 @@ export function hookCommands(treeDir: string): string[] {
   };
   walk(treeDir);
   return [...found].sort();
+}
+
+// Credentials for GitHub, the Actions runtime and cloud or model providers. The
+// installers, binaries and hooks under test never need them.
+const CREDENTIAL = /^(?:GH_|GITHUB_TOKEN$|ACTIONS_|AWS_|AZURE_|GOOGLE_|ANTHROPIC_|OPENAI_)|TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|PRIVATE_KEY/i;
+
+/** The environment every process the check starts gets: this one without credentials. */
+export function childEnvironment(inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(inherited).filter(([name]) => !CREDENTIAL.test(name)));
+}
+
+/**
+ * The engine hook commands opencode's plugin starts, as the plugin file names
+ * them: opencode runs its hooks from a TypeScript plugin, not a JSON config.
+ */
+export function opencodeHookCommands(pluginFile: string): string[] {
+  if (!existsSync(pluginFile)) return [];
+  const text = readFileSync(pluginFile, "utf-8");
+  const constant = (name: string, fallback: string) => {
+    const value = new RegExp(`const ${name} = "([^"]*)";`).exec(text)?.[1];
+    return value === undefined || value.startsWith("{{") ? fallback : value;
+  };
+  const invoke = constant("PROJECTED_INVOKE", "bun .aidlc/tools/aidlc.ts");
+  const namespace = constant("TRUSTED_NAMESPACE", "engine");
+  const hooks = new Set([...text.matchAll(/(?:runCore\(\s*|^\s*)"aidlc-([a-z0-9-]+)\.ts",/gm)].map((match) => match[1]));
+  return [...hooks].sort().map((hook) => `${invoke} ${namespace} hook ${hook}`);
 }
 
 /** Whether the hook phase trace in `directory` shows the engine ran a hook and it ended with code 0. */
@@ -106,7 +133,7 @@ function check(previous: string, candidate: string, target: string, root: string
   const bin = join(machine, "bin");
   const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...childEnvironment(process.env),
     AIDLC_INSTALL_ROOT: machine,
     AIDLC_BIN_DIR: bin,
     // No gh: both releases take the installer's checksum-only path.
@@ -174,7 +201,17 @@ function check(previous: string, candidate: string, target: string, root: string
   // 4. What the person does next, per project.
   let traces = 0;
   const hooks = (harness: string, project: string, when: string) => {
-    const commands = hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
+    const plugin = join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+    const commands = harness === "opencode"
+      // The plugin passes the project folder itself; the shell reads it from the environment.
+      ? opencodeHookCommands(plugin).map((command) => `${command} --project-dir "$CLAUDE_PROJECT_DIR"`)
+      : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
+    if (commands.length === 0) failures.push(`${harness} ${when}: the project has no hook commands to run`);
+    if (harness === "opencode") {
+      run(`opencode plugin ${when}`, process.execPath, ["-e",
+        `const m = await import(${JSON.stringify(pathToFileURL(plugin).href)}); if (typeof m.default !== "function") throw new Error("the plugin exports no factory");`,
+      ], {}, project);
+    }
     for (const command of commands) {
       const trace = join(root, "trace", String(++traces));
       const r = spawnSync(shell, ["-c", command], {

@@ -5,7 +5,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hookCommands, tracedToCompletion } from "../../scripts/ci-update-from-previous.ts";
+import {
+  childEnvironment,
+  hookCommands,
+  opencodeHookCommands,
+  tracedToCompletion,
+} from "../../scripts/ci-update-from-previous.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -43,6 +48,39 @@ describe("ci-update-from-previous helpers", () => {
       "aidlc engine hook continue-workflow",
     ]);
     expect(hookCommands(join(tree, "missing"))).toEqual([]);
+  });
+
+  test("opencode's hook commands come from its plugin, in the form the plugin starts them", () => {
+    const tree = scratch();
+    const plugin = join(tree, "aidlc-opencode-adapter.ts");
+    writeFileSync(plugin, [
+      'const PROJECTED_INVOKE = "aidlc";',
+      'const TRUSTED_NAMESPACE = "engine";',
+      "// chat.message -> aidlc-session-start.ts",
+      'await runCore("aidlc-write-audit-log.ts", payload, directory);',
+      "const result = await runCore(",
+      '  "aidlc-session-start.ts",',
+      "  input,",
+      ");",
+      'const message = "use aidlc-orchestrate.ts report instead";',
+    ].join("\n"));
+    expect(opencodeHookCommands(plugin)).toEqual([
+      "aidlc engine hook session-start",
+      "aidlc engine hook write-audit-log",
+    ]);
+    // A source tree that was never projected falls back the way the plugin does.
+    writeFileSync(plugin, 'const PROJECTED_INVOKE = "{{INVOKE}}";\n  "aidlc-session-start.ts",\n');
+    expect(opencodeHookCommands(plugin)).toEqual(["bun .aidlc/tools/aidlc.ts engine hook session-start"]);
+    expect(opencodeHookCommands(join(tree, "missing.ts"))).toEqual([]);
+  });
+
+  test("the releases under test get no GitHub, Actions or provider credentials", () => {
+    const env = childEnvironment({
+      PATH: "/usr/bin", HOME: "/home/runner", SystemRoot: "C:\\Windows", RUNNER_TEMP: "/tmp/r", GITHUB_REPOSITORY: "o/r",
+      GH_TOKEN: "x", GITHUB_TOKEN: "x", ACTIONS_RUNTIME_TOKEN: "x", ACTIONS_ID_TOKEN_REQUEST_URL: "x",
+      AWS_SECRET_ACCESS_KEY: "x", ANTHROPIC_API_KEY: "x", NPM_TOKEN: "x", SOME_PASSWORD: "x", OTHER_API_KEY: "x",
+    });
+    expect(Object.keys(env).sort()).toEqual(["GITHUB_REPOSITORY", "HOME", "PATH", "RUNNER_TEMP", "SystemRoot"]);
   });
 
   test("a hook ran when the engine started, loaded it, and every end it logged was code 0", () => {
