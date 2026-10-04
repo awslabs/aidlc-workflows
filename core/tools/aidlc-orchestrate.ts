@@ -891,7 +891,8 @@ function writePrepared(prepared: PreparedEmission): void {
   // An ask is the person's to answer, so the turn ends at it on purpose; any
   // other step the agent is handed means the turn goes on.
   const askDir = prepared.projectDir ?? engineProjectDir;
-  if (askDir) {
+  // A conversation that has not joined the record writes nothing into it.
+  if (askDir && !engineUnjoined) {
     try {
       markAskTurnEnd(resolveProjectDir(askDir), kind === "ask");
     } catch {
