@@ -25,6 +25,8 @@ permissions:
         - "*@{*"
         - "*\n*"
         - "*\r*"
+        - "*aidlc-lifecycle.ts*"
+        - "*aidlc-machine-config.ts*"
     - capability: shell
       effect: deny
       match:
