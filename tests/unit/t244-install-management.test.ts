@@ -1284,11 +1284,13 @@ describe("t244 management lifecycle", () => {
     expect(run(LIFECYCLE, ["uninstall"], project, env).status).toBe(2);
     const uninstall = run(LIFECYCLE, ["uninstall", "--yes"], project, env);
     expect(uninstall.status, `${uninstall.stdout}\n${uninstall.stderr}`).toBe(0);
-    if (process.platform !== "win32") {
-      expect(uninstall.stdout).toContain(
-        "Removed aidlc and all retained releases. Machine settings, update cache, pins, harness default, and project files were kept.",
-      );
-    }
+    // Windows says so too, and that its last files go once the command ends.
+    const finish = process.platform === "win32"
+      ? " Windows removes the last files a moment after this command ends."
+      : "";
+    expect(uninstall.stdout).toContain(
+      `Removed aidlc and all retained releases.${finish} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`,
+    );
     // Windows restores retained files before retiring the mutation fence.
     // Wait for that final marker too; visible files alone do not mean reinstall
     // can begin, or that fixture cleanup may safely remove this machine root.
@@ -1313,11 +1315,9 @@ describe("t244 management lifecycle", () => {
     writeFileSync(join(machine, "default-harness"), "claude\n");
     const purge = run(LIFECYCLE, ["uninstall", "--purge", "--yes"], project, env);
     expect(purge.status, `${purge.stdout}\n${purge.stderr}`).toBe(0);
-    if (process.platform !== "win32") {
-      expect(purge.stdout).toContain(
-        "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept.",
-      );
-    }
+    expect(purge.stdout).toContain(
+      `Removed aidlc, all retained releases, machine settings, update cache, pins, harness default, and release channel.${finish} Project files were kept.`,
+    );
     await waitForAbsent([
       join(machine, "versions"),
       command,
@@ -1531,7 +1531,7 @@ describe("t244 removal commands say what they remove and ask nothing", () => {
     ], project, env).status).toBe(0);
     install();
     const kept = "Uninstalling AI-DLC (1 retained version(s)). Project trees will not be changed. " +
-      "Machine configuration, update cache, pins, and harness default will be kept.";
+      "Machine settings, update cache, pins, harness default, and release channel will be kept.";
     const refused = run(LIFECYCLE, ["uninstall"], project, env);
     expect(refused.status, refused.stdout + refused.stderr).toBe(2);
     expect(refused.stdout).toContain(`${kept.replace(/\.$/, "")}; non-interactive use requires --yes`);

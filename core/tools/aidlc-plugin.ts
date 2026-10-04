@@ -775,7 +775,7 @@ export function comparePluginState(
       state: provedMissing ? "installed-missing" : "inventory-unavailable",
       action: provedMissing ? "attention" : "current",
       message: provedMissing
-        ? "installed plugin missing; reinstall via host, or sync --prune-missing"
+        ? `installed plugin missing; reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove what it added`
         : "not compared: no host plugin list",
     });
   }
@@ -1148,6 +1148,7 @@ function pruneOwnedPlugin(
   const dataDir = harnessDataDir(stagedProject, harnessDir);
   rmSync(join(dataDir, `plugin-owned-${key}.json`), { force: true });
   rmSync(join(dataDir, `plugin-compose-${key}.json`), { force: true });
+  rmSync(join(dataDir, `plugin-files-${key}.json`), { force: true });
 }
 
 function replaceOwnedPluginPrimitives(
@@ -1323,6 +1324,9 @@ function compositionIsCurrent(
 
 // The person asked for --prune-missing, so at a terminal it says what goes and
 // how to get it back, then prunes. A script or an agent passes --yes.
+// A command used the wrong way, which exits 2 like every other usage refusal.
+class PluginUsageError extends Error {}
+
 export function announcePrune(
   argv: string[],
   keys: string[],
@@ -1331,11 +1335,11 @@ export function announcePrune(
 ): void {
   if (keys.length === 0 || argv.includes("--yes")) return;
   if (!input.isTTY) {
-    throw new Error("plugin sync --prune-missing requires --yes in non-interactive mode");
+    throw new PluginUsageError("plugin sync --prune-missing requires --yes in non-interactive mode");
   }
   output.write(
-    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project, ` +
-      "their additions to stage files, and their composition records. To get them back, reinstall " +
+    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project ` +
+      "and their additions to stage files. To get them back, reinstall " +
       `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
   );
 }
@@ -1515,9 +1519,10 @@ export async function main(argv: string[]): Promise<void> {
     throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing]>");
   } catch (error) {
     const message = errorMessage(error);
-    if (flags.json === "true") process.stdout.write(jsonEnvelope(1, message, null));
+    const code = error instanceof PluginUsageError ? 2 : 1;
+    if (flags.json === "true") process.stdout.write(jsonEnvelope(code, message, null));
     else process.stderr.write(`aidlc engine plugin: ${message}\n`);
-    process.exitCode = 1;
+    process.exitCode = code;
   }
 }
 

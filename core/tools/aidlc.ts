@@ -1618,12 +1618,12 @@ function publicCommandError(command: string): Action {
   };
 }
 
-function nounError(noun: string, verb: string | undefined): Action {
+function nounError(noun: string, verb: string | undefined, namespace: "engine" | "system" = "engine"): Action {
   const detail = verb ? `unknown verb '${verb}'` : "missing verb";
   return {
     type: "error",
     code: 2,
-    message: `aidlc: ${detail} for engine noun '${noun}'; try 'aidlc engine --help'\n`,
+    message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
   };
 }
 
@@ -1866,7 +1866,7 @@ function resolveNoun(argv: string[], namespace: Exclude<RouteNamespace, "public"
 
   const custom = routes.find((route) => route.kind === "custom");
   if (custom) return handleCustom(custom, argv);
-  return nounError(noun, argv[1]);
+  return nounError(noun, argv[1], namespace);
 }
 
 function resolveEngine(argv: string[]): Action {

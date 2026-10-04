@@ -1832,7 +1832,7 @@ async function versionsCommand(argv: string[]): Promise<ReturnType<typeof succes
     return success(
       (versions.length
         ? versions.map((item) =>
-            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}] pins=${item.pinPaths.length} stale-pins=${item.stalePinPaths.length}${item.complete ? "" : " incomplete"}`
+            `${item.version}${item.active ? " active" : ""}${item.rollback ? " rollback" : ""} [${item.distributions.join(",")}]${item.pinPaths.length > 0 ? ` pinned by ${item.pinPaths.length} project(s)` : ""}${item.stalePinPaths.length > 0 ? ` ${item.stalePinPaths.length} stale pin(s)` : ""}${item.complete ? "" : " incomplete"}`
           ).join("\n")
         : "no retained versions") +
         (pinWarnings.length > 0 ? `\nwarning: ${pinWarnings.join("; ")}` : ""),
@@ -2069,7 +2069,7 @@ function uninstallCommand(argv: string[]): CommandResult {
   const plan = buildUninstallPlan(purge);
   const settings = purge
     ? "Machine settings, update cache, pins, harness default, and release channel will be removed."
-    : "Machine configuration, update cache, pins, and harness default will be kept.";
+    : "Machine settings, update cache, pins, harness default, and release channel will be kept.";
   announceRemoval(
     argv,
     warned(`Uninstalling AI-DLC (${versions.length} retained version(s)). Project trees will not be changed. ${settings}${
@@ -2732,15 +2732,21 @@ function humanLifecycleNarration(
     const data = result.data as {
       purge?: boolean;
       deferred?: boolean;
+      recovered?: number;
+      warnings?: string[];
       preservedUnowned?: string[];
     } | undefined;
-    if (data?.deferred) return null;
+    // A resumed cleanup keeps its own line.
+    if (data?.recovered !== undefined) return null;
+    // On Windows the last files go once this command has exited.
+    const finish = data?.deferred ? " Windows removes the last files a moment after this command ends." : "";
+    const warnings = data?.deferred && data.warnings?.length ? `${data.warnings.join("\n")}\n` : "";
     if (data?.preservedUnowned?.length) {
       return successText(
-        `Removed owned aidlc files.${
+        `${warnings}Removed owned aidlc files.${finish}${
           data.purge
             ? " Removed owned machine settings and cache files."
-            : " Machine settings, update cache, pins, and harness default were kept."
+            : " Machine settings, update cache, pins, harness default, and release channel were kept."
         } Project files were kept.${
           preservedUninstallPaths(data.preservedUnowned)
         }`,
@@ -2748,9 +2754,9 @@ function humanLifecycleNarration(
       );
     }
     return successText(
-      data?.purge
-        ? "Removed aidlc, all retained releases, machine settings, update cache, pins, and harness default. Project files were kept."
-        : "Removed aidlc and all retained releases. Machine settings, update cache, pins, harness default, and project files were kept.",
+      `${warnings}${data?.purge
+        ? `Removed aidlc, all retained releases, machine settings, update cache, pins, harness default, and release channel.${finish} Project files were kept.`
+        : `Removed aidlc and all retained releases.${finish} Machine settings, update cache, pins, harness default, release channel, and project files were kept.`}`,
       process.stdout,
     );
   }

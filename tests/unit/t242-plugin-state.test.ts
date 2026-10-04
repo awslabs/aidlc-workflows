@@ -25,6 +25,7 @@ import {
   collectPluginStatus,
   comparePluginState,
   discoverPluginInventory,
+  main as pluginMain,
   normalizeInstalledPlugin,
   pluginSourceHash,
   renderPluginStatuses,
@@ -972,8 +973,27 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     );
     await syncPlugins(project, [], ".claude");
     expect(existsSync(stage)).toBe(true);
+    // The plugin's record of the files it composed goes with it, so a pruned
+    // plugin no longer claims them.
+    const filesRecord = join(project, ".claude", "tools", "data", "plugin-files-test-pro.json");
+    expect(existsSync(filesRecord)).toBe(true);
+    // Without a terminal or --yes the command is used the wrong way, which
+    // exits 2 like every other usage refusal, and removes nothing.
+    const saved = { exitCode: process.exitCode, harness: process.env.AIDLC_HARNESS_DIR };
+    process.env.AIDLC_HARNESS_DIR = ".claude";
+    try {
+      await pluginMain(["sync", "--prune-missing", "--project-dir", project, "--json"]);
+      expect(process.exitCode).toBe(2);
+    } finally {
+      // Bun keeps a set exit code when it is assigned undefined.
+      process.exitCode = saved.exitCode ?? 0;
+      if (saved.harness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+      else process.env.AIDLC_HARNESS_DIR = saved.harness;
+    }
+    expect(existsSync(stage)).toBe(true);
     const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
     expect(result.pruned).toEqual(["test-pro"]);
+    expect(existsSync(filesRecord)).toBe(false);
     expect(existsSync(stage)).toBe(false);
     expect(readFileSync(
       join(project, ".claude", "skills", "aidlc", "SKILL.md"),
@@ -1060,8 +1080,8 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       announcePrune(["--prune-missing"], ["test-pro", "other"], { isTTY: true }, output);
       const said = output.read()?.toString() ?? "";
       expect(said).toBe(
-        "Pruning missing plugin(s) test-pro, other: removing the files they added to this project, " +
-          "their additions to stage files, and their composition records. To get them back, reinstall " +
+        "Pruning missing plugin(s) test-pro, other: removing the files they added to this project " +
+          "and their additions to stage files. To get them back, reinstall " +
           `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
       );
       expect(said).not.toContain("[y/N]");
