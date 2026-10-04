@@ -5387,6 +5387,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isOneOfChoices",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isoTimestamp",
       "minMechanism": "none",
       "coveredBy": [],
@@ -7310,7 +7317,7 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:pickerOffersOnly",
+      "unitId": "function:pickerOffersChoices",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
