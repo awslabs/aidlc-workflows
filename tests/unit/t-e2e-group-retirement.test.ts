@@ -5,7 +5,9 @@
 // probe on a group that holds only an unreaped zombie.
 import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { NATIVE_PROCESS_QUERY_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { groupRetired, type GroupProbe } from "../lib/e2e-process.ts";
 
@@ -13,13 +15,19 @@ const errno = (code: string) => Object.assign(new Error(code), { code });
 const failing = (code: string): GroupProbe["signal"] => () => { throw errno(code); };
 const NO_STAT: GroupProbe["stat"] = () => { throw new Error("stat not expected"); };
 
-// Starts a child in its own process group, prints its pid, then blocks without
-// running an event loop, so it never reaps the child: the group holds only
-// that zombie for as long as the holder lives.
+// Starts a child in its own process group and prints its pid, then waits
+// without running its event loop, so the child stays an unreaped zombie, until
+// the release file appears or its time is up. Back in its event loop it reaps
+// the child and exits.
 const ZOMBIE_HOLDER = [
+  'const fs = require("node:fs");',
   'const child = require("node:child_process").spawn("true", [], { detached: true, stdio: "ignore" });',
-  'require("node:fs").writeSync(1, child.pid + "\\n");',
-  "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);",
+  'child.on("exit", () => process.exit(0));',
+  'fs.writeSync(1, child.pid + "\\n");',
+  "const pause = new Int32Array(new SharedArrayBuffer(4));",
+  "while (!fs.existsSync(process.env.ZOMBIE_RELEASE) && Date.now() < Number(process.env.ZOMBIE_UNTIL)) {",
+  "  Atomics.wait(pause, 0, 0, 20);",
+  "}",
 ].join("\n");
 
 function isZombie(pid: number): boolean {
@@ -78,7 +86,13 @@ describe("process group retirement probe", () => {
     "a group holding only an unreaped zombie is not an error, and is gone once reaped",
     async () => {
       const deadline = Date.now() + (remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) ?? NATIVE_STARTUP_TIMEOUT_MS);
-      const holder = spawn(process.execPath, ["-e", ZOMBIE_HOLDER], { stdio: ["ignore", "pipe", "inherit"] });
+      const dir = mkdtempSync(join(tmpdir(), "aidlc-zombie-group-"));
+      const release = join(dir, "release");
+      const holder = spawn(process.execPath, ["-e", ZOMBIE_HOLDER], {
+        stdio: ["ignore", "pipe", "inherit"],
+        env: { ...process.env, ZOMBIE_RELEASE: release, ZOMBIE_UNTIL: String(deadline) },
+      });
+      const holderExited = () => holder.exitCode !== null || holder.signalCode !== null;
       try {
         let printed = "";
         holder.stdout.on("data", (chunk) => { printed += chunk; });
@@ -92,11 +106,18 @@ describe("process group retirement probe", () => {
         // refuses the probe with EPERM.
         expect(answer).toBe(process.platform === "darwin" ? "EPERM" : "ok");
         expect(() => groupRetired(group)).not.toThrow();
-        // The orphaned zombie goes to init or launchd, which reaps it.
-        holder.kill("SIGKILL");
-        await until(() => groupRetired(group), "the orphaned zombie to be reaped", deadline);
+        // Released, the holder reaps its child and exits, so the group is gone.
+        writeFileSync(release, "");
+        await until(holderExited, "the holder to reap its child and exit", deadline);
+        expect(holder.exitCode).toBe(0);
+        let after = "ok";
+        try { process.kill(-group, 0); }
+        catch (error) { after = (error as NodeJS.ErrnoException).code ?? String(error); }
+        expect(after).toBe("ESRCH");
+        expect(groupRetired(group)).toBe(true);
       } finally {
-        if (holder.exitCode === null && holder.signalCode === null) holder.kill("SIGKILL");
+        if (!holderExited()) holder.kill("SIGKILL");
+        rmSync(dir, { recursive: true, force: true });
       }
     },
   );
