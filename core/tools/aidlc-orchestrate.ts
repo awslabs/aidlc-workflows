@@ -12106,19 +12106,17 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // A stage skipped because it does not apply is said, in one line with the
-    // agent's reason, with the next step the agent speaks from: the agent
-    // reports the skip and goes straight on.
-    const skippedReason = reason.trim().replace(/\s+/g, " ");
+    // A stage skipped because it does not apply is said, in one line, with the
+    // next step the agent speaks from: the agent reports the skip and goes
+    // straight on. The agent's reason stays in the audit; it is the agent's
+    // own words, so it never becomes a line the engine says.
     const skipped: Directive = {
       kind: "done",
       reason:
         `Committed skip for "${slug}" (scope: ${scope}). ` +
         "State routed forward; run next to continue.",
       ...workflowContinues(pd),
-      narration: `${node.name} does not apply here, so I skipped it: ${
-        skippedReason.length > 200 ? `${skippedReason.slice(0, 200)}...` : skippedReason
-      }`,
+      narration: `${node.name} does not apply here, so I skipped it.`,
     };
     carriesNarration.add(skipped);
     emit(skipped);
@@ -12513,8 +12511,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         const next = nextInScopeStage(slug, scope, loadStateFileIfPresent(pd) ?? undefined);
         gateReply.next_stage = next ? next.name : null;
         // Where the stage's output is, said with the gate, so the person can
-        // look even when no summary comes before the question.
-        const folder = commonFolder(resolveProduces(node, null, engineRelativeRecordDir(pd), codekbCtxFor(pd)));
+        // look even when no summary comes before the question. A stage that
+        // repeats per unit writes under the unit's folder, so without the unit
+        // named no folder is said rather than a wrong one.
+        const unit = flags.unit?.trim() || null;
+        const gateState = loadStateFileIfPresent(pd);
+        const unitFolders = isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, gateState);
+        const folder = unitFolders && !unit
+          ? ""
+          : commonFolder(resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(pd), codekbCtxFor(pd)));
         if (folder) gateReply.narration = `${node.name} is ready for your review: what it produced is in ${folder}/.`;
       }
     }
