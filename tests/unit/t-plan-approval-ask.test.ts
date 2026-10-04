@@ -730,7 +730,8 @@ describe("when the stage rules arrive in parts", () => {
   for (const unit of [null, "unit-2"]) {
     test(`one approval, then the rules in parts, then the build (${unit ?? "no Units"})`, () => {
       const proj = withRulesInParts(unit ? unitProject(unit) : project());
-      writePlan(proj, "", unit);
+      // A step that runs a project command which writes files on its own.
+      writePlan(proj, "- [ ] Step 2: run `bun install` to add the slug dependency\n", unit);
       const ask = next(proj);
       expect(ask.kind, JSON.stringify(ask)).toBe("ask");
       expect(ask.ask_type).toBe("plan-approval");
@@ -754,6 +755,11 @@ describe("when the stage rules arrive in parts", () => {
       // The worker is told to do file work with its file tools, before the approved content.
       expect(brief.stdout).toContain(`## Files and commands\n\n${FILE_TOOLS_RULE}\n`);
       expect(brief.stdout.indexOf("## Files and commands")).toBeLessThan(brief.stdout.indexOf("## Approved plan"));
+      // The rule is about the worker writing a file itself: the plan's own
+      // file-writing command still runs.
+      expect(brief.stdout).toContain("Step 2: run `bun install` to add the slug dependency");
+      expect(FILE_TOOLS_RULE).toContain("A project command the plan calls for that writes files on its own");
+      expect(FILE_TOOLS_RULE).toContain("still runs as a command");
       expect(auditText(proj).match(/\*\*Event\*\*: PLAN_APPROVAL_RECORDED/g)).toHaveLength(1);
     });
   }

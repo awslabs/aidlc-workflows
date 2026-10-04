@@ -9825,15 +9825,15 @@ function handleCodekbPublish(
 // no audit. The one write: the compared repo's own `scope-draft-<repo>.md` in
 // the active record's `inception/reverse-engineering/` is the stage's
 // temporary input, written only for this compare, so the compare removes it
-// whatever the verdict (no shell delete).
+// whatever the verdict (no shell delete). `record` is the record the handler
+// selected, so the draft is checked against the same record the compare ran for.
 function comparedScopeDraft(
-  projectDir: string,
+  record: string | null,
   incomingPath: string,
   repo: string,
 ): { record: string; rel: string } | null {
   const name = `scope-draft-${repo}.md`;
   if (basename(incomingPath) !== name) return null;
-  const record = recordDir(projectDir);
   if (record === null || !existsSync(record)) return null;
   const rel = toPosix(relative(realpathSync(record), realpathSync(resolve(incomingPath))));
   return rel === `inception/reverse-engineering/${name}` ? { record, rel } : null;
@@ -9931,7 +9931,8 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
       die(`codekb-scope-diff --compare: file not found: ${incomingPath || "(missing path)"}`);
     }
     incomingText = readFileSync(incomingPath, "utf-8");
-    const draft = comparedScopeDraft(projectDir, incomingPath, repo);
+    const record = selection.intent === null ? null : recordDir(projectDir, selection.intent, space);
+    const draft = comparedScopeDraft(record, incomingPath, repo);
     if (draft !== null) {
       removeRecordFileNoFollow(draft.record, draft.rel);
       removed = { draft_removed: true };

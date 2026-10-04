@@ -1994,13 +1994,17 @@ export const AS_ITS_OWN_COMMAND =
  * persona, the subagent dispatch protocol, and the reviewer protocol carry it
  * verbatim (t-agent-conduct). Inside the project the file tools run without a
  * prompt on every harness; a shell write, or a compound shell line, can stop
- * and ask the person. Reads go through the shell only where that is the
- * harness's one way to read (Codex), as one plain command.
+ * and ask the person. The rule is about the agent writing a file itself: a
+ * project command the plan calls for that writes files on its own still runs.
+ * Reads go through the shell only where that is the harness's one way to read
+ * (Codex), as one plain command.
  */
 export const FILE_TOOLS_RULE =
-  "Create and edit files with your file tools, never through the shell (no heredoc, no `echo`, " +
+  "Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, " +
   "`printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any " +
-  "missing folder). Read, list, and search with your file tools where you have them; where the shell " +
+  "missing folder). A project command the plan calls for that writes files on its own (a package " +
+  "install, a build, a scaffolder, a migration, a formatter, or a code generator) still runs as a command. " +
+  "Read, list, and search with your file tools where you have them; where the shell " +
   "is your only way to read, use one plain read command (no `cd` before it, no pipe or second command " +
   `after it). Run every AI-DLC command ${AS_ITS_OWN_COMMAND}: a shell line can stop and ask the person to approve it.`;
 
