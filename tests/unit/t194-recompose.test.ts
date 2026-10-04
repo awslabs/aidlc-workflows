@@ -458,6 +458,28 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(readState(proj)).toMatch(/- \[S\] user-stories — EXECUTE/);
   });
 
+  test("a forward jump tells the person what it skipped and how to go back", () => {
+    const proj = createdProject("bugfix");
+    run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);
+    const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
+    expect(before).toBeDefined();
+    const jr = run(proj, "aidlc-jump.ts", [
+      "execute", "--target", "code-generation", "--direction", "forward",
+    ]);
+    expect(jr.status).toBe(0);
+    const body = JSON.parse(jr.out) as { notice?: string; stages_skipped: string[] };
+    expect(body.stages_skipped).toContain("user-stories");
+    expect(body.notice).toMatch(/^Moved to Code Generation; skipped .*User Stories.*\. To go back, type `[^`]* --stage /);
+    expect(body.notice).toContain(`--stage ${before}\``);
+    // One plain line: no stage slugs, no internals.
+    expect(body.notice).not.toContain("[S]");
+    const back = run(proj, "aidlc-jump.ts", [
+      "execute", "--target", String(before), "--direction", "backward",
+    ]);
+    expect(back.status).toBe(0);
+    expect((JSON.parse(back.out) as { notice?: string }).notice).toBeUndefined();
+  });
+
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
     const proj = createdProject("bugfix");
     run(proj, "aidlc-utility.ts", ["recompose", "--add", "user-stories"]);

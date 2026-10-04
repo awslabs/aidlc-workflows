@@ -38,6 +38,7 @@ import {
   toPosix,
   UNIT_NAME_REGEX,
   writeStateFile,
+  entrySkillInvocation,
 } from "./aidlc-lib.js";
 
 // The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
@@ -659,11 +660,23 @@ function handleExecute(args: string[]): void {
 
   writeStateFile(pd, content);
 
+  // A forward jump says, in the person's terms, what it passed over and how to
+  // come back: jumping back to where they were resets those stages again.
+  const named = (slugs: readonly string[]): string => {
+    const names = graph.filter((node) => slugs.includes(node.slug)).map((node) => node.name);
+    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  };
+  const notice = direction === "forward"
+    ? `Moved to ${targetStage.name}${stagesSkipped.length > 0 ? `; skipped ${named(stagesSkipped)}` : ""}. ` +
+      `To go back, type \`${entrySkillInvocation()} --stage ${currentSlug}\`.`
+    : undefined;
+
   console.log(
     JSON.stringify({
       direction,
       target: targetSlug,
       target_phase: targetStage.phase.toUpperCase(),
+      ...(notice ? { notice } : {}),
       stages_skipped: stagesSkipped,
       stages_reset: stagesReset,
       state_updated: true,

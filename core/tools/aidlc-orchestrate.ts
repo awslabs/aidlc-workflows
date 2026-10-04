@@ -10684,7 +10684,10 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
+      // A unit-major forward jump already says how to go back for its Units.
+      (direction === "forward" && !unitMajor?.said
+        ? `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scopeArg(scope)}\` to perform the jump. When its output carries \`notice\`, tell the person that line once, as written. Then re-run \`next\` to continue from the jump target.`
+        : `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`) +
         (unitMajor?.said ?? "") + everyUnitLine,
     ));
     return;
