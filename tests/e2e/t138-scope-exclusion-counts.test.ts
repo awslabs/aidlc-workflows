@@ -181,6 +181,8 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
           `- **Scope**: ${SCOPE}`,
         );
 
+        // The questions and gates are answered by the driver's menus, as a
+        // person answers them: answers chosen up front would be the agent's.
         const r = await driveAidlc(
           `/aidlc ${SCOPE} This is a synthetic security-patch fixture. Scaffold a tiny ` +
             "dependency-free Bun CLI that prints an HTML greeting for its argument, then fix " +
@@ -189,8 +191,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
             "quote as &#39;, while preserving ordinary and Unicode text. Add table-driven " +
             "regression tests that call the real exported function and a CLI test proving " +
             "the greeting uses it; those tests must fail against the unescaped implementation. " +
-            "Use Bun built-in APIs. Choose recommended answers, approve " +
-            "each gate, and continue through workflow completion.",
+            "Use Bun built-in APIs, and continue through workflow completion.",
           {
             projectDir: proj,
             timeoutMs: remainingWorkMs(),
