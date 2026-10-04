@@ -424,7 +424,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         "aidlc engine orchestrate next a\\;b",
         "aidlc engine orchestrate next '\"' ; touch x ; '\"'",
         "aidlc engine orchestrate next \"a\\\" ; touch x ; \\\"\"",
-        "aidlc engine orchestrate next \"%PATH%\"",
+        ...(shell === "cmd" ? ["aidlc engine orchestrate next \"%PATH%\""] : []),
       ].entries()) {
         await expect(invoke(`${shell}-${i}`, command)).rejects.toThrow(/one direct invocation|reads its arguments again/);
       }
@@ -459,21 +459,24 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
   const CMD_OK: Array<[string, string[]]> = [
     ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
     ['aidlc engine orchestrate next "Rename \u201cTasks\u201d, R&D | QA"', ["Rename \u201cTasks\u201d, R&D | QA"]],
+    ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Wow, say !T241_VALUE now"', ["Wow, say !T241_VALUE now"]],
   ];
 
   test("PowerShell and cmd.exe each read their own quoting, and a quote either reads differently is refused", async () => {
     const root = freshProject();
-    const adapterWith = async (shell: string) => {
+    const adapterWith = async (shell: string, platform: NodeJS.Platform = "win32") => {
       const { client } = fakeClient();
       const adapter = await createAdapter({
         client: { ...client, config: { get: async () => ({ data: { shell } }) } },
         directory: root,
         aidlcEntrypoints: new Set([...TEST_ENTRYPOINTS, "tools/aidlc.ts"]),
         aidlcCommand: TEST_AIDLC_COMMAND,
+        platform,
       });
       return (callID: string, command: string) =>
         adapter["tool.execute.before"]({ tool: "bash", sessionID: "main", callID }, { args: { command } });
     };
+    // Windows PowerShell and cmd.exe, wherever the tests run.
     const pwsh = await adapterWith("pwsh");
     const cmd = await adapterWith("cmd.exe");
     for (const [i, [command]] of PWSH_OK.entries()) await expect(pwsh(`ps-ok-${i}`, command)).resolves.toBeUndefined();
@@ -503,6 +506,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       "aidlc engine orchestrate next 'Book rooms\nfor R and D'",
       "aidlc engine orchestrate next '%APPDATA% and %TEMP%'",
       "aidlc engine orchestrate next '50%' 'of %TEMP'",
+      "aidlc engine orchestrate next 'say !T241_VALUE! now'",
     ].entries()) {
       await expect(pwsh(`ps-launcher-${i}`, command)).rejects.toThrow("Set \"shell\" in opencode's settings to cmd.exe");
     }
@@ -511,10 +515,29 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     for (const [i, command] of [
       "aidlc engine orchestrate next 'Approve'",
       'aidlc engine orchestrate next "%APPDATA%"',
+      'aidlc engine orchestrate next "say !T241_VALUE! now"',
       'aidlc engine orchestrate next "a\\" & touch x & "b"',
       'aidlc engine orchestrate next R^&D',
     ].entries()) {
       await expect(cmd(`cmd-no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // PowerShell on Linux or macOS hands a program its arguments one by one, and
+    // `aidlc` there is no cmd.exe launcher: the person's text passes as written.
+    const posixPwsh = await adapterWith("pwsh", "linux");
+    for (const [i, command] of [
+      "aidlc engine orchestrate next 'R&D books rooms | QA\nat 50% of %TEMP%'",
+      "aidlc engine orchestrate next 'Rename \"Tasks\"' 'C:\\dir\\' ''",
+      "bun .aidlc/tools/aidlc.ts engine orchestrate next 'Rename \"Tasks\" for R&D'",
+    ].entries()) {
+      await expect(posixPwsh(`posix-ps-ok-${i}`, command)).resolves.toBeUndefined();
+    }
+    for (const [i, command] of [
+      'aidlc engine orchestrate next "fix \u201d; New-Item x; \u201c"',
+      'aidlc engine orchestrate next "a""; New-Item x; ""b"',
+      "aidlc engine orchestrate next 'a'b",
+      "aidlc engine orchestrate next *",
+    ].entries()) {
+      await expect(posixPwsh(`posix-ps-no-${i}`, command)).rejects.toThrow("one direct invocation");
     }
   });
 
@@ -559,6 +582,18 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         expect(argv.slice(-tail.length), `${shell}: ${command}`).toEqual(tail);
         expect(existsSync(join(root, "x")), `${shell}: ${command}`).toBe(false);
       }
+    }
+    // With delayed expansion on, a lone ! may drop out, but no variable's value
+    // reaches the tool.
+    for (const [command] of CMD_OK) {
+      const run = spawnSync(process.env.ComSpec ?? "cmd.exe", ["/d", "/v:on", "/s", "/c", `"${command}"`], {
+        cwd: root,
+        env: { ...env, T241_VALUE: "expanded-value" },
+        encoding: "utf-8",
+        windowsVerbatimArguments: true,
+      });
+      expect(run.status, `cmd /v:on: ${command}\n${run.stderr}`).toBe(0);
+      expect(run.stdout, `cmd /v:on: ${command}`).not.toContain("expanded-value");
     }
   });
 

@@ -150,6 +150,8 @@ export type PluginInput = {
   aidlcEntrypoints?: ReadonlySet<string>;
   /** Unit-test seam. Production uses the projected framework dispatcher. */
   aidlcCommand?: readonly string[];
+  /** Unit-test seam. Production uses the running platform. */
+  platform?: NodeJS.Platform;
 };
 
 const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
@@ -169,24 +171,26 @@ const PROJECTED_BUN_TOOLS = DEFAULT_AIDLC_COMMAND[0] === "bun"
 // opencode runs bash-tool commands with its `shell` setting, else /bin/sh on
 // POSIX and COMSPEC (cmd.exe) on Windows. The boundary reads a command the way
 // that shell would: "posix" for sh, bash, dash, zsh and ksh, "powershell" for
-// pwsh and powershell, and "cmd" for cmd.exe. Any other shell, or one it
-// cannot learn, is "strict": no AIDLC command passes there.
-export type ShellDialect = "posix" | "powershell" | "cmd" | "strict";
+// pwsh and powershell ("windows-powershell" on Windows, which hands a program
+// one command line and runs the aidlc launcher through cmd.exe), and "cmd" for
+// cmd.exe. Any other shell, or one it cannot learn, is "strict": no AIDLC
+// command passes there.
+export type ShellDialect = "posix" | "powershell" | "windows-powershell" | "cmd" | "strict";
 
 const POSIX_SHELLS = new Set(["sh", "bash", "dash", "zsh", "ksh"]);
 const POWERSHELLS = new Set(["pwsh", "powershell"]);
 
 /** `configured` is the `shell` setting, null when unset, false when unreadable. */
-function shellDialect(configured: string | null | false): ShellDialect {
+function shellDialect(configured: string | null | false, platform: NodeJS.Platform = process.platform): ShellDialect {
   if (configured === false) return "strict";
   let shell = configured?.trim() ?? "";
   if (shell === "") {
-    if (process.platform !== "win32") return "posix";
+    if (platform !== "win32") return "posix";
     shell = process.env.COMSPEC?.trim() || "cmd.exe";
   }
   const name = shell.replaceAll("\\", "/").split("/").pop()?.toLowerCase().replace(/\.exe$/, "") ?? "";
   if (POSIX_SHELLS.has(name)) return "posix";
-  if (POWERSHELLS.has(name)) return "powershell";
+  if (POWERSHELLS.has(name)) return platform === "win32" ? "windows-powershell" : "powershell";
   return name === "cmd" ? "cmd" : "strict";
 }
 
@@ -205,7 +209,9 @@ function shellDialect(configured: string | null | false): ShellDialect {
 function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
   if (dialect === "strict") return null;
   const posix = dialect === "posix";
-  const powerShell = dialect === "powershell";
+  const powerShell = dialect === "powershell" || dialect === "windows-powershell";
+  // Windows PowerShell builds one command line for the program to split again.
+  const windowsPs = dialect === "windows-powershell";
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this refuses.
   if (dialect === "cmd" && /[\x00-\x08\x0a-\x1f\x7f-\x9f]/.test(command)) return null;
   // PowerShell reads the typographic quotes as quotes.
@@ -214,14 +220,16 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
   // A PowerShell quote opens and closes a whole word: "a""b" and 'a'b join
   // beyond this reading.
   const wordEnds = (at: number): boolean => at >= command.length || command[at] === " " || command[at] === "\t";
-  // cmd.exe replaces a %NAME% pair even inside quotes; a lone % stays.
+  // cmd.exe replaces a %NAME% pair even inside quotes, and a !NAME! pair when
+  // delayed expansion is on; a lone % or ! stays.
   const percentPair = command.indexOf("%") !== command.lastIndexOf("%");
+  const bangPair = command.indexOf("!") !== command.lastIndexOf("!");
   const words: string[] = [];
   // A trailing backslash escapes the quote the program reads around a word,
   // and Windows PowerShell drops an empty argument and splits a bare -x.y.
   const keep = (done: string): boolean => {
-    if (!posix && done.endsWith("\\")) return false;
-    if (powerShell && (done === "" || /^-[^-].*\./.test(done))) return false;
+    if ((dialect === "cmd" || windowsPs) && done.endsWith("\\")) return false;
+    if (windowsPs && (done === "" || /^-[^-].*\./.test(done))) return false;
     words.push(done);
     return true;
   };
@@ -239,7 +247,7 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
         }
         quote = null;
         if (powerShell && !wordEnds(i + 1)) return null;
-      } else if (powerShell && ch === '"') {
+      } else if (windowsPs && ch === '"') {
         // Windows PowerShell hands it on unescaped.
         return null;
       } else {
@@ -263,9 +271,9 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
           continue;
         }
       }
-      if (dialect === "cmd" && ch === "%" && percentPair) return null;
+      if (dialect === "cmd" && ((ch === "%" && percentPair) || (ch === "!" && bangPair))) return null;
       // The program's own argument reader takes \" as a quote inside the word.
-      if (!posix && ch === "\\" && command[i + 1] === '"') return null;
+      if ((dialect === "cmd" || windowsPs) && ch === "\\" && command[i + 1] === '"') return null;
       word += ch;
       continue;
     }
@@ -326,15 +334,16 @@ const UNKNOWN_SHELL =
   "opencode's settings to one of these, or remove that setting.";
 
 // On Windows `aidlc` is the aidlc.cmd launcher. PowerShell hands it a word with
-// no space unquoted, and cmd.exe reads & | < > ^, a line break and a %NAME%
-// pair in what it is handed.
+// no space unquoted, and cmd.exe reads & | < > ^, a line break, a %NAME% pair
+// and, with delayed expansion on, a !NAME! pair in what it is handed.
 const LAUNCHER_REREAD =
   "When PowerShell runs the aidlc launcher, cmd.exe reads its arguments again, so &, |, <, >, ^, " +
-  "line breaks and %NAME% pairs cannot reach AI-DLC as written. Set \"shell\" in opencode's settings " +
+  "line breaks and %NAME% or !NAME! pairs cannot reach AI-DLC as written. Set \"shell\" in opencode's settings " +
   "to cmd.exe, or remove that setting, and run the command again with the text in double quotes.";
 
 function launcherRereads(args: string[]): boolean {
-  return args.some((arg) => /[&|<>^\r\n]/.test(arg)) || /%[^%]*%/.test(args.join(" "));
+  const line = args.join(" ");
+  return args.some((arg) => /[&|<>^\r\n]/.test(arg)) || /%[^%]*%/.test(line) || /![^!]*!/.test(line);
 }
 
 /** Return a denial reason only when the static AIDLC allow-prefix would match. */
@@ -347,7 +356,7 @@ function aidlcBashBoundaryViolation(
     if (dialect === "strict") return UNKNOWN_SHELL;
     const words = directShellWords(command, dialect);
     if (words?.[0] === "aidlc") {
-      return dialect === "powershell" && launcherRereads(words.slice(1)) ? LAUNCHER_REREAD : null;
+      return dialect === "windows-powershell" && launcherRereads(words.slice(1)) ? LAUNCHER_REREAD : null;
     }
     return (
       "AIDLC bash permission allows one direct invocation of a framework tool only. " +
@@ -466,6 +475,7 @@ export default async ({
   directory,
   aidlcEntrypoints = shippedAidlcEntrypoints,
   aidlcCommand = DEFAULT_AIDLC_COMMAND,
+  platform = process.platform,
 }: PluginInput) => {
   const runCore = (
     hookFile: string,
@@ -520,14 +530,14 @@ export default async ({
   let dialect: ShellDialect | null = null;
   async function currentShellDialect(): Promise<ShellDialect> {
     if (dialect !== null) return dialect;
-    if (!client.config) return shellDialect(null);
+    if (!client.config) return shellDialect(null, platform);
     try {
       const settings = (await client.config.get()).data;
-      if (!settings) return shellDialect(false);
-      dialect = shellDialect(typeof settings.shell === "string" ? settings.shell : null);
+      if (!settings) return shellDialect(false, platform);
+      dialect = shellDialect(typeof settings.shell === "string" ? settings.shell : null, platform);
       return dialect;
     } catch {
-      return shellDialect(false);
+      return shellDialect(false, platform);
     }
   }
 
