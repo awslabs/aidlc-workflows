@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:status
+// covers: subcommand:aidlc-utility:status, function:staleStageNote
 //
 // CLI-contract port of tests/unit/t38-utility-status-gate-awareness.sh
 // (TAP plan 5), mechanism = cli. Equal-or-stronger migration: every .sh
