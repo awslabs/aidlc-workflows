@@ -445,7 +445,9 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield");
     const r = status(p);
     expect(r.status).toBe(0);
-    expect(r.out).toMatch(/^Changed since approved: Practices Discovery[^\n]*\. To redo it, type `\/aidlc --stage practices-discovery`\.$/m);
+    // The code arriving after it ran is the reason, said as the next step says it.
+    expect(r.out).toMatch(/^Practices Discovery ran before the code was here; say "redo practices discovery" to include it\.( Also affected: [^\n]*\.)?$/m);
+    expect(r.out).not.toContain("--stage practices-discovery");
     expect(r.out).not.toContain("advisory; routing continues");
   });
 

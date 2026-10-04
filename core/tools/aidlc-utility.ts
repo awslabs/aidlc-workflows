@@ -354,7 +354,9 @@ import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
 import {
   captureStageValidationBasis,
+  codeArrivedStageLine,
   inspectStageValidity,
+  staleStageNote,
 } from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
@@ -1962,10 +1964,12 @@ To get started:
       .filter((issue) => !issue.direct)
       .map((issue) => issue.stage);
     const earliest = directlyStale[0] ?? validity.issues[0]?.stage ?? null;
-    if (validity.issues.length > 0 && earliest !== null) {
-      validityOutput =
-        `Changed since approved: ${stageNames([...directlyStale, ...needsRevalidation])}. ` +
-        `To redo it, type \`${entrySkillInvocation()} --stage ${earliest}\`.\n`;
+    const earliestIssue = validity.issues.find((issue) => issue.stage === earliest);
+    if (earliest !== null && earliestIssue) {
+      // The same line the next step says, and the same way to act on it.
+      const others = [...directlyStale, ...needsRevalidation].filter((slug) => slug !== earliest);
+      validityOutput = staleStageNote(stageNames([earliest]), earliestIssue, content) +
+        `${others.length > 0 ? ` Also affected: ${stageNames(others)}.` : ""}\n`;
     }
   } catch {
     // Unreadable receipts change nothing the person can act on here.
@@ -10305,8 +10309,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           .map((stage) => stage.slug);
         staleNamed.push(...doneWithoutCode.map((slug) => stageNames([slug])));
         if (doneWithoutCode.length === 1) {
-          const name = stageNames(doneWithoutCode);
-          lines.push(`${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`);
+          lines.push(codeArrivedStageLine(stageNames(doneWithoutCode)));
         } else if (doneWithoutCode.length > 1) {
           lines.push(
             `${stageNames(doneWithoutCode)} ran before the code was here; say "redo" and a stage's name to include it there.`,
@@ -10342,7 +10345,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       addPendingPersonLines(projectDir, selection.sessionId, [narration]);
     // Having heard which stage is behind, the chat is not told again by the
     // out-of-date warning that follows.
-    if (selection.sessionId !== null) markPersonLinesHeard(projectDir, selection.sessionId, staleNamed.map(staleStageLine));
+    if (selection.sessionId !== null) markPersonLinesHeard(
+      projectDir,
+      selection.sessionId,
+      staleNamed.flatMap((name) => [staleStageLine(name), codeArrivedStageLine(name)]),
+    );
     process.stdout.write(`${JSON.stringify(flags["then-rerun"] === "true"
       ? {
         kind: "print",

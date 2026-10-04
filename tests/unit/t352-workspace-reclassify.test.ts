@@ -470,7 +470,8 @@ describe("t352 reclassify: existing code after a new-project start", () => {
     const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
     expect(r.status).toBe(0);
     expect(reply(r)).toContain("then we're back at Requirements Analysis.");
-    expect(reply(r)).toContain('Practices Discovery ran before the code was here; say "redo practices discovery" to include it.');
+    // Said once, by the next step, in the words status uses too.
+    expect(reply(r)).not.toContain("ran before the code was here");
   });
 
   test("before the workflow reaches Reverse Engineering it is simply back on the plan", () => {
@@ -743,14 +744,14 @@ describe("t352 what the person hears after saying it is existing code", () => {
     expect(reply(r)).toBe(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
         "Next I'll document the code, then we're back at Requirements Analysis. " +
-        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
         "To undo, say it's a new project.",
     );
     const after = next(proj);
     const advisory = after.stage_validity as Record<string, unknown> | undefined;
     expect(advisory?.directly_stale).toEqual(["practices-discovery"]);
+    // The code arriving is the reason it gives, the one time it is said.
     expect(advisory?.warning).toBe(
-      'Practices Discovery finished before something it used changed; say "redo practices discovery" to bring it up to date.',
+      'Practices Discovery ran before the code was here; say "redo practices discovery" to include it.',
     );
     for (const machinery of [/routing/i, /advisory/i, /drift/i, /directive/i, /receipt/i, /\bengine\b/i, /--stage/]) {
       expect(String(advisory?.warning)).not.toMatch(machinery);
@@ -872,7 +873,6 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(reverseEngineering.narration)).toStartWith(
       "Project type is now existing code, as you said (TypeScript; React; npm (package.json) in ui-repo). " +
         "Next I'll document the code, then we're back at Requirements Analysis. " +
-        'Practices Discovery ran before the code was here; say "redo practices discovery" to include it. ' +
         "To undo, say it's a new project.",
     );
     expect(reverseEngineering.stage_validity).toBeUndefined();
