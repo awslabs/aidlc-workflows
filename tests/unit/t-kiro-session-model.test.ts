@@ -37,6 +37,7 @@ import {
   parseKiroModelList,
   readKiroPersonalSession,
   recommendedKiroModel,
+  setByDotenvFile,
   writeKiroPersonalSession,
 } from "../../core/tools/aidlc-kiro-session.ts";
 
@@ -126,6 +127,14 @@ describe("Kiro session model rules", () => {
       ],
     }));
     expect(list.ok && list.models.map((model) => model.id)).toEqual(["claude-opus-5"]);
+  });
+
+  test("a seam name in a .env file counts in any casing, as Windows reads it", () => {
+    const dir = temp("kiro-session-dotenv-case-");
+    writeFileSync(join(dir, ".env.local"), "aidlc_test_kiro_session_json={}\n");
+    expect(setByDotenvFile("AIDLC_TEST_KIRO_SESSION_JSON", dir)).toBe(true);
+    writeFileSync(join(dir, ".env.local"), "# Aidlc_Test_Kiro_Session_Json={}\nOTHER=1\n");
+    expect(setByDotenvFile("AIDLC_TEST_KIRO_SESSION_JSON", dir)).toBe(false);
   });
 
   test("a seam set in a project's .env file is ignored", () => {

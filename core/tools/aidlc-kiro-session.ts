@@ -102,7 +102,8 @@ const BUN_DOTENV_FILES = [
 ];
 
 export function setByDotenvFile(name: string, dir = process.cwd()): boolean {
-  const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`, "m");
+  // Any casing counts: Windows reads environment names case-insensitively.
+  const assignment = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`, "mi");
   return BUN_DOTENV_FILES.some((file) => {
     try {
       return assignment.test(readFileSync(join(dir, file), "utf-8"));
