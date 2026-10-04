@@ -1374,6 +1374,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /choice <redo\|jump\|fresh> --user-input/,
         /--description "<the new work>"/,
         /skip this probe and menu/i,
+        /offers to resume or redo/i,
       ]) {
         if (old.test(text)) stale.push(`${rel}  ${old.source}`);
       }

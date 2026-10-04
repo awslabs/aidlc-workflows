@@ -482,7 +482,7 @@ The framework follows a built-in retry protocol:
 
 ### Manual recovery
 
-Re-run `/aidlc` — it detects the `[-]` (in-progress) state and offers to resume or redo the stage. Check the `audit/` shards for the error entry to understand what failed.
+Re-run `/aidlc`: it detects the `[-]` (in-progress) state and carries on with the stage; say redo to run it again from the start. Check the `audit/` shards for the error entry to understand what failed.
 
 ---
 
