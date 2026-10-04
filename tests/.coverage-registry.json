@@ -1759,6 +1759,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:askTurnEndIsOpen",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:askTurnEndMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:asReviewClass",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3631,7 +3655,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4905,7 +4929,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6116,6 +6140,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:markAskTurnEnd",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:markdownBlocks",
       "minMechanism": "none",
       "coveredBy": [
@@ -6133,7 +6169,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6145,7 +6181,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -10681,7 +10717,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

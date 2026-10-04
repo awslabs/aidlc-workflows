@@ -24331,6 +24331,13 @@ export function humanTurnMarkerPath(projectDir: string, intent?: string, space?:
 export function engineTouchMarkerPath(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "engine-touch");
 }
+// The engine's last word to the agent was a question for the person (an `ask`):
+// where new work goes, which plan to start it with, and the like. `next` alone
+// can still return the work in progress, so this marker is how the Stop hook
+// knows the turn ends at a question on purpose.
+export function askTurnEndMarkerPath(projectDir: string, intent?: string, space?: string): string {
+  return join(engineDir(projectDir, intent, space), "ask-turn-end");
+}
 
 // The env marker that identifies the Stop hook's OWN read-only `next` probe.
 // Set by aidlc-continue-workflow.ts on its spawn; read by aidlc-orchestrate.ts
@@ -24428,6 +24435,38 @@ function workflowIsCreated(projectDir: string, intent?: string, space?: string):
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
+}
+
+// Record what the engine handed out last: an ask sets the marker, anything else
+// clears it. The Stop hook's own probe changes nothing.
+export function markAskTurnEnd(projectDir: string, asked: boolean, intent?: string, space?: string): void {
+  if (isReadOnlyEngineProbe()) return;
+  if (!workflowIsCreated(projectDir, intent, space)) return;
+  const path = askTurnEndMarkerPath(projectDir, intent, space);
+  if (asked) {
+    touchTurnMarker(path);
+    return;
+  }
+  try {
+    rmSync(path, { force: true, recursive: true });
+  } catch {
+    /* a stale marker only lets one turn end at a question that is no longer open */
+  }
+}
+
+// True when the engine's last word was a question the person has not answered:
+// the ask marker is newer than their last message. Fail-closed like the
+// conversational reading: a missing or unreadable marker on either side is no
+// evidence, and the caller falls through to its usual checks.
+export function askTurnEndIsOpen(projectDir: string, intent?: string, space?: string): boolean {
+  try {
+    const askStat = statSync(askTurnEndMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
+    const humanStat = statSync(humanTurnMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
+    if (!askStat?.isFile() || !humanStat?.isFile()) return false;
+    return askStat.mtimeMs > humanStat.mtimeMs;
+  } catch {
+    return false;
+  }
 }
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
