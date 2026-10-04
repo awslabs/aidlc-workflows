@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:status
+// covers: subcommand:aidlc-utility:status, function:fenceSourceLabel
 //
 // CLI-contract port of tests/unit/t38-utility-status-gate-awareness.sh
 // (TAP plan 5), mechanism = cli. Equal-or-stronger migration: every .sh
@@ -72,6 +72,9 @@ import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { loadGraph } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -399,13 +402,43 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
     expect(r.out).not.toContain("(revision");
   });
 
-  test("6: --status surfaces untracked completions without failing", () => {
+  test("6: --status keeps advisory bookkeeping to itself and says what kind of work this is", () => {
     const p = seededProj();
     const r = status(p);
     expect(r.status).toBe(0);
-    expect(r.out).toContain(
-      "Validity:       Untracked completions - advisory; routing continues",
-    );
-    expect(r.out).toContain("Untracked:");
+    // Completions with no receipt, and checks that are all on, are not the
+    // person's to act on.
+    expect(r.out).not.toContain("Validity:");
+    expect(r.out).not.toContain("Untracked");
+    expect(r.out).not.toContain("Fences:");
+    expect(r.out).toContain("Scope:          feature\n");
+    expect(r.out).toContain("Project Type:   new project\n");
+    expect(r.out).toContain("Depth:          Standard\n");
+    // Said by the person, and a plan composed for this work, read as such.
+    sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield\n- **Project Type Source**: you");
+    sedState(p, /^- \*\*Test Strategy\*\*: .*$/m, "- **Test Strategy**: Minimal\n- **Plan**: custom, based on feature");
+    const again = status(p).out;
+    expect(again).toContain("Project Type:   existing code (you said so)\n");
+    expect(again).toContain("Depth:          Standard (tests: Minimal)\n");
+    expect(again).toContain("Plan:           custom, based on feature (this piece of work only)\n");
+    expect(again).not.toContain("Scope:");
+  });
+
+  test("7: --status names a stage changed since its approval, and the redo", () => {
+    const p = seededProj();
+    // Practices Discovery approved while this was a new project, with the
+    // completion record the engine writes; then the person says existing code.
+    sedState(p, /^- \[.\] practices-discovery/m, "- [x] practices-discovery");
+    const practices = loadGraph().find((stage) => stage.slug === "practices-discovery");
+    if (!practices) throw new Error("graph has no practices-discovery");
+    appendAuditEntry("STAGE_COMPLETED", {
+      Stage: "practices-discovery",
+      ...stageValidationAuditFields(p, practices, readFileSync(statePath(p), "utf-8")),
+    }, p);
+    sedState(p, /^- \*\*Project Type\*\*: .*$/m, "- **Project Type**: Brownfield");
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toMatch(/^Changed since approved: Practices Discovery[^\n]*\. To redo it, type `\/aidlc --stage practices-discovery`\.$/m);
+    expect(r.out).not.toContain("advisory; routing continues");
   });
 });

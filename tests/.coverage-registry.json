@@ -3783,6 +3783,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:fenceSourceLabel",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t38.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:fenceSwitchSentence",
       "minMechanism": "none",
       "coveredBy": [],

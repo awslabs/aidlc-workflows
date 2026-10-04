@@ -154,14 +154,14 @@ describe.skipIf(
 
       const status = await drive("/aidlc --status", 60_000, {
         toolName: "Bash",
-        resultIncludes: "Fences:",
+        resultIncludes: "Checks off:",
       });
       assertToolResultContains(status, "Bash", "Guard Policy");
-      assertToolResultContains(status, "Bash", "Fences:");
+      assertToolResultContains(status, "Bash", "Checks off:");
       const statusOutput = status.toolResults.find(
-        (result) => result.toolName === "Bash" && result.resultText.includes("Fences:"),
+        (result) => result.toolName === "Bash" && result.resultText.includes("Checks off:"),
       );
-      expect(statusOutput?.resultText).toMatch(/^Fences:.*\bstate-transition off\b/m);
+      expect(statusOutput?.resultText).toMatch(/^Checks off:.*\bstate-transition\b/m);
     } finally {
       cleanupTestProject(projectDir);
     }

@@ -109,9 +109,8 @@ const tempDirs: string[] = [];
 
 /** The status lines, padded exactly as `status` prints them. */
 const STATUS_POLICY = "Guard Policy:   ";
-const STATUS_FENCES = "Fences:         ";
-const ALL_FENCES_ON =
-  "plan re-approval on (default), review-freeze on (default), state-transition on (default), reviewer-scope on (default), human-presence on (default)";
+// Status names only the checks that are off, grouped by why.
+const STATUS_FENCES = "Checks off:     ";
 const FENCE_SESSION = "t333-fence-session";
 /** Every fence kill switch held at "0" so the test host's environment cannot lower a fence. */
 const FENCE_ENV_CLEAR = {
@@ -706,7 +705,7 @@ describe("t333 (3) resolution precedence", () => {
     const status = run(UTILITY, ["status"], proj);
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain(`${STATUS_POLICY}unavailable (Invalid Guard Policy "stricct (set by you)" in ${state} (field: Guard Policy)`);
-    expect(status.stdout).toContain(`${STATUS_FENCES}unavailable\n`);
+    expect(status.stdout).not.toContain(STATUS_FENCES);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);
   });
@@ -770,7 +769,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain(`${STATUS_POLICY}off (set by you)\n`);
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval off (guard policy off (set by you)), review-freeze off (guard policy off (set by you)), state-transition off (guard policy off (set by you)), reviewer-scope off (guard policy off (set by you)), human-presence on (default)\n`,
+      `${STATUS_FENCES}plan re-approval, review-freeze, state-transition, reviewer-scope (guard policy off (set by you))\n`,
     );
     expect(run(UTILITY, ["config-get", "guard-policy"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
@@ -845,12 +844,12 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
     expect(status.stdout).toContain(`${STATUS_POLICY}off (from scope poc)\n`);
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval off (guard policy off (from scope poc)), review-freeze off (guard policy off (from scope poc)), state-transition off (guard policy off (from scope poc)), reviewer-scope off (guard policy off (from scope poc)), human-presence on (default)\n`,
+      `${STATUS_FENCES}plan re-approval, review-freeze, state-transition, reviewer-scope (guard policy off (from scope poc))\n`,
     );
     const strict = project("enterprise");
     const strictStatus = run(UTILITY, ["status"], strict.proj, FENCE_ENV_CLEAR);
     expect(strictStatus.stdout).toContain(`${STATUS_POLICY}strict (from scope enterprise)\n`);
-    expect(strictStatus.stdout).toContain(`${STATUS_FENCES}${ALL_FENCES_ON}\n`);
+    expect(strictStatus.stdout).not.toContain(STATUS_FENCES);
   });
 
   /** The last JSON line `next` printed, narrowed to the two fields these tests read. */
@@ -1793,7 +1792,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
     expect(status.stdout).toContain(`${STATUS_POLICY}strict (from scope enterprise)\n`);
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval on (default), review-freeze on (default), state-transition off (set by you), reviewer-scope on (default), human-presence on (default)\n`,
+      `${STATUS_FENCES}state-transition (set by you)\n`,
     );
     // Repeating is a no-op: no second row, no write.
     const before = readFileSync(state, "utf-8");
@@ -1857,7 +1856,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(auditBlockField(restoredRows[0].block, "Scope")).toBe("classic");
     expect(auditBlockField(restoredRows[0].block, "Source")).toBe("you");
     expect(run(UTILITY, ["config-get", "guard.review-freeze"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (set by you)\n");
-    expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).toContain("review-freeze on (set by you)");
+    // Status lists what is off, so the raised check drops out of the list.
+    expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).toContain(
+      `${STATUS_FENCES}plan re-approval, state-transition, reviewer-scope (guard policy off (from scope classic))\n`,
+    );
     const again = run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR);
     expect(again.status, again.stderr).toBe(0);
     expect(again.stdout).toContain("Fence review-freeze is already on");
@@ -2506,10 +2508,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const status = run(UTILITY, ["status"], proj, env);
     expect(status.stdout).toContain("Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)\n");
     expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval off (env AIDLC_DISABLE_PLAN_APPROVAL_GUARD), review-freeze on (default), state-transition on (default), reviewer-scope on (default), human-presence on (default)\n`,
+      `${STATUS_FENCES}plan re-approval (env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)\n`,
     );
     const presence = run(UTILITY, ["status"], proj, { ...FENCE_ENV_CLEAR, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
-    expect(presence.stdout).toContain("human-presence off (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)");
+    expect(presence.stdout).toContain(`${STATUS_FENCES}human-presence (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)\n`);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(0);
   });

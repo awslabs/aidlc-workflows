@@ -35391,7 +35391,7 @@ export function resolveFences(
   return out;
 }
 
-function fenceSourceLabel(resolution: FenceResolution): string {
+export function fenceSourceLabel(resolution: FenceResolution): string {
   return resolution.source === "you" ? "set by you" : resolution.source;
 }
 
