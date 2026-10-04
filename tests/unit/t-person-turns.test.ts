@@ -2,8 +2,9 @@
 // person's needs a turn the driver sent after its gate or question opened.
 // Seeded audit rows stand in for the engine's, so each case is exact.
 import { afterEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
 import {
   PersonTurnLedger,
@@ -15,9 +16,20 @@ import {
 } from "../harness/person-turns.ts";
 
 const projects: string[] = [];
+const folders: string[] = [];
 afterEach(() => {
   for (const project of projects.splice(0)) cleanupTestProject(project);
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+  delete process.env.AIDLC_PERSON_TURNS_DIR;
 });
+
+/** A private ledger folder for this case, as the driver makes its own. */
+function ledgerFolder(): string {
+  const folder = mkdtempSync(join(tmpdir(), "t-person-turns-ledger-"));
+  folders.push(folder);
+  process.env.AIDLC_PERSON_TURNS_DIR = folder;
+  return folder;
+}
 
 let clock = 0;
 function row(project: string, event: string, fields: Record<string, string> = {}): void {
@@ -80,6 +92,7 @@ describe("person-turn check", () => {
     const problems = drive.unbacked();
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("QUESTION_ANSWERED user-stories");
+    expect(problems[0]).toContain('recorded words "picked by the agent"');
   });
 
   test("a project type the agent changed with no turn after the work started is flagged", () => {
@@ -89,6 +102,7 @@ describe("person-turn check", () => {
     row(dir, "WORKSPACE_INITIALISED", { "Project Type": "Greenfield" });
     row(dir, "WORKSPACE_RECLASSIFIED", { "New Project Type": "Greenfield (you)" });
     expect(drive.unbacked()[0]).toContain("WORKSPACE_RECLASSIFIED");
+    expect(drive.unbacked()[0]).toContain('recorded words "Greenfield (you)"');
     drive.sent("it is a new project");
     row(dir, "WORKSPACE_RECLASSIFIED", { "New Project Type": "Brownfield (you)" });
     expect(drive.unbacked()).toHaveLength(1);
@@ -101,6 +115,12 @@ describe("person-turn check", () => {
     const drive = new PersonTurnLedger(dir);
     drive.sent("carry on");
     expect(drive.unbacked()).toEqual([]);
+  });
+
+  test.skipIf(process.platform === "win32")("the TUI ledger refuses a folder another account could write", () => {
+    const folder = ledgerFolder();
+    chmodSync(folder, 0o777);
+    expect(() => startPersonTurnSession("t-person-turns-hostile", project())).toThrow("is not a private folder");
   });
 
   test("a slash command at an open gate is no reply to it, but backs what it asks for", () => {
@@ -130,12 +150,18 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toEqual([]);
     row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "plan-approval" });
     drive.sent("rename the handler first");
-    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Details: "Request Changes" });
-    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Details: "Approve Plan" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "plan-approval", Details: "Request Changes" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "plan-approval", Details: "Approve Plan" });
     expect(drive.unbacked()).toHaveLength(1);
     expect(drive.unbacked()[0]).toContain('QUESTION_ANSWERED code-generation');
     drive.sent("now approve it");
-    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Details: "Approve Plan" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "plan-approval", Details: "Approve Plan" });
+    expect(drive.unbacked()).toHaveLength(1);
+    // A question another checkpoint opened later on the same stage is not this one's.
+    row(dir, "DECISION_RECORDED", { Stage: "build-and-test", Checkpoint: "plan-approval" });
+    drive.sent("approve the plan");
+    row(dir, "DECISION_RECORDED", { Stage: "build-and-test", Checkpoint: "summary-confirmation" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "build-and-test", Checkpoint: "plan-approval", Details: "Approve Plan" });
     expect(drive.unbacked()).toHaveLength(1);
   });
 
@@ -150,6 +176,7 @@ describe("person-turn check", () => {
   });
 
   test("the TUI ledger spans every session of the project and goes when it is read", () => {
+    const folder = ledgerFolder();
     const dir = project();
     const session = `t-person-turns-${process.pid}`;
     startPersonTurnSession(session, dir);
@@ -170,7 +197,7 @@ describe("person-turn check", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("GATE_APPROVED requirements-analysis");
     expect(problems[0]).toContain('"/aidlc --status"');
-    expect(existsSync(`${dir}.person-turns.jsonl`)).toBe(false);
+    expect(readdirSync(folder)).toEqual([]);
     expect(unbackedTuiDecisions(dir)).toEqual([]);
     expect(unbackedFailure("The TUI drive", problems).message)
       .toStartWith("The TUI drive recorded 1 decision(s) as the person's that no turn from them backs:\n  GATE_APPROVED");

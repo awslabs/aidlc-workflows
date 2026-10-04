@@ -11,7 +11,18 @@
 // Kiro CLI recorded an approval when the person had typed only a slash command
 // at the open gate; this catches that kind.
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -70,8 +81,10 @@ export function auditCursor(projectDir: string): AuditCursor {
  * project type.
  */
 function role(row: AuditShardEvent): { item: string; opens: boolean; decides: boolean; reply: boolean } | undefined {
+  // A question is also told apart by its checkpoint (plan approval, summary confirmation, ...).
   const item = (kind: string) =>
-    [kind, ...["Stage", "Unit", "Workflow"].map((field) => auditBlockField(row.block, field) ?? "")].join("\0");
+    [kind, ...["Stage", "Unit", "Workflow", ...(kind === "answer" ? ["Checkpoint"] : [])]
+      .map((field) => auditBlockField(row.block, field) ?? "")].join("\0");
   switch (row.event) {
     case "STAGE_AWAITING_APPROVAL":
       return { item: item("gate"), opens: true, decides: false, reply: false };
@@ -135,8 +148,8 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
 function describe(row: AuditShardEvent, key: string, turns: readonly PersonTurn[]): string {
   const stage = auditBlockField(row.block, "Stage");
   const unit = auditBlockField(row.block, "Unit");
-  const words = auditBlockField(row.block, "Person Reply") ?? auditBlockField(row.block, "User Input") ??
-    auditBlockField(row.block, "Details");
+  const words = ["Person Reply", "User Input", "Details", "Feedback", "New Project Type"]
+    .map((field) => auditBlockField(row.block, field)).find((value) => value !== null) ?? null;
   const sent = turns.slice(-8).map((turn) => JSON.stringify(turn.words.slice(0, 60))).join(", ");
   return [
     `${row.event}${stage ? ` ${stage}` : ""}${unit ? ` (Unit ${unit})` : ""} at ${row.timestamp} in ${key}`,
@@ -172,13 +185,31 @@ export class PersonTurnLedger {
   }
 }
 
-// The TUI driver runs once per command (start, send, kill), so its ledger is a
-// file beside the project, out of the agent's working tree, and each session
-// names its project, and what was typed but not yet submitted, in a pointer
-// file.
-const SESSIONS = join(tmpdir(), "aidlc-tui-person-turns");
-const sessionPointer = (session: string) => join(SESSIONS, `${encodeURIComponent(session)}.json`);
-const ledgerFile = (projectDir: string) => `${projectDir}.person-turns.jsonl`;
+// The TUI driver runs once per command (start, send, kill), so it keeps its
+// ledger in files: one per project, out of the agent's working tree, and one
+// pointer per session naming its project and what was typed but not yet
+// submitted. They live in a directory only this account can use.
+function privateDirectory(): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const dir = process.env.AIDLC_PERSON_TURNS_DIR ??
+    join(tmpdir(), uid === undefined ? "aidlc-tui-person-turns" : `aidlc-tui-person-turns-${uid}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(dir);
+  if (!stat.isDirectory() || (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o077) !== 0))) {
+    throw new Error(`${dir} is not a private folder of this account: remove it and run the test again`);
+  }
+  return dir;
+}
+const fileName = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 32);
+const sessionPointer = (session: string) => join(privateDirectory(), `session-${fileName(session)}.json`);
+const ledgerFile = (projectDir: string) => join(privateDirectory(), `ledger-${fileName(projectDir)}.jsonl`);
+
+/** Replace a file in the private folder through a new name. */
+function replaceFile(path: string, text: string): void {
+  const temp = `${path}.${process.pid}.tmp`;
+  writeFileSync(temp, text, { flag: "w", mode: 0o600 });
+  renameSync(temp, path);
+}
 
 interface LedgerLine {
   kind: "start" | "turn";
@@ -206,15 +237,14 @@ function readPointer(session: string): SessionPointer | undefined {
 
 /** A TUI session started in `projectDir`: later turns sent to it are the person's. */
 export function startPersonTurnSession(session: string, projectDir: string): void {
-  mkdirSync(SESSIONS, { recursive: true });
-  writeFileSync(sessionPointer(session), JSON.stringify({ projectDir } satisfies SessionPointer));
+  replaceFile(sessionPointer(session), JSON.stringify({ projectDir } satisfies SessionPointer));
   appendLine(projectDir, "start", "");
 }
 
 /** The driver typed `text` into a TUI session without submitting it. */
 export function typedIntoPersonTurnSession(session: string, text: string): void {
   const pointer = readPointer(session);
-  if (pointer) writeFileSync(sessionPointer(session), JSON.stringify({ ...pointer, typed: `${pointer.typed ?? ""}${text}` }));
+  if (pointer) replaceFile(sessionPointer(session), JSON.stringify({ ...pointer, typed: `${pointer.typed ?? ""}${text}` }));
 }
 
 /** The driver submitted what it typed, then `text`; a session with no project is not tracked. */
@@ -222,7 +252,7 @@ export function submittedToPersonTurnSession(session: string, text: string): voi
   const pointer = readPointer(session);
   if (!pointer || !existsSync(ledgerFile(pointer.projectDir))) return;
   appendLine(pointer.projectDir, "turn", `${pointer.typed ?? ""}${text}`);
-  if (pointer.typed) writeFileSync(sessionPointer(session), JSON.stringify({ projectDir: pointer.projectDir }));
+  if (pointer.typed) replaceFile(sessionPointer(session), JSON.stringify({ projectDir: pointer.projectDir }));
 }
 
 /**
@@ -239,10 +269,11 @@ export function unbackedTuiDecisions(projectDir: string): string[] {
     .map((line) => ({ words: line.words, cursor: new Map(line.cursor) }));
   const problems = start && existsSync(projectDir) ? unbackedDecisions(projectDir, new Map(start.cursor), turns) : [];
   rmSync(file, { force: true });
-  for (const name of existsSync(SESSIONS) ? readdirSync(SESSIONS) : []) {
+  const folder = privateDirectory();
+  for (const name of readdirSync(folder).filter((entry) => entry.startsWith("session-") && entry.endsWith(".json"))) {
     try {
-      const pointer = JSON.parse(readFileSync(join(SESSIONS, name), "utf-8")) as { projectDir?: string };
-      if (pointer.projectDir === projectDir) rmSync(join(SESSIONS, name), { force: true });
+      const pointer = JSON.parse(readFileSync(join(folder, name), "utf-8")) as { projectDir?: string };
+      if (pointer.projectDir === projectDir) rmSync(join(folder, name), { force: true });
     } catch { /* another driver is writing it */ }
   }
   return problems;
