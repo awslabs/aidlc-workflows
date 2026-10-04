@@ -1979,6 +1979,16 @@ To get started:
     currentNode !== undefined && isPerUnitStage(currentNode)
       ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
       : "";
+  // Other work still in flight in this space, so the person sees it and how to
+  // reach it; archived and finished work stays out.
+  const others = selection.intent === null
+    ? []
+    : listIntents(projectDir, selection.space, selection.intent)
+      .filter((entry) => entry.dirName !== null && !entry.active && entry.status.trim().toLowerCase() === "in-flight")
+      .map((entry) => entry.dirName as string);
+  const alsoOpen = others.length === 0
+    ? ""
+    : `Also open:      ${others.join(", ")} (type \`${entrySkillInvocation()} intent ${others.length === 1 ? others[0] : "<name>"}\` to switch)\n`;
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -1995,7 +2005,7 @@ Phase Progress:
 ${phaseProgress}
 ${validityOutput ? `${validityOutput}\n` : ""}Last Completed: ${lastCompleted}
 Next Stage:     ${nextStage}
-`;
+${alsoOpen}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),
