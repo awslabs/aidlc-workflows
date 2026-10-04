@@ -93,6 +93,8 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
+  // Hook-owned: a question box closed with no answer (Codex's runs out).
+  "QUESTION_UNANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",

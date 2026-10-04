@@ -10599,6 +10599,20 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "CONSTRUCTION_POLICY_RECORDED",
   "PLAN_APPROVAL_RECORDED",
 ]);
+// A question box that came back with nothing picked: Codex returns exactly
+// {"answers":{}} when its box runs out unattended. Nobody answered.
+export function emptyPickerResult(toolResponse: unknown): boolean {
+  let response = toolResponse;
+  if (typeof response === "string") {
+    try { response = JSON.parse(response); } catch { return false; }
+  }
+  if (response === null || typeof response !== "object" || Array.isArray(response)) return false;
+  const keys = Object.keys(response);
+  if (keys.length !== 1 || keys[0] !== "answers") return false;
+  const answers = (response as Record<string, unknown>).answers;
+  return answers !== null && typeof answers === "object" && !Array.isArray(answers) &&
+    Object.keys(answers).length === 0;
+}
 const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
@@ -10656,8 +10670,12 @@ export function humanTurnState(projectDir: string): HumanTurnState {
       if (ev === "DECISION_RECORDED") {
         decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
       }
+      // QUESTION_UNANSWERED (hook-owned: a question box closed with no answer)
+      // spends any earlier turn, so a remark typed before the box never answers
+      // the question asked in it. The question itself stays open.
       const isResolution =
         GATE_RESOLUTION_EVENTS.has(ev) ||
+        ev === "QUESTION_UNANSWERED" ||
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;

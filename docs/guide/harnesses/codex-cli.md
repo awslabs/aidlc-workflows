@@ -220,6 +220,9 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `codex -c features.default_mode_request_user_input=false`.
 - **No custom statusline** — workflow position rides the `update_plan` tool
   (the `task-progress` statusline item) and `$aidlc --status`.
+- **A question box that runs out**: Codex closes its question box after
+  about two minutes with no answer. Nothing is answered for you: when you
+  come back, the same question is waiting in the chat.
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only
   in-sandbox by design. Interactive sessions auto-escalate, and the shipped
   `.codex/rules/default.rules` pre-allows `git worktree`/`commit`/`add`.

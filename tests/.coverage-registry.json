@@ -602,6 +602,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "QUESTION_UNANSWERED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t149-codex-hook-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "RECOMPOSED",
       "minMechanism": "none",
       "coveredBy": [
@@ -3542,6 +3554,18 @@
         {
           "file": "tests/unit/t64.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:emptyPickerResult",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t149-codex-hook-adapter.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

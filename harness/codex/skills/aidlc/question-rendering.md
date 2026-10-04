@@ -73,6 +73,10 @@ Map the spec fields 1:1:
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).
+- **No answer**: the box runs out after about two minutes and returns no
+  answers. Nothing was answered: ask the same question again in your reply as
+  numbered prose, not in the box, and end the turn; never pick an answer for
+  the person.
 
 ### Track 2 — numbered prose (the floor)
 
