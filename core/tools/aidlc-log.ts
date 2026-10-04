@@ -2721,7 +2721,7 @@ function handleReview(args: string[]): void {
             `${unitArg}${singleArg} --iteration ${n}`;
         };
         const startAgain = (n: number): string =>
-          pendingStatus?.iteration === n && pendingStatus.replaceable && !attempt.replacementSpent
+          pendingStatus?.iteration === n && pendingStatus.replaceable
             ? ` It never got a verdict, so request it again instead: \`${requestAgain(n)}\`.`
             : "";
         if (retryPending) {
@@ -2914,12 +2914,10 @@ function handleReview(args: string[]): void {
         }
         // A pending request whose outputs or source changed before its verdict
         // can never finish: a retry re-dispatches the old bytes, and a verdict
-        // cannot bind to them. It gives up its pass once per attempt, so an
-        // interrupted review never leaves the stage with no way to be reviewed.
-        const replaceIteration =
-          pendingStatus?.replaceable && !attempt.replacementSpent
-            ? pendingStatus.iteration
-            : null;
+        // cannot bind to them. A new request at the same pass replaces it (once:
+        // a replacement is not replaced again), so an interrupted review never
+        // leaves the stage with no way to be reviewed.
+        const replaceIteration = pendingStatus?.replaceable ? pendingStatus.iteration : null;
         if (replaceIteration !== null) {
           if (iteration !== replaceIteration) {
             refuseReview(
@@ -2941,11 +2939,18 @@ function handleReview(args: string[]): void {
                 "for this stage, then retry the review.",
             );
           }
-          replaces = attempt.pendingRequests.get(replaceIteration)?.binding?.requestId ?? "none";
+          const replaced = attempt.pendingRequests.get(replaceIteration)?.binding ?? null;
+          replaces = replaced?.requestId ?? "none";
           fields["Artifact Fingerprint"] = snapshot.fingerprint;
           requestId = mintReviewRequestId();
           fields["Request Id"] = requestId;
           fields["Replaces Request Id"] = replaces;
+          // A replaced recovery request stays the attempt's recovery request.
+          if (replaced?.recoveryCause) {
+            fields.Recovery = "stale-receipt";
+            fields["Recovery Cause"] = replaced.recoveryCause;
+            recovery = "stale-receipt";
+          }
           stampRequestedSourceBinding(node);
           openReviewDraftSlot(attempt.floor);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);

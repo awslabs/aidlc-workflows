@@ -17043,13 +17043,13 @@ export interface ReviewAttemptAccounting {
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
+      // This request replaced one that could never finish (see
+      // reviewRequestReplaces); it cannot be replaced again.
+      replacement: boolean;
     }
   >;
   recoveryIteration: number | null;
   recoverySpent: boolean;
-  // A request that replaced a pending one which could never finish (its outputs
-  // or source changed before a verdict); one per attempt.
-  replacementSpent: boolean;
   ambiguity: string | null;
 }
 
@@ -17316,13 +17316,13 @@ export function reviewAttemptAccounting(
   let requestCount = 0;
   let recoveryIteration: number | null = null;
   let recoverySpent = false;
-  let replacementSpent = false;
   const pendingIterations = new Set<number>();
   const pendingRequests = new Map<
     number,
     {
       binding: ReviewRequestBinding | null;
       retried: boolean;
+      replacement: boolean;
     }
   >();
   for (let i = floor + 1; i < events.length; i++) {
@@ -17360,8 +17360,8 @@ export function reviewAttemptAccounting(
       if (binding === null) continue;
       // A replacement takes the pass of the request it replaces: it is a new
       // dispatch of new bytes, so it neither counts again nor inherits a retry.
-      const replacement = auditBlockField(entry.block, "Replaces Request Id") !== null;
-      if (replacement) replacementSpent = true;
+      const previous = pendingRequests.get(iteration);
+      const replacement = reviewRequestReplaces(entry.block, previous);
       if (auditBlockField(entry.block, "Retry") !== "pending-request" && !replacement) {
         requestCount++;
       }
@@ -17370,7 +17370,6 @@ export function reviewAttemptAccounting(
         recoverySpent = true;
       }
       pendingIterations.add(iteration);
-      const previous = pendingRequests.get(iteration);
       const modernBinding = reviewRequestBindingIsModern(binding, stage);
       pendingRequests.set(iteration, {
         binding,
@@ -17379,6 +17378,7 @@ export function reviewAttemptAccounting(
           (previous?.retried === true ||
             (auditBlockField(entry.block, "Retry") === "pending-request" &&
               modernBinding)),
+        replacement,
       });
     } else {
       const pending = pendingRequests.get(iteration);
@@ -17408,7 +17408,6 @@ export function reviewAttemptAccounting(
     pendingRequests,
     recoveryIteration,
     recoverySpent,
-    replacementSpent,
     ambiguity,
   };
 }
@@ -17455,15 +17454,17 @@ export function reviewAppendedAfterRequest(
     : !binding.legacyAppendix.priorAppendix;
 }
 
-// What can still be done with the oldest pending review request: retried once
-// against its original binding, or completed with a verdict. Both require the
-// request's artifact and source identities to still describe the current bytes;
-// the verdict itself arrives as a review record, so nothing else is needed.
-export function pendingReviewRequestStatus(
+// Whether a pending request's binding still describes the bytes on disk: its
+// artifacts (one stable snapshot), the workspace source and, for a per-unit
+// workspace stage, the unit source. `readable` is false when an output or the
+// unit source manifest cannot be read: restoring it may make the request
+// current again. One check, shared by the attempt accounting view
+// (pendingReviewRequestStatus) and the receipts view (freshReviewReceipts).
+export function pendingRequestCurrency(
   projectDir: string,
   stage: ReviewFingerprintStage,
   unit: string | undefined,
-  attempt: ReviewAttemptAccounting,
+  binding: ReviewRequestBinding,
   options: {
     requireRequiredArtifacts?: boolean;
     boltDag?: BoltDagResolution;
@@ -17471,34 +17472,14 @@ export function pendingReviewRequestStatus(
     single?: boolean;
     sourceState?: WorkspaceSourceState | null;
   } = {},
-): PendingReviewRequestStatus | null {
-  const iteration = [...attempt.pendingIterations].sort((a, b) => a - b)[0];
-  if (iteration === undefined) return null;
-  const pending = attempt.pendingRequests.get(iteration);
-  const binding = pending?.binding;
-  if (!pending || !binding) {
-    return {
-      iteration,
-      requestCurrent: false,
-      retryable: false,
-      verdictRecordable: false,
-      replaceable: false,
-    };
-  }
-
+): { requestCurrent: boolean; readable: boolean; modernVerdictBinding: boolean } {
   const snapshot = reviewArtifactSnapshot(projectDir, stage, unit, {
     requireRequiredArtifacts: options.requireRequiredArtifacts,
     boltDag: options.boltDag,
     mergedBoltUnits: options.mergedBoltUnits,
   });
   if (snapshot === null) {
-    return {
-      iteration,
-      requestCurrent: false,
-      retryable: false,
-      verdictRecordable: false,
-      replaceable: false,
-    };
+    return { requestCurrent: false, readable: false, modernVerdictBinding: false };
   }
 
   let readable = true;
@@ -17552,13 +17533,62 @@ export function pendingReviewRequestStatus(
       if (binding.unitSourceFingerprint === null) modernVerdictBinding = false;
     }
   }
+  return { requestCurrent, readable, modernVerdictBinding };
+}
 
+// A REVIEW_REQUESTED row replaces the pending request at its scope and pass when
+// it names that request's id (`none` for one recorded before request ids) and
+// that request is not itself a replacement: one replacement per request. Any
+// other row carrying the field is an ordinary request.
+export function reviewRequestReplaces(
+  block: string,
+  pending: { binding: ReviewRequestBinding | null; replacement: boolean } | undefined,
+): boolean {
+  const named = auditBlockField(block, "Replaces Request Id");
+  if (named === null || pending === undefined || pending.replacement || pending.binding === null) {
+    return false;
+  }
+  return named === (pending.binding.requestId ?? "none");
+}
+
+// What can still be done with the oldest pending review request: retried once
+// against its original binding, completed with a verdict, or (its outputs or
+// source changed) replaced by a new request at the same pass.
+export function pendingReviewRequestStatus(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  unit: string | undefined,
+  attempt: ReviewAttemptAccounting,
+  options: {
+    requireRequiredArtifacts?: boolean;
+    boltDag?: BoltDagResolution;
+    mergedBoltUnits?: ReadonlySet<string>;
+    single?: boolean;
+    sourceState?: WorkspaceSourceState | null;
+  } = {},
+): PendingReviewRequestStatus | null {
+  const iteration = [...attempt.pendingIterations].sort((a, b) => a - b)[0];
+  if (iteration === undefined) return null;
+  const pending = attempt.pendingRequests.get(iteration);
+  const binding = pending?.binding;
+  if (!pending || !binding) {
+    return {
+      iteration,
+      requestCurrent: false,
+      retryable: false,
+      verdictRecordable: false,
+      replaceable: false,
+    };
+  }
+  const { requestCurrent, readable, modernVerdictBinding } = pendingRequestCurrency(
+    projectDir, stage, unit, binding, options,
+  );
   return {
     iteration,
     requestCurrent,
     retryable: requestCurrent && !pending.retried,
     verdictRecordable: requestCurrent && modernVerdictBinding,
-    replaceable: readable && !requestCurrent,
+    replaceable: readable && !requestCurrent && !pending.replacement,
   };
 }
 
@@ -17997,6 +18027,7 @@ export function freshReviewReceipts(
       timestamp: string;
       shard: string;
       verificationFailed?: boolean;
+      replacement: boolean;
     }
   >();
   const modernUnitReceipts = new Map<
@@ -18249,6 +18280,7 @@ export function freshReviewReceipts(
         binding,
         timestamp: e.timestamp,
         shard: e.shard,
+        replacement: reviewRequestReplaces(e.block, previous),
       });
       continue;
     }
@@ -18401,9 +18433,35 @@ export function freshReviewReceipts(
   }
   applyDeferredBoundaries();
 
+  // The workspace source is read once per call, here or for source freshness.
+  let sourceRead = false;
+  let sharedSource: WorkspaceSourceState | null = null;
+  const currentSource = (): WorkspaceSourceState | null => {
+    if (!sourceRead) {
+      sharedSource = options.sourceState !== undefined ? options.sourceState : workspaceSourceState(projectDir);
+      sourceRead = true;
+    }
+    return sharedSource;
+  };
+  const requireRequiredArtifacts =
+    resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, projectDir) !== "1";
   for (const request of pendingRequests.values()) {
+    // A pending request whose outputs or source changed before its verdict can
+    // never finish (a retry re-dispatches the old bytes); unless it already
+    // replaced one, the next move is a new request at the same pass, which is
+    // what `outstanding` names to every reader (wave entries, gates, recovery).
+    const currency =
+      request.binding === null || request.replacement
+        ? null
+        : pendingRequestCurrency(projectDir, stage, request.unit, request.binding, {
+            requireRequiredArtifacts,
+            boltDag: options.boltDag,
+            mergedBoltUnits,
+            ...(stage.workspace_requires ? { sourceState: currentSource() } : {}),
+          });
+    const replaceable = currency?.readable === true && !currency.requestCurrent;
     const pending: PendingReviewProgress = {
-      state: "retry-required",
+      state: replaceable ? "outstanding" : "retry-required",
       iteration: request.iteration,
       recovery: request.recovery,
       ...(request.verificationFailed ? { verificationFailed: true } : {}),
@@ -18427,9 +18485,7 @@ export function freshReviewReceipts(
     (newestSourceFingerprint !== null || modernUnitReceipts.size > 0);
   // One shared temp-index pass supplies BOTH global reconciliation and every
   // per-unit comparison. Never recompute inside the unit loop.
-  const currentSourceState = needsCurrentSource
-    ? options.sourceState !== undefined ? options.sourceState : workspaceSourceState(projectDir)
-    : null;
+  const currentSourceState = needsCurrentSource ? currentSource() : null;
   const currentSourceFingerprint = currentSourceState?.fingerprint ?? null;
   const currentSourceListing = currentSourceState?.listing ?? null;
   const sourceMismatch =
@@ -28047,9 +28103,7 @@ export function guardAttemptState(
   // A pending request that can never finish (its outputs or source changed
   // before a verdict) is requested again at the same pass, once per attempt.
   const pendingReviewFor = (iteration: number) =>
-    pendingStatus?.iteration === iteration &&
-    pendingStatus.replaceable &&
-    accounting?.replacementSpent === false
+    pendingStatus?.iteration === iteration && pendingStatus.replaceable
       ? { nextReview: { iteration } }
       : pendingReviewAt(iteration);
   const budget = options.reviewBudget ?? null;

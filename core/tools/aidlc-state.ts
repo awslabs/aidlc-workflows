@@ -4579,12 +4579,14 @@ function reviewerPreconditionError(
       receipts,
     });
   }
+  // A request that can never finish is requested again at its own pass.
+  const ordinal = pending?.state === "outstanding" ? String(pending.iteration) : "<next ordinal>";
   if (action === "present-approval-gate") {
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
-        `<next ordinal>\` and record its verdict with the same command plus ` +
+        `${ordinal}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
         `approval summary instead.`;
@@ -4599,7 +4601,7 @@ function reviewerPreconditionError(
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
       `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --iteration <next ordinal>\` and record its verdict ` +
+      `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
       `READY review in the approval summary instead.`;

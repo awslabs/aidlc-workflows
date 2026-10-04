@@ -66,6 +66,7 @@ import {
   boltSlugForUnit,
   freshReviewReceipts,
   guardAttemptState,
+  reviewRequestReplaces,
   latestReviewRecordRefs,
   mergeReviewRecordsFromDelta,
   REVIEW_RECORD_MAX_BYTES,
@@ -1749,7 +1750,98 @@ describe("t271 review iteration ceiling", () => {
     expect(over.stderr).toContain("allows 1 review pass");
   });
 
-  test("an attempt replaces an unfinishable review once", () => {
+  test("an interrupted per-unit review whose outputs changed reads as the same pass to request again", () => {
+    // Wave entries, gate refusals and the guard recovery all read this one
+    // projection, so none of them sends the conductor to a retry that cannot work.
+    const proj = seedProject("bugfix");
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(dagDir, { recursive: true });
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: unit-alpha\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+    const request = [
+      "--stage", "functional-design",
+      "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha",
+      "--iteration", "1",
+    ];
+    const first = runReview(proj, request);
+    expect(first.status, first.stderr).toBe(0);
+    const stage = resolveStage("functional-design");
+    if (!stage) throw new Error("functional-design missing from stage graph");
+    const read = () =>
+      freshReviewReceipts(proj, readFileSync(seededStateFile(proj), "utf-8"), stage, {
+        reviewClass: "advisory",
+      }).unitPending.get("unit-alpha");
+    expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+    writeReviewedArtifact(proj, "functional-design", "spec rewritten after the request\n", "unit-alpha");
+    expect(read()).toMatchObject({ state: "outstanding", iteration: 1 });
+
+    const again = runReview(proj, request);
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toContain('"replaces"');
+    // A replacement is pending like any request, and is not replaced again.
+    expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+    writeReviewedArtifact(proj, "functional-design", "spec rewritten twice\n", "unit-alpha");
+    expect(read()).toMatchObject({ state: "retry-required", iteration: 1 });
+  });
+
+  test("replacing the recovery review keeps it the attempt's one recovery", () => {
+    const proj = seedProject("feature");
+    writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
+    const base = [
+      "--stage", "requirements-analysis",
+      "--reviewer", "aidlc-product-lead-agent",
+    ];
+    expect(runReview(proj, [...base, "--iteration", "1"]).status).toBe(0);
+    expect(runReview(proj, [...base, "--iteration", "1", "--verdict", "READY"]).status).toBe(0);
+    writeReviewedArtifact(proj, "requirements-analysis", "changed requirements\n");
+    const recovery = runReview(proj, [...base, "--iteration", "2"]);
+    expect(recovery.status, recovery.stderr).toBe(0);
+    expect(recovery.stdout).toContain('"recovery":"stale-receipt"');
+
+    // The recovery reviewer is cut off and the outputs change again.
+    writeReviewedArtifact(proj, "requirements-analysis", "changed during the recovery review\n");
+    const again = runReview(proj, [...base, "--iteration", "2"]);
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stdout).toContain('"recovery":"stale-receipt"');
+    const requests = auditBlocks(proj, "REVIEW_REQUESTED");
+    expect(requests).toHaveLength(3);
+    expect(auditBlockField(requests[2], "Replaces Request Id")).toBe(
+      auditBlockField(requests[1], "Request Id"),
+    );
+    expect(auditBlockField(requests[2], "Recovery")).toBe("stale-receipt");
+    expect(auditBlockField(requests[2], "Recovery Cause")).toBe(
+      auditBlockField(requests[1], "Recovery Cause"),
+    );
+
+    const verdict = runReview(proj, [...base, "--iteration", "2", "--verdict", "NOT-READY"]);
+    expect(verdict.status, verdict.stderr).toBe(0);
+    writeReviewedArtifact(proj, "requirements-analysis", "changed once more\n");
+    const spent = runReview(proj, [...base, "--iteration", "3"]);
+    expect(spent.status).not.toBe(0);
+    expect(spent.stderr).toContain("one recovery review was already used");
+  });
+
+  test("a row replaces the pending request only when it names that request", () => {
+    const binding = { requestId: "review:" + "a".repeat(32) } as unknown as Parameters<
+      typeof reviewRequestReplaces
+    >[1] extends infer P ? P extends { binding: infer B } ? B : never : never;
+    const pending = { binding, replacement: false };
+    const row = (named: string) => `**Event**: REVIEW_REQUESTED\n**Replaces Request Id**: ${named}\n`;
+    expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), pending)).toBe(true);
+    expect(reviewRequestReplaces(row("review:" + "b".repeat(32)), pending)).toBe(false);
+    expect(reviewRequestReplaces(row("none"), pending)).toBe(false);
+    expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), { binding, replacement: true })).toBe(false);
+    expect(reviewRequestReplaces(row("review:" + "a".repeat(32)), undefined)).toBe(false);
+    expect(reviewRequestReplaces("**Event**: REVIEW_REQUESTED\n", pending)).toBe(false);
+    const legacy = { binding: { requestId: null } as unknown as typeof binding, replacement: false };
+    expect(reviewRequestReplaces(row("none"), legacy)).toBe(true);
+  });
+
+  test("a replacement is not replaced again", () => {
     const proj = seedProject("bugfix");
     const artifact = writeReviewedArtifact(proj, "requirements-analysis", "reviewed requirements\n");
     const request = [
