@@ -1315,6 +1315,24 @@ export function listRoutes(): readonly Route[] {
   return ROUTES;
 }
 
+// The tool scripts behind a route that can change the machine (a release,
+// machine-wide settings, the installation). Copy channels pre-approve
+// AI-DLC's other tool scripts, never these, so running one directly shows the
+// host's own prompt.
+export function machineReachingTools(): string[] {
+  return [...new Set(
+    ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
+      .map((route) => route.tool)
+      .filter((tool): tool is string => tool !== undefined),
+  )].sort();
+}
+
+// AI-DLC's tool scripts a copy channel pre-approves: every one but those.
+export function copyChannelToolScripts(): string[] {
+  const machine = new Set(machineReachingTools());
+  return [...new Set(Object.values(TOOLS))].filter((tool) => !machine.has(tool)).sort();
+}
+
 export function renderHumanHelp(): string {
   const invoke = aidlcInvocation();
   const out = process.stdout;
