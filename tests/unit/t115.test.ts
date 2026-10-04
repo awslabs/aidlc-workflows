@@ -89,7 +89,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   auditLockDir,
   readAllAuditShards,
@@ -2116,6 +2116,32 @@ describe("t115 the gate and a skip say what the plan does next", () => {
     const reopened = orchestrate(["report", "--stage", "feasibility", "--result", "awaiting-approval"], q, noReview);
     expect(reopened.status, reopened.out).toBe(0);
     expect(lastDirective(reopened.stdout)).toMatchObject({ kind: "print", next_stage: "Team Formation" });
+  });
+
+  // A live run's Reverse Engineering gate came with no summary at all; the
+  // reply that opens it names where the documents are, for the gate.
+  test("a gate with nothing said before it still names where the output is", () => {
+    const p = projWithState("state-brownfield-init-done.md");
+    const directive = orchestrateNext(p);
+    let parsed = lastDirective(directive.stdout);
+    for (let hop = 0; parsed.kind === "load-steering" && hop < 10; hop++) {
+      parsed = lastDirective(orchestrate(["continue", String(parsed.receipt)], p).stdout);
+    }
+    expect(parsed.kind, directive.out).toBe("run-stage");
+    const produces = parsed.produces as string[];
+    expect(produces.length).toBeGreaterThan(0);
+    for (const rel of produces) {
+      mkdirSync(dirname(join(p, rel)), { recursive: true });
+      writeFileSync(join(p, rel), "# Documented\n\nDone.\n");
+    }
+    const opened = orchestrate(["report", "--stage", "reverse-engineering", "--result", "awaiting-approval"], p, {
+      ...noReview,
+      AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
+    });
+    expect(opened.status, opened.out).toBe(0);
+    expect(String(lastDirective(opened.stdout).narration)).toMatch(
+      /^Reverse Engineering is ready for your review: what it produced is in aidlc\/spaces\/default\/codekb\/[^/]+\/\.$/,
+    );
   });
 
   test("a stage skipped as not applying is said with the next step the agent speaks from", () => {
