@@ -272,6 +272,9 @@ export function validateProjectionDescriptor(
     if (integration.policy === "managed-block" && !managedBlockIsSafe(integration)) {
       throw new Error(`${root}: ${safe} has an invalid managed-block marker`);
     }
+    if (integration.policy !== "managed-block" && integration.marker !== undefined) {
+      throw new Error(`${root}: ${safe} has a marker, which only a managed block takes`);
+    }
     if (
       (integration.policy === "json-map" || integration.policy === "json-array") &&
       (typeof integration.jsonKey !== "string" || integration.jsonKey.length === 0)
@@ -355,12 +358,15 @@ export function copyStartsWithout(integration: Pick<RootIntegration, "policy" | 
 // Every managed-block root file a release ships, and every file a copy starts
 // without, is also copied, byte for byte, to
 // <harnessDir>/tools/data/root-blocks/<marker or file name>, inside the
-// harness folder a copy brings along.
+// harness folder a copy brings along. Only a managed block has a marker.
 export function rootBlockPath(
   harnessRoot: string,
-  integration: Pick<RootIntegration, "path" | "marker">,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy">,
 ): string {
-  return join(harnessRoot, "tools", "data", "root-blocks", integration.marker || basename(integration.path));
+  const name = integration.policy === "managed-block" && integration.marker
+    ? integration.marker
+    : basename(integration.path);
+  return join(harnessRoot, "tools", "data", "root-blocks", name);
 }
 
 // Where a projection holds the bytes it ships for a root integration: the root

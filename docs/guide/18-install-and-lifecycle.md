@@ -833,9 +833,10 @@ aidlc config project --reset --yes
 
 On a copy-channel projection, `config project` applies plugin, MCP, and
 completion choices from the project's own files at the release it already
-has, so it needs no download. It needs the release only when the project is
-pinned to another one, or when MCP is turned back on after the shipped server
-list was removed; it then asks at a terminal, and scripts add `--download`.
+has, so it needs no download. Turning MCP back on reads the shipped server list
+the harness folder keeps. It needs the release only when the project is pinned
+to another one, or when that list is missing from the harness folder; it then
+asks at a terminal, and scripts add `--download`.
 `--from <path>` instead uses files you downloaded: `aidlc-copy-runtime-X.Y.Z.tar.gz`,
 its extracted `runtime/` folder, or one harness root. Servers you added to
 `.mcp.json` yourself are never recorded or removed.
@@ -850,8 +851,10 @@ project or settings files. The preview remains available during an active
 workflow; applying the change still requires completing that workflow.
 
 MCP consent remains `defaults` or `none`. A non-interactive project mutation
-with no earlier consent records `none`; `--yes` only confirms the mutation and
-never adds MCP entries.
+with no earlier consent records `none`, unless `.mcp.json` already holds a
+shipped server as shipped: then it records `defaults` and keeps the servers
+there, adding none. `--yes` only confirms the mutation and never adds MCP
+entries.
 
 On Claude Code, `.mcp.json` is the consent-managed surface: `--check` verifies
 both `defaults` and `none`, and later plain config refreshes reapply the answer.
@@ -1493,7 +1496,7 @@ names the one setting to add yourself. It leaves out your `.gitignore` and
 there, or creates them when the project has none. Claude Code's `.mcp.json` is
 left out as well, so a copy starts with no MCP servers, as `aidlc config` does
 by default; to turn the shipped servers on, run
-`bun .claude/tools/aidlc.ts config project --mcp defaults --yes`. It also leaves out the team's memory
+`bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes`. It also leaves out the team's memory
 files (`aidlc/spaces/default/memory/team.md`, where Practices Discovery records
 the practices you affirmed, and `project.md`, where your project rules and
 learnings go) and your chosen space (`aidlc/active-space`). Copying a newer

@@ -7067,7 +7067,15 @@ function planRootIntegrations(
     const shippedCopy = ownBytes && copyStartsWithout(integration)
       ? rootBlockPath(join(sourceRoot, descriptor.harnessDir), integration)
       : "";
-    const fromShippedCopy = shippedCopy !== "" && regularFile(shippedCopy);
+    // Read only through no symlink, so the copy cannot point at another file.
+    let fromShippedCopy = shippedCopy !== "" && regularFile(shippedCopy);
+    if (fromShippedCopy) {
+      try {
+        assertProjectionPathHasNoSymlinks(sourceRoot, relative(sourceRoot, shippedCopy).split(sep).join("/"));
+      } catch {
+        fromShippedCopy = false;
+      }
+    }
     const sourcePath = fromShippedCopy
       ? shippedCopy
       : shippedRootIntegrationPath(sourceRoot, descriptor.harnessDir, integration);

@@ -7095,6 +7095,20 @@ describe("t243 projection channel", () => {
     expect(() => projectionFiles(source)).toThrow(".mcp.json has an invalid shared mode");
   });
 
+  // The copy a copy runtime keeps of a file it leaves out is named by that
+  // file; a marker on it could point the read at another file.
+  test("projection descriptors reject a marker on anything but a managed block", () => {
+    const source = temp("aidlc-t243-json-marker-source-");
+    cpSync(CLAUDE_RELEASE, source, { recursive: true });
+    const descriptorPath = join(source, ".claude", "tools", "data", "aidlc-projection.json");
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+      rootIntegrations: Array<{ path: string; marker?: string }>;
+    };
+    descriptor.rootIntegrations.find((item) => item.path === ".mcp.json")!.marker = "../settings.local.json";
+    writeFileSync(descriptorPath, JSON.stringify(descriptor, null, 2) + "\n");
+    expect(() => projectionFiles(source)).toThrow(".mcp.json has a marker, which only a managed block takes");
+  });
+
   test("projection descriptors reject malformed or policy-mismatched legacy signatures", async () => {
     const { projectionFiles } = await import("../../core/tools/aidlc-distribution.ts");
     const malformed = temp("aidlc-t240-legacy-schema-");

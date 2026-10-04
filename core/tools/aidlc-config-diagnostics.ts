@@ -1244,21 +1244,27 @@ function writeClaudeProvider(
   settings.env = env;
   writeJson(settingsPath, settings);
 
-  const mcpPath = join(projectionRoot, ".mcp.json");
-  if (!existsSync(mcpPath)) return;
-  const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
-  const servers = isRecord(mcp.mcpServers) ? mcp.mcpServers : {};
-  const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
-  if (!aws || !Array.isArray(aws.args)) return;
-  aws.args = aws.args.map((arg) => {
-    if (typeof arg !== "string") return arg;
-    if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
-      return `https://aws-mcp.${record.region}.api.aws/mcp`;
-    }
-    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${record.region}`;
-    return arg;
-  });
-  writeJson(mcpPath, mcp);
+  // The root file, and the copy a copy runtime keeps in the harness folder,
+  // so servers turned on later use the same region.
+  for (const mcpPath of [
+    join(projectionRoot, ".mcp.json"),
+    join(projectionRoot, harnessDir, "tools", "data", "root-blocks", ".mcp.json"),
+  ]) {
+    if (!existsSync(mcpPath)) continue;
+    const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
+    const servers = isRecord(mcp.mcpServers) ? mcp.mcpServers : {};
+    const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
+    if (!aws || !Array.isArray(aws.args)) continue;
+    aws.args = aws.args.map((arg) => {
+      if (typeof arg !== "string") return arg;
+      if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
+        return `https://aws-mcp.${record.region}.api.aws/mcp`;
+      }
+      if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${record.region}`;
+      return arg;
+    });
+    writeJson(mcpPath, mcp);
+  }
 }
 
 const CLAUDE_BEDROCK_MODEL_KEYS = [

@@ -558,6 +558,25 @@ describe("t304 copied projection configuration", () => {
     expect(JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers).toEqual({ "team-db": team });
   }, 120_000);
 
+  // A region recorded before the servers are turned on reaches them: the copy
+  // in the harness folder is kept in step with the provider choice.
+  test("servers turned on in a copy use the region recorded before", () => {
+    const project = readmeCopyProject();
+    const first = runCopied(project, ["config", "project", "--completions", "zsh", "--yes"]);
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    const region = runCopied(project, [
+      "config", "providers", "--provider", "amazon-bedrock", "--region", "eu-west-1", "--yes",
+    ]);
+    expect(region.status, region.stdout + region.stderr).toBe(0);
+    const on = runCopied(project, ["config", "project", "--mcp", "defaults", "--yes"], {
+      env: { AIDLC_RELEASE_BASE_URL: "http://127.0.0.1:9/unreachable" },
+    });
+    expect(on.status, on.stdout + on.stderr).toBe(0);
+    const aws = JSON.parse(readFileSync(join(project, ".mcp.json"), "utf-8")).mcpServers["aws-mcp"] as { args: string[] };
+    expect(aws.args).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
+    expect(aws.args).toContain("AWS_REGION=eu-west-1");
+  }, 120_000);
+
   // A project copied before copies left .mcp.json out already has the shipped
   // servers. Config with no MCP choice keeps them; only turning MCP off removes
   // them, and never the team's own.
