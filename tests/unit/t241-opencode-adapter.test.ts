@@ -152,7 +152,7 @@ function copyCore(root: string, relativePath: string): void {
 }
 
 function fakeClient(parentBySession: Record<string, string | undefined> = {}) {
-  const prompts: Array<{ id: string; text: string }> = [];
+  const prompts: Array<{ id: string; text: string; synthetic?: boolean }> = [];
   const client: PluginInput["client"] = {
     session: {
       get: async ({ path }) => ({
@@ -161,7 +161,7 @@ function fakeClient(parentBySession: Record<string, string | undefined> = {}) {
           : {},
       }),
       prompt: async ({ path, body }) => {
-        prompts.push({ id: path.id, text: body.parts[0]?.text ?? "" });
+        prompts.push({ id: path.id, text: body.parts[0]?.text ?? "", synthetic: body.parts[0]?.synthetic });
       },
     },
   };
@@ -1007,5 +1007,116 @@ if (n === 0) process.stdout.write(JSON.stringify({ decision: "block", reason: "c
     });
 
     expect(readFileSync(stopCount, "utf-8")).toBe("2");
+  });
+});
+
+describe("t241 OpenCode adapter: what the person sees", () => {
+  function nudgingProject(): { root: string; stopCount: string } {
+    const root = freshProject();
+    const stopCount = join(root, "stop-count");
+    writeHook(
+      root,
+      "aidlc-session-start.ts",
+      `await Bun.stdin.text();
+process.stdout.write(JSON.stringify({ additionalContext: "active" }) + "\\n");
+`,
+    );
+    writeHook(root, "aidlc-record-human-turn.ts", "await Bun.stdin.text();\n");
+    writeHook(
+      root,
+      "aidlc-continue-workflow.ts",
+      `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const countFile = ${JSON.stringify(stopCount)};
+const n = existsSync(countFile) ? Number(readFileSync(countFile, "utf-8")) : 0;
+writeFileSync(countFile, String(n + 1), "utf-8");
+await Bun.stdin.text();
+process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) + "\\n");
+`,
+    );
+    return { root, stopCount };
+  }
+  const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
+
+  test("the end-of-turn nudge is a synthetic part, so the person's chat does not show it", async () => {
+    const { root } = nudgingProject();
+    const { client, prompts } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toStartWith("[aidlc-forwarding-nudge]");
+    expect(prompts[0].synthetic).toBe(true);
+  });
+
+  test("after the person stops a turn with Esc, no nudge follows until they write again", async () => {
+    const { root, stopCount } = nudgingProject();
+    const { client, prompts } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
+    await adapter.event({
+      event: {
+        type: "session.error",
+        properties: { sessionID: "main", error: { name: "MessageAbortedError", data: { message: "Aborted" } } },
+      },
+    });
+    await adapter.event(idle);
+    await adapter.event(idle);
+    expect(existsSync(stopCount)).toBe(false);
+    expect(prompts).toHaveLength(0);
+
+    // Another error is not the person stopping.
+    await adapter.event({
+      event: { type: "session.error", properties: { sessionID: "other", error: { name: "APIError" } } },
+    });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "go on" }] });
+    await adapter.event(idle);
+    expect(readFileSync(stopCount, "utf-8")).toBe("1");
+    expect(prompts).toHaveLength(1);
+  });
+
+  test("/aidlc shows what the person typed and keeps the command text for the agent", async () => {
+    const root = freshProject();
+    const commandFile = join(REPO_ROOT, "dist", "opencode", ".opencode", "command", "aidlc.md");
+    mkdirSync(join(root, ".opencode", "command"), { recursive: true });
+    copyFileSync(commandFile, join(root, ".opencode", "command", "aidlc.md"));
+    const recorded = join(root, "prompt.json");
+    writeHook(root, "aidlc-session-start.ts", "await Bun.stdin.text();\n");
+    writeHook(
+      root,
+      "aidlc-record-human-turn.ts",
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
+`,
+    );
+    const template = readFileSync(commandFile, "utf-8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    const expanded = template.replace("$ARGUMENTS", "fix the sales report end date").trim();
+    const { client } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+
+    const parts: Array<Record<string, unknown>> = [{ id: "prt_1", type: "text", text: expanded }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts });
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toMatchObject({ id: "prt_1", text: expanded, synthetic: true });
+    expect(parts[1]).toMatchObject({
+      id: "prt_1t",
+      type: "text",
+      text: "/aidlc fix the sales report end date",
+      synthetic: false,
+      ignored: true,
+    });
+    // The person's turn is still read from the command text the agent gets.
+    expect(JSON.parse(readFileSync(recorded, "utf-8")).prompt).toBe(expanded);
+
+    const bare: Array<Record<string, unknown>> = [{ id: "prt_2", type: "text", text: template.replace("$ARGUMENTS", "").trim() }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: bare });
+    expect(bare[1]).toMatchObject({ text: "/aidlc", ignored: true });
+
+    // Plain words, and a part without an id, are left as they are.
+    const plain: Array<Record<string, unknown>> = [{ id: "prt_3", type: "text", text: "approve" }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: plain });
+    expect(plain).toEqual([{ id: "prt_3", type: "text", text: "approve" }]);
+    const noId: Array<Record<string, unknown>> = [{ type: "text", text: expanded }];
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: noId });
+    expect(noId).toEqual([{ type: "text", text: expanded }]);
   });
 });

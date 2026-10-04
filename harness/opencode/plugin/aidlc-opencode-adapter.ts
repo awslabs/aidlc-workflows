@@ -27,7 +27,10 @@
 // session prompt via the SDK client. The injected prompt carries the NUDGE
 // sentinel so the chat.message arm never mints HUMAN presence for it (a
 // synthetic nudge is not a human turn), and loop-guarding stays with the core
-// hook's run-mode-aware no-progress ceiling — this shim never counts.
+// hook's run-mode-aware no-progress ceiling; this shim never counts. The
+// prompt's part is synthetic, so the agent reads it and the person's chat does
+// not show it. After the person stops a turn (Esc, a session.error
+// MessageAbortedError) no nudge is sent until they write again.
 //
 // Known degradations vs Claude Code (documented in AGENTS.md):
 //   - session-start's additionalContext has no injection channel; the hook
@@ -43,6 +46,7 @@
 //     but never scopes the main session.
 
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
@@ -102,13 +106,48 @@ export type EngineErrorToast = {
   duration?: number;
 };
 
+type ChatPart = { id?: string; type?: string; text?: string; synthetic?: boolean; ignored?: boolean };
+
+// The /aidlc command's own text, the part of .opencode/command/aidlc.md before
+// $ARGUMENTS, read from the projected file so the two never drift. Null when
+// the file is missing or has no $ARGUMENTS.
+function aidlcCommandPreamble(directory: string): string | null {
+  try {
+    const file = readFileSync(join(directory, ".opencode", "command", "aidlc.md"), "utf-8");
+    const body = file.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
+    const at = body.indexOf("$ARGUMENTS");
+    const preamble = at < 0 ? "" : body.slice(0, at).trim();
+    return preamble === "" ? null : preamble;
+  } catch {
+    return null;
+  }
+}
+
+// opencode shows a command's whole template as the person's message. Keep the
+// template for the agent (synthetic: sent to the model, not shown) and show
+// what the person typed (ignored: shown, not sent, so the agent still reads
+// the request once). A part without an id is left as it is.
+function showTypedCommand(parts: ChatPart[], first: ChatPart, preamble: string): void {
+  const text = first.text?.trimStart() ?? "";
+  if (typeof first.id !== "string" || !text.startsWith(preamble)) return;
+  const words = text.slice(preamble.length).trim();
+  first.synthetic = true;
+  parts.push({
+    ...first,
+    id: `${first.id}t`,
+    text: words === "" ? "/aidlc" : `/aidlc ${words}`,
+    synthetic: false,
+    ignored: true,
+  });
+}
+
 export type PluginInput = {
   client: {
     session: {
       get: (opts: { path: { id: string } }) => Promise<{ data?: { parentID?: string } }>;
       prompt: (opts: {
         path: { id: string };
-        body: { parts: Array<{ type: "text"; text: string }> };
+        body: { parts: Array<{ type: "text"; text: string; synthetic?: boolean }> };
       }) => Promise<unknown>;
     };
     // opencode's SDK client exposes the TUI toast (`POST /tui/show-toast`);
@@ -371,6 +410,10 @@ export default async ({
   const mainSession = new Map<string, boolean>();
   const sessionAgent = new Map<string, string>();
   const idleInFlight = new Set<string>();
+  // Main sessions whose turn the person stopped (Esc). The person stopped on
+  // purpose, so the idle that follows sends no nudge until they write again.
+  const interrupted = new Set<string>();
+  const commandText = aidlcCommandPreamble(directory);
 
   // The guards judge the workflow of a bound session. A child (task-tool)
   // session skips SessionStart and has no binding, so send the main session
@@ -416,7 +459,7 @@ export default async ({
   return {
     "chat.message": async (
       input: { sessionID: string; agent?: string },
-      output: { parts: Array<{ type?: string; text?: string }> },
+      output: { parts: ChatPart[] },
     ) => {
       if (input.agent) sessionAgent.set(input.sessionID, input.agent);
       // Never treat this plugin's own continue-workflow-nudge injection as a human turn.
@@ -424,6 +467,8 @@ export default async ({
       if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
       if (!(await isMainSession(input.sessionID))) return;
       sawHumanTurn.add(input.sessionID);
+      interrupted.delete(input.sessionID);
+      if (first && commandText !== null) showTypedCommand(output.parts, first, commandText);
       if (!started.has(input.sessionID)) {
         const result = await runCore(
           "aidlc-session-start.ts",
@@ -749,8 +794,15 @@ export default async ({
     },
 
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
+      if (event.type === "session.error") {
+        const sessionID = (event.properties?.sessionID as string) ?? "";
+        const error = event.properties?.error as { name?: unknown } | undefined;
+        if (sessionID && error?.name === "MessageAbortedError") interrupted.add(sessionID);
+        return;
+      }
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties?.sessionID as string) ?? "";
+      if (interrupted.has(sessionID)) return;
       // A workflow can be created during the first turn, after session-start saw
       // no state. Let the core Stop hook's own state-file guard decide.
       if (!sessionID || !sawHumanTurn.has(sessionID)) return;
@@ -788,9 +840,10 @@ export default async ({
       // Release serialization before the prompt: OpenCode may synchronously
       // deliver the continuation's next idle while this promise is pending.
       if (nudgeReason) {
+        // Synthetic: the agent reads it, the person's chat does not show it.
         await client.session.prompt({
           path: { id: sessionID },
-          body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${nudgeReason}` }] },
+          body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${nudgeReason}`, synthetic: true }] },
         });
       }
     },

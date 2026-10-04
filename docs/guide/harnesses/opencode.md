@@ -154,8 +154,13 @@ the project.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
-  (marked with a sentinel so it never mints human presence). A chatting or
+  (marked with a sentinel so it never mints human presence). The nudge is a
+  synthetic part: the agent reads it, and your chat does not show it. When you
+  stop a turn with Esc, no nudge follows until you write again. A chatting or
   pausing human is released by the hook's interactive cap.
+- **`/aidlc` shows what you typed.** opencode would show the command's whole
+  template as your message; the plugin keeps the template for the agent and
+  shows your `/aidlc ...` line instead.
 - **Personas are native subagents** (`mode: subagent`); the conductor adopts
   them inline for most stages and delegates via the `task` tool for the two
   subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native
