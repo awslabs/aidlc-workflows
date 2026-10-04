@@ -7,10 +7,11 @@ import * as promises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { FILE_DEADLINE_ENV } from "../harness/test-budget.ts";
-import { coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
+import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { createE2eNativeRoot, finishE2eTemporaryFiles } from "../lib/e2e-workers.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import type { IsolatedProcessRetirement } from "../lib/e2e-process.ts";
+import { classifyLiveFiles } from "../../scripts/ci-live-filter.ts";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -62,6 +63,13 @@ function fixture(attempt?: number) {
   };
   return { root, temp, project, artifacts, env, retirement, receipt, receiptPath, report, reportPath, config };
 }
+
+// A live Codex file left off the list loses the runner-owned Windows cleanup.
+test("every live Codex journey may hand its Windows fixture to the runner", () => {
+  const codex = classifyLiveFiles(REPO_ROOT).get("codex")!;
+  expect(codex.length).toBeGreaterThan(0);
+  for (const file of codex) expect(CODEX_FILE.test(file.split("/").at(-1)!), file).toBe(true);
+});
 
 test("a validated Windows Codex handoff moves the container and preserves its bytes after retirement", async () => {
   const f = fixture();

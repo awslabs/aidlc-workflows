@@ -54,8 +54,8 @@ const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
   ? TIMEOUT_S * 1000
   : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
-// The existing-code question as `next` returns it, inside the JSON stream.
-const ASKED = /ask_type\\?"\s*:\s*\\?"project-type/;
+// The existing-code question as `next` returns it to the agent.
+const ASKED = '"ask_type":"project-type"';
 const ANSWER = "yes, it is our existing code";
 
 function codexVersionOk(): boolean {
@@ -75,15 +75,6 @@ function skipReason(): string | null {
   return null;
 }
 const SKIP_REASON = skipReason();
-
-// The shared install, with the writes a workflow makes allowed. The sandbox
-// mode is a root setting, so it goes before the first table.
-function setupProject(): { proj: string; home: string; root: string } {
-  const project = setupCodexProject();
-  const config = join(project.home, "config.toml");
-  writeFileSync(config, `sandbox_mode = "workspace-write"\n${readFileSync(config, "utf-8")}`);
-  return project;
-}
 
 function engine(proj: string, args: string[]): string {
   const r = spawnSync("bun", [join(".codex", "tools", "aidlc.ts"), "engine", ...args], {
@@ -123,6 +114,18 @@ function reStageRow(content: string): string | undefined {
   return /^- \[.\] reverse-engineering \S+ (EXECUTE|SKIP)$/m.exec(content)?.[1];
 }
 
+// What AI-DLC's own commands printed during a turn: each completed command's
+// output from the JSON stream (never the agent's own messages).
+function commandOutputs(stdout: string): string[] {
+  const outputs: string[] = [];
+  for (const line of stdout.split("\n").filter((entry) => entry.trim())) {
+    const event = JSON.parse(line) as { type?: string; item?: { type?: string; aggregated_output?: unknown } };
+    if (event.type === "item.completed" && event.item?.type === "command_execution" &&
+      typeof event.item.aggregated_output === "string") outputs.push(event.item.aggregated_output);
+  }
+  return outputs;
+}
+
 function codexTurn(proj: string, home: string, prompt: string, opts: { resume?: boolean } = {}): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
@@ -143,7 +146,7 @@ describe("t-exec-codex-journey-code-arrives - a new project gains the team's cod
     `the question comes once and waits; the person's yes is recorded as theirs and Reverse Engineering starts${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
     async () => {
       const deadlineMs = performance.now() + TEST_TIMEOUT_MS;
-      const { proj, home, root } = setupProject();
+      const { proj, home, root } = setupCodexProject({ workspaceWrite: true });
       await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         mkdirSync(join(proj, "docs"), { recursive: true });
         writeFileSync(join(proj, "docs", "vision.md"), "# Lunch poll\n\nA small web app where a team votes on where to eat lunch each day.\n");
@@ -158,7 +161,8 @@ describe("t-exec-codex-journey-code-arrives - a new project gains the team's cod
         // Beat 1: the person carries on and is asked about the code.
         const b1 = codexTurn(proj, home, "$aidlc");
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
-        expect(ASKED.test(b1.stdout), `the existing-code question was never asked\n${codexExecDiagnostic(b1)}`).toBe(true);
+        expect(commandOutputs(b1.stdout).some((out) => out.includes(ASKED)), `the existing-code question was never asked\n${codexExecDiagnostic(b1)}`)
+          .toBe(true);
         const atQuestion = readAuditShardEvents(proj);
         expect(atQuestion.filter((r) => r.event === "WORKSPACE_RECLASSIFIED"), "reclassified before the person answered").toEqual([]);
 
@@ -166,6 +170,7 @@ describe("t-exec-codex-journey-code-arrives - a new project gains the team's cod
         const b2 = codexTurn(proj, home, ANSWER, { resume: true });
         expect(b2.rc, codexExecDiagnostic(b2)).toBe(0);
         expect(b2.sessionId).toBe(b1.sessionId);
+        expect(commandOutputs(b2.stdout).filter((out) => out.includes(ASKED)), "the question came back after the answer").toEqual([]);
 
         // The answer is the person's: the reclassify came only after their
         // reply. When this was written, codex exec 0.151.0 and 0.160.0 ran

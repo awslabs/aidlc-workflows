@@ -14,22 +14,22 @@
 //           stops once the work is created.
 //   then:   the team's code lands in the folder (a small TypeScript repo).
 //   chat 2: a new chat. The person types `/aidlc`. AI-DLC asks whether the
-//           code is existing code to work on. The person answers in their own
-//           words, "yes, it is our existing code", typed into the picker (or as
-//           their next message when the question comes as plain text). The
-//           drive stops when Reverse Engineering is handed to the agent to run.
+//           code is existing code to work on, in a picker. The person answers
+//           in their own words, "yes, it is our existing code", typed into the
+//           picker. The drive stops when Reverse Engineering is handed to the
+//           agent to run.
 //
 // Pass/fail reads only engine output, the audit and the state file, NEVER the
 // agent's prose:
 //   - creation said, in the engine's own line for the person, that the empty
 //     folder starts as a new project, and recorded it as the scan's call;
-//   - the existing-code question was asked, and nothing was reclassified
-//     before the person answered;
+//   - the existing-code question was asked and shown once, in a picker, and
+//     nothing was reclassified before the person answered;
 //   - the answer came from the person's turn: a human turn is recorded after
 //     the question and before the one reclassify, which records Brownfield as
 //     theirs and puts Reverse Engineering back on the plan;
-//   - Reverse Engineering is the next stage AI-DLC runs, and the question was
-//     shown at most once.
+//   - Reverse Engineering is the next stage AI-DLC runs, with no other
+//     question on the way.
 //
 // The composed-plan half (a composer plan that left Reverse Engineering out) is
 // pinned without a model in t352; a live composer picks its own base scope,
@@ -119,26 +119,23 @@ describe("t-journey-code-arrives (sdk): a new project gains the team's code", ()
 
         teamCodeArrives(proj);
 
-        // Chat 2: the person carries on and is asked about the code.
+        // Chat 2: the person carries on and is shown the question in a picker,
+        // where they type their answer. The audit is read as they answer.
         let atQuestion: number | undefined;
-        const snapshot = (): void => { atQuestion ??= auditRows(proj).length; };
         const answered = await driveAidlc("/aidlc", {
           projectDir: proj,
           persistSession: true,
           answerScript: { kind: "byHeader", map: {}, fallback: { text: ANSWER } },
-          onAskUserQuestion: snapshot,
-          nextMessage: (turn) => {
-            if (turn.turn !== 1) return undefined;
-            snapshot();
-            return ANSWER;
-          },
+          onAskUserQuestion: () => { atQuestion ??= auditRows(proj).length; },
           stopAfterToolResult: { toolName: "Bash", resultIncludes: RE_RUNS },
           timeoutMs: budget(),
         });
 
         const asks = answered.toolResults.filter((t) => t.toolName === "Bash" && t.resultText.includes(ASKED));
         expect(asks.length, "the existing-code question was never asked").toBeGreaterThanOrEqual(1);
-        expect(answered.askedQuestions.length, "pickers in chat 2").toBeLessThanOrEqual(1);
+        // Shown once, in a picker, and no other question before Reverse Engineering.
+        const shown = answered.askedQuestions.map((m) => m.questions.map((q) => q.question));
+        expect(shown, `pickers in chat 2: ${JSON.stringify(shown)}`).toHaveLength(1);
         expect(atQuestion, "the person was never given the question").toBeDefined();
 
         const rows = auditRows(proj);

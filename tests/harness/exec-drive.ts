@@ -96,8 +96,9 @@ export function codexBedrockConfig(env: NodeJS.ProcessEnv = process.env): string
 // A scratch install: dist/codex copied verbatim, git-initialized (project
 // hooks.json discovery requires a git repo), a scratch CODEX_HOME with Bedrock
 // provider + project trust + the trust pre-seed from `package.ts codex trust`
-// so hooks fire with zero TUI passes.
-export function setupCodexProject(): CodexProject {
+// so hooks fire with zero TUI passes. A journey that writes workflow records
+// asks for the workspace-write sandbox.
+export function setupCodexProject(opts: { workspaceWrite?: boolean } = {}): CodexProject {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "codex-exec-")));
   const proj = join(root, "proj");
   const home = join(root, "codex-home");
@@ -132,6 +133,8 @@ export function setupCodexProject(): CodexProject {
       `model_provider = "amazon-bedrock"`,
       `model_context_window = 1000000`,
       `model_reasoning_effort = "low"`,
+      // A root setting: after the first table it would belong to that table.
+      ...(opts.workspaceWrite ? [`sandbox_mode = "workspace-write"`] : []),
       ``,
       ...codexBedrockConfig(),
       ``,

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
+import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 export interface CodexExecution {
@@ -123,7 +123,7 @@ async function deferredWindowsCleanup(root: string): Promise<{ defer(): void; cl
     !Array.isArray(config.command) || config.command[1] !== "test" ||
     typeof config.command[0] !== "string" || !samePath(realpathSync(config.command[0]), realpathSync(process.execPath)) ||
     typeof config.command[2] !== "string" ||
-    !/^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace)\.serial\.test\.ts$/.test(basename(config.command[2])) ||
+    !CODEX_FILE.test(basename(config.command[2])) ||
     basename(config.command[2]) !== env.AIDLC_TEST_NAME ||
     typeof config.cwd !== "string" || !samePath(config.cwd, process.cwd()) ||
     !samePath(config.command[2], join(config.cwd, "tests", "e2e", env.AIDLC_TEST_NAME)) ||
