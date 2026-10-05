@@ -11335,6 +11335,12 @@ export function constructionCheckpointGaps(
     return dag.units.filter((unit) => !approved.has(unit)).map((unit) => `Unit "${unit}"`);
   }
   if (constructionSkeletonOn(stateContent)) {
+    // Once every per-unit stage is done or skipped the skeleton has done its
+    // job: a later stage (Build and Test, CI Pipeline) does not wait on an
+    // approval a jump or a later fix retired, which nothing routes back to.
+    if (stage.for_each !== "unit-of-work" && unitMajorConstructionStageSlugs(scope, stateContent).length === 0) {
+      return [];
+    }
     const first = dag.batches.flat()[0];
     return approved.has(first) ? [] : [`skeleton Unit "${first}"`];
   }

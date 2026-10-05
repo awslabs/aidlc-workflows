@@ -29,7 +29,7 @@ import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds, REDO_REUSE_SOURCE,
-  _resetStageGraphForTests, _resetScopeMappingForTests,
+  _resetStageGraphForTests, _resetScopeMappingForTests, constructionCheckpointGaps,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -2655,5 +2655,42 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(own.out).toContain("allows 1 review pass");
     policyHuman(p, "Please review alpha again", "t342-pick");
     expect(reviewThroughLog(p, codeReview("alpha", 2)).status).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// The walking skeleton gates the per-unit stages. Once they are all done or
+// skipped, a jump or a later fix that retires the skeleton's approval must not
+// hold Build and Test, because nothing routes back to the skeleton from there.
+describe("t342 Build and Test after the per-unit stages", () => {
+  function atBuildAndTest(perUnit: "done" | "skipped" | "pending"): string {
+    const p = fixture({ stance: "on", current: "build-and-test" });
+    const marker = perUnit === "done" ? "x" : perUnit === "skipped" ? "S" : " ";
+    let text = readFileSync(seededStateFile(p), "utf-8");
+    // The state's checkbox lines separate the slug and its action with U+2014.
+    const sep = "\u2014";
+    for (const stage of stages) text = text.replace(`- [ ] ${stage} ${sep} EXECUTE`, `- [${marker}] ${stage} ${sep} EXECUTE`);
+    text = text.replace(`- [ ] build-and-test ${sep} EXECUTE`, `- [-] build-and-test ${sep} EXECUTE`);
+    writeFileSync(seededStateFile(p), text);
+    return p;
+  }
+
+  test("a skeleton approval retired after every per-unit stage finished does not hold the gate", () => {
+    for (const perUnit of ["done", "skipped"] as const) {
+      const p = atBuildAndTest(perUnit);
+      const state = readFileSync(seededStateFile(p), "utf-8");
+      // Skipped per-unit stages leave nothing to checkpoint at all (null).
+      expect(constructionCheckpointGaps(p, state, findStageBySlug("build-and-test")!) ?? [], perUnit).toEqual([]);
+      const report = spawnSync(process.execPath, [
+        join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report", "--stage", "build-and-test",
+        "--result", "awaiting-approval", "--project-dir", p,
+      ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+      expect(`${report.stdout}${report.stderr}`).not.toContain("Construction checkpoints are not approved");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("while a per-unit stage is still open the skeleton still gates", () => {
+    const p = atBuildAndTest("pending");
+    const state = readFileSync(seededStateFile(p), "utf-8");
+    expect(constructionCheckpointGaps(p, state, findStageBySlug("build-and-test")!)).toEqual(['skeleton Unit "alpha"']);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
