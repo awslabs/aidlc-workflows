@@ -186,8 +186,10 @@ The typed forms `/aidlc config set guard-policy relaxed --intent <name> --space 
 and `/aidlc --guard-policy relaxed --intent <name> --space <name> ...` make the
 human-turn hook apply the switch at prompt time to that intent and space.
 The trailing `...` in the flags form stands for an optional task description.
-A nonexistent named intent is refused. Without a state file, a fence switch says to create the piece
-of work and type it again, while Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next.
+A nonexistent named intent is refused. Without a state file, Guard Policy
+`relaxed` or `off` and plan approval `off` are kept for the piece of work this
+chat starts next, and any other fence switch says to create the piece of work
+and type it again.
 
 Selectors target the same intent for state, memory policy, and audit without
 switching the active cursors. All supplied values are validated before mutation;
@@ -431,7 +433,7 @@ A fence is a guard that refuses an action nothing asked for: no step the workflo
 /aidlc config set guard.review-freeze on
 ```
 
-Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter (asking for the guards as a whole to be off, such as "turn the guards off", sets Guard Policy `off`), or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook applies a typed switch at prompt time to the piece of work selected by `--intent <name>` and `--space <name>`, or by the hook payload session's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused. A Guard Policy `relaxed` or `off` switch typed before the work exists is for the piece of work this chat starts next (`Guard Policy relaxed for the piece of work you start now (set by you).`). Typed in the same message as a request, it goes with that request (`Guard Policy relaxed for the work you are asking for (set by you).`): new work takes it when it is created, and if you choose to continue the open work instead, it is applied there; the message alone never changes the open work. For a fence switch without a state file, create the piece of work and type the switch again. No other switch is saved for later, and an unrelated reply opens nothing.
+Lowering a fence or the policy word is the person's call. Ask in your own words and the agent runs the setter (asking for the guards as a whole to be off, such as "turn the guards off", sets Guard Policy `off`), or type `/aidlc config set guard.<fence> off`, `/aidlc --guard-policy relaxed|off`, or the confirmation words `guard policy relaxed|off`, choosing one value. The human-turn hook applies a typed switch at prompt time to the piece of work selected by `--intent <name>` and `--space <name>`, or by the hook payload session's workflow selection when those selectors are omitted, and writes the state and audit row. It reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it. A nonexistent named intent is refused. A Guard Policy `relaxed` or `off` switch typed before the work exists is for the piece of work this chat starts next (`Guard Policy relaxed for the piece of work you start now (set by you).`). Typed in the same message as a request, it goes with that request (`Guard Policy relaxed for the work you are asking for (set by you).`): new work takes it when it is created, and if you choose to continue the open work instead, it is applied there; the message alone never changes the open work. Plan approval `off` typed before the work exists is kept the same way; for any other fence switch without a state file, create the piece of work and type the switch again. No other switch is saved for later, and an unrelated reply opens nothing.
 
 The CLI setters lower only when a reply from you has arrived since the last decision, and perform no switch-authority session lookup. Hooks run on Windows too, so the typed switch works on every harness that forwards the prompt. An already-off fence or an identical policy word already marked `set by you` needs no key because the CLI update is a no-op.
 
