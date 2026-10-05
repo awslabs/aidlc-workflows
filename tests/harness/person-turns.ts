@@ -56,9 +56,10 @@ export interface PersonTurn {
   words: string;
   cursor: AuditCursor;
   /**
-   * How many answers the turn can back: the picks one menu submission carried
+   * How many answers a menu submission can back: the picks it carried
    * (several on a form with more than one question, none for a pick on one of
-   * its tabs, which the form's Submit counts). A typed reply is one.
+   * its tabs, which the form's Submit counts). Unset for a typed reply, which
+   * answers every question open when it arrived, as the engine reads a reply.
    */
   selections?: number;
 }
@@ -104,9 +105,10 @@ const gateItem = (row: AuditShardEvent) =>
  * what the stage's previous answer followed, and any other decision follows
  * the previous one of its stage or gate. A turn backs it when it was sent after
  * that point (or at the drive's start, when the point is earlier than the
- * drive) and before the row. Each turn backs at most as many answers as it
- * carried selections, so a second answer to one typed reply needs a newer turn,
- * while one menu submission with two picks backs two answers. Approvals and
+ * drive) and before the row. A menu submission backs as many answers as it
+ * carried picks; a typed reply backs one answer for each question open when it
+ * arrived (at least one), so a second answer to one question needs a newer
+ * turn, and so does a question asked after the reply. Approvals and
  * answers need a reply: a turn that was only a command (it starts with "/", as
  * the human-turn hook reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
@@ -180,7 +182,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         const backing = turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
           return at >= after && at <= index && !(needsReply && isCommand(turn.words)) &&
-            (!answer || used[which] < (turn.selections ?? 1));
+            (!answer || used[which] < (turn.selections ?? openQuestions(events, at)));
         });
         if (backing === -1) problems.push(describe(row, key, turns));
         else if (answer) used[backing]++;
@@ -198,6 +200,19 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     }
   }
   return problems;
+}
+
+// The questions open when a turn arrived `at` this point of a shard: each one
+// asked counts until an answer closes one (at least one, for a reply to a gate
+// or to a question the trail does not show).
+function openQuestions(events: readonly AuditShardEvent[], at: number): number {
+  const { DECISION_CLOSING_EVENTS } = audit();
+  let open = 0;
+  for (const row of events.slice(0, at)) {
+    if (row.event === "DECISION_RECORDED") open++;
+    else if (DECISION_CLOSING_EVENTS.has(row.event)) open = Math.max(0, open - 1);
+  }
+  return Math.max(open, 1);
 }
 
 function describe(row: AuditShardEvent, key: string, turns: readonly PersonTurn[]): string {
@@ -230,9 +245,9 @@ export class PersonTurnLedger {
     this.start = auditCursor(projectDir);
   }
 
-  /** Call as the driver sends a turn, before the agent can act on it, with the picks it carried. */
-  sent(words: string, selections = 1): void {
-    this.turns.push({ words, cursor: auditCursor(this.projectDir), selections });
+  /** Call as the driver sends a turn, before the agent can act on it; a menu answer passes its picks. */
+  sent(words: string, selections?: number): void {
+    this.turns.push({ words, cursor: auditCursor(this.projectDir), ...(selections === undefined ? {} : { selections }) });
   }
 
   unbacked(): string[] {

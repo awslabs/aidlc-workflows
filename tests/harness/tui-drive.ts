@@ -1721,19 +1721,23 @@ function gridIsSubmitScreen(grid: string): boolean {
 }
 
 // The picks a form's review screen lists above Submit, one `→ <choice>` line
-// per answered question. When the review is out of view, the tab strip's
-// ticked tabs count them instead.
+// per answered question, read from the last review on screen up to its own
+// Submit. When the review is out of view, the tab strip's ticked tabs count
+// them instead; the strip's tabs cap what the review can count.
 export function reviewedPicks(grid: string): string[] {
   const lines = grid.split("\n");
-  const review = lines.findIndex((line) => line.includes("Review your answers"));
+  const strip = lines.findLast((line) => line.includes("←") && line.includes("Submit")) ?? "";
+  const tabs = (strip.match(/[☒☐]/g) ?? []).length;
+  const ticked = (strip.match(/☒/g) ?? []).length;
+  const review = lines.findLastIndex((line) => line.includes("Review your answers"));
   if (review >= 0) {
-    const picks = lines.slice(review + 1)
+    const end = lines.findIndex((line, at) => at > review && /Ready to submit|Submit answers/.test(line));
+    const picks = lines.slice(review + 1, end === -1 ? undefined : end)
       .map((line) => /^\s*│?\s*→\s+(.*\S)\s*$/.exec(line)?.[1])
       .filter((pick): pick is string => pick !== undefined);
-    if (picks.length > 0) return picks;
+    if (picks.length > 0) return tabs > 0 ? picks.slice(0, tabs) : picks;
   }
-  const strip = lines.find((line) => line.includes("←") && line.includes("Submit")) ?? "";
-  return Array.from({ length: (strip.match(/☒/g) ?? []).length }, () => "");
+  return Array.from({ length: ticked }, () => "");
 }
 
 // Is the painted question a MULTI-SELECT ("select all that apply")? The AUQ key
@@ -2365,6 +2369,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
+        nextPersonTurnCarriesPicks(session, 1);
         await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
@@ -2381,7 +2386,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       // Revision Count++). Consume the one-shot so every later gate is approved.
       await backend.send(session, "Down", false, true);
       await sleep(150);
-      if (requestChangesNeedsSubmit) nextPersonTurnCarriesPicks(session, 0);
+      nextPersonTurnCarriesPicks(session, requestChangesNeedsSubmit ? 0 : 1);
       await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
@@ -2408,7 +2413,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         screen: grid,
       });
       // A pick on one tab of a form is counted with the form's Submit.
-      if (gridIsMultiTabForm(grid)) nextPersonTurnCarriesPicks(session, 0);
+      nextPersonTurnCarriesPicks(session, gridIsMultiTabForm(grid) ? 0 : 1);
       await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;

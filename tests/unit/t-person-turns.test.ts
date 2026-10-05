@@ -174,7 +174,7 @@ describe("person-turn check", () => {
     expect(problems[0]).toContain('recorded words "Add a note"');
   });
 
-  test("a typed reply backs one answer, even to a menu of two questions", () => {
+  test("a typed reply backs one answer per question open when it arrived", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
     drive.sent("start");
@@ -185,6 +185,25 @@ describe("person-turn check", () => {
     const problems = drive.unbacked();
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain('recorded words "Q2: Cognito"');
+  });
+
+  test("one typed reply answers every question open when it arrived; a question asked after it waits", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    for (const question of ["Way of working?", "Walking skeleton?", "How much testing?"]) {
+      row(dir, "DECISION_RECORDED", { Stage: "practices-discovery", Decision: question });
+    }
+    drive.sent("A, B, and A with CI");
+    for (const reply of ["A", "B", "A, with CI"]) {
+      row(dir, "QUESTION_ANSWERED", { Stage: "practices-discovery", Details: reply });
+    }
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "DECISION_RECORDED", { Stage: "practices-discovery", Decision: "Deploy anywhere?" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "practices-discovery", Details: "Deploy to staging" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Deploy to staging"');
   });
 
   test("a later question supersedes an earlier one, as the engine pairs them", () => {
@@ -368,6 +387,12 @@ describe("person-turn check", () => {
       "  2. Cancel",
     ].join("\n");
     expect(reviewedPicks(review)).toEqual(["Keep (project)", "Nothing to add"]);
+    // Only the last review counts, up to its own Submit, and never more picks
+    // than the form has tabs.
+    const earlier = ["Review your answers", "   → A", "   → B", "   → C", "", "Ready to submit your answers?"].join("\n");
+    expect(reviewedPicks(`${earlier}\n${review}\n   → Not a pick`)).toEqual(["Keep (project)", "Nothing to add"]);
+    const crowded = review.replace("   → Nothing to add", "   → Nothing to add\n   → An answer the agent wrote");
+    expect(reviewedPicks(crowded)).toEqual(["Keep (project)", "Nothing to add"]);
     expect(reviewedPicks("←  ☒ Stakeholders  ☒ Comms  ☐ Scope  ✔ Submit  →\n\n❯ 1. Submit answers")).toEqual(["", ""]);
   });
 
