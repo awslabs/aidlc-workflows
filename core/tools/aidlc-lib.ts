@@ -37343,8 +37343,18 @@ function appendGuardPolicySetRow(
 }
 
 /** A bounded, human-readable list of changed paths. */
+// A path anyone can name may carry a line break or a control character. In a
+// line the person or the conductor reads it stays one inert line.
+export function inertPath(path: string): string {
+  return path.replace(
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: escaping them is the point
+    /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 export function renderChangedPaths(paths: readonly string[]): string {
-  const shown = paths.slice(0, CHANGE_CONTROL_MAX_LISTED_PATHS);
+  const shown = paths.slice(0, CHANGE_CONTROL_MAX_LISTED_PATHS).map(inertPath);
   const more = paths.length - shown.length;
   return more > 0 ? `${shown.join(", ")} (and ${more} more)` : shown.join(", ");
 }

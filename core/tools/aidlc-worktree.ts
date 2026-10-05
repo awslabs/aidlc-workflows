@@ -54,6 +54,7 @@ import {
   readAuditShardEvents,
   readStateFile,
   recordAcceptedChanges,
+  renderChangedPaths,
   recoveryRepoCandidates,
   relativeRecordDir,
   relativeRecordDirForSelection,
@@ -2033,7 +2034,7 @@ function assertAggregateSourceBeforeMerge(
   // change is recorded once so the merge chain stays readable.
   const keepChange = (recorded: string, changed: string[] | null) => {
     const notice = changed && changed.length > 0
-      ? `You changed ${changed.join(", ")} during the build; kept them and merged unit ${record.unit}.`
+      ? `You changed ${renderChangedPaths(changed)} during the build; kept them and merged unit ${record.unit}.`
       : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
     for (const line of recordAcceptedChanges(pd, [{
       checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
@@ -2109,7 +2110,7 @@ function assertAggregateSourceBeforeMerge(
     if (acceptsChanges) return keepChange(opening.fingerprint, changed);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source changed since the stage-entry baseline (${changed.join(", ") || "unknown paths"}). ` +
+      `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed) || "unknown paths"}). ` +
         "Undo those changes and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
     );
   }

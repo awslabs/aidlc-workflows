@@ -5146,6 +5146,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:inertPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-policy-off-means-off.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:inspectContinuationCursor",
       "minMechanism": "none",
       "coveredBy": [
@@ -8880,8 +8892,13 @@
       "unitClass": "function",
       "unitId": "function:renderChangedPaths",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-guard-policy-off-means-off.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

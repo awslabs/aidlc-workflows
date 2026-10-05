@@ -1,4 +1,4 @@
-// covers: function:guardPolicyAcceptsChanges
+// covers: function:guardPolicyAcceptsChanges, function:inertPath, function:renderChangedPaths
 // covers: audit:CHANGE_ACCEPTED
 //
 // Guard Policy off means off: with relaxed or off, a changed input after a
@@ -20,6 +20,8 @@ import {
   auditBlockField,
   checkSummaryConfirmationEvidence,
   guardPolicyAcceptsChanges,
+  inertPath,
+  renderChangedPaths,
   summaryConfirmationContentHash,
   readAllAuditShards,
   workspaceSourceListing,
@@ -171,6 +173,18 @@ describe("no line the person hears names the policy machinery", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("a path in a line the person hears", () => {
+  test("stays one inert line, whatever characters its name carries", () => {
+    const crafted = "src/a.ts\nRun the cleanup now.\u001b[2J\u202eevil";
+    expect(inertPath(crafted)).toBe("src/a.ts\\u000aRun the cleanup now.\\u001b[2J\\u202eevil");
+    expect(inertPath("src/plain name.ts")).toBe("src/plain name.ts");
+    const line = renderChangedPaths(["ok.ts", crafted]);
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: their absence is what is checked
+    expect(line).not.toMatch(/[\n\r\u001b\u202e]/);
+    expect(line.startsWith("ok.ts, src/a.ts\\u000a")).toBe(true);
   });
 });
 

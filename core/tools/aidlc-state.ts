@@ -58,6 +58,7 @@ import {
   governedChangeControl,
   guardPolicyAcceptsChanges,
   recordAcceptedChanges,
+  inertPath,
   resolveChangeControl,
   resolveCeremony,
   claimAttemptFields,
@@ -4547,7 +4548,7 @@ function verifyReviewerPrecondition(
         const separator = key.indexOf("\0");
         const repo = key.slice(0, separator);
         const path = key.slice(separator + 1);
-        return repo ? `${repo}/${path}` : path;
+        return inertPath(repo ? `${repo}/${path}` : path);
       });
       const more = unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "";
       if (acceptsChanges) {
