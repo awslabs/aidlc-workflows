@@ -52,6 +52,10 @@ const TEST_ENTRYPOINTS = new Set([
   "hooks/aidlc-continue-workflow.ts",
 ]);
 const scratch: string[] = [];
+// A request the launcher cannot carry goes through the file `next` reads.
+const REQUEST_FILE_STEP =
+  "with your file tool to aidlc/.aidlc-request-text/request.txt in this project, and run the same command with " +
+  "--request-file aidlc/.aidlc-request-text/request.txt in place of the request's words";
 
 afterEach(() => {
   for (const dir of scratch.splice(0)) {
@@ -433,7 +437,7 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
         "aidlc engine orchestrate next \"a\\\" ; touch x ; \\\"\"",
         ...(shell === "cmd" ? ["aidlc engine orchestrate next \"%PATH%\""] : []),
       ].entries()) {
-        await expect(invoke(`${shell}-${i}`, command)).rejects.toThrow(/one direct invocation|cannot reach AI-DLC through the aidlc launcher/);
+        await expect(invoke(`${shell}-${i}`, command)).rejects.toThrow(/one direct invocation|cannot reach AI-DLC through/);
       }
     }
     // A shell it cannot learn, or a setting it cannot read, passes no AIDLC
@@ -520,14 +524,15 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     // The aidlc launcher hands its arguments to cmd.exe on Windows, and
     // PowerShell passes a word with no space on bare. Each refusal names a step
     // that works: cmd.exe keeps & | < > ^ inside double quotes; nothing on
-    // Windows keeps a line break or a %NAME% or !NAME! pair, so the person says
-    // how to write it.
+    // Windows keeps a line break or a %NAME% or !NAME! pair, so a request goes
+    // through a file, and any other text is the person's to write.
     for (const [i, [command, step]] of [
       ["aidlc engine orchestrate next 'R&D'", "Set \"shell\" in opencode's settings to cmd.exe"],
-      ["aidlc engine orchestrate next 'Book rooms\nfor R and D'", "Ask the person how to write the text"],
-      ["aidlc engine orchestrate next '%APPDATA% and %TEMP%'", "Ask the person how to write the text"],
-      ["aidlc engine orchestrate next '50%' 'of %TEMP'", "Ask the person how to write the text"],
-      ["aidlc engine orchestrate next 'say !T241_VALUE! now'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next 'Book rooms\nfor R and D'", REQUEST_FILE_STEP],
+      ["aidlc engine orchestrate next '%APPDATA% and %TEMP%'", REQUEST_FILE_STEP],
+      ["aidlc engine orchestrate next '50%' 'of %TEMP'", REQUEST_FILE_STEP],
+      ["aidlc engine orchestrate next 'say !T241_VALUE! now'", REQUEST_FILE_STEP],
+      ["aidlc engine log answer --stage requirements-analysis --details 'Book rooms\nfor R and D'", "Ask the person how to write the text"],
     ].entries()) {
       await expect(pwsh(`ps-launcher-${i}`, command)).rejects.toThrow(step);
     }
@@ -535,12 +540,21 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     // inside quotes, and a program reads \" as a quote inside a word.
     for (const [i, command] of [
       "aidlc engine orchestrate next 'Approve'",
-      'aidlc engine orchestrate next "%APPDATA%"',
-      'aidlc engine orchestrate next "say !T241_VALUE! now"',
       'aidlc engine orchestrate next "a\\" & touch x & "b"',
       'aidlc engine orchestrate next R^&D',
+      'aidlc engine log answer --stage requirements-analysis --details "%APPDATA%"',
     ].entries()) {
       await expect(cmd(`cmd-no-${i}`, command)).rejects.toThrow("one direct invocation");
+    }
+    // cmd.exe ends a command at a line break and replaces a %NAME% or !NAME!
+    // pair even inside quotes, so a request holding one goes through a file.
+    for (const [i, command] of [
+      'aidlc engine orchestrate next "%APPDATA%"',
+      'aidlc engine orchestrate next "say !T241_VALUE! now"',
+      'aidlc engine orchestrate next "Book rooms\nfor R and D"',
+      'bun .aidlc/tools/aidlc.ts engine orchestrate next --scope feature "50% of %TEMP%"',
+    ].entries()) {
+      await expect(cmd(`cmd-file-${i}`, command)).rejects.toThrow(REQUEST_FILE_STEP);
     }
     // PowerShell 7 on Windows hands Bun its arguments as written, and the aidlc
     // launcher one command line read again by cmd.exe.
@@ -549,8 +563,9 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       await expect(pwsh7(`ps7-ok-${i}`, command)).resolves.toBeUndefined();
     }
     for (const [i, [command, refusal]] of [
-      ["aidlc engine orchestrate next 'Rename \"Tasks\"'", "Ask the person how to write the text"],
-      ["aidlc engine orchestrate next 'C:\\dir\\'", "Ask the person how to write the text"],
+      ["aidlc engine orchestrate next 'Rename \"Tasks\"'", REQUEST_FILE_STEP],
+      ["aidlc engine orchestrate next 'C:\\dir\\'", REQUEST_FILE_STEP],
+      ["aidlc engine log answer --stage x --details 'C:\\dir\\'", "Ask the person how to write the text"],
       ["aidlc engine orchestrate next ''", "Leave it out and run the command again"],
       ["aidlc engine orchestrate next 'R&D'", "Set \"shell\" in opencode's settings to cmd.exe"],
       ['bun .aidlc/tools/aidlc.ts engine orchestrate next "fix \u201d; New-Item x; \u201c"', "one direct invocation"],
