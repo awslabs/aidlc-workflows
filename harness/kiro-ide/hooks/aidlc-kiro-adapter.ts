@@ -139,6 +139,7 @@ import {
 import {
   approvalFingerprint,
   beginCodeGeneration,
+  codeGenerationExecutionAllowed,
   codeGenerationPlanApprovalFence,
   legacyPlanApprovalGuardState,
   parseTestingContract,
@@ -520,7 +521,9 @@ function processLegacyPlanApprovalWrite(
     }
     return null;
   }
-  if (state.approved) return null;
+  // An approved plan, or one that changed since under a lowered check, is not
+  // a planning window: its writes are the build's.
+  if (state.approved || codeGenerationExecutionAllowed(projectDir, state.target)) return null;
   const authority = resolveCodeGenerationAuthority(projectDir, state.target);
   const planPath = join(authority.stageDir, "code-generation-plan.md");
   const instructionsPath = join(authority.stageDir, "unit-test-instructions.md");
@@ -1917,11 +1920,13 @@ type Forward = { hook: string; input: Record<string, unknown> } | null;
 // own switch) lets changed content through once the plan is approved, as the
 // core guard does; it never supplies the first approval. These refusals are the
 // adapter's own, for payloads that hide their target, so they follow the same
-// rule. An unreadable state keeps the check up.
+// rule: an approved plan that changed since is still approved here, through the
+// core's own continuation. An unreadable state keeps the check up.
 function loweredPlanCheckAdmitsApprovedWork(): boolean {
   try {
     const state = legacyPlanApprovalGuardState(projectDir);
-    if (!state.active || !state.approved || state.target === null) return false;
+    if (!state.active || state.target === null) return false;
+    if (!state.approved && !codeGenerationExecutionAllowed(projectDir, state.target)) return false;
     return codeGenerationPlanApprovalFence(projectDir, state.target, {
       sessionId: resolvedPlanApprovalSessionId(ide),
     }).decision === "stand-aside";
@@ -2232,6 +2237,23 @@ function buildForward(): Forward {
             },
           };
         }
+        // An approved plan that changed since, under a lowered check, builds on.
+        if (state.active && !state.approved && state.target !== null && loweredPlanCheckAdmitsApprovedWork()) {
+          try {
+            beginCodeGeneration(projectDir, state.target);
+          } catch (error) {
+            return {
+              hook: "__legacy_plan_approval_block__",
+              input: {
+                reason:
+                  `Legacy Code Generation could not start its protected authority: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`,
+              },
+            };
+          }
+          return null;
+        }
         if (
           state.active &&
           !state.approved &&
@@ -2240,12 +2262,23 @@ function buildForward(): Forward {
         ) {
           // The canonical planning writes stay open: re-presenting the plan is
           // the remedy, and it is a questions-file write. Blocking it here made
-          // source drift before approval a dead end on this harness.
+          // source drift before approval a dead end on this harness. Under a
+          // lowered check the person's answer accepts that drift, so the plan
+          // is not shown again: the tool waits for their answer.
+          let lowered = false;
+          try {
+            lowered = state.target !== null && codeGenerationPlanApprovalFence(projectDir, state.target, {
+              sessionId: resolvedPlanApprovalSessionId(ide),
+            }).decision === "stand-aside";
+          } catch {
+            lowered = false;
+          }
           return {
             hook: "__legacy_plan_approval_block__",
             input: {
-              reason:
-                "Plan Approval fallback blocked this tool because workspace source changed after the plan's source was recorded. Re-present the plan: write the Plan Approval section again with a blank [Answer]: so the write hook refreshes [Planned Source] and re-issues the decision, then approve.",
+              reason: lowered
+                ? "Plan Approval fallback blocked this tool until the person answers the plan question. The source change since the plan was written is accepted, so do not show the plan again: wait for their answer."
+                : "Plan Approval fallback blocked this tool because workspace source changed after the plan's source was recorded. Re-present the plan: write the Plan Approval section again with a blank [Answer]: so the write hook refreshes [Planned Source] and re-issues the decision, then approve.",
             },
           };
         }
