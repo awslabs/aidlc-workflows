@@ -90,7 +90,25 @@ export function auditCursor(projectDir: string): AuditCursor {
   return new Map([...readTrail(projectDir)].map(([key, events]) => [key, events.length]));
 }
 
-const isCommand = (words: string) => words.trim().startsWith("/");
+// A turn is only a command as the human-turn hook reads it: a slash command
+// with something the engine reads in it. Words alone after the AIDLC entry
+// ("/aidlc approve the code plan") are a reply, as is any other slash text.
+let entryReader: {
+  aidlcEntryWords: (prompt: string) => string | null;
+  nextArgsAreOnlyWords: (args: string[]) => boolean;
+  splitKiroCommandArgs: (raw: string) => string[];
+} | undefined;
+function isCommand(words: string): boolean {
+  const text = words.trim();
+  if (!/^[/$]aidlc(?:[-\s]|$)/i.test(text)) return false;
+  entryReader ??= {
+    ...(require("../../dist/claude/.claude/tools/aidlc-reply-reader.ts") as { aidlcEntryWords: (prompt: string) => string | null }),
+    ...(require("../../dist/claude/.claude/tools/aidlc-orchestrate.ts") as { nextArgsAreOnlyWords: (args: string[]) => boolean }),
+    splitKiroCommandArgs: (require("../../dist/claude/.claude/tools/aidlc-lib.ts") as { splitKiroCommandArgs: (raw: string) => string[] }).splitKiroCommandArgs,
+  };
+  const after = entryReader.aidlcEntryWords(text);
+  return after === null || after.length === 0 || !entryReader.nextArgsAreOnlyWords(entryReader.splitKiroCommandArgs(after));
+}
 
 /** A gate is one per stage, Unit and workflow. */
 const gateItem = (row: AuditShardEvent) =>
@@ -110,8 +128,8 @@ const gateItem = (row: AuditShardEvent) =>
  * carried picks; a typed reply backs one answer for each question open when it
  * arrived (at least one), so a second answer to one question needs a newer
  * turn, and so does a question asked after the reply. Approvals and
- * answers need a reply: a turn that was only a command (it starts with "/", as
- * the human-turn hook reads it) does not count. A command still backs what it
+ * answers need a reply: a turn that was only a command (as the human-turn hook
+ * reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
  *
  * A choice the person left to the agent (its row says Answer Source "chosen

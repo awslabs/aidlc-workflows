@@ -545,6 +545,46 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // A new chat whose first message is "/aidlc approve the code plan": the words
+  // answer the open question the first time. They are not asked about as new
+  // work, and the agent's record of the choice is not refused.
+  test("a reply typed after /aidlc in a new chat answers the plan question, with no new-work question", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc approve the code plan", OTHER_SESSION);
+    const read = next(proj, ["approve", "the", "code", "plan"]);
+    expect(read.kind, JSON.stringify(read)).toBe("print");
+    expect(read.ask_type).toBeUndefined();
+    expect(read.message).toContain("--checkpoint plan-approval");
+    const recorded = answer(proj, "Approve Plan");
+    expect(recorded.code, recorded.message).toBe(0);
+    expect(auditText(proj)).toContain("**Person Reply**: approve the code plan");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("an exact pick typed after /aidlc is recorded at once, and its words lead straight to the build", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc 1");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    const read = next(proj, ["1"]);
+    expect(read.kind, JSON.stringify(read)).toBe("print");
+    expect(read.message).toContain("it is recorded");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("a command typed after /aidlc is still no answer to the plan question", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc --status");
+    const early = answer(proj, "Approve Plan");
+    expect(early.code).not.toBe(0);
+    expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    // The step it names works once they reply.
+    reply(proj, "approve it");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
+  });
+
   test("an answer from another chat on the same work counts", () => {
     const proj = project();
     askFor(proj);

@@ -79,6 +79,7 @@ import {
   recordGateWords,
   recordPreWorkflowHeartbeat,
   resolveProjectDirFromHook,
+  splitKiroCommandArgs,
   stateFilePath,
   stripRecommendedDecorator,
   validSessionId,
@@ -100,7 +101,22 @@ import {
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
 import { notePlanApprovalAskReply } from "../tools/aidlc-plan-approval-ask.ts";
-import { isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
+import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
+
+// "/aidlc approve the code plan" is the person's reply: the engine reads the
+// words after the entry as nothing but words. Any flag, scope, verb or noun
+// keeps it a command. Read only for a prompt that starts with the entry, so
+// other prompts pay nothing; a failed read keeps it a command, as before.
+async function aidlcEntryReply(prompt: string): Promise<string | null> {
+  const words = aidlcEntryWords(prompt);
+  if (words === null || words.length === 0) return null;
+  try {
+    const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
+    return nextArgsAreOnlyWords(splitKiroCommandArgs(words)) ? words : null;
+  } catch {
+    return null;
+  }
+}
 
 function extractResponseText(value: unknown): string {
   if (typeof value === "string") {
@@ -405,17 +421,23 @@ try {
       // framework, not an answer to the pending Plan Approval question; a
       // question about a switch ("skip plan approval?") is for the agent.
       const switchQuestion = typedPrompt.length > 0 && isTypedGuardSwitchQuestion(typedPrompt);
+      const entryReply = typedPrompt.length > 0 ? await aidlcEntryReply(typedPrompt) : null;
       const notAReply = typedPrompt.length > 0 && (
-        isAidlcCommandPrompt(typedPrompt) ||
+        (isAidlcCommandPrompt(typedPrompt) && entryReply === null) ||
         isTypedGuardSwitchPrompt(typedPrompt) ||
         switchQuestion ||
         PLAN_APPROVAL_OVERRIDE_PHRASE_RE.test(typedPrompt.trim())
       );
+      // A reply typed after the entry is the words after it, so "/aidlc 1"
+      // picks the first choice as "1" does.
+      const replyText = entryReply ?? humanResponseText;
       let keptWordsOffset: number | null = null;
       try {
         withAuditLock(projectDir, () => {
           // A turn that is only a command to AIDLC is no reply to an open
           // question: the row says so, and decisions on that question skip it.
+          // Words typed after the entry with nothing of a command in them
+          // ("/aidlc use postgres") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
             ...(switchQuestion ? { Reply: QUESTION_TURN_REPLY } : notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
@@ -427,7 +449,7 @@ try {
           // reply, free text typed into it counts, and so does a picked gate
           // choice, which is their exact pick. Never blocks the turn.
           const typedWords = typedPrompt
-            ? (notAReply ? "" : typedPrompt)
+            ? (notAReply ? "" : entryReply ?? typedPrompt)
             : pickerFreeText(humanResponseText, pickerQuestion) || pickedGateLabel(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
             try {
@@ -443,18 +465,18 @@ try {
           // arrives in.
           // A question about a switch ("skip plan approval?") reaches it too, as
           // words for the conductor to answer.
-          const engineQuestionOwnsReply = humanResponseText !== "" && (!notAReply || switchQuestion) &&
-            notePlanApprovalAskReply(projectDir, sessionId, humanResponseText, pickerQuestion);
-          if (!engineQuestionOwnsReply && sessionId && humanResponseText) {
+          const engineQuestionOwnsReply = replyText !== "" && (!notAReply || switchQuestion) &&
+            notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion);
+          if (!engineQuestionOwnsReply && sessionId && replyText) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
             const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
             if (plan && protectedQuestion) {
               clearPlanApprovalChallenge(projectDir, sessionId);
               withdrawProtectedQuestions(projectDir, sessionId);
             } else if (protectedQuestion) {
-              if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, humanResponseText, questionText, pickerQuestion);
+              if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion);
             } else if (!notAReply) {
-              recordPlanApprovalHumanResponse(projectDir, sessionId, humanResponseText, pickerQuestion);
+              recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
             }
           }
           if (sessionId && typedPrompt) {
@@ -469,7 +491,7 @@ try {
         // ask's, not revision feedback for a stage gate.
         const offset = keptWordsOffset;
         // A command, or several picks, is no one remedy.
-        const recoveryReply = notAReply || pickerQuestion?.severalPicks ? "" : humanResponseText;
+        const recoveryReply = notAReply || pickerQuestion?.severalPicks ? "" : replyText;
         if (consumeSharedDirectiveAsk(projectDir, recoveryReply) && offset !== null) {
           try {
             withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));

@@ -407,6 +407,7 @@ import { sameGuardOperation } from "./aidlc-guard-operation.ts";
 import {
   isPlanApprovalBeat,
   legacyPlanApprovalOffNotice,
+  openPlanApprovalQuestion,
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
@@ -2267,6 +2268,24 @@ function openQuestionReplyDirective(stage: string, checkpoint: string | null, re
   );
 }
 
+// Prose while the engine's code plan question is open: the conductor reads
+// whether it answers that question (or, while the person edits the files,
+// says they are done), the same split as openQuestionReplyDirective.
+function openPlanQuestionReplyDirective(editing: boolean, requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  const answer = editing
+    ? `The person is editing the code plan files themselves. If their reply says they are done, run bare \`${orchestrate} next\`.`
+    : "The code plan question is open, and the person's reply may answer it. Read it. If it does, record the choice " +
+      `they made with \`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
+      `--details "<their choice>"\`, then run bare \`${orchestrate} next\`.`;
+  return printDirective(
+    `${answer} If it is about something else, such as new work or a change to the plan, run ` +
+      `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
+      "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
+      "their answer.",
+  );
+}
+
 // A routing question's reshape of one listed record: it selects that record,
 // then reshapes it, with the settings typed with the request.
 function routingReshapeCommand(questionId: string, selector: string, existingWork: string): string {
@@ -3364,6 +3383,16 @@ function parseNextFlags(args: string[]): ParsedFlags {
     flags.retiredOnly = true;
   }
   return flags;
+}
+
+// What follows `/aidlc` or `$aidlc` is the person's reply, not a command, when
+// `next` reads it as nothing but words: no flag, scope, verb or noun of its
+// own ("/aidlc approve the code plan"). parseNextFlags is the one reading of
+// those arguments, so a flag or verb it learns is a command here at once.
+export function nextArgsAreOnlyWords(args: string[]): boolean {
+  if (args.length === 0) return false;
+  const parsed = parseNextFlags(args);
+  return typeof parsed.intent === "string" && Object.keys(parsed).length === 1;
 }
 
 // Appended to the `done` reason emitted when the ACTIVE intent has no in-scope
@@ -7276,6 +7305,28 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
     !isTeamUnitOwnership(stateContent)
   ) {
+    // The engine's own code plan question takes the reply from any chat, so
+    // words beside it ("approve the code plan", typed in a new chat) are read
+    // as its answer first, never asked about as new work.
+    const planQuestion = openPlanApprovalQuestion(pd, flags.intent);
+    if (planQuestion !== null) {
+      // Exactly one of its choices, already recorded from their reply.
+      if (planQuestion.answered && planQuestion.isChoice) {
+        emit(printDirective(
+          "The person's reply answered the code plan question, and it is recorded. Run bare " +
+            `\`${aidlcToolInvocation("orchestrate")} next\`: it carries out their choice.`,
+        ));
+        return;
+      }
+      if (!planQuestion.answered) {
+        const words = saveQuestion(
+          pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+          undefined, routingSettings(carriedRoutingFlags(flags)),
+        );
+        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id));
+        return;
+      }
+    }
     const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
       // The settings typed with these words ride on with them.

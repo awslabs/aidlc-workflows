@@ -275,6 +275,19 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(auditBlockField(approved[0].block, "Person Reply")).toBe("approve");
   });
 
+  // Words typed after the entry are the person's reply when nothing in them is
+  // a command: "/aidlc approve" approves the first time, with their words.
+  test.each([
+    ["/aidlc approve", "approve"],
+    ["$aidlc ok that makes sense, approve", "ok that makes sense, approve"],
+  ])("%s is a reply: the approval records it the first time", (typed, kept) => {
+    says(proj, typed);
+    expect(auditBlockField(events(proj, "HUMAN_TURN").at(-1)?.block ?? "", "Reply")).toBeNull();
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "Person Reply")).toBe(kept);
+  });
+
   // Only AIDLC's own commands are commands: a reply that starts with a path is
   // the person's words.
   test("a reply that starts with a slash path is a reply, kept as their words", () => {

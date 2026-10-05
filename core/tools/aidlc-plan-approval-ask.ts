@@ -969,6 +969,30 @@ function currentPlanApprovalAsk(
   return same ? { marker, record } : null;
 }
 
+/**
+ * The engine's Plan Approval question while it is the open step: whether every
+ * plan it asks about has an answer, whether the person is editing the files,
+ * and whether `words` are exactly one of its choices ("1", "Approve Plan").
+ * Null when it is not the open step.
+ */
+export function openPlanApprovalQuestion(
+  projectDir: string,
+  words: string,
+): { answered: boolean; editing: boolean; isChoice: boolean } | null {
+  try {
+    const open = currentPlanApprovalAsk(projectDir, "all");
+    if (open === null) return null;
+    const { record } = open;
+    return {
+      answered: record.targets.every((target) => record.results?.some((result) => result.unit === target.unit)),
+      editing: record.mode === "editing",
+      isChoice: exactOptionPick(words, record.choices) !== null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 type TargetApproval =
   | { ok: true; result: PlanApprovalAskResult; changed: boolean }
   | { ok: false; result?: PlanApprovalAskResult; notice: string };

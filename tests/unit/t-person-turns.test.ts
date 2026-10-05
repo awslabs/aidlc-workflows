@@ -73,6 +73,23 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toEqual([]);
   });
 
+  // The check reads a turn as the human-turn hook does: words alone after the
+  // AIDLC entry are a reply that backs the approval; a flag keeps it a command.
+  test("\"/aidlc approve\" backs an approval; \"/aidlc --status\" does not", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "team-formation" });
+    drive.sent("/aidlc --status");
+    row(dir, "HUMAN_TURN", { Reply: "command" });
+    row(dir, "GATE_APPROVED", { Stage: "team-formation", "User Input": "Approve" });
+    expect(drive.unbacked()).toHaveLength(1);
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });
+    drive.sent("/aidlc approve");
+    row(dir, "HUMAN_TURN");
+    row(dir, "GATE_APPROVED", { Stage: "user-stories", "User Input": "Approve" });
+    expect(drive.unbacked()).toHaveLength(1);
+  });
+
   test("a gate opened before the drive is backed by the drive's opening prompt", () => {
     const dir = project();
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "requirements-analysis" });
