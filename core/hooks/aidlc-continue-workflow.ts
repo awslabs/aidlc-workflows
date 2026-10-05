@@ -121,10 +121,12 @@
 //      survive the Stop hook's own `next` probe. Allow that wait before probing,
 //      including under autonomous Construction when the guard requires human
 //      input. Once the response is ready, continuation is enforced again.
-//  10. A QUESTION FROM THE ENGINE: the last step `next` handed out was an `ask`
-//      (where new work goes, which plan to start it with), and the person has
-//      not written since (askTurnEndIsOpen). The probe's own `next` would hand
-//      back the work in progress, so this too is read before probing.
+//  10. A STEP THAT ENDS THE TURN: the last step the engine handed out was an
+//      `ask` (where new work goes, which plan to start it with) or a print the
+//      agent stops after (status, a setting, a scope change, new work that
+//      starts in a fresh session), and the person has not written since
+//      (turnEndIsOpen). The probe's own `next`, or Copilot's retained step,
+//      would hand back the work in progress, so this is read before either.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -155,7 +157,7 @@ import {
   getField,
   stateDigest,
   hasCurrentSharedResumeWait,
-  askTurnEndIsOpen,
+  turnEndIsOpen,
   hasCurrentSharedGuardRecoveryWait,
   hasPendingDecision,
   hookChildEnv,
@@ -1729,6 +1731,17 @@ if (copilotEvidence?.status === "contended") {
   return allowStop();
 }
 if (copilotEvidence?.status === "foreign" || copilotEvidence?.status === "resume") return allowStop();
+// The engine's last word ended the turn on purpose: a question for the person
+// or a print the agent stops after. Its own `next`, like Copilot's retained
+// step, would hand back the work in progress.
+if (turnEndIsOpen(projectDir)) {
+  recordHookTrace(
+    projectDir,
+    HOOK_NAME,
+    "the engine's last step ended the turn; allowing the stop before the next probe",
+  );
+  return allowStop();
+}
 if (!copilotSession) {
   let resumeWaiting = false;
   let recoveryWaiting = false;
@@ -1756,16 +1769,6 @@ if (!copilotSession) {
       projectDir,
       HOOK_NAME,
       "active guard-recovery question is waiting on the human; allowing the stop before the shared next probe",
-    );
-    return allowStop();
-  }
-  // The engine's last word was a question for the person, such as where new
-  // work goes; `next` alone would hand back the work in progress instead.
-  if (askTurnEndIsOpen(projectDir)) {
-    recordHookTrace(
-      projectDir,
-      HOOK_NAME,
-      "the engine's last step was a question for the person; allowing the stop before the shared next probe",
     );
     return allowStop();
   }

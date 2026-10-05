@@ -424,7 +424,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(routed.status, routed.out).toBe(0);
         const creation = JSON.parse(routed.stdout.trim());
         expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");
-        expect(creation.message).toContain("no reviewers, sensors, learnings ritual, or summary confirmation");
+        expect(creation.message).toContain("no reviewers, sensors, learnings ritual, or summary confirmation; lead agent only");
         const created = runEmittedCommand(printedCommand(creation.message));
         expect(created.status, created.out).toBe(0);
         expect(recordDirs(proj)).toHaveLength(3);

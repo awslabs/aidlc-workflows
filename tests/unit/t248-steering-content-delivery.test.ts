@@ -1599,15 +1599,14 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
+    // poc ships collaborators off, so only the lead's context is loaded.
     for (const path of [
       ".claude/agents/aidlc-product-agent.md",
-      ".claude/agents/aidlc-architect-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
       ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
-      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
     ]) {
       expect(paths).toContain(path);
     }
@@ -1763,7 +1762,7 @@ describe("t248 deterministic steering delivery", () => {
       ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
     );
     expect(paths).toContain(
-      ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+      ".claude/knowledge/aidlc-product-agent/prioritization-frameworks.md",
     );
   });
 

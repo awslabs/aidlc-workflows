@@ -951,6 +951,8 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
   return `${JSON.stringify(merged, null, 2)}\n`;
 }
 
+const RETIRED_SHIPPED_ALLOW = new Set(["Shell(bun)"]);
+
 function mergeCli(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -963,7 +965,10 @@ function mergeCli(sourcePath: string, targetPath: string): string {
 
   const shippedAllow = stringArray(sourcePermissions.allow, `${sourcePath}: permissions.allow`);
   const shippedDeny = stringArray(sourcePermissions.deny, `${sourcePath}: permissions.deny`);
-  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`);
+  // The allow entry earlier releases shipped, which covered every bun command;
+  // the narrower shipped entries replace it on refresh.
+  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`)
+    .filter((entry) => !RETIRED_SHIPPED_ALLOW.has(entry));
   const projectDeny = stringArray(existingPermissions?.deny, `${targetPath}: permissions.deny`);
   const conflicts = [
     ...shippedAllow.filter((entry) => projectDeny.includes(entry)),

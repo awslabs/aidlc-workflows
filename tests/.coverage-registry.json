@@ -1779,30 +1779,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:askTurnEndIsOpen",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:askTurnEndMarkerPath",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:asReviewClass",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3529,6 +3505,34 @@
       "coveredBy": [
         {
           "file": "tests/unit/t310-stage-validity-propagation.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:effectiveSupportAgents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:effectiveSupportAgentsForProject",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
           "mechanism": "none"
         }
       ],
@@ -6231,18 +6235,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:markAskTurnEnd",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t259-turn-markers.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:markdownBlocks",
       "minMechanism": "none",
       "coveredBy": [
@@ -6320,6 +6312,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t327-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markTurnEnd",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7354,6 +7358,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -7365,6 +7373,10 @@
       "unitId": "function:pipelineLinks",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
@@ -8910,6 +8922,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-collaborators-switch.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t337-ceremony-policy.test.ts",
           "mechanism": "none"
         }
@@ -10121,6 +10137,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:singleStageAttemptScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SKELETON_STANCES",
       "minMechanism": "none",
       "coveredBy": [],
@@ -10882,6 +10910,30 @@
       "coveredBy": [
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:turnEndIsOpen",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:turnEndMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -14360,6 +14412,10 @@
       "unitId": "aidlc-log link",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-collaborators-switch-cli.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"

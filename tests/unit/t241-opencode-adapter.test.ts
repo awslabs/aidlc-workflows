@@ -1218,6 +1218,37 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
   });
 
+  // A live run: in a new chat on open work, a read-only /aidlc --status was
+  // followed by a hidden nudge that started the open stage. The status ends
+  // the turn; a step that hands out work still leads to the nudge.
+  test("idle sends no nudge after a read-only status, and still nudges after the agent is handed work", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    const { client, prompts } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const engine = (...args: string[]) => {
+      const run = Bun.spawnSync({
+        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", "orchestrate", ...args, "--project-dir", root],
+        cwd: root,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      return JSON.parse(run.stdout.toString()) as { kind: string };
+    };
+    const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
+
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "/aidlc --status" }] });
+    expect(engine("next", "--status").kind).toBe("print");
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(0);
+
+    expect(engine("next").kind).not.toBe("print");
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+  });
+
   test("a typed summary-confirmation off in chat reaches the real record-human-turn hook as the person's choice", async () => {
     const root = freshInstalledProject();
     seedStateFile(root, "state-brownfield-feature.md");

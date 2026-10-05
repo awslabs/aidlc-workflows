@@ -127,8 +127,9 @@ const manifest: HarnessManifest = {
     // beside it are packaged byte-identical to the Claude harness).
     { src: "hooks/aidlc-cursor-adapter.ts", dst: "hooks/aidlc-cursor-adapter.ts" },
     { src: "hooks.json", dst: "hooks.json" },
-    // Project-level permissions: pre-approve bun (the engine/tool runner) so
-    // the forwarding loop is not interrupted by a prompt per engine call.
+    // Project-level permissions: pre-approve AI-DLC's own workflow commands
+    // (the dispatcher's engine commands and the aidlc-*.ts tools) so the
+    // forwarding loop is not interrupted by a prompt per engine call.
     // .cursor/cli.json is the ONLY project-level CLI config Cursor reads
     // (permissions only, documented contract).
     { src: "cli.json", dst: "cli.json" },

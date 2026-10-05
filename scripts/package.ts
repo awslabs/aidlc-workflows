@@ -89,12 +89,13 @@ import {
   writeMarkdownAgentSurface,
 } from "../core/tools/aidlc-model-policy.ts";
 import {
+  cursorTrustedShell,
   scanNamespaceInvocations,
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
-import { ROUTES, TOOLS } from "../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
@@ -997,6 +998,7 @@ function buildTree(
       tierCap: TIER_CAP,
     });
   }
+  expandCursorToolAllows(treeRoot, m);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1090,17 +1092,48 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+// Cursor's authored cli.json names AI-DLC's tool scripts with one glob. The
+// projection lists, in its place, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// each tool script it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then shows
+// Cursor's own prompt. Both trees get it; the native rewrite then drops every
+// bun entry.
+function expandCursorToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "cursor") return;
+  const cliPath = join(treeRoot, "cli.json");
+  const value = JSON.parse(readFileSync(cliPath, "utf-8")) as { permissions?: { allow?: unknown } };
+  const allow = value.permissions?.allow;
+  const glob = `Shell(bun:${m.harnessDir}/tools/aidlc-*)`;
+  if (!Array.isArray(allow) || !allow.includes(glob)) {
+    throw new Error(`[cursor] cli.json has no ${glob} entry to expand`);
+  }
+  const tool = (script: string) => `Shell(bun:${m.harnessDir}/tools/${script}`;
+  value.permissions!.allow = allow.flatMap((entry) =>
+    entry === glob
+      ? [
+        ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+        ...copyChannelToolScripts().flatMap((script) => [`${tool(script)})`, `${tool(script)} *)`]),
+      ]
+      : [entry]
+  );
+  writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
 function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): void {
   if (m.tierFlavor !== "cursor") return;
   const cliPath = join(outRoot, m.harnessDir, "cli.json");
   const value = JSON.parse(readFileSync(cliPath, "utf-8")) as {
-    permissions?: { allow?: unknown };
+    permissions?: { allow?: unknown; deny?: unknown };
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[cursor] cli.json has no permissions.allow list");
+  // The copy channel's bun entries name its tool paths; native runs the
+  // aidlc command, so they give way to its one trusted-prefix entry.
   value.permissions!.allow = [
-    ...allow.filter((entry) => entry !== "Shell(bun)"),
-    `Shell(${trustedCommand("*")})`,
+    ...allow.filter((entry) => typeof entry !== "string" || !entry.startsWith("Shell(bun")),
+    cursorTrustedShell(),
   ];
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }

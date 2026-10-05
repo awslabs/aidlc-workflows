@@ -94,7 +94,7 @@ function inceptionState(checkbox = "[?]"): string {
 ## Project Information
 - **Project**: ensemble evidence test
 - **Project Type**: Greenfield
-- **Scope**: feature
+- **Scope**: enterprise
 - **State Version**: 8
 
 ## Scope Configuration
@@ -126,7 +126,7 @@ function practicesState(
 ## Project Information
 - **Project**: practices ensemble evidence test
 - **Project Type**: Greenfield
-- **Scope**: feature
+- **Scope**: enterprise
 - **State Version**: 8
 - **Practices Affirmed Timestamp**: ${affirmedTimestamp}
 
@@ -253,10 +253,13 @@ function startSingle(
   env: Record<string, string | undefined> = {},
 ): void {
   seedAidlcMemory(proj);
+  // enterprise is the scope that ships collaborators on, so an isolated run
+  // (which resolves the switch from its recorded attempt scope, never the main
+  // state's intent line) still owes ensemble evidence.
   const result = runOrchestrateNext(
     ORCH,
     proj,
-    ["--scope", "feature", "--stage", "user-stories", "--single"],
+    ["--scope", "enterprise", "--stage", "user-stories", "--single"],
     { cwd: proj, env: { ...process.env, ...env } },
   );
   expect(result.status, result.stderr).toBe(0);

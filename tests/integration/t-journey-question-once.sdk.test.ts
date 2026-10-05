@@ -51,7 +51,7 @@ import { describe, expect, test } from "bun:test";
 import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 import { type CapturedAskUserQuestion, driveAidlc, readAuditEvents, readStateFile } from "../harness/sdk-drive.ts";
-import { askTurnEndIsOpen, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readIntentRegistry, turnEndIsOpen } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
 const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
@@ -132,7 +132,7 @@ describe("t-journey-question-once (sdk): a question still open at the end of a t
               rows: countRows(readAuditEvents(proj)),
               intents: readIntentRegistry(proj).length,
               state: readStateFile(proj) ?? "",
-              engineAskOpen: askTurnEndIsOpen(proj),
+              engineAskOpen: turnEndIsOpen(proj),
               reply: separateWorkReply(firstMenu),
             };
             replied = true;

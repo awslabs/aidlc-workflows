@@ -133,6 +133,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
@@ -7290,8 +7291,12 @@ function handlePracticesPromote(args: string[]): void {
   if (dirname(discoveredRulesPath) !== draftDir) {
     fail("team-practices and discovered-rules drafts must share one stage directory");
   }
+  // Honour the collaborators switch: a lead-only practices-discovery run (the
+  // `collaborators` ceremony off for this scope) has no spokes and therefore no
+  // contribution files to revalidate. Same switch owner the gate and dispatch
+  // read, so promotion can never demand evidence the stage never produced.
   const missingContributions: string[] = [];
-  for (const agent of practicesStage!.support_agents ?? []) {
+  for (const agent of effectiveSupportAgentsForProject(pd, practicesStage!)) {
     const contribution = join(draftDir, "contributions", `${agent}.md`);
     let firstLine = "";
     try {

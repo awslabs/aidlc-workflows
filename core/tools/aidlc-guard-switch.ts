@@ -90,6 +90,7 @@ export const CONFIG_KEYS = [
   "learnings",
   "summary-confirmation",
   "plan-approval",
+  "collaborators",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];

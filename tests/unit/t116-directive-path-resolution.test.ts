@@ -626,6 +626,10 @@ describe("t116 inline context roster", () => {
       "domain-design",
       (proj) => {
         cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+        // feature ships collaborators off; this case asserts the full inline
+        // roster, so pin the switch on for the directive it builds.
+        const sp = seededStateFile(proj);
+        writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
         for (const relative of customPaths) {
           const absolute = join(proj, ...relative.split("/"));
           mkdirSync(dirname(absolute), { recursive: true });

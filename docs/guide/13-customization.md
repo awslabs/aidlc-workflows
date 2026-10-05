@@ -139,9 +139,9 @@ You can override scope at any time during a workflow:
 
 ## Intent Configuration
 
-The eight intent settings are `depth`, `test-strategy`, `review`,
-`guard-policy`, `sensors`, `learnings`, `summary-confirmation`, and
-`plan-approval`, in that order. Three more keys, `guard.review-freeze`,
+The nine intent settings are `depth`, `test-strategy`, `review`,
+`guard-policy`, `sensors`, `learnings`, `summary-confirmation`,
+`plan-approval`, and `collaborators`, in that order. Three more keys, `guard.review-freeze`,
 `guard.state-transition`, and `guard.reviewer-scope`, switch one guard off or
 back on for a single piece of work, and `guard.plan-approval` is another name
 for `plan-approval`. The CLI routes share one atomic setter,
@@ -156,8 +156,8 @@ Mix the settings in one command rather than chaining separate updates:
 ```
 
 The native equivalent is `aidlc engine config set <key> <value>` followed by
-the remaining `--key value` flags. `config get <key>` accepts all twelve keys,
-and `config list` (optionally `--json`) returns all twelve, including effective
+the remaining `--key value` flags. `config get <key>` accepts all thirteen keys,
+and `config list` (optionally `--json`) returns all thirteen, including effective
 values and sources for Guard Policy, the switchable fences, and the ceremonies
 (`guard.plan-approval` is another name for `plan-approval` and reads the same):
 
@@ -213,13 +213,15 @@ the cap for this piece of work.
 
 ### Ceremony Switches
 
-Scopes own four independent ceremony defaults. Each accepts `on` or `off`.
-Every shipped scope now declares all four explicitly rather than relying on a
+Scopes own five independent ceremony defaults. Each accepts `on` or `off`.
+Every shipped scope now declares all five explicitly rather than relying on a
 default; a scope file that omits one still falls back to `on`. Classic sets
 sensors, learnings, and plan approval to `on` and summary confirmation to `off`.
 Bugfix sets learnings and summary confirmation to `off` and keeps sensors and
-plan approval `on`. Express is the only shipped scope with all four off; poc
-also turns plan approval off.
+plan approval `on`. Express turns the first four off; poc also turns plan
+approval off. `collaborators` is the exception to the on-default: it ships on
+only on `enterprise` and off on every other scope, so a first run is lean and a
+team re-enables collaborators deliberately.
 
 | Scope key | Per-intent flag | Global kill switch | What off removes |
 |-----------|-----------------|--------------------|------------------|
@@ -227,11 +229,12 @@ also turns plan approval off.
 | `learnings` | `/aidlc --learnings on\|off` | `AIDLC_DISABLE_LEARNINGS=1` | Stage learnings read/write ritual |
 | `summary_confirmation` | `/aidlc --summary-confirmation on\|off` | `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1` | The separate pre-output summary-confirmation checkpoint |
 | `plan_approval` | `/aidlc --plan-approval on\|off` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` | The stop that asks you to approve each code plan before it is built ([Plan approval](#plan-approval)) |
+| `collaborators` | `/aidlc --collaborators on\|off` | `AIDLC_DISABLE_COLLABORATORS=1` | A stage's support agents: off runs every stage lead-only (no blind spokes, mob round, or pipeline support link); the reviewer is unaffected |
 
 Precedence is global kill switch (`1`) → valid intent field → scope default →
 `on`. Kill switches can also be recorded with `aidlc config flags --bypass <NAME>`.
-New intents store `Sensors`, `Learnings`, `Summary Confirmation`, and
-`Plan Approval` after `Guard Policy` in `aidlc-state.md`, each with a source
+New intents store `Sensors`, `Learnings`, `Summary Confirmation`,
+`Plan Approval`, and `Collaborators` after `Guard Policy` in `aidlc-state.md`, each with a source
 label such as `on (from scope classic)`. The label reads `set by you` only when
 the human-turn hook applies the message you typed itself: summary confirmation
 or plan approval off typed with no description, plan approval off in your own

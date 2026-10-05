@@ -721,6 +721,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
@@ -781,6 +783,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    // Pin collaborators on (fixture scope ships them off) so reverse-engineering keeps its architect pipeline link.
+    writeFileSync(seededStateFile(proj), readFileSync(seededStateFile(proj), "utf-8").replace(/^- \*\*Scope\*\*: .*/m, "- **Scope**: enterprise"));
     rewriteIntentRepos(proj, ["repo-a"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  CONFIG_SECTIONS,
   dispatcherWorkspaceUtilityArgv,
   HUMAN_PRESENCE_NO_SWITCH,
   LAUNCHER_GLOBAL_FLAGS,
@@ -1313,6 +1314,39 @@ function routeForms(route: Route): string[] {
 
 export function listRoutes(): readonly Route[] {
   return ROUTES;
+}
+
+// The tool scripts behind a route that can change the machine (a release,
+// machine-wide settings, the installation). Copy channels pre-approve
+// AI-DLC's other tool scripts, never these, so running one directly shows the
+// host's own prompt.
+export function machineReachingTools(): string[] {
+  return [...new Set(
+    ROUTES.filter((route) => route.mutationScope === "machine" || route.mutationScope === "project-and-machine")
+      .map((route) => route.tool)
+      .filter((tool): tool is string => tool !== undefined),
+  )].sort();
+}
+
+// AI-DLC's tool scripts a copy channel pre-approves: every one but those.
+export function copyChannelToolScripts(): string[] {
+  const machine = new Set(machineReachingTools());
+  return [...new Set(Object.values(TOOLS))].filter((tool) => !machine.has(tool)).sort();
+}
+
+// The dispatcher's public commands, outside its engine namespace, that a copy
+// channel pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
+// version utilities and config's read-only forms. A host that matches text as
+// written cannot tell a quoted or re-spelled machine-wide config flag from a
+// project one, so every other config command is left to the host's prompt.
+export function copyChannelDispatcherCommands(): string[] {
+  return [
+    "doctor",
+    "version",
+    "--doctor",
+    "status",
+    ...CONFIG_SECTIONS.flatMap((section) => [`config ${section} --show --json`, `config ${section} --help`]),
+  ];
 }
 
 export function renderHumanHelp(): string {

@@ -525,7 +525,10 @@ Before beginning any stage, transition sidebar tasks:
 1. Previous stage task `in_progress` -> mark `completed`
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
-Rules: task must be `in_progress` for spinner to display. Update BEFORE
+Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool the harness's
+skill maps them to, is in the agent's tool list; otherwise the agent skips
+task transitions silently. Rules: task must be `in_progress`
+for spinner to display. Update BEFORE
 reading stage file. Applies to all 33 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`
@@ -672,7 +675,9 @@ mutually blind quality, developer, and devsecops contributions, human interview,
 then lead integration. Its gate offers **Approve** / **Request Changes**; after
 Approve, `practices-promote` must commit both the affirmed timestamp and a
 `PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
-conductor reports the stage approved.
+conductor reports the stage approved. With collaborators off (the scope setting,
+shipped on only for `enterprise`), the directive lists no support agents and each
+of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5).
 
 ### The 11 Domain Agents
 

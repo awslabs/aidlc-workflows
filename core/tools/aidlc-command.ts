@@ -66,6 +66,14 @@ export function codexHookTrustHash(
   return `sha256:${createHash("sha256").update(JSON.stringify(sortKeys(identity)), "utf-8").digest("hex")}`;
 }
 
+// The Cursor CLI permission for the trusted prefix. Cursor reads only the
+// first token as a Shell entry's command base, and the rest after a colon as
+// an argument glob, so `Shell(aidlc engine *)` would name no command at all.
+export function cursorTrustedShell(): string {
+  const [command, ...rest] = TRUSTED_COMMAND_TOKENS;
+  return `Shell(${command}:${[...rest, "*"].join(" ")})`;
+}
+
 // Lightweight dispatcher grammar. aidlc-lib.ts retains the same public
 // workspace helpers for methodology callers; keeping this copy in the existing
 // command module avoids loading the full methodology graph at CLI startup.
@@ -85,6 +93,9 @@ export const PINNED_TOP_LEVEL_ROUTES = [
 ] as const;
 
 export const PINNED_SYSTEM_GROUPS = ["workspace-sync"] as const;
+
+// The sections `aidlc config <section>` takes (aidlc-init.ts reads them).
+export const CONFIG_SECTIONS = ["models", "runtime", "providers", "trust", "flags", "project"] as const;
 
 const LAUNCHER_FLAG_VALUES = new Set(["--project-dir"]);
 // The dispatcher's global flags: `aidlc` drops them wherever they appear

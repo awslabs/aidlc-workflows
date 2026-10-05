@@ -24687,12 +24687,13 @@ export function humanTurnMarkerPath(projectDir: string, intent?: string, space?:
 export function engineTouchMarkerPath(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "engine-touch");
 }
-// The engine's last word to the agent was a question for the person (an `ask`):
-// where new work goes, which plan to start it with, and the like. `next` alone
-// can still return the work in progress, so this marker is how the Stop hook
-// knows the turn ends at a question on purpose.
-export function askTurnEndMarkerPath(projectDir: string, intent?: string, space?: string): string {
-  return join(engineDir(projectDir, intent, space), "ask-turn-end");
+// The engine's last word to the agent ended the turn on purpose: a question for
+// the person (where new work goes, which plan to start it with) or a print the
+// agent stops after (status, a setting, a scope change, new work that starts
+// in a fresh session). `next` alone can still return the work in progress, so
+// this marker is how the Stop hook knows.
+export function turnEndMarkerPath(projectDir: string, intent?: string, space?: string): string {
+  return join(engineDir(projectDir, intent, space), "turn-end");
 }
 
 // The env marker that identifies the Stop hook's OWN read-only `next` probe.
@@ -24752,20 +24753,45 @@ export function isReadOnlyEngineProbe(): boolean {
 // fails closed on the read side, and the unlink succeeds in the root-owned case
 // because the containing directory stays user-writable. If even the unlink
 // fails there is nothing further to do; the block cap remains the backstop.
-function touchTurnMarker(path: string): void {
+// The marker lives in the record's engine folder and is reached through no
+// symlink, the leaf included, so a link in the record never sends the write or
+// the clean-up anywhere else.
+function touchTurnMarker(projectDir: string, name: string, intent?: string, space?: string): void {
+  const recordRoot = docsRoot(projectDir, intent, space);
+  const relative = join(ENGINE_DIR, name);
   try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, `${isoTimestamp()}\n`, "utf-8");
+    const anchor = realpathSync(recordRoot);
+    const target = assertNoSymlinkInChainOrThrow(anchor, relative);
+    mkdirSync(dirname(target), { recursive: true });
+    assertNoSymlinkInChainOrThrow(anchor, relative);
+    const noFollow = typeof fsConstants.O_NOFOLLOW === "number" ? fsConstants.O_NOFOLLOW : 0;
+    const fd = openSync(target, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | noFollow, 0o644);
+    try {
+      writeSync(fd, `${isoTimestamp()}\n`);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     // Degrade to "no evidence" rather than leaving a stale mtime that would
     // silently relax the carve-out from here on. `recursive` so a directory
     // squatting on the path (an unlikely but possible way for the write to fail
     // while the path survives) is cleared too, not just a stale file.
-    try {
-      rmSync(path, { force: true, recursive: true });
-    } catch {
-      /* nothing left to try - the cap-bounded block is the backstop */
-    }
+    clearTurnMarker(recordRoot, relative);
+  }
+}
+
+// A turn mark's stat, read through the same no-symlink path it is written by:
+// a link anywhere on the way reads as no mark.
+function turnMarkerStat(projectDir: string, name: string, intent?: string, space?: string) {
+  const target = recordFileTargetOrThrow(docsRoot(projectDir, intent, space), join(ENGINE_DIR, name));
+  return lstatSync(target, { throwIfNoEntry: false });
+}
+
+function clearTurnMarker(recordRoot: string, relative: string): void {
+  try {
+    rmSync(recordFileTargetOrThrow(recordRoot, relative), { force: true, recursive: true });
+  } catch {
+    /* nothing left to try - the cap-bounded block is the backstop */
   }
 }
 
@@ -24790,36 +24816,32 @@ function workflowIsCreated(projectDir: string, intent?: string, space?: string):
 // adapter; direct execution of the authority-bearing hook file is inert.
 export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
   if (!workflowIsCreated(projectDir, intent, space)) return;
-  touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
+  touchTurnMarker(projectDir, "human-turn", intent, space);
 }
 
-// Record what the engine handed out last: an ask sets the marker, anything else
-// clears it. The Stop hook's own probe changes nothing.
-export function markAskTurnEnd(projectDir: string, asked: boolean, intent?: string, space?: string): void {
+// Record what the engine handed out last: a step that ends the turn sets the
+// marker, anything else clears it. The Stop hook's own probe changes nothing.
+export function markTurnEnd(projectDir: string, endsTurn: boolean, intent?: string, space?: string): void {
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
-  const path = askTurnEndMarkerPath(projectDir, intent, space);
-  if (asked) {
-    touchTurnMarker(path);
+  if (endsTurn) {
+    touchTurnMarker(projectDir, "turn-end", intent, space);
     return;
   }
-  try {
-    rmSync(path, { force: true, recursive: true });
-  } catch {
-    /* a stale marker only lets one turn end at a question that is no longer open */
-  }
+  // A stale marker only lets one turn end at a step that is no longer the last.
+  clearTurnMarker(docsRoot(projectDir, intent, space), join(ENGINE_DIR, "turn-end"));
 }
 
-// True when the engine's last word was a question the person has not answered:
-// the ask marker is newer than their last message. Fail-closed like the
+// True when the engine's last word ended the turn and the person has not
+// written since: the marker is newer than their last message. Fail-closed like the
 // conversational reading: a missing or unreadable marker on either side is no
 // evidence, and the caller falls through to its usual checks.
-export function askTurnEndIsOpen(projectDir: string, intent?: string, space?: string): boolean {
+export function turnEndIsOpen(projectDir: string, intent?: string, space?: string): boolean {
   try {
-    const askStat = statSync(askTurnEndMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
-    const humanStat = statSync(humanTurnMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
-    if (!askStat?.isFile() || !humanStat?.isFile()) return false;
-    return askStat.mtimeMs > humanStat.mtimeMs;
+    const endStat = turnMarkerStat(projectDir, "turn-end", intent, space);
+    const humanStat = turnMarkerStat(projectDir, "human-turn", intent, space);
+    if (!endStat?.isFile() || !humanStat?.isFile()) return false;
+    return endStat.mtimeMs > humanStat.mtimeMs;
   } catch {
     return false;
   }
@@ -24851,7 +24873,7 @@ export function askTurnEndIsOpen(projectDir: string, intent?: string, space?: st
 export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
-  touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
+  touchTurnMarker(projectDir, "engine-touch", intent, space);
 }
 
 // The transcript-free reading of "the ending turn was conversational": the last
@@ -24867,8 +24889,6 @@ export function turnMarkersShowConversational(
   space?: string,
 ): boolean {
   try {
-    const humanPath = humanTurnMarkerPath(projectDir, intent, space);
-    const enginePath = engineTouchMarkerPath(projectDir, intent, space);
     // Both markers must be present AND be regular files. An absent engine
     // marker is NOT read as "the engine was never touched, therefore chat": it
     // is read as "no evidence", because that is also the shape of a fresh
@@ -24877,8 +24897,8 @@ export function turnMarkersShowConversational(
     // dangling symlink) would otherwise contribute a meaningless mtime to the
     // comparison, and on the engine side a meaningless-but-old mtime reads as
     // "chat" and releases the stop.
-    const humanStat = statSync(humanPath, { throwIfNoEntry: false });
-    const engineStat = statSync(enginePath, { throwIfNoEntry: false });
+    const humanStat = turnMarkerStat(projectDir, "human-turn", intent, space);
+    const engineStat = turnMarkerStat(projectDir, "engine-touch", intent, space);
     if (!humanStat?.isFile() || !engineStat?.isFile()) return false;
     return humanStat.mtimeMs > engineStat.mtimeMs;
   } catch {
@@ -31214,8 +31234,40 @@ export interface PipelineLinkEvidence {
 
 export function pipelineLinks(
   stage: Pick<StageEntry, "lead_agent" | "support_agents">,
+  effectiveSupports?: string[],
 ): string[] {
-  return [stage.lead_agent, ...(stage.support_agents ?? [])];
+  return [stage.lead_agent, ...(effectiveSupports ?? stage.support_agents ?? [])];
+}
+
+/**
+ * The collaborators a stage gets for the workflow active in `projectDir`,
+ * resolved from that workflow's recorded scope + state. The lower-level pipeline
+ * paths (link recording, precondition checks) hold only `projectDir`, so this
+ * reads the active state for them and defers to `effectiveSupportAgents` — the
+ * one switch owner. Fails open to the declared list if the state cannot be read,
+ * so a resolution hiccup never strands a legitimately-run stage. An isolated
+ * (`--single`) run reads the scope its attempt recorded and no state, as its
+ * directive does: it never borrows the main workflow's settings.
+ */
+export function effectiveSupportAgentsForProject(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "support_agents">,
+  options: { singleRun?: boolean } = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const declared = stage.support_agents ?? [];
+  if (declared.length === 0) return [];
+  if (options.singleRun === true) {
+    return effectiveSupportAgents(stage, singleStageAttemptScope(projectDir, stage.slug), null, env);
+  }
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(projectDir);
+  } catch {
+    return declared;
+  }
+  const scope = getField(stateContent, "Scope")?.trim() ?? null;
+  return effectiveSupportAgents(stage, scope, stateContent, env);
 }
 
 type OrderedPipelineEvidenceEvent = AuditShardEvent;
@@ -31305,6 +31357,26 @@ export function pipelineAttemptStartedAt(
     options.singleRun === true,
   );
   return floor?.timestamp ?? "";
+}
+
+// The scope an isolated attempt recorded on its STAGE_STARTED row. Call only
+// after confirming an open attempt. Match its boundary ordering and never
+// borrow ceremony policy from the main workflow; legacy rows return null.
+export function singleStageAttemptScope(projectDir: string, slug: string): string | null {
+  const workflow = `single-stage:${slug}`;
+  const attemptStart = readAuditShardEvents(projectDir)
+    .filter((entry) =>
+      entry.event === "STAGE_STARTED" &&
+      auditBlockField(entry.block, "Stage") === slug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    )
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    })
+    .pop();
+  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
 }
 
 export function singleStageAttemptIsOpen(
@@ -31512,9 +31584,16 @@ function currentPipelineReuseEvidence(
 export function pipelineLinkEvidence(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
-  options: { singleRun?: boolean } = {},
+  options: { singleRun?: boolean; effectiveSupports?: string[] } = {},
 ): PipelineLinkEvidence {
-  const links = pipelineLinks(stage);
+  // The chain honours the collaborators switch: when a caller already knows the
+  // effective support list (it holds scope + state) it passes it; otherwise we
+  // resolve it from the active workflow, or from an isolated run's own scope.
+  // An empty list collapses the chain to the lead alone, which then authors the
+  // artifacts as the sole/final link.
+  const effectiveSupports = options.effectiveSupports ??
+    effectiveSupportAgentsForProject(projectDir, stage, { singleRun: options.singleRun });
+  const links = pipelineLinks(stage, effectiveSupports);
   const registeredRepos = intentRepos(projectDir);
   const repos = registeredRepos;
   const singleRun = options.singleRun === true;
@@ -31525,13 +31604,19 @@ export function pipelineLinkEvidence(
   );
   const receipts: PipelineLinkReceipt[] = [];
   const chainRepos = repos.length > 0 ? repos : [null];
+  // The final link certifies the finished artifacts, so its receipt counts only
+  // if it was recorded as the final link of a chain this long: a scan-only lead
+  // receipt never stands in for a lead-only run after collaborators turn off.
+  const fitsChain = (receipt: PipelineLinkReceipt, index: number): boolean =>
+    index < links.length - 1 || receipt.position === null ||
+    receipt.position === `${links.length}/${links.length}`;
   for (const repo of chainRepos) {
     const chain: PipelineLinkReceipt[] = [];
     for (const receipt of rawReceipts) {
       if (receipt.repo !== repo) continue;
       if (receipt.link === links[0]) {
         chain.length = 0;
-        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt)) {
+        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt) && fitsChain(receipt, 0)) {
           chain.push(receipt);
         }
         continue;
@@ -31539,7 +31624,8 @@ export function pipelineLinkEvidence(
       if (
         chain.length > 0 &&
         chain.length < links.length &&
-        receipt.link === links[chain.length]
+        receipt.link === links[chain.length] &&
+        fitsChain(receipt, chain.length)
       ) {
         chain.push(receipt);
       }
@@ -34791,6 +34877,7 @@ export function scopeSettingsOffList(
   if (policy.learnings === "off") off.push("learnings ritual");
   if (policy.summary_confirmation === "off") off.push("summary confirmation");
   if (policy.plan_approval === "off") off.push("plan approval");
+  if (policy.collaborators === "off") off.push("collaborators");
   return off;
 }
 
@@ -34804,17 +34891,20 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
     learnings: def.ceremony?.learnings ?? "on",
     summary_confirmation: def.ceremony?.summary_confirmation ?? "on",
     plan_approval: def.ceremony?.plan_approval ?? "on",
+    collaborators: def.ceremony?.collaborators ?? "on",
   });
   return summary;
 }
 
-/** Human-readable policy clause appended to the scope's stage/gate counts. */
+/** Human-readable policy clause appended to the scope's stage/gate counts.
+ * Collaborators off reads as what runs instead: the lead agent alone. */
 export function ceremonyOffClause(summary: ScopeCostSummary): string {
-  const { off } = summary;
-  if (off.length === 0) return "";
-  if (off.length === 1) return `; no ${off[0]}`;
-  if (off.length === 2) return `; no ${off[0]} or ${off[1]}`;
-  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}`;
+  const off = summary.off.filter((label) => label !== "collaborators");
+  const leadOnly = off.length < summary.off.length ? "; lead agent only" : "";
+  if (off.length === 0) return leadOnly;
+  if (off.length === 1) return `; no ${off[0]}${leadOnly}`;
+  if (off.length === 2) return `; no ${off[0]} or ${off[1]}${leadOnly}`;
+  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}${leadOnly}`;
 }
 
 // --- Timestamp ---
@@ -35435,7 +35525,7 @@ export function formatGuardPolicy(value: GuardPolicy, source: string): string {
 export const formatChangeControl = formatGuardPolicy;
 
 // Scope-owned ceremonies: env kill switch, then intent, then scope, then on.
-export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval"] as const;
+export const CEREMONY_KEYS = ["sensors", "learnings", "summary_confirmation", "plan_approval", "collaborators"] as const;
 export type CeremonyKey = (typeof CEREMONY_KEYS)[number];
 export type CeremonySetting = "on" | "off";
 export const CEREMONY_SETTINGS: readonly CeremonySetting[] = ["on", "off"];
@@ -35444,6 +35534,7 @@ export const CEREMONY_FIELDS: Record<CeremonyKey, string> = {
   learnings: "Learnings",
   summary_confirmation: "Summary Confirmation",
   plan_approval: "Plan Approval",
+  collaborators: "Collaborators",
 };
 /** Global kill switches; "1" forces off. Recordable via config flags --bypass. */
 export const CEREMONY_ENV: Record<CeremonyKey, string> = {
@@ -35451,12 +35542,14 @@ export const CEREMONY_ENV: Record<CeremonyKey, string> = {
   learnings: "AIDLC_DISABLE_LEARNINGS",
   summary_confirmation: "AIDLC_DISABLE_SUMMARY_CONFIRMATION",
   plan_approval: "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
+  collaborators: "AIDLC_DISABLE_COLLABORATORS",
 };
 export const CEREMONY_FLAGS: Record<CeremonyKey, string> = {
   sensors: "--sensors",
   learnings: "--learnings",
   summary_confirmation: "--summary-confirmation",
   plan_approval: "--plan-approval",
+  collaborators: "--collaborators",
 };
 export type CeremonyPolicy = Record<CeremonyKey, CeremonySetting>;
 export interface CeremonyResolution {
@@ -35545,6 +35638,7 @@ export function resolveCeremonyPolicy(
     learnings: resolveCeremony("learnings", scope, stateContent),
     summary_confirmation: resolveCeremony("summary_confirmation", scope, stateContent),
     plan_approval: resolveCeremony("plan_approval", scope, stateContent),
+    collaborators: resolveCeremony("collaborators", scope, stateContent),
   };
 }
 
@@ -35558,7 +35652,34 @@ export function ceremonyPolicyValues(
     learnings: policy.learnings.value,
     summary_confirmation: policy.summary_confirmation.value,
     plan_approval: policy.plan_approval.value,
+    collaborators: policy.collaborators.value,
   };
+}
+
+/**
+ * The collaborators a stage ACTUALLY gets for this run — the single owner of
+ * the collaborators switch. Returns the stage's declared `support_agents`, or
+ * an empty list when the `collaborators` ceremony resolves to `off` for the
+ * active scope (env kill switch → per-run intent → scope default → on).
+ *
+ * This is the ONLY place that interprets the switch. The directive builder, the
+ * approval-gate evidence check, and practices-promote all call it, so dispatch,
+ * the gate, and promotion can never disagree about who the collaborators are.
+ * An empty list means the stage runs lead-only on every topology (the shared
+ * stage-protocol-ensemble.md contract: dispatch exactly these agents, and none
+ * means the lead runs alone).
+ */
+export function effectiveSupportAgents(
+  stage: Pick<StageEntry, "support_agents">,
+  scope: string | null | undefined,
+  stateContent: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const declared = stage.support_agents ?? [];
+  if (declared.length === 0) return [];
+  return resolveCeremony("collaborators", scope, stateContent, env).value === "off"
+    ? []
+    : declared;
 }
 
 function changeControlMemoryDir(

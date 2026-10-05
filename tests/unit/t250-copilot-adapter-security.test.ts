@@ -870,6 +870,78 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("12c: a refusal of an AI-DLC command names what it did not accept and the form to run, and says chaining only for a chain", () => {
+    // An agent that typed `park --stage code-generation --note "..."` was
+    // told to avoid chaining six times, then read engine source to find the
+    // plain `park`.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const reason = (command: string) => {
+        const out = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+        expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+        return out.hookSpecificOutput?.permissionDecisionReason ?? "";
+      };
+      for (const [command, named, form] of [
+        ['aidlc engine orchestrate park --stage code-generation --note "stopping for today"', "--stage", "aidlc engine orchestrate park"],
+        ["bun .aidlc/tools/aidlc.ts park --help", "--help", "bun .aidlc/tools/aidlc.ts park"],
+        ["bun .aidlc/tools/aidlc.ts engine orchestrate park now", "now", "bun .aidlc/tools/aidlc.ts engine orchestrate park"],
+        ["bun .aidlc/tools/aidlc-orchestrate.ts park --stage code-generation", "--stage", "bun .aidlc/tools/aidlc-orchestrate.ts park"],
+      ]) {
+        const text = reason(command);
+        expect(text, command).toContain("`park` takes no options");
+        expect(text, command).toContain(`\`${named}\``);
+        expect(text, command).toContain(`Run \`${form}\``);
+        expect(text, command).not.toContain("chaining");
+      }
+      // A word that is not plain text is never repeated back.
+      expect(reason("aidlc engine orchestrate park 'a `b` c'")).not.toContain("`b`");
+      const extra = reason("aidlc continue ABCD1234 EFGH5678");
+      expect(extra).toContain("`continue` takes only the receipt");
+      expect(extra).toContain("Run `aidlc next`");
+      expect(extra).not.toContain("<receipt>");
+      expect(extra).not.toContain("chaining");
+      for (const command of ["aidlc engine orchestrate next --project-dir", "aidlc engine orchestrate next --project-dir ./no-such-folder"]) {
+        const text = reason(command);
+        expect(text, command).toContain("`--project-dir`");
+        expect(text, command).toContain("run the command without `--project-dir`");
+        expect(text, command).not.toContain("chaining");
+      }
+      // A chain keeps the chaining refusal.
+      expect(reason("aidlc engine orchestrate next; rm -rf build")).toContain("chaining");
+      // The form it names is the next step that works.
+      const parked = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc engine orchestrate park")));
+      expect(parked.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+      const fresh = shellDecision(runAdapter(s, "guard-tool-call", shellCall("aidlc next")));
+      expect(fresh.hookSpecificOutput?.updatedInput?.command).toContain(STUB_ATTEMPT);
+    } finally {
+      s.cleanup();
+    }
+    // A project without the copied script is told to use the installed command.
+    const bare = scratch();
+    try {
+      const out = shellDecision(runAdapter(bare, "guard-tool-call", shellCall("bun .aidlc/tools/aidlc-orchestrate.ts park")));
+      expect(out.hookSpecificOutput?.permissionDecisionReason).toContain(
+        "Run the same command with `aidlc engine orchestrate` in place of `bun .aidlc/tools/aidlc-orchestrate.ts`",
+      );
+      // A second thing it would not accept is named too, with the command that runs.
+      for (const [command, form] of [
+        ["bun .aidlc/tools/aidlc-orchestrate.ts park --help", "aidlc engine orchestrate park"],
+        ['bun .aidlc/tools/aidlc-orchestrate.ts park --stage code-generation --note "stopping for today"', "aidlc engine orchestrate park"],
+        ["bun .aidlc/tools/aidlc-orchestrate.ts continue ABCD1234 EFGH5678", "aidlc engine orchestrate next"],
+      ]) {
+        const text = shellDecision(runAdapter(bare, "guard-tool-call", shellCall(command))).hookSpecificOutput?.permissionDecisionReason ?? "";
+        expect(text, command).toContain(`Run \`${form}\``);
+        expect(text, command).not.toContain("chaining");
+        const named = shellDecision(runAdapter(bare, "guard-tool-call", shellCall(form)));
+        expect(named.hookSpecificOutput?.permissionDecision, form).not.toBe("deny");
+      }
+    } finally {
+      bare.cleanup();
+    }
+  });
+
   // --- Deliberate block (core exit 2) → deny projection, later hooks skipped --
 
   test("13: a core-hook exit 2 becomes a deny-JSON projection (exit 0); reviewer-scope is skipped", () => {

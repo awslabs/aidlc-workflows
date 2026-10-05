@@ -238,7 +238,7 @@ function runnerFixture(mode: "success" | "timeout" | "cancel" | "capture", witne
     "tests/lib/e2e-plan.ts", "tests/lib/e2e-scheduler.ts", "tests/lib/e2e-workers.ts", "tests/lib/e2e-process.ts",
     "tests/lib/e2e-deferred-cleanup.ts",
     "tests/harness/tui-runtime.ts", "tests/harness/tui-drive.ts", "tests/harness/sdk-drive.ts",
-    "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
+    "tests/harness/person-turns.ts", "tests/harness/sdk-process-containment.ts", "tests/harness/windows-folder-holders.ts",
     // Started by path at runtime, so the import walk cannot see it.
     "tests/harness/sdk-contained-bootstrap.ts",
     "tests/harness/tui-time-budget.ts",

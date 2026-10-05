@@ -67,7 +67,7 @@ import { join } from "node:path";
 import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { gateText, turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -199,6 +199,7 @@ function codexTurn(
 ): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -207,7 +208,7 @@ function codexTurn(
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
-  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("compose-front", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return { ...result, ...(result.rc === 0 ? turnEvidence(result.stdout) : { agentMessages: [] }) };
 }
 

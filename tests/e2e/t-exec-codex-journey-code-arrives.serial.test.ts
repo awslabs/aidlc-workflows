@@ -38,7 +38,7 @@ import { join } from "node:path";
 import { auditBlockField, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexHeadlessArgs, setupCodexProject } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
@@ -129,6 +129,7 @@ function commandOutputs(stdout: string): string[] {
 function codexTurn(proj: string, home: string, prompt: string, opts: { resume?: boolean } = {}): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -137,7 +138,7 @@ function codexTurn(proj: string, home: string, prompt: string, opts: { resume?: 
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
-  recordCodexExec("code-arrives", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("code-arrives", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return { ...result, ...(result.rc === 0 ? turnEvidence(result.stdout) : { agentMessages: [] }) };
 }
 

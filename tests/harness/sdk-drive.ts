@@ -75,6 +75,7 @@ import {
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -718,6 +719,9 @@ export async function driveAidlc(
   let turn = 1;
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
+  // The person's turns: the opening prompt now, each menu answer as it is given.
+  const personTurns = new PersonTurnLedger(projectDir);
+  personTurns.sent(prompt);
   let stopAfterAskUserQuestionToolUseId: string | undefined;
   writeSdkTrace(tracePath, "start", {
     prompt,
@@ -763,6 +767,7 @@ export async function driveAidlc(
     } else {
       turn++;
       writeSdkTrace(tracePath, "next_message", { turn, message: next });
+      personTurns.sent(next);
       input.send(next);
     }
   };
@@ -838,6 +843,9 @@ export async function driveAidlc(
             const chat = opts.chatAboutQuestionWhen?.({ questions, answers: {} }) === true;
             const answers = chat ? {} : buildAnswers(questions, answerScript, askMenuIndex);
             askMenuIndex++;
+            // "Chat about this" answers nothing: the person's reply comes in
+            // their next message.
+            if (!chat) personTurns.sent(JSON.stringify(answers));
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
             if (chat) {
@@ -1132,6 +1140,12 @@ export async function driveAidlc(
   // A drive that leaves descendants behind is a failure even when its own
   // assertions could pass: the next fixture removal would hit them as EBUSY.
   if (containmentFailure) throw containmentFailure;
+  // So is a decision recorded as the person's that no turn they sent backs.
+  const unbacked = personTurns.unbacked();
+  if (unbacked.length > 0) {
+    writeSdkTrace(tracePath, "unbacked_decision", { decisions: unbacked });
+    throw unbackedFailure("The SDK drive", unbacked);
+  }
 
   const result: DriveResult = {
     toolResults,

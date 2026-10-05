@@ -609,6 +609,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     resetAidlcEnv();
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+    // The fixture scope ships collaborators off, which would collapse the
+    // reverse-engineering pipeline to the developer lead alone and drop the
+    // architect link the codekb-placement cases record. Pin the switch on.
+    const sp = seededStateFile(proj);
+    writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
   });
 
   afterEach(() => cleanupTestProject(proj));

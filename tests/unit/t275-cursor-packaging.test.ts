@@ -50,6 +50,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -219,14 +220,91 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
-  test("6: cli.json pre-approves exactly Shell(bun) at the project level", () => {
+  const SHIPPED_ALLOW = [
+    "Shell(bun:.cursor/tools/aidlc.ts engine *)",
+    ...copyChannelDispatcherCommands().map((command) => `Shell(bun:.cursor/tools/aidlc.ts ${command})`),
+    ...copyChannelToolScripts().flatMap((tool) => [`Shell(bun:.cursor/tools/${tool})`, `Shell(bun:.cursor/tools/${tool} *)`]),
+  ];
+  const SHIPPED_DENY: string[] = [];
+
+  test("6: cli.json pre-approves only AI-DLC's own workflow commands at the project level", () => {
     const cli = JSON.parse(readFileSync(join(ENGINE, "cli.json"), "utf-8")) as {
       permissions?: { allow?: string[]; deny?: string[] };
     };
     // Project-level cli.json is permissions-only (Cursor's documented
-    // contract); the shipped allowlist is the engine runner and nothing else.
-    expect(cli.permissions?.allow).toEqual(["Shell(bun)"]);
-    expect(cli.permissions?.deny).toEqual([]);
+    // contract); the shipped allowlist is the dispatcher's engine namespace,
+    // its doctor, version, status and read-only config forms exactly as
+    // AI-DLC runs them, and each of AI-DLC's tool scripts but the ones behind
+    // a machine-changing command, nothing else bun can run.
+    expect(cli.permissions?.allow).toEqual(SHIPPED_ALLOW);
+    expect(cli.permissions?.deny).toEqual(SHIPPED_DENY);
+    expect(machineReachingTools()).toEqual(expect.arrayContaining(["aidlc-lifecycle.ts", "aidlc-machine-config.ts"]));
+    for (const tool of machineReachingTools()) {
+      expect(cli.permissions?.allow?.some((entry) => entry.includes(tool)), tool).toBe(false);
+    }
+  });
+
+  // Cursor CLI's documented matching: `Shell(commandBase:args)`, the command's
+  // first token against commandBase and the rest against the args glob (`*`
+  // matches any text); deny beats allow; a command no entry names asks.
+  function cursorShellEffect(cli: { allow: string[]; deny: string[] }, command: string): "deny" | "allow" | "ask" {
+    const [base, ...rest] = command.split(" ");
+    const args = rest.join(" ");
+    const hits = (entries: string[]) => entries.some((entry) => {
+      const m = /^Shell\(([^:)]+)(?::(.*))?\)$/.exec(entry);
+      if (!m || m[1] !== base) return false;
+      if (m[2] === undefined) return true;
+      const glob = m[2].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*");
+      return new RegExp(`^${glob}$`).test(args);
+    });
+    if (hits(cli.deny)) return "deny";
+    return hits(cli.allow) ? "allow" : "ask";
+  }
+
+  test("6b: AI-DLC's own commands run with no prompt; anything that changes the machine or a setting shows Cursor's prompt", () => {
+    const cli = { allow: SHIPPED_ALLOW, deny: SHIPPED_DENY };
+    for (const command of [
+      "bun .cursor/tools/aidlc.ts engine orchestrate next",
+      "bun .cursor/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'",
+      "bun .cursor/tools/aidlc.ts config models --show --json",
+      "bun .cursor/tools/aidlc.ts config providers --help",
+      "bun .cursor/tools/aidlc.ts doctor",
+      "bun .cursor/tools/aidlc.ts version",
+      "bun .cursor/tools/aidlc.ts --doctor",
+      "bun .cursor/tools/aidlc.ts status",
+      "bun .cursor/tools/aidlc-utility.ts",
+      "bun .cursor/tools/aidlc-utility.ts codekb-path",
+      "bun .cursor/tools/aidlc-log.ts answers --stage x",
+    ]) {
+      expect(cursorShellEffect(cli, command), command).toBe("allow");
+    }
+    // The verbs and the scripts behind them fall to Cursor's own prompt.
+    for (const command of [
+      "bun .cursor/tools/aidlc.ts use 2.10.0",
+      "bun .cursor/tools/aidlc.ts update",
+      "bun .cursor/tools/aidlc.ts rollback",
+      "bun .cursor/tools/aidlc.ts uninstall --yes",
+      "bun .cursor/tools/aidlc.ts system config global set offline on",
+      "bun .cursor/tools/aidlc.ts --yes update",
+      ...machineReachingTools().map((tool) => `bun .cursor/tools/${tool} use 2.10.0`),
+      // Any config change, a machine-wide flag however it is spelled included,
+      // and a read that only looks like the shipped forms.
+      "bun .cursor/tools/aidlc.ts config --pin 2.10.0",
+      "bun .cursor/tools/aidlc.ts config --unpin",
+      "bun .cursor/tools/aidlc.ts config --channel",
+      "bun .cursor/tools/aidlc.ts config --channel preview",
+      "bun .cursor/tools/aidlc.ts config project --plugins all --download --yes",
+      "bun .cursor/tools/aidlc.ts config models --deciding-effort high --global --yes",
+      'bun .cursor/tools/aidlc.ts config models --deciding-effort high --gl"obal" --yes',
+      "bun .cursor/tools/aidlc.ts config models --deciding-effort high --project --yes",
+      "bun .cursor/tools/aidlc.ts config models --show --json --global",
+      "bun .cursor/tools/aidlc.ts doctor --fix",
+      // A file whose name only starts with a tool script's.
+      "bun .cursor/tools/aidlc-log.tsx answers --stage x",
+      "bun .cursor/tools/aidlc-log.ts.bak answers --stage x",
+    ]) {
+      expect(cursorShellEffect(cli, command), command).toBe("ask");
+    }
   });
 
   test("7: shipped cursor prose names no other harness's engine dir", () => {
@@ -261,7 +339,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(r.stdout).toContain("ok    aidlc-cursor-adapter.ts present");
       expect(r.stdout).toContain("ok    hooks.json present (hook wiring)");
-      expect(r.stdout).toContain("ok    cli.json present (Shell(bun) permission pre-approval)");
+      expect(r.stdout).toContain("ok    cli.json present (AI-DLC command permission pre-approval)");
       expect(r.stdout).toContain(
         "ok    rules/aidlc.mdc present (standing method rule (alwaysApply read instruction))",
       );
@@ -291,7 +369,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(
         join(cursorDir, "cli.json"),
         `${JSON.stringify({
-          permissions: { allow: ["Shell(git)"], deny: ["Shell(rm)"] },
+          // Shell(bun) is the entry earlier releases shipped; refresh drops it.
+          permissions: { allow: ["Shell(git)", "Shell(bun)"], deny: ["Shell(rm)"] },
           projectSetting: true,
         }, null, 2)}\n`,
       );
@@ -323,8 +402,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         projectSetting: boolean;
       };
       expect(cli.projectSetting).toBe(true);
-      expect(cli.permissions.allow).toEqual(["Shell(git)", "Shell(bun)"]);
-      expect(cli.permissions.deny).toEqual(["Shell(rm)"]);
+      expect(cli.permissions.allow).toEqual(["Shell(git)", ...SHIPPED_ALLOW]);
+      expect(cli.permissions.deny).toEqual(["Shell(rm)", ...SHIPPED_DENY]);
       expect(readFileSync(join(cursorDir, ".gitignore"), "utf-8")).toBe(
         "project-cursor-cache\n",
       );

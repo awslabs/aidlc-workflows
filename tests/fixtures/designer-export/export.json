@@ -3350,7 +3350,8 @@
         "sensors": "on",
         "learnings": "off",
         "summary_confirmation": "off",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "classic": {
@@ -3398,7 +3399,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "off",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "enterprise": {
@@ -3446,7 +3448,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "on"
       }
     },
     "express": {
@@ -3498,7 +3501,8 @@
         "sensors": "off",
         "learnings": "off",
         "summary_confirmation": "off",
-        "plan_approval": "off"
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "feature": {
@@ -3547,7 +3551,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "infra": {
@@ -3599,7 +3604,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "mvp": {
@@ -3651,7 +3657,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "poc": {
@@ -3704,7 +3711,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "off"
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "refactor": {
@@ -3757,7 +3765,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "security-patch": {
@@ -3812,7 +3821,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "workshop": {
@@ -3865,7 +3875,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     }
   },

@@ -31,7 +31,13 @@ off to Construction.
 
 The phase contains three dispatched topologies: the two-link Reverse
 Engineering pipeline at Stage 2.1, the Practices Discovery hub-and-spoke at
-Stage 2.2, and the User Stories mob at Stage 2.4.
+Stage 2.2, and the User Stories mob at Stage 2.4. Their support agents take part
+when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work).
+With collaborators off, the engine hands each stage an empty `support_agents`
+list and the lead runs alone: the developer is the pipeline's only link and
+writes the 9 artifacts itself, Practices Discovery skips the spokes, User Stories
+skips the mob round, and no contribution files are owed. The steps below
+describe the full roster.
 
 **Key characteristics of the Inception phase:**
 
@@ -106,7 +112,7 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 | Condition        | CONDITIONAL -- brownfield; verified-current stores may be reused        |
 | Lead Agent       | aidlc-developer-agent                                                        |
 | Support Agents   | aidlc-architect-agent                                                        |
-| Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes) |
+| Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes; the developer alone when collaborators are off) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
@@ -241,7 +247,7 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
 | Condition        | CONDITIONAL -- always rerun for freshness on EXECUTE scopes            |
 | Lead Agent       | aidlc-pipeline-deploy-agent                                                  |
 | Support Agents   | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent                        |
-| Mode             | subagent (lead draft → three mutually blind spokes → human interview → lead integration) |
+| Mode             | subagent (lead draft → three mutually blind spokes → human interview → lead integration; no spokes when collaborators are off) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
@@ -283,7 +289,8 @@ Four lead artifacts plus three spoke contributions are written to
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.
 - `practices-discovery-timestamp.md` -- run timestamp + commit hash.
 - `contributions/aidlc-{quality,developer,devsecops}-agent.md` -- one
-  identity-marked contribution from each mutually blind spoke; these files are
+  identity-marked contribution from each mutually blind spoke (none when
+  collaborators are off); these files are
   engine-checked completion evidence.
 
 On affirmation, content is promoted to:
@@ -333,7 +340,7 @@ On affirmation, content is promoted to:
    receipt. Then call
    `aidlc-orchestrate.ts report --stage practices-discovery --result
    approved --user-input "Approve"`. The engine verifies all three
-   contribution files and the current-attempt receipt before completing and
+   contribution files (none when collaborators are off) and the current-attempt receipt before completing and
    routing.
 
 ### Approval Gate
@@ -530,7 +537,7 @@ Conditional gate format:
 | Condition        | CONDITIONAL -- execute for user-facing features, multiple personas, complex business logic, or cross-team work |
 | Lead Agent       | aidlc-product-agent                                                          |
 | Support Agents   | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent               |
-| Mode             | mob (the 2.5.0 mob-elaboration showcase)                               |
+| Mode             | mob (the 2.5.0 mob-elaboration showcase; lead only when collaborators are off) |
 | Completion Emoji | :books:                                                                |
 
 ### Purpose
@@ -681,8 +688,9 @@ Changes**.
   The formal MVP boundary is set during Delivery Planning (Stage 2.9).
 - The `user-stories-assessment.md` artifact is always produced, even when the
   stage is skipped, to document the rationale.
-- The three identity-marked contribution files are mandatory ensemble evidence;
-  approval is refused until the lead has integrated all three.
+- With collaborators on, the three identity-marked contribution files are
+  mandatory ensemble evidence; approval is refused until the lead has
+  integrated all three. A lead-only run owes none.
 - Stories produced here are consumed by Refined Mockups (2.5), Domain
   Design (2.6), Units Generation (2.7), and Delivery Planning (2.9).
 - The aidlc-design-agent support is a deliberate addition for UX-informed

@@ -12,15 +12,15 @@ Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subag
 
 | Stage | Phase | Description |
 |-------|-------|-------------|
-| 2.1 Reverse Engineering (code scan) | Inception | Deep code scan producing structured analysis for architect synthesis |
+| 2.1 Reverse Engineering (code scan) | Inception | Deep code scan producing structured analysis for architect synthesis; with collaborators off it also writes the 9 artifacts itself |
 | 3.5 Code Generation | Construction | Implements units of work from design specifications (per unit) |
 
 ## Stages Supported
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
-| 2.2 Practices Discovery | Inception | Mutually blind code-pattern spoke; writes its own contribution file |
-| 2.4 User Stories | Inception | Implementability voice in the mob ensemble; writes its own contribution file |
+| 2.2 Practices Discovery | Inception | Mutually blind code-pattern spoke when collaborators are on; writes its own contribution file |
+| 2.4 User Stories | Inception | Implementability voice in the mob ensemble when collaborators are on; writes its own contribution file |
 | 3.1 Functional Design | Construction | API contracts and data model input |
 | 4.3 Deployment Execution | Operation | Database migrations |
 

@@ -99,28 +99,36 @@ The lead writes an initial version of all four declared artifacts under
 `<record>/inception/practices-discovery/`. The timestamp artifact remains a
 draft until final integration. Only the lead edits these declared artifacts.
 
-### Step 3: Blind Support Review (Always)
+### Step 3: Blind Support Review
 
-Dispatch all three support agents as one parallel batch when the harness
-supports parallel delegation. Every brief contains only the stage path, the
-lead draft paths, and relevant evidence paths. No brief or context may contain
-a sibling's contribution: the spokes are mutually blind.
+Dispatch exactly the collaborators the directive lists in `support_agents`, as
+one parallel batch when the harness supports parallel delegation. Every brief
+contains only the stage path, the lead draft paths, and relevant evidence
+paths. No brief or context may contain a sibling's contribution: the spokes are
+mutually blind.
 
-1. **aidlc-quality-agent** - assess testing posture, coverage tooling, CI
-   quality gates, test/code patterns, and gaps the interview must resolve.
-2. **aidlc-developer-agent** - assess naming, layer boundaries, error handling,
-   file organization, and code-style conventions.
-3. **aidlc-devsecops-agent** - assess lint/format rules, SAST/DAST, secret and
-   dependency scanning, and supply-chain controls.
+**If `directive.support_agents` is empty, skip this step entirely** — the
+collaborators switch is off for this scope, so the stage runs lead-only
+(`stage-protocol-ensemble.md` §5): the lead's draft stands as the practices,
+the interview resolves them, and no spoke review runs. The full roster, when
+present, is:
 
-Each support agent writes:
+- **aidlc-quality-agent** - assess testing posture, coverage tooling, CI
+  quality gates, test/code patterns, and gaps the interview must resolve.
+- **aidlc-developer-agent** - assess naming, layer boundaries, error handling,
+  file organization, and code-style conventions.
+- **aidlc-devsecops-agent** - assess lint/format rules, SAST/DAST, secret and
+  dependency scanning, and supply-chain controls.
+
+Each dispatched support agent writes:
 
 `<record>/inception/practices-discovery/contributions/<agent-slug>.md`
 
 The first line must be `**Collaborator:** <agent-slug>`, followed by
 `## Contribution` and `## Positions` as defined by
-`stage-protocol-ensemble.md` §11. Collect all three files before the interview. Their presence and identity
-markers are deterministic completion evidence checked by the engine.
+`stage-protocol-ensemble.md` §11. Collect every dispatched collaborator's file
+before the interview. Their presence and identity markers are deterministic
+completion evidence checked by the engine.
 
 ### Step 4: Interview (Always)
 
@@ -161,8 +169,9 @@ following the standard non-gate question flow.
 ### Step 5: Lead Integration
 
 Delegate a final integration turn to `aidlc-pipeline-deploy-agent`. Pass the
-lead draft paths, all three contribution paths, and the completed interview
-file. The lead alone updates the four declared artifacts:
+lead draft paths, every contribution path produced in Step 3 (none on a
+lead-only run), and the completed interview file. The lead alone updates the
+four declared artifacts:
 
 1. **team-practices.md** - five sections matching `memory/team.md`
    (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
@@ -233,8 +242,8 @@ The orchestrator does not edit active-space memory directly. Run:
 
 The subcommand resolves the active space and:
 
-- revalidates every declared support contribution and its identity marker
-  before any memory write;
+- revalidates every effective support contribution and its identity marker
+  before any memory write (none on a lead-only run);
 - reads both drafts and
   `aidlc/spaces/<active-space>/memory/{team,project}.md`;
 - replaces the five matching sections in `team.md`;
@@ -258,8 +267,8 @@ After Step 7 prints `{"emitted":"PRACTICES_AFFIRMED",...}` and exits 0:
 
 Use the stage-protocol.md completion template:
 
-- summarize all four artifacts, three contribution files, and both promotion
-  targets;
+- summarize all four artifacts, any contribution files produced (none on a
+  lead-only run), and both promotion targets;
 - use `<record>/inception/practices-discovery/` as the review path;
 - name the next stage from the gate-opening reply's `next_stage`, else `directive.next_stage`.
 

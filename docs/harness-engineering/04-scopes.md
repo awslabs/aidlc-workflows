@@ -47,16 +47,18 @@ The scope frontmatter fields are:
 | `learnings` | No | `on` or `off`; controls the stage learnings read/write ritual. Absence means on. Per-intent override: `/aidlc --learnings on\|off`; global kill switch: `AIDLC_DISABLE_LEARNINGS=1`. |
 | `summary_confirmation` | No | `on` or `off`; controls the separate pre-output summary confirmation, not stage approval. Absence means on. Per-intent override: `/aidlc --summary-confirmation on\|off`; global kill switch: `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`. This scope scalar is distinct from a stage's `required` / `if-present` declaration. |
 | `plan_approval` | No | `on` or `off`; whether the person is asked to approve each code plan before Code Generation builds it. `off` builds the plan as written after one line naming it and records `PLAN_APPROVAL_SKIPPED`; the person can still say "review the plan first". Absence means on. The shipped defaults are off on `express` and `poc` and on elsewhere. Per-intent override: `/aidlc --plan-approval on\|off`, where only the person turns it off; global kill switch: `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`. A memory `## Guard Policy` section holding `Mode: strict` keeps it on over this key, and the kill switch wins over that lock; see [Plan approval](../guide/13-customization.md#plan-approval). |
+| `collaborators` | No | `on` or `off`; whether a stage runs with its support agents (collaborators) or lead-only. `off` makes the engine hand every stage an empty effective `support_agents`, so on every topology the lead runs alone — no mutually-blind subagent spokes, no mob round, and a pipeline's lead becomes its sole and final link (it authors the artifacts the chain would otherwise split). The stage's authored `support_agents` list is untouched, so flipping back on re-enables the full ensemble. The reviewer mechanism is independent and unaffected. Absence means on. The shipped defaults are on on `enterprise` and off on the other ten, so a first run is lean and a team re-enables collaborators deliberately. Per-intent override: `/aidlc --collaborators on\|off`; global kill switch: `AIDLC_DISABLE_COLLABORATORS=1`. |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error. Invalid ceremony values are rejected with the file, key,
 and the two allowed values. Resolution is kill switch (`1`) → valid intent
-line → scope default → on. Every shipped scope declares all four ceremony keys
+line → scope default → on. Every shipped scope declares all five ceremony keys
 explicitly rather than leaning on the default: classic declares sensors,
 learnings, and plan approval on and summary confirmation off, bugfix declares
 sensors and plan approval on and learnings and summary confirmation off,
-express declares all four off, poc declares plan approval off and the other
-three on, and the other seven declare all four on. Classic's gated flow also
+express declares all four of those off, poc declares plan approval off and the
+other three on, and the other seven declare those four on; `collaborators` is
+on only on `enterprise` and off on every other scope. Classic's gated flow also
 caps reviews to one advisory pass and disables walking-skeleton ceremony, while
 explicit autonomy keeps the single pre-merge review.
 
@@ -208,7 +210,7 @@ Tuning is a smaller edit, but it lands on the stage, not the scope. Two changes 
 
 - **Flip a stage in or out.** Add or remove the scope name from a stage's `scopes:` list. This is how you'd, say, add `mvp` to `observability-setup`'s `scopes:` because your team always wires monitoring even for a first cut. One tag, then regenerate with `bun scripts/package.ts` and run `--doctor`.
 - **Change a default depth, test strategy, or review ceiling.** Adjust `depth`, add/remove `testStrategy`, or add/remove `review_cap` in the scope's `core/scopes/aidlc-<name>.md` frontmatter. The first two recalibrate artifact and test volume; `review_cap` lowers stage review classes to `adversarial`, `advisory`, or `none` without ever raising them. Because each scope carries its own defaults, the change applies to every workflow that selects the scope. Per-run `--depth`, `--test-strategy`, and `--review` can lower the corresponding behavior further.
-- **Change a ceremony default.** Set `sensors`, `learnings`, `summary_confirmation`, or `plan_approval` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. Apart from `plan_approval: off`, which builds each code plan without asking, no ceremony switch removes stage approval, human-turn authority, audit, or team write protection.
+- **Change a ceremony default.** Set `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, or `collaborators` to `on` or `off` in the scope file. Existing intent lines retain their choice; a scope change refreshes scope-sourced lines but preserves per-intent overrides. Apart from `plan_approval: off`, which builds each code plan without asking, and `collaborators: off`, which runs every stage lead-only, no ceremony switch removes stage approval, human-turn authority, audit, team write protection, or the reviewer.
 
 Either way, the regenerate-and-doctor pair from step 3 above applies. The edit is small; the verification is the same.
 

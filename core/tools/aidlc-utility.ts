@@ -92,6 +92,7 @@ import {
   TRUSTED_COMMAND_PREFIX,
   TRUSTED_COMMAND_TOKENS,
   trustedCommand,
+  cursorTrustedShell,
 } from "./aidlc-command.ts";
 import {
   capInlineContextPaths,
@@ -640,7 +641,7 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
-  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, guard.<fence>)
+  config get <key>  Show active workflow config (depth, test-strategy, review, guard-policy, sensors, learnings, summary-confirmation, collaborators, guard.<fence>)
   config set <key> <value> [--<key> <value> ...]  Atomically change active workflow settings
   config list       List active workflow config (--json for structured output)
   plugin select [names]  Show or set the enabled plugin list
@@ -669,6 +670,7 @@ Utilities:
   --sensors <on|off>  Enable or disable stage sensors for this intent
   --learnings <on|off>  Enable or disable the learnings ritual for this intent
   --summary-confirmation <on|off>  Enable or disable summary confirmation for this intent
+  --collaborators <on|off>  Run stages with their support agents, or lead-only, for this intent
   --version         Show the framework version
   --help            Show this help message
 
@@ -3711,7 +3713,7 @@ export async function collectDoctorReport(
           hashes.length > 0 &&
           hashes.every((hash) => seedText.includes(`trusted_hash = "${hash}"`));
       } else if (currentHarnessDir === ".cursor") {
-        nativePermission = commands.includes(`Shell(${trustedCommand("*")})`);
+        nativePermission = commands.includes(cursorTrustedShell());
       } else if (currentHarnessName === "copilot") {
         // Copilot has no project command allowlist. Its folder-trust contract
         // is checked separately below; this row verifies native hook wiring.
@@ -4290,7 +4292,7 @@ export async function collectDoctorReport(
     // standing + phase method rule pointers are all inside .cursor/.
     for (const [file, what] of [
       ["hooks.json", "hook wiring"],
-      ["cli.json", "Shell(bun) permission pre-approval"],
+      ["cli.json", "AI-DLC command permission pre-approval"],
       ["rules/aidlc.mdc", "standing method rule (alwaysApply read instruction)"],
       ["rules/aidlc-phase-ideation.mdc", "Ideation phase rule (agent-decided read instruction)"],
       ["rules/aidlc-phase-inception.mdc", "Inception phase rule (agent-decided read instruction)"],
@@ -10779,13 +10781,13 @@ function rebuildEffectivePlanFields(
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
-    "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>] " +
+    "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] [--review <adversarial|advisory|none>] " +
     "[--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
   );
   const flips = { skip: new Set<string>(), add: new Set<string>() };
   // Settings approved together with the stage changes land in the same state
   // write, so one approval never leaves the plan half-applied.
-  const settingKeys = new Set<ConfigKey>(["sensors", "learnings", "summary-confirmation", "review"]);
+  const settingKeys = new Set<ConfigKey>(["sensors", "learnings", "summary-confirmation", "collaborators", "review"]);
   const settings: IntentSettingsRequest = {};
   // Why the plan changed, when the engine knows (a jump to a skipped stage).
   let reason: string | undefined;
@@ -11861,7 +11863,7 @@ export async function main(argv: string[]): Promise<void> {
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
-        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] " +
+        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );
