@@ -340,16 +340,18 @@ export function applyIntentSettings(
       }
     }
   }
-  // The person's Guard Policy word covers every check: this work's own
-  // per-check entries go with it (below), except a check this command names.
-  // A check they had kept on that the word turns off is a lowering too.
+  // The person's Guard Policy word covers every check in its own direction:
+  // off clears this work's checks kept on, strict its checks turned off, and
+  // relaxed neither, so relaxed never turns a check back on or off. A check
+  // this command names keeps its own setting. A check they had kept on that
+  // the word turns off is a lowering too.
   const wholePolicy = ccRequest?.source === "you" && changeControl !== null;
   const namedFences = new Set(fenceRequests.map((request) => request.fence));
   const withoutPerCheckEntries = (text: string): string => {
     const off = parseGuardsOffLine(getField(text, GUARDS_OFF_FIELD));
     const on = parseGuardsOnLine(getField(text, GUARDS_ON_FIELD));
-    const keepOff = off.filter((fence) => namedFences.has(fence));
-    const keepOn = on.filter((fence) => namedFences.has(fence));
+    const keepOff = changeControl === "strict" ? off.filter((fence) => namedFences.has(fence)) : off;
+    const keepOn = changeControl === "off" ? on.filter((fence) => namedFences.has(fence)) : on;
     let updated = text;
     if (keepOff.length !== off.length) updated = setGuardsOffLine(updated, keepOff);
     if (keepOn.length !== on.length) updated = setGuardsOnLine(updated, keepOn);

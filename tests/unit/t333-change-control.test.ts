@@ -1969,9 +1969,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(rowsOf(proj, "GUARD_DISABLED")).toHaveLength(1);
   });
 
-  // The Guard Policy word set as a whole covers every check, both ways: off
-  // leaves none on that the person had kept on, and strict leaves none off.
-  // A single check switched after it still applies.
+  // The Guard Policy word set as a whole covers every check in its own
+  // direction: off leaves none on that the person had kept on, strict leaves
+  // none off, and relaxed changes neither. A single check switched after it
+  // still applies.
   test("Guard Policy off set as a whole also turns off a check the person had kept on", () => {
     const { proj, state } = project("classic");
     const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
@@ -2012,6 +2013,22 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(restored).toHaveLength(1);
     expect(auditBlockField(restored[0].block, "Guard")).toBe("state-transition");
     expect(auditBlockField(restored[0].block, "Source")).toBe("you");
+  });
+
+  // From a live run: the person asked for fewer re-approvals while relaxed,
+  // and the setter turned a check they had turned off back on.
+  test("Guard Policy relaxed set when already relaxed keeps a check the person turned off", () => {
+    const { proj, state } = project("enterprise");
+    recordHumanPrompt(proj, "/aidlc --guard-policy relaxed");
+    recordHumanPrompt(proj, "/aidlc config set guard.state-transition off");
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("state-transition (set by you)");
+    recordHumanPrompt(proj, "stop asking me to re-approve when files change");
+    const same = run(UTILITY, ["config-change", "--guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
+    expect(same.status, same.stderr).toBe(0);
+    expect(same.stdout).toContain("Guard Policy is already relaxed");
+    expect(same.stdout).not.toContain("back on");
+    expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("state-transition (set by you)");
+    expect(rowsOf(proj, "GUARD_RESTORED")).toHaveLength(0);
   });
 
   const fenceRefusal = "Turning the state-transition check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.state-transition off`.";
