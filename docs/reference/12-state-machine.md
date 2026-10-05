@@ -713,8 +713,9 @@ remain allowed. Memory-held strict also forces any previously lowered fence
 back on while that line stands, unless a machine-wide kill switch takes
 precedence. The persisted `Guards Off` entry remains and takes effect again
 only after the memory line no longer holds strict. Scope-owned Guard Policy
-follows a stricter new scope default, while a lower default preserves the
-stored value until the person asks for the lower value. Ceremony values still
+follows a stricter new scope default. A lower default follows when the person
+asked for the scope change; otherwise the stored value stays and the output
+says so in one line. Ceremony values still
 follow the new scope under memory policy, which controls the effective Guard
 Policy. Changed stored values or sources are audited with scope provenance;
 explicit overrides and absent legacy rows are preserved. Explicit Guard
