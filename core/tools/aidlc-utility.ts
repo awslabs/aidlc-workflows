@@ -10717,17 +10717,27 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         const strictness = { off: 0, relaxed: 1, strict: 2 } as const;
         const nextPolicy = scopeDefinitionGuardPolicy(newScopeDef);
         // Scope changes raise the policy automatically. A lower default
-        // follows the scope only on the person's own request for the change
-        // (the authority a direct Guard Policy lowering needs); otherwise the
-        // work keeps its value and the output says so in one line.
+        // follows the scope only on the person's own request for the change,
+        // on this work's own record (the authority a direct Guard Policy
+        // lowering needs); otherwise the work keeps its value and the output
+        // says so in one line.
         if (strictness[nextPolicy] >= strictness[previousCC.value]) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
-        } else if (process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true })) {
+        } else if (
+          process.env.AIDLC_UNATTENDED !== "1" &&
+          personSpokeSinceGate(projectDir, { requests: true, intent, space })
+        ) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
         } else {
+          // Work picked by name is switched by name: the plain words reach
+          // the work this chat is on.
+          const switchWords = flags.intent
+            ? `${entrySkillInvocation()} config set guard-policy ${nextPolicy} --intent ${intent}` +
+              (flags.space ? ` --space ${space}` : "")
+            : `guard policy ${nextPolicy}`;
           keptPolicyLine =
             `Guard Policy stays ${previousCC.value} (from ${previousCC.source}). ` +
-            `Say "guard policy ${nextPolicy}" to match ${newScope}.`;
+            `Say "${switchWords}" to match ${newScope}.`;
         }
       }
       for (const key of CEREMONY_KEYS) {

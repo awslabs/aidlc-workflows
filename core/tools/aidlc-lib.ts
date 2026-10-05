@@ -10857,13 +10857,17 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
   }
 }
 
-export function humanTurnState(projectDir: string, options: { replies?: boolean; requests?: boolean } = {}): HumanTurnState {
+// With `intent` and `space`, the turns read are that work's, not the active work's.
+export function humanTurnState(
+  projectDir: string,
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+): HumanTurnState {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
   // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
   // genuinely unordered (isoTimestamp is second-precision) and fail closed
   // below.
-  const shards = auditShards(projectDir);
+  const shards = auditShards(projectDir, options.intent, options.space);
   const events: { ts: string; shard: number; pos: number; human: boolean; event: string }[] = [];
   // Questions logged since a turn: a later question's reply is not the one the
   // earlier answers used.
@@ -11013,11 +11017,15 @@ export function commandTurnHint(projectDir: string): string {
 // turn exists (an empty ledger, which reads as acted for older workflows, does
 // not count). Lowering a check the person asked for in their own words needs it.
 // With `replies`, the turn must be a reply, not only a command to AIDLC; with
-// `requests`, anything but a question about a switch.
-export function personSpokeSinceGate(projectDir: string, options: { replies?: boolean; requests?: boolean } = {}): boolean {
+// `requests`, anything but a question about a switch. With `intent` and
+// `space`, the turn must be on that work's record.
+export function personSpokeSinceGate(
+  projectDir: string,
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+): boolean {
   if (humanTurnState(projectDir, options) !== "acted") return false;
   try {
-    return readAuditShardEvents(projectDir).some((row) =>
+    return readAuditShardEvents(projectDir, options.intent, options.space).some((row) =>
       options.replies ? isReplyTurn(row) : options.requests ? isRequestTurn(row) : row.event === "HUMAN_TURN");
   } catch {
     return false;

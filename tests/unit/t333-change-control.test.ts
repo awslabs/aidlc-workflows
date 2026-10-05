@@ -1058,6 +1058,38 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(kept.stdout).toContain('Guard Policy stays strict (from scope enterprise). Say "guard policy off" to match classic.');
   });
 
+  test("the person's request on one piece of work does not lower another's Guard Policy", () => {
+    const { proj, state: firstState } = project("enterprise");
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const first = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const second = run(
+      UTILITY,
+      ["intent-create", "--scope", "enterprise", "--arguments", "second fixture", "--label", "second"],
+      proj,
+    );
+    expect(second.status, second.stderr).toBe(0);
+    const active = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(active).not.toBe(first);
+    // The person's turn is on the work this chat is on, not on the first work.
+    recordHumanPrompt(proj, "/aidlc --scope classic");
+    const other = run(UTILITY, ["scope-change", "--scope", "classic", "--intent", first], proj, FENCE_ENV_CLEAR);
+    expect(other.status, other.stderr).toBe(0);
+    expect(getField(readFileSync(firstState, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
+    expect(other.stdout).toContain(
+      `Guard Policy stays strict (from scope enterprise). Say "/aidlc config set guard-policy off --intent ${first}" to match classic.`,
+    );
+    // Named in the same message, the step it gives applies to that work.
+    recordHumanPrompt(proj, `/aidlc config set guard-policy off --intent ${first}`);
+    expect(getField(readFileSync(firstState, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+
+    // The work the person spoke on carries the lower default.
+    const activeState = join(intents, active, "aidlc-state.md");
+    recordHumanPrompt(proj, "/aidlc --scope classic");
+    const own = run(UTILITY, ["scope-change", "--scope", "classic", "--intent", active], proj, FENCE_ENV_CLEAR);
+    expect(own.status, own.stderr).toBe(0);
+    expect(getField(readFileSync(activeState, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
+  });
+
   test("creation accepts its scope default, while scope-change lowering requires a typed switch", () => {
     // Creation: the flag names what the scope would have given anyway.
     const proj = createTestProject();
