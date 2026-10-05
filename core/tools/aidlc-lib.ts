@@ -33405,7 +33405,8 @@ export const SCOPE_NAME_RULE =
 export function scopeArg(scope: string): string {
   if (scope !== "" && !isScopeName(scope)) {
     throw new Error(
-      `This workflow's scope is not a scope name, so no command was printed for it. A scope name uses ${SCOPE_NAME_RULE}.`,
+      `This workflow's scope is not a scope name, so no command was printed for it. ` +
+        `Switch the workflow to a scope with \`${entrySkillInvocation()} --scope <name>\`.`,
     );
   }
   return shellArg(scope);

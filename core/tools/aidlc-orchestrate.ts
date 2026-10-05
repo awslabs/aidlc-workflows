@@ -303,6 +303,7 @@ import {
   validScopes,
   shellArg,
   scopeArg,
+  isScopeName,
   authoritativeProjectDescription,
   harnessDir,
   hookActivation,
@@ -10287,9 +10288,11 @@ function ensureSingleStageStarted(
   if (singleStageAttemptIsOpen(projectDir, node.slug)) {
     const recordedScope = singleStageAttemptScope(projectDir, node.slug);
     if (recordedScope !== null && recordedScope !== scope) {
-      return `The open isolated attempt uses scope "${recordedScope}", not requested scope "${scope}". ` +
-        `Complete it with \`report --single --stage ${node.slug} --result approved\`, ` +
-        `or re-run with \`--scope ${scopeArg(recordedScope)}\`.`;
+      // A saved scope that is not a scope name is not repeated or put in a command.
+      const named = isScopeName(recordedScope);
+      return `The open isolated attempt uses ${named ? `scope "${recordedScope}"` : "another scope"}, not requested scope "${scope}". ` +
+        `Complete it with \`report --single --stage ${node.slug} --result approved\`` +
+        (named ? `, or re-run with \`--scope ${scopeArg(recordedScope)}\`.` : ".");
     }
     return null;
   }

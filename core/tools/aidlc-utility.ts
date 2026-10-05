@@ -315,6 +315,7 @@ import {
   scalarField,
   stageEnabledBySelection,
   stagesInScope,
+  isScopeName,
   scopeArg,
   stateFilePath,
   clearSessionIntentUuid,
@@ -10843,8 +10844,8 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // setting whose value changed. Nothing runs until the person asks.
       outputLines = [
         `Switched to ${newScope}: ${executeStages.length} stages (${completedCount} done), ` +
-          `${gates} approval gates${ceremonyOffClause(summary)}. ` +
-          `To go back, type \`${entrySkillInvocation()} --scope ${scopeArg(oldScope)}\`.`,
+          `${gates} approval gates${ceremonyOffClause(summary)}.` +
+          (isScopeName(oldScope) ? ` To go back, type \`${entrySkillInvocation()} --scope ${scopeArg(oldScope)}\`.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
             `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
