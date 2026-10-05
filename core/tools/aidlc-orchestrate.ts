@@ -1407,6 +1407,16 @@ function emit(requested: Directive): void {
           )));
           return;
         }
+        if (publication === "preserved") {
+          // A Copilot chat's resume question is still open, and this `next`
+          // came from outside that answer: retrying repeats the refusal, so
+          // name the answer instead.
+          recordHookDrop(projectDir, "active-directive", "fresh next arrived while the resume question waits");
+          writePrepared(prepareEmission(errorDirective(
+            `The workflow is waiting for an answer to its resume question in the Copilot chat that asked it, so this \`next\` did not run. Answer that question there, or type \`${entrySkillInvocation()} --resume\` in that chat to pick the work up.`,
+          )));
+          return;
+        }
         if (publication !== "copilot-committed" && publication !== "generic-committed") {
           recordHookDrop(projectDir, "active-directive", "fresh next did not commit its directive");
           writePrepared(prepareEmission(errorDirective(
