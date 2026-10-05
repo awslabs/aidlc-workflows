@@ -965,6 +965,35 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(acceptedRows(proj)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a Unit's own brief says only that Unit's accepted change; the final gate's brief says every Unit's", () => {
+    const proj = teamProject("relaxed");
+    settleUnit(proj);
+    editReviewedUnitArtifact(proj);
+    const gate = run(STATE_TOOL, ["gate-start", UNIT_STAGE, "--unit", UNIT], proj, UNIT_ENV);
+    expect(gate.status, gate.stderr).toBe(0);
+    const relativeArtifact = relative(proj, reviewedUnitArtifact(proj)).replaceAll("\\", "/");
+    // Another Unit's change, already said once when it was kept.
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: UNIT_STAGE,
+        Unit: "beta",
+        Checkpoint: "review-receipt",
+        Changed: "src/beta.js",
+        Details: "src/beta.js changed after Unit beta's review; carrying on.",
+      },
+      proj,
+    );
+    const own = run(BRIEF_TOOL, ["review", "--stage", UNIT_STAGE, "--unit", UNIT, "--why", "first"], proj, UNIT_ENV);
+    expect(own.status, own.stderr).toBe(0);
+    expect(own.stdout).toContain(`**Changed after review:** \`${relativeArtifact}\``);
+    expect(own.stdout).not.toContain("src/beta.js");
+    const final = run(BRIEF_TOOL, ["review", "--stage", UNIT_STAGE, "--why", "first"], proj, UNIT_ENV);
+    expect(final.status, final.stderr).toBe(0);
+    expect(final.stdout).toContain(`**Changed after review:** \`${relativeArtifact}\``);
+    expect(final.stdout).toContain("**Changed after review:** `src/beta.js`");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("strict is today's refusal for the Unit", () => {
     const proj = teamProject("strict");
     settleUnit(proj);
