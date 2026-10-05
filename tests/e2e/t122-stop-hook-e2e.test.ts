@@ -32,14 +32,18 @@
 //          Bash tool_result ("Status:         Completed" — the verbatim
 //          handleStatus emission, aidlc-utility.ts:296-310; deterministically
 //          confirmed on this exact fixture: Completion 32/32, Status Completed).
-//   3 the live hook fired and took the done->allow path
+//   3 the live hook fired and allowed the stop without a block
 //       -> GUARDED exactly like the .sh: the skill-scoped Stop hook does not
 //          fire on every headless turn, so when the heartbeat
 //          (aidlc-docs/.aidlc-engine/hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
 //          absent we SKIP this sub-assertion (record the skip, never fail).
-//          When it IS present, the done branch ran resetGuard()
-//          (aidlc-continue-workflow.ts:241-248,357) which wrote block-count.json with
-//          count 0 — assert the parsed count === 0.
+//          When it IS present, the hook took one of the two allows a finished
+//          workflow's status turn reaches: the status print ended the turn
+//          (the engine marked it, so the hook allows before its `next` probe
+//          and traces "the engine's last step ended the turn"), or the probe
+//          answered `done` and resetGuard() wrote block-count.json with count
+//          0. Assert one of them, and that any block-count.json holds count 0
+//          (no block was counted).
 //   4 pending directive -> the REAL hook BLOCKS, against the REAL engine
 //       -> seed state-final-stage (final stage [-], engine emits a real
 //          run-stage for feedback-optimization), pipe {"stop_hook_active":false}
@@ -183,6 +187,7 @@ const tracePath = (proj: string): string =>
 const STATUS_COMPLETED_LINE = "Status:         Completed"; // utility.ts:302 (padEnd shape confirmed by direct run)
 const PENDING_STAGE = "feedback-optimization"; // state-final-stage.md:90 ([-] final stage)
 const RELEASE_RECORD = "recursion guard released the stop";
+const TURN_END_RECORD = "the engine's last step ended the turn";
 
 /** Pipe a real Stop payload into the SHIPPED hook with the project's REAL
  *  engine resolved via CLAUDE_PROJECT_DIR. Returns exit code + trimmed stdout
@@ -350,7 +355,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
   // session runs to completion (no hang).
   // =========================================================================
   test(
-    "(e2e) /aidlc --status over a completed workflow runs to done under the live Stop hook; done->allow trace asserted when the hook fires",
+    "(e2e) /aidlc --status over a completed workflow runs to done under the live Stop hook; the hook's allow asserted when it fires",
     async () => {
       const proj = setupIntegrationProject({
         withState: "state-completed.md",
@@ -382,14 +387,19 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
 
         // .sh test 3 (GUARDED, the .sh's exact discipline): the skill-scoped
         // Stop hook does not fire on every headless turn. When the heartbeat is
-        // present, the done branch ran resetGuard() -> block-count.json count 0.
+        // present, the hook allowed the stop: either the status print ended
+        // the turn (the trace line) or the `done` probe ran resetGuard()
+        // (block-count.json), and no block was counted.
         // When absent, record the skip explicitly — the run-to-done assertions
         // above hold either way (an un-fired hook simply lets the turn end).
         if (existsSync(heartbeatPath(proj))) {
-          const guard = JSON.parse(
-            readFileSync(guardPath(proj), "utf-8"),
-          ) as { count: number };
-          expect(guard.count).toBe(0);
+          const endedAtStatus = existsSync(tracePath(proj)) &&
+            readFileSync(tracePath(proj), "utf-8").includes(TURN_END_RECORD);
+          const guard = existsSync(guardPath(proj))
+            ? (JSON.parse(readFileSync(guardPath(proj), "utf-8")) as { count: number })
+            : undefined;
+          expect(endedAtStatus || guard !== undefined).toBe(true);
+          if (guard !== undefined) expect(guard.count).toBe(0);
         } else {
           // eslint-disable-next-line no-console
           console.log(

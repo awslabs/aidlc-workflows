@@ -845,7 +845,7 @@ export async function driveAidlc(
             askMenuIndex++;
             // "Chat about this" answers nothing: the person's reply comes in
             // their next message.
-            if (!chat) personTurns.sent(JSON.stringify(answers));
+            if (!chat) personTurns.sent(JSON.stringify(answers), Object.keys(answers).length);
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
             if (chat) {

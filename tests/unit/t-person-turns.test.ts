@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
 import {
+  nextPersonTurnCarriesPicks,
   PersonTurnLedger,
   startPersonTurnSession,
   submittedToPersonTurnSession,
@@ -14,6 +15,7 @@ import {
   unbackedFailure,
   unbackedTuiDecisions,
 } from "../harness/person-turns.ts";
+import { reviewedPicks } from "../harness/tui-drive.ts";
 
 const projects: string[] = [];
 const folders: string[] = [];
@@ -321,6 +323,52 @@ describe("person-turn check", () => {
     expect(unbackedTuiDecisions(dir)).toEqual([]);
     expect(unbackedFailure("The TUI drive", problems).message)
       .toStartWith("The TUI drive recorded 1 decision(s) as the person's that no turn from them backs:\n  GATE_APPROVED");
+  });
+
+  test("a TUI form's Submit backs one answer per pick on it; a pick on one of its tabs backs none", () => {
+    const folder = ledgerFolder();
+    const dir = project();
+    const session = `t-person-turns-form-${process.pid}`;
+    startPersonTurnSession(session, dir);
+    submittedToPersonTurnSession(session, "/aidlc --stage intent-capture");
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture", Decision: "Anything to add for next time?" });
+    // A pick on each of the form's two tabs, then Submit.
+    nextPersonTurnCarriesPicks(session, 0);
+    submittedToPersonTurnSession(session, "");
+    nextPersonTurnCarriesPicks(session, 0);
+    submittedToPersonTurnSession(session, "");
+    nextPersonTurnCarriesPicks(session, 2, "Keep (project); Nothing to add");
+    submittedToPersonTurnSession(session, "");
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Keep (project)" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Nothing to add" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Add a note" });
+    const problems = unbackedTuiDecisions(dir);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Add a note"');
+    expect(problems[0]).toContain('"Keep (project); Nothing to add"');
+    expect(readdirSync(folder)).toEqual([]);
+  });
+
+  test("a form's picks are read off its review screen, or its ticked tabs when the review is out of view", () => {
+    const review = [
+      "────────────────────────────────────────",
+      "←  ☒ Learning  ☒ Add note  ✔ Submit  →",
+      "",
+      "Review your answers",
+      "",
+      " │ ● I jotted one note from this stage. Keep it as a practice for next time?",
+      " │   (a solo-owner personal task tracker)",
+      "   → Keep (project)",
+      " ● Anything to add for next time?",
+      "   → Nothing to add",
+      "",
+      "Ready to submit your answers?",
+      "",
+      "❯ 1. Submit answers",
+      "  2. Cancel",
+    ].join("\n");
+    expect(reviewedPicks(review)).toEqual(["Keep (project)", "Nothing to add"]);
+    expect(reviewedPicks("←  ☒ Stakeholders  ☒ Comms  ☐ Scope  ✔ Submit  →\n\n❯ 1. Submit answers")).toEqual(["", ""]);
   });
 
   test.each([

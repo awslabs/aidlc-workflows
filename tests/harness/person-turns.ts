@@ -55,6 +55,12 @@ export type AuditCursor = ReadonlyMap<string, number>;
 export interface PersonTurn {
   words: string;
   cursor: AuditCursor;
+  /**
+   * How many answers the turn can back: the picks one menu submission carried
+   * (several on a form with more than one question, none for a pick on one of
+   * its tabs, which the form's Submit counts). A typed reply is one.
+   */
+  selections?: number;
 }
 
 function readTrail(projectDir: string): AuditTrail {
@@ -94,10 +100,13 @@ const gateItem = (row: AuditShardEvent) =>
  * question's answer, or a checkpoint's own gate row, closes the stage's open
  * DECISION_RECORDED, and a later question supersedes an earlier one. A stage
  * gate follows its STAGE_AWAITING_APPROVAL; a project-type change follows the
- * work's creation or the last change. With nothing open, a decision follows
- * the previous one of its stage or gate, so a second answer needs a newer turn.
- * A turn backs it when it was sent after that point (or at the drive's start,
- * when the point is earlier than the drive) and before the row. Approvals and
+ * work's creation or the last change. With nothing open, an answer follows
+ * what the stage's previous answer followed, and any other decision follows
+ * the previous one of its stage or gate. A turn backs it when it was sent after
+ * that point (or at the drive's start, when the point is earlier than the
+ * drive) and before the row. Each turn backs at most as many answers as it
+ * carried selections, so a second answer to one typed reply needs a newer turn,
+ * while one menu submission with two picks backs two answers. Approvals and
  * answers need a reply: a turn that was only a command (it starts with "/", as
  * the human-turn hook reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
@@ -115,6 +124,8 @@ const gateItem = (row: AuditShardEvent) =>
 export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
   const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
   const problems: string[] = [];
+  // How many answers each turn has backed so far.
+  const used = turns.map(() => 0);
   for (const [key, events] of readTrail(projectDir)) {
     const first = start.get(key) ?? 0;
     const open = new Map<string, { block: string; index: number }>();
@@ -138,14 +149,17 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         auditBlockField(row.block, "Checkpoint") !== "walking-skeleton";
       let since: number | undefined;
       let reply = true;
+      let answer = false;
       if (closes) {
         since = pending?.index ?? answered.get(stage) ?? -1;
-        answered.set(stage, index);
+        answered.set(stage, since);
+        answer = true;
       } else if (gate && !engineApproved) {
         reply = row.event === "GATE_APPROVED";
         if (pending && decisionAnsweredBy(pending.block, row.event, row.block)) {
           since = pending.index;
-          answered.set(stage, index);
+          answered.set(stage, since);
+          answer = true;
         } else {
           since = gates.get(gateItem(row)) ?? gated.get(gateItem(row)) ?? -1;
           if (!backfilled) {
@@ -163,11 +177,13 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       if (since !== undefined && index >= first) {
         const after = Math.max(since + 1, first);
         const needsReply = reply;
-        const backed = turns.some((turn) => {
+        const backing = turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
-          return at >= after && at <= index && !(needsReply && isCommand(turn.words));
+          return at >= after && at <= index && !(needsReply && isCommand(turn.words)) &&
+            (!answer || used[which] < (turn.selections ?? 1));
         });
-        if (!backed) problems.push(describe(row, key, turns));
+        if (backing === -1) problems.push(describe(row, key, turns));
+        else if (answer) used[backing]++;
       }
       if (row.event === "DECISION_RECORDED" || closes || gate) {
         const next = nextOpenDecision(pending?.block ?? null, row.event, row.block);
@@ -214,9 +230,9 @@ export class PersonTurnLedger {
     this.start = auditCursor(projectDir);
   }
 
-  /** Call as the driver sends a turn, before the agent can act on it. */
-  sent(words: string): void {
-    this.turns.push({ words, cursor: auditCursor(this.projectDir) });
+  /** Call as the driver sends a turn, before the agent can act on it, with the picks it carried. */
+  sent(words: string, selections = 1): void {
+    this.turns.push({ words, cursor: auditCursor(this.projectDir), selections });
   }
 
   unbacked(): string[] {
@@ -256,10 +272,11 @@ interface LedgerLine {
   kind: "start" | "turn";
   words: string;
   cursor: [string, number][];
+  selections?: number;
 }
 
-function appendLine(projectDir: string, kind: LedgerLine["kind"], words: string): void {
-  const line: LedgerLine = { kind, words, cursor: [...auditCursor(projectDir)] };
+function appendLine(projectDir: string, kind: LedgerLine["kind"], words: string, selections?: number): void {
+  const line: LedgerLine = { kind, words, cursor: [...auditCursor(projectDir)], ...(selections === undefined ? {} : { selections }) };
   appendFileSync(ledgerFile(projectDir), `${JSON.stringify(line)}\n`);
 }
 
@@ -267,6 +284,7 @@ interface SessionPointer {
   projectDir: string;
   typed?: string;
   sent?: number;
+  picks?: { selections: number; words: string };
 }
 
 function readPointer(session: string): SessionPointer | undefined {
@@ -292,11 +310,22 @@ export function typedIntoPersonTurnSession(session: string, text: string): void 
   if (pointer) replaceFile(sessionPointer(session), JSON.stringify({ ...pointer, typed: `${pointer.typed ?? ""}${text}` }));
 }
 
+/**
+ * The driver's next submit to the session carries `selections` menu picks,
+ * with `words` naming them: a form's Submit carries every pick on it, and a
+ * pick on one of its tabs carries none.
+ */
+export function nextPersonTurnCarriesPicks(session: string, selections: number, words = ""): void {
+  const pointer = readPointer(session);
+  if (pointer) replaceFile(sessionPointer(session), JSON.stringify({ ...pointer, picks: { selections, words } }));
+}
+
 /** The driver submitted what it typed, then `text`; a session with no project is not tracked. */
 export function submittedToPersonTurnSession(session: string, text: string): void {
   const pointer = readPointer(session);
   if (!pointer) return;
-  appendLine(pointer.projectDir, "turn", `${pointer.typed ?? ""}${text}`);
+  const picks = pointer.picks;
+  appendLine(pointer.projectDir, "turn", picks?.words || `${pointer.typed ?? ""}${text}`, picks?.selections);
   const sent = (pointer.sent ?? 0) + 1;
   replaceFile(sessionPointer(session), JSON.stringify({ projectDir: pointer.projectDir, sent } satisfies SessionPointer));
 }
@@ -336,7 +365,7 @@ export function unbackedTuiDecisions(projectDir: string): string[] {
   }
   const start = lines.find((line) => line.kind === "start");
   const turns = lines.filter((line) => line.kind === "turn")
-    .map((line) => ({ words: line.words, cursor: new Map(line.cursor) }));
+    .map((line) => ({ words: line.words, cursor: new Map(line.cursor), selections: line.selections }));
   if (!start || turns.length < sent) {
     throw new Error(
       `${record} holds ${turns.length} of the ${sent} turn(s) the driver sent${start ? "" : " and no session start"}, ` +
