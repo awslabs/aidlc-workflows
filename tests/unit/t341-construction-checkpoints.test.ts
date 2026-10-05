@@ -546,6 +546,20 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "true"]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a fixer that changes the Unit's files and fails on both runs names the step that works", () => {
+    const dir = project();
+    recordCommand(dir, writeCheck(dir,
+      "require('node:fs').appendFileSync('src/alpha.ts', '// touched\\n');\n" +
+      "process.exit(1);\n"));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified).toBe(false);
+    expect(result.verification!.exit_code).toBe(1);
+    expect(result.verification!.error).toBe(
+      "The check changed this Unit's files each time it ran, so no one version of them passed. " +
+        "Use a check that leaves the files as they are, then verify again.",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("a passing check that prints more than a megabyte still verifies", () => {
     const dir = project();
     const size = 3 * 1024 * 1024;

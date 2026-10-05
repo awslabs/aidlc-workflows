@@ -770,7 +770,7 @@ function verifyOnce(
     // runs once more; the second run decides.
     const changedByCheck = proof.signal === null && proof.error === null && !proof.evidence_unchanged &&
       after.root === before.root && after.result.ready && after.verificationCommand?.sha256 === proof.command_sha256;
-    if (changedByCheck && secondRun && passed) proof.error = CHECK_KEPT_CHANGING;
+    if (changedByCheck && secondRun) proof.error = CHECK_KEPT_CHANGING;
     proof.verified = passed && proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
