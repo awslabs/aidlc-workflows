@@ -264,11 +264,17 @@ setting. Each `t-guard-matrix-<change>.test.ts` file makes one change at the
 point a person makes it: a later Unit edits an approved Unit's file, a hand
 edit, a plan edit while its approval waits, a pull mid-stage, a revert, a second
 review the person asks for, an engine update between Units, the person's own
-switch to off, a composed scope and classic as it ships. Every refusal the run
-meets is followed: the person picks a remedy the engine offers, or the agent
-runs the command it names. Each case checks:
+switch to off, a composed scope and classic as it ships. The document changes
+walk Functional Design too: while Unit 2 builds, Unit 1's approved functional
+design or code plan is edited (by Unit 2's agent or by the person), or the
+design is deleted. Their `-waves` files run Functional Design stage by stage,
+then the person asks for one Unit at a time. Every refusal the run meets is
+followed: the person picks a remedy the engine offers, or the agent runs the
+command it names. Each case checks:
 
-- under Guard Policy off, nothing refuses the person or asks them again;
+- under Guard Policy off, nothing refuses the person or asks them again (for a
+  changed document, the same under relaxed; a deleted one may cost the one stop
+  that makes it again, and it must be made again);
 - with the policy on, the person is asked at most once about the change;
 - no refusal comes back after its step was taken (a deadlock);
 - every decision recorded as the person's is backed by a turn they sent, and
