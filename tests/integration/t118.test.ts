@@ -410,10 +410,13 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const report = (...extra: string[]) =>
       directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
     writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: feature; touch pwned"), "utf-8");
-    for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
-      expect(r.kind).toBe("error");
-      expect(r.message).toContain("cannot be redone from here");
-      expect(r.message).not.toContain("touch pwned");
+    // A saved scope that is not a scope name prints no command, as everywhere.
+    for (const extra of [["--choice", "redo"], ["--user-input", "2"]]) {
+      const r = run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]);
+      expect(r.status).not.toBe(0);
+      expect(r.stdout).toBe("");
+      expect(r.out).toContain("is not a scope name, so no command was printed");
+      expect(r.out).not.toContain("touch pwned");
     }
     writeFileSync(statePath(p), state.replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation$(touch pwned)"), "utf-8");
     for (const r of [

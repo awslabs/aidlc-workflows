@@ -12130,14 +12130,16 @@ function handleResumeReport(
 // The redo of the current stage, run only for a stage and a scope AI-DLC knows,
 // with every value quoted, so nothing read from the state file runs as shell.
 function redoCurrentStage(pd: string, scope: string, stateContent: string, slug: string): PrintDirective | ErrorDirective {
-  if (nodeForSlug(slug) === undefined || !validScopes().has(scope)) {
+  if (nodeForSlug(slug) === undefined) {
     return errorDirective(
-      `This workflow's current stage or scope is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
+      `This workflow's current stage is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
     );
   }
+  // A saved scope that is not a scope name stops here, as every printed command does.
+  const scopeText = scopeArg(scope);
   const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
   return printDirective(unitRedo ??
-    `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${shellArg(slug)} --direction redo --scope ${shellArg(scope)}\` to reset the current stage, then re-run \`next\` to start it over.`);
+    `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${shellArg(slug)} --direction redo --scope ${scopeText}\` to reset the current stage, then re-run \`next\` to start it over.`);
 }
 
 // A redo, jump, or start-fresh request on re-entry, typed by the conductor
