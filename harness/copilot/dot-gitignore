@@ -12,7 +12,6 @@ aidlc/.aidlc-claim-registry.json
 aidlc/.aidlc-unit-releases/
 aidlc/.aidlc-unit-merges/
 aidlc/.aidlc-sessions/
-aidlc/.aidlc-request-text/
 aidlc/spaces/*/intents/.aidlc-*
 **/aidlc/spaces/*/intents/**/.aidlc-engine/
 **/aidlc/spaces/*/intents/**/.aidlc-sensors/

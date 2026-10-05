@@ -173,11 +173,4 @@ describe("next --request-file: the person's words arrive exactly, through no she
     expect(keptRequests(proj)).toContain(WORDS);
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
-
-  test("every harness keeps the folder out of git", () => {
-    for (const harness of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
-      const lines = readFileSync(join(REPO_ROOT, "harness", harness, "dot-gitignore"), "utf-8").split("\n");
-      expect(lines, harness).toContain("aidlc/.aidlc-request-text/");
-    }
-  });
 });

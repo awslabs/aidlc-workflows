@@ -14,7 +14,6 @@ aidlc/.aidlc-unit-merges/
 aidlc/.aidlc-cursor-subagents/
 aidlc/.aidlc-cursor-subagent-*.json
 aidlc/.aidlc-sessions/
-aidlc/.aidlc-request-text/
 aidlc/spaces/*/intents/.aidlc-*
 **/aidlc/spaces/*/intents/**/.aidlc-engine/
 **/aidlc/spaces/*/intents/**/.aidlc-sensors/

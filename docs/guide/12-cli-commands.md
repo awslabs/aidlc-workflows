@@ -203,7 +203,7 @@ engine through a file instead of the command line: the agent writes it to
 --request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
 engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
 through no link, up to 64 KiB, uses its words exactly as written, and removes
-the file once read. The folder is in AI-DLC's `.gitignore` lines.
+the file once the command goes ahead.
 
 ---
 
