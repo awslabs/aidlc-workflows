@@ -18550,7 +18550,9 @@ export function freshReviewReceipts(
   // What changed, whose review it came after, and that the work carries on.
   const reviewedStageName = findStageBySlug(stage.slug)?.name ?? stage.slug;
   const relaxedReviewNotice = (what: string, unit: string | null): string =>
-    `${what} changed after ${unit ? `Unit ${unit}'s` : `the ${reviewedStageName}`} review; carrying on.`;
+    `${what} changed after ${
+      unit ? `the ${unitPlainName(unit)} Unit was reviewed` : `the ${reviewedStageName} review`
+    }; carrying on.`;
   // Under relaxed or off, source that cannot be checked against its review on
   // this machine is said once and the verdict stands.
   let uncheckedSourceNoticed = false;
@@ -19110,7 +19112,7 @@ export function freshReviewReceipts(
               changed: null,
               recorded: receipt.fingerprint,
               current: unitSourceFingerprint(currentSourceListing, claimModel, manifest.rawBytesSha256),
-              notice: `Unit ${unit}'s list of files changed after its review; carrying on.`,
+              notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed; carrying on.`,
             });
           }
         } else {
@@ -22925,6 +22927,11 @@ export function workspaceSourceFingerprint(
   space?: string,
 ): string | null {
   return workspaceSourceState(projectDir, intent, space)?.fingerprint ?? null;
+}
+
+/** A Unit named the way a person says it: `u1-note-store` reads "note store". */
+export function unitPlainName(unit: string): string {
+  return unit.replace(/^u\d+[-_]/i, "").replace(/[-_]+/g, " ").trim() || unit;
 }
 
 export function workspaceSourceListing(
