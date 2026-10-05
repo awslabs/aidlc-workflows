@@ -204,6 +204,7 @@ import {
   inspectContinuationCursor,
   isPerUnitStage,
   isReadOnlyEngineProbe,
+  noteProjectTypeAsked,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
   isRegularFile,
@@ -7536,6 +7537,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (currentState !== "awaiting-approval" && currentState !== "revising") {
     const askDirective = projectTypeAskDirective(pd, stateContent, currentSlug);
     if (askDirective) {
+      if (!isReadOnlyEngineProbe()) noteProjectTypeAsked(pd);
       emit(askDirective);
       return;
     }

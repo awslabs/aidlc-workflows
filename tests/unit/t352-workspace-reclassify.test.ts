@@ -2,7 +2,8 @@
 // function:declaredProjectType, function:constructionHasStarted, function:projectTypeRecordedAsPersons,
 // function:reverseEngineeringOwedBehindCursor, function:greenfieldWorkspaceGainedCode,
 // function:scanSummary, function:rebuildEffectivePlanFields, function:markPersonLinesHeard,
-// function:personLineHeard, function:staleStageLine, audit:WORKSPACE_RECLASSIFIED
+// function:personLineHeard, function:staleStageLine, function:personSaidProjectType,
+// function:noteProjectTypeAsked, function:clearProjectTypeAsked, audit:WORKSPACE_RECLASSIFIED
 //
 // t352 - the person decides whether a piece of work is a new project or existing
 // code, and AI-DLC notices when a folder set up as new gains code.
@@ -468,6 +469,72 @@ describe("t352 what the folder is, is the person's word", () => {
     const r = reclassifyUnsaid(proj, "greenfield");
     expect(r.status, said(r)).toBe(0);
     expect(field(state(proj), "Project Type Source")).toBe("you");
+  });
+});
+
+// A bare /aidlc in a new chat is a command, not an answer: once the engine has
+// asked what the folder is, only what the person says after the question
+// records it. Their own words from before it still count, so they are never
+// asked twice.
+describe("t352 the folder question needs the person's word after it", () => {
+  test("after a bare /aidlc, the agent's own answer to the question is refused", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: "practices-discovery" }, proj);
+    // A new chat: the person types /aidlc, and the engine asks.
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    expect(next(proj).ask_type).toBe("project-type");
+    const before = state(proj);
+    const agents = reclassifyUnsaid(proj, "brownfield");
+    expect(agents.status).not.toBe(0);
+    expect(said(agents)).toContain("Ask them the question you were given, end the turn");
+    expect(state(proj)).toBe(before);
+    // Their answer to it goes through.
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const theirs = reclassifyUnsaid(proj, "brownfield");
+    expect(theirs.status, said(theirs)).toBe(0);
+    expect(field(state(proj), "Project Type Source")).toBe("you");
+  });
+
+  test("a typed /aidlc --project-type after the question is their answer", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: "practices-discovery" }, proj);
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    expect(next(proj).ask_type).toBe("project-type");
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    const r = reclassifyUnsaid(proj, "greenfield");
+    expect(r.status, said(r)).toBe(0);
+  });
+
+  test("the person's own words before the question still count, so nothing is asked twice", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: "practices-discovery" }, proj);
+    // "I've added my existing app to this folder, carry on."
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    expect(next(proj).ask_type).toBe("project-type");
+    const r = reclassifyUnsaid(proj, "brownfield");
+    expect(r.status, said(r)).toBe(0);
+  });
+
+  test("asking again before the answer keeps the first showing, so the answer between counts", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: "practices-discovery" }, proj);
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    expect(next(proj).ask_type).toBe("project-type");
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    expect(next(proj).ask_type).toBe("project-type");
+    expect(reclassifyUnsaid(proj, "brownfield").status).toBe(0);
   });
 });
 

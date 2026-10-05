@@ -10882,6 +10882,62 @@ export function personRepliedAfter(projectDir: string, mark: AuditMark): boolean
   }
 }
 
+// When the engine first asked what the folder is, and the person has not
+// answered yet: the audit mark at that showing, in the work's own record.
+function projectTypeAskPath(projectDir: string): string | null {
+  const root = recordDir(projectDir);
+  return root === null ? null : join(root, ".aidlc-engine", "project-type-ask.json");
+}
+
+function projectTypeAskedAt(projectDir: string): AuditMark | null {
+  const path = projectTypeAskPath(projectDir);
+  if (path === null || !existsSync(path)) return null;
+  try {
+    const mark = JSON.parse(readAtomicReplacedFileNoFollowOrThrow(path, "project type question").toString("utf-8")) as AuditMark;
+    return typeof mark.shard === "string" && Number.isSafeInteger(mark.offset) ? mark : null;
+  } catch {
+    return null;
+  }
+}
+
+// The engine shows the question: keep the first showing, so a reply the person
+// gave before it is shown again still answers it. Best-effort: the question is
+// asked either way.
+export function noteProjectTypeAsked(projectDir: string): void {
+  const path = projectTypeAskPath(projectDir);
+  if (path === null || projectTypeAskedAt(projectDir) !== null) return;
+  try {
+    assertNoSymlinkInChainOrThrow(projectDir, relative(projectDir, dirname(path)));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileAtomic(path, JSON.stringify(auditMark(projectDir)));
+  } catch {
+    // Without the mark the person's word is read as before the question.
+  }
+}
+
+export function clearProjectTypeAsked(projectDir: string): void {
+  const path = projectTypeAskPath(projectDir);
+  if (path !== null) removeRuntimeFile(path);
+}
+
+// What the folder is, is the person's word: their own words since the last
+// decision, or, once the engine has asked, anything they typed after the
+// question (an answer, or `/aidlc --project-type ...`). A command typed before
+// the question (a bare `/aidlc` that led to it) is no answer to it.
+export function personSaidProjectType(projectDir: string): boolean {
+  const asked = projectTypeAskedAt(projectDir);
+  if (asked === null || projectRelativePath(projectDir, auditFilePath(projectDir)) !== asked.shard) {
+    return personSpokeSinceGate(projectDir, { requests: true });
+  }
+  if (personSpokeSinceGate(projectDir, { replies: true })) return true;
+  try {
+    const after = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").subarray(asked.offset).toString("utf-8");
+    return auditShardBlocks(after).some((block) => isRequestTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+  } catch {
+    return false;
+  }
+}
+
 // With `intent` and `space`, the turns read are that work's, not the active work's.
 export function humanTurnState(
   projectDir: string,
