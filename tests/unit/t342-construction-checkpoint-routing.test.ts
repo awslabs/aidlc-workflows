@@ -855,10 +855,14 @@ describe("t342 Construction checkpoint routing", () => {
     expect(JSON.parse(iteration.stdout).notice).toBe(
       "Construction now goes stage by stage (it built one Unit at a time). Say 'build one Unit at a time' to undo.",
     );
-    // Asking for what is already in force changes nothing and says nothing.
+    // Asking for what is already in force changes nothing and says so.
+    const rows = readAuditShardEvents(p).length;
     const same = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
     expect(same.status).toBe(0);
-    expect(JSON.parse(same.stdout).notice).toBeUndefined();
+    expect(JSON.parse(same.stdout).notice).toBe("Construction already goes stage by stage.");
+    const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    expect(JSON.parse(off.stdout).notice).toBe("Construction checkpoints are already off for this work.");
+    expect(readAuditShardEvents(p)).toHaveLength(rows);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("an unattended run never changes a Construction setting, even after a person turn", () => {

@@ -2907,6 +2907,11 @@ function validateChoiceArgs(
     invalidKnownMessage: (flag) => `${flag} is not valid for config ${section}`,
   });
   if (grammar) return grammar;
+  // Nobody is there to ask for a check off on an unattended run. Turning one
+  // back on is always done.
+  if (section === "flags" && process.env.AIDLC_UNATTENDED === "1" && valuesAfter(argv, "--bypass").length > 0) {
+    return "An unattended run does not turn a check off (AIDLC_UNATTENDED=1 is set): run it from an attended session.";
+  }
   const mutationFlags = section === "flags"
     ? [
         "--bypass",

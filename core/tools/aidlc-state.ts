@@ -1150,27 +1150,45 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   });
 }
 
-// The one line the person hears when a Construction setting changed: what it
-// is now, what it was, and the words that bring the old value back. Each
-// entry says the value as it is now, as it was, and how to ask for it.
-// Nothing when it was already so.
+// The one line the person hears for a Construction setting they asked for:
+// what it is now, what it was, and the words that bring the old value back, or
+// that it already was so. Each entry says the value as it is now, as it was,
+// how to ask for it, and that nothing changed.
 function constructionPolicyNotice(before: string, after: string, field: string): { notice?: string } {
   const previous = getField(before, field)?.trim() ?? "";
   const value = getField(after, field)?.trim() ?? "";
-  if (previous === value) return {};
-  const lines: Record<string, { now: string; was: string; undo: string }> = {
-    enabled: { now: "Construction checkpoints are on for this work now", was: "they were on", undo: "turn checkpoints back on" },
-    disabled: { now: "Construction checkpoints are off for this work now", was: "they were off", undo: "turn checkpoints off" },
-    "unit-major": { now: "Construction now builds one Unit at a time", was: "it built one Unit at a time", undo: "build one Unit at a time" },
-    "stage-major": { now: "Construction now goes stage by stage", was: "it went stage by stage", undo: "go stage by stage" },
-    swarm: { now: "Construction now builds the Units in parallel", was: "it built the Units in parallel", undo: "build the Units in parallel" },
-    serial: { now: "Construction now builds the Units one after another", was: "it built the Units one after another", undo: "build the Units one after another" },
+  const lines: Record<string, { now: string; was: string; undo: string; already: string }> = {
+    enabled: {
+      now: "Construction checkpoints are on for this work now", was: "they were on", undo: "turn checkpoints back on",
+      already: "Construction checkpoints are already on for this work",
+    },
+    disabled: {
+      now: "Construction checkpoints are off for this work now", was: "they were off", undo: "turn checkpoints off",
+      already: "Construction checkpoints are already off for this work",
+    },
+    "unit-major": {
+      now: "Construction now builds one Unit at a time", was: "it built one Unit at a time", undo: "build one Unit at a time",
+      already: "Construction already builds one Unit at a time",
+    },
+    "stage-major": {
+      now: "Construction now goes stage by stage", was: "it went stage by stage", undo: "go stage by stage",
+      already: "Construction already goes stage by stage",
+    },
+    swarm: {
+      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel", undo: "build the Units in parallel",
+      already: "Construction already builds the Units in parallel",
+    },
+    serial: {
+      now: "Construction now builds the Units one after another", was: "it built the Units one after another",
+      undo: "build the Units one after another", already: "Construction already builds the Units one after another",
+    },
   };
   const other: Record<string, string> = {
     enabled: "disabled", disabled: "enabled", "unit-major": "stage-major", "stage-major": "unit-major",
     swarm: "serial", serial: "swarm",
   };
   const line = lines[value];
+  if (previous === value) return { notice: line ? `${line.already}.` : `${field} is already ${value}.` };
   if (!line) return { notice: `${field} is now ${value}.` };
   const was = lines[previous];
   return { notice: `${line.now}${was ? ` (${was.was})` : ""}. Say '${(was ?? lines[other[value]]).undo}' to undo.` };

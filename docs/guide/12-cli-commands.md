@@ -1516,7 +1516,9 @@ project with several harnesses, and prints what it recorded or cleared with the
 command that undoes it. With no `--local`, `--project`, or `--global`, a
 `--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
 clears the switch from every file that records it. A switch is on while any of
-the files records it. A command that also changes
+the files records it. An unattended run (`AIDLC_UNATTENDED=1`) records no
+`--bypass`, since nobody is there to ask for it; a `--clear-bypass` is always
+done. A command that also changes
 another flag is a settings change too and is done the same way, with a line for
 each part, and so is a command that brings in other release files (a
 `--download`, or the update a project pinned to another release needs first).

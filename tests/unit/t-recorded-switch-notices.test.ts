@@ -253,6 +253,22 @@ describe("a check switched off for the project is always said, never refused", (
     expect(said[0]).toContain(NOT_FROM_CHAT);
   });
 
+  test("an unattended run does not turn a check off for the project, and still turns one back on", () => {
+    const proj = installedProject();
+    says(proj, ASKED);
+    const unattended = { AIDLC_UNATTENDED: "1" };
+    const refused = dispatch(proj, ["config", "flags", "--project-dir", proj, "--bypass", NAME, "--local", "--yes"], undefined, unattended);
+    invalidateSettingsCache();
+    expect(refused.status).not.toBe(0);
+    expect(refused.stdout + refused.stderr).toContain("An unattended run does not turn a check off");
+    expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
+    writeLocal(proj, [NAME]);
+    const cleared = dispatch(proj, ["config", "flags", "--project-dir", proj, "--clear-bypass", NAME, "--yes"], undefined, unattended);
+    invalidateSettingsCache();
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
+  });
+
   test("a line written into the file, or kept from before this release, counts and is said once", () => {
     const proj = project();
     const path = writeLocal(proj, [NAME]);
