@@ -4067,6 +4067,27 @@ process.exit(0);
     ], project, runtimeEnv());
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(readFileSync(path, "utf-8")).toBe(saved);
+
+    // Straight after the mark, a release that ships a different opencode.json
+    // takes the mark along.
+    const fresh = install("opencode");
+    const freshPath = join(fresh, "opencode.json");
+    writeFileSync(freshPath, `\uFEFF${readFileSync(freshPath, "utf-8")}`);
+    const source = temp("aidlc-t294-opencode-bom-source-");
+    cpSync(join(DIST_RELEASE, "opencode"), source, { recursive: true });
+    const shipped = JSON.parse(readFileSync(join(source, "opencode.json"), "utf-8"));
+    writeFileSync(join(source, "opencode.json"), `${JSON.stringify({ ...shipped, share: "disabled" }, null, 2)}\n`);
+    const upgraded = run([
+      "config", "--project-dir", fresh, "--from", source, "--harness", "opencode", "--yes",
+    ], fresh, runtimeEnv());
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(freshPath, "utf-8")).toBe(`\uFEFF${readFileSync(join(source, "opencode.json"), "utf-8")}`);
+    // Their own edit, mark or not, is still theirs.
+    writeFileSync(freshPath, `\uFEFF${JSON.stringify({ ...shipped, theme: "mine" }, null, 2)}\n`);
+    const edited = run([
+      "config", "--project-dir", fresh, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
+    ], fresh, runtimeEnv());
+    expect(edited.stdout + edited.stderr).toContain("opencode.json (unowned whole file)");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {

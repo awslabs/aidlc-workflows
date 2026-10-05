@@ -8317,8 +8317,10 @@ function planRootIntegrations(
       ? priorContribution.hash
       : undefined;
     const currentHash = sha256Bytes(current);
+    // A byte order mark the person's editor added is not their change.
+    const owned = currentHash === priorHash || (withoutBom(current) !== current && sha256Bytes(withoutBom(current)) === priorHash);
     const adoptedLegacy = integration.legacySignatures?.wholeFileHashes?.includes(currentHash) ?? false;
-    if (!retainBaseline || currentHash === priorHash) {
+    if (!retainBaseline || owned) {
       contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
     } else if (priorContribution) {
       contributions[integration.path] = priorContribution;
@@ -8326,7 +8328,7 @@ function planRootIntegrations(
     if (
       !recordOnly &&
       targetExists &&
-      currentHash !== priorHash &&
+      !owned &&
       currentHash !== shippedHash &&
       !adoptedLegacy
     ) {
