@@ -2060,15 +2060,10 @@ X. Other (please specify)
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // The code went in an earlier commit and a docs-only commit landed after
-    // it: "write the code" is not the step. The refusal names the switch the
-    // person can turn off, and with it recorded the same approve goes through.
-    test("names the step that works when the code is in an earlier commit, and that step is accepted", () => {
+    // it. The refusal names the ways forward that keep the check: a source
+    // change not committed yet counts, and the same approve then goes through.
+    test("names the way forward when the last commit is docs only, and that step is accepted", () => {
       initGitRepo();
-      const ignore = join(proj, ".gitignore");
-      const ignored = existsSync(ignore) ? readFileSync(ignore, "utf-8") : "";
-      if (!ignored.split("\n").includes("aidlc.settings.local.json")) {
-        writeFileSync(ignore, `${ignored}aidlc.settings.local.json\n`);
-      }
       writeWorkspaceFile(proj, "src/legacy/old.ts");
       git(["add", "-A"]);
       git(["commit", "-q", "-m", "baseline brownfield code"]);
@@ -2080,26 +2075,10 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "record docs only"]);
       const refused = approveCodeGen();
       expect(refused.rc).not.toBe(0);
-      expect(refused.out).toContain("If the code is already in an earlier commit");
-      expect(refused.out).toContain(
-        "config flags --bypass AIDLC_SKIP_ARTIFACT_GUARD --local --yes",
-      );
-      const env = { ...process.env };
-      delete env.AIDLC_SKIP_ARTIFACT_GUARD;
-      const recorded = spawnSync(
-        BUN,
-        [
-          join(AIDLC_SRC, "tools", "aidlc.ts"),
-          "config", "flags", "--project-dir", proj,
-          "--bypass", "AIDLC_SKIP_ARTIFACT_GUARD", "--local", "--yes",
-        ],
-        { cwd: proj, encoding: "utf-8", env },
-      );
-      expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
-      // Git still sees no new code, so only the recorded switch lets it through.
-      const status = spawnSync("git", ["status", "--porcelain"], { cwd: proj, encoding: "utf-8" });
-      expect(status.stdout).not.toContain("src/");
-      expect(status.stdout).not.toContain("aidlc.settings.local.json");
+      expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
+      expect(refused.out).toContain("choose Request Changes and say what is missing");
+      expect(refused.out).not.toContain("--bypass");
+      writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
       const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(approved.rc, approved.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
