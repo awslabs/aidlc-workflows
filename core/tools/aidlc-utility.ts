@@ -146,7 +146,6 @@ import {
   GUARD_POLICY_VALUES,
   guardPolicyAtLeast,
   guardPolicyAcceptsChanges,
-  personSpokeSinceGate,
   scopeDefinitionGuardPolicy,
   GUARD_FENCES,
   type GuardSwitch,
