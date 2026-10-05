@@ -11537,8 +11537,8 @@ function checkStageCompletionEvidence(
       return {
         ok: false,
         message:
-          `Cannot present "practices-discovery" for approval. In team-practices.md: ${problem} ` +
-          "Fix that line, then report the stage again.",
+          `Practices Discovery is not ready for approval yet. In team-practices.md: ${problem} ` +
+          "Once that line is fixed, Practices Discovery comes back for approval.",
       };
     }
   }

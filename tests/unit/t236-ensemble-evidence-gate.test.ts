@@ -829,7 +829,14 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("In team-practices.md");
     expect(refused.message).toContain('"Methodology evidence" line');
+    expect(refused.message).not.toContain("report");
     expect(readFileSync(seededStateFile(unreadable), "utf-8")).toBe(before.state);
+
+    // A mix of two is custom, so the gate never splits it to the first one.
+    const mixed = withDraft("tdd for the domain, test-after for adapters");
+    const mixedRefused = runReport(mixed, ["--stage", "practices-discovery", "--result", "awaiting-approval"]);
+    expect(mixedRefused.kind).toBe("error");
+    expect(mixedRefused.message).toContain("custom for a mix");
 
     // The s20d line: the value leads, so promotion splits off the reasons.
     const reasons = withDraft(

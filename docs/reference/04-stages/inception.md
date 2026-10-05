@@ -288,7 +288,8 @@ Four lead artifacts plus three spoke contributions are written to
   `Methodology evidence:` bullet: the gate does not open on a value Code
   Generation could not read, and `practices-promote` splits a value given with
   its reasons ("test-after (because ...)") into the bare value and that bullet
-  before it writes `team.md`.
+  before it writes `team.md`. Reasons that name a second methodology describe a
+  mix, which is `custom`, so that value is never split.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.

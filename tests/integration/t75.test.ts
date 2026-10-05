@@ -598,6 +598,21 @@ describe("t75 practices-promote: the promoted Testing Posture is readable", () =
     expect(refusal).toContain('"Methodology evidence" line');
     expect(readFileSync(fx.teamMd, "utf-8")).toBe(before);
   });
+
+  test("H: a Methodology that mixes two of them is never split to the first", () => {
+    const fx = makeFixture();
+    const before = readFileSync(fx.teamMd, "utf-8");
+    writeFileSync(
+      fx.teamPracticesPath,
+      "# Team Practices Draft\n\n## Testing Posture\n\n- **Methodology**: tdd for the domain, test-after for adapters\n- **Ordering**: one sentence.\n",
+      "utf-8",
+    );
+    const r = runPromote(fx);
+    expect(r.status).not.toBe(0);
+    const refusal = (JSON.parse(r.out.trim().split("\n").at(-1) ?? "{}") as { error?: string }).error ?? "";
+    expect(refusal).toContain("custom for a mix");
+    expect(readFileSync(fx.teamMd, "utf-8")).toBe(before);
+  });
 });
 
 // ============================================================

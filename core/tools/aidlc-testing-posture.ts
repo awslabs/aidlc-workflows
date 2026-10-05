@@ -587,6 +587,9 @@ function structuredMethodology(value: string): TestingMethodology {
 // "test-after (evidence and org default agree - ...)".
 const METHODOLOGY_WITH_REASONS =
   /^[`*_]*(tdd|bdd|atdd|test-after|custom)[`*_]*(?=$|[\s(:;,])[\s:;,]*(.*)$/i;
+// Reasons that name a second methodology describe a mix ("tdd for the domain,
+// test-after for adapters"), which is `custom`, so they are never split.
+const METHODOLOGY_NAME = /(?<![\w-])(tdd|bdd|atdd|test[- ]after|custom)(?![\w-])/gi;
 
 // A practices draft's Testing Posture section made readable by the renderer
 // before practices-promote writes it to team.md: the Methodology field must be
@@ -609,19 +612,23 @@ export function promotableTestingPosture(
     section,
     problem:
       `The Testing Posture Methodology "${value}" is not one of tdd, bdd, atdd, test-after, custom. ` +
-      "Write the Methodology line as one of those values and nothing else, and put the reasons in a " +
-      'separate "Methodology evidence" line.',
+      "Write the Methodology line as one of those values and nothing else (custom for a mix of them, " +
+      'with the order in the Ordering line), and put the reasons in a separate "Methodology evidence" line.',
   };
   const lead = value.trim().match(METHODOLOGY_WITH_REASONS);
   const span = structuredFieldSpan(section, "Methodology");
   if (!lead || !span || span.value !== value) return unreadable;
+  const named = lead[1].toLowerCase();
+  for (const other of lead[2].matchAll(METHODOLOGY_NAME)) {
+    if (other[1].toLowerCase().replace(" ", "-") !== named) return unreadable;
+  }
   const lines = section.split(/\r?\n/);
   const head = lines[span.start].match(/^(.*?Methodology(?:\*\*)?[ \t]*:)/i);
   if (!head) return unreadable;
   let reasons = lead[2].trim();
   const wrapped = reasons.match(/^\((.*)\)\.?$/s);
   if (wrapped) reasons = wrapped[1].trim();
-  const field = [`${head[1]} ${lead[1].toLowerCase()}`];
+  const field = [`${head[1]} ${named}`];
   if (reasons) {
     field.push(`${head[1].replace(/Methodology/i, (word) => `${word} evidence`)} ${reasons}`);
   }
