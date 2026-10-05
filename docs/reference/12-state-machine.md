@@ -260,7 +260,15 @@ fingerprinting, while the union drives receipt filtering.
 **Reviewer gate guard (issue #551).** A reviewer-bearing stage cannot enter
 `AwaitingApproval` through `gate-start` or `revise` until its configured
 reviewer has a fresh terminal `REVIEW_COMPLETED` receipt. The same receipt
-remains mandatory on all four completion paths. Re-reporting an already-open
+remains mandatory on all four completion paths, with one exception: the
+person's own approval (reported with their reply since the question) goes over
+a review that was requested in the current attempt and has no verdict yet, and
+`GATE_APPROVED` then carries `Review: not finished`. The gate a report backfills
+for that approval (`gate-start --recovered --person-approves`) opens the same
+way, only after such a reply. A review never requested, a recovery review in
+flight, a result that could not be verified, a review whose content changed
+after its verdict, and a project whose memory locks Guard Policy strict keep
+the review required. Re-reporting an already-open
 gate re-runs these guards without writing a duplicate transition. A rejection
 reported directly from `Active` moves to `Revising` without fabricating a
 `STAGE_AWAITING_APPROVAL` row. Synthetic transition tests that deliberately

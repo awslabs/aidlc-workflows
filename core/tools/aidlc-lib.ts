@@ -14367,6 +14367,9 @@ export interface FreshReviewReceipts {
   unitIterations: Map<string, number>;
   stagePending: PendingReviewProgress | null;
   unitPending: Map<string, PendingReviewProgress>;
+  /** Review requests in this attempt that have no verdict yet: "" for the
+   *  stage-level request, else the Unit's name. */
+  awaitingVerdict?: Set<string>;
   /**
    * Units with a merge-confirmed Bolt attempt. A name-only attempt is
    * confirmed by its BOLT_COMPLETED row; a slug-backed (worktree) attempt is
@@ -18384,6 +18387,7 @@ export function freshReviewReceipts(
     unitIterations: new Map(),
     stagePending: null,
     unitPending: new Map(),
+    awaitingVerdict: new Set(),
     mergedBoltUnits: new Set(),
     openBoltUnits: new Set(),
     acceptedChanges: [],
@@ -18946,7 +18950,9 @@ export function freshReviewReceipts(
   };
   const requireRequiredArtifacts =
     resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, projectDir) !== "1";
+  const awaitingVerdict = new Set<string>();
   for (const request of pendingRequests.values()) {
+    awaitingVerdict.add(request.unit ?? "");
     // A pending request whose outputs or source changed before its verdict can
     // never finish (a retry re-dispatches the old bytes); the next move is a new
     // request at the same pass, which is what `outstanding` names to every
@@ -19340,6 +19346,7 @@ export function freshReviewReceipts(
     unitIterations,
     stagePending,
     unitPending,
+    awaitingVerdict,
     mergedBoltUnits,
     openBoltUnits,
     acceptedChanges: [
