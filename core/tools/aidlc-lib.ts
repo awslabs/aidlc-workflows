@@ -3427,6 +3427,20 @@ export function codekbFingerprintExcludes(projectDir: string, sourceDir: string)
   return [...excluded].sort();
 }
 
+// The same files, as a Unit's source accounting reads them: a change to one of
+// AI-DLC's own files at the workspace root (an install or upgrade writing its
+// .gitignore block or AGENTS.md, a second tool added) is no Unit's application
+// source, so no Unit has to claim it. Keys are `<repo>\0<path>`; a sibling
+// repo holds none of these files.
+export function aidlcOwnedSourceKey(projectDir: string): (pathKey: string) => boolean {
+  const owned = codekbFingerprintExcludes(projectDir, projectDir);
+  return (pathKey) => {
+    const parsed = splitSourcePathKey(pathKey);
+    return parsed !== null && parsed.repo === "" &&
+      owned.some((entry) => parsed.path === entry || parsed.path.startsWith(`${entry}/`));
+  };
+}
+
 function generatedRunnerSkill(skillDir: string): boolean {
   try {
     const skillMd = join(skillDir, "SKILL.md");

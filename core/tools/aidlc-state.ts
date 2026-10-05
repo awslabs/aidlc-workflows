@@ -166,6 +166,7 @@ import {
   resolveProjectFlag,
   resolveWorkflowSelection,
   sourceClaimCovers,
+  aidlcOwnedSourceKey,
   sourceBaselineAuditFields,
   sourceListingEntriesEqual,
   resolveProjectDir,
@@ -4298,8 +4299,13 @@ function verifyReviewerPrecondition(
       if (!baseline.has(pathKey)) baselineChanged.add(pathKey);
     }
     const claimModels = [...receipts.freshUnitClaims.values()];
+    // AI-DLC's own files (its .gitignore block, AGENTS.md, a second tool's
+    // install) are no Unit's to claim.
+    const aidlcOwned = aidlcOwnedSourceKey(pd);
     baselineUnclaimed = [...baselineChanged]
-      .filter((pathKey) => !claimModels.some((claims) => sourceClaimCovers(pathKey, claims)))
+      .filter((pathKey) =>
+        !aidlcOwned(pathKey) && !claimModels.some((claims) => sourceClaimCovers(pathKey, claims))
+      )
       .sort();
   }
   const resolutionForReconciliation = perUnit ? resolveBoltDag(pd) : null;
