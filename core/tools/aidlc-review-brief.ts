@@ -1922,6 +1922,9 @@ export function reviewInvalidationDetails(
 export function acceptedReviewChanges(
   projectDir: string,
   stageSlug: string,
+  // A Unit's own approval: only that Unit's changes. Each was already said once
+  // when it was kept, so another Unit's change is not said again here.
+  unit?: string,
 ): Array<{ notice: string; changed: string[] | null }> {
   const attemptView = reviewInvalidationAttemptView(
     readAuditShardEvents(projectDir),
@@ -1933,7 +1936,8 @@ export function acceptedReviewChanges(
       event.event !== "CHANGE_ACCEPTED" ||
       !attemptEventAfterFrontier(attemptView.floor, event) ||
       auditBlockField(event.block, "Stage") !== stageSlug ||
-      auditBlockField(event.block, "Checkpoint") !== "review-receipt"
+      auditBlockField(event.block, "Checkpoint") !== "review-receipt" ||
+      (unit !== undefined && auditBlockField(event.block, "Unit") !== unit)
     ) {
       continue;
     }
@@ -2044,7 +2048,9 @@ export function renderReviewBrief(
   // Change Control `relaxed` (the ledger's CHANGE_ACCEPTED rows for this stage
   // in the current attempt). The verdict above is the reviewer's; these lines
   // tell the human what moved since it was recorded.
-  for (const accepted of acceptedReviewChanges(projectDir, stage.slug)) {
+  // The final gate of a per-Unit stage omits --unit and says every Unit's change.
+  const changesFor = stage.for_each === "unit-of-work" ? unit : undefined;
+  for (const accepted of acceptedReviewChanges(projectDir, stage.slug, changesFor)) {
     lines.push(`**Reviewed content differs:** ${accepted.notice}`);
     if (accepted.changed !== null) {
       lines.push(

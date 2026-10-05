@@ -271,7 +271,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
-   changed paths. The reviewer's verdict is never altered. Under `relaxed` or
+   changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
    `off`, a change the person asks for after the verdict ("rename the handler",
    "fix that answer") is made directly, with no Request Changes round and no
    new review; the gate then shows the change as above. The freeze stays this
