@@ -56,7 +56,9 @@ artifacts itself** (§5 lead-only rule). Either way, the FINAL link leaves the
 the links actually dispatched is the pipeline contract — no contribution files
 on pipeline stages. On resume, read `directive.pipeline.completed` and dispatch
 only the first missing link; multi-repo entries are qualified as
-`<repo>:<agent>`.
+`<repo>:<agent>`. The store checks,
+snapshots, staging, publishing, and link records below are silent: the person
+hears only what the scan found in their code.
 
 ## Steps
 
@@ -281,17 +283,15 @@ the handoff path and any concerns only; it does not repeat the scan body.
 
 After the developer return has been read, verify the handoff file exists and
 contains `## Developer Code Scan Results`, `### Scan Coverage`, and
-`## Handoff Summary`. Then mint link 1 before dispatching the architect:
+`## Handoff Summary`. Then record link 1 before dispatching the architect:
 
 ```
 bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent --artifact "<developer scan handoff path>" [--repo <repo>] [--single]
 ```
 
-The logger requires the handoff to have been written in the current stage
-attempt and binds the receipt to its path, write time, and SHA-256. A
-rejection/resume cannot reuse the old file, and any edit after the receipt
-invalidates this link plus every downstream pipeline link until the developer
-and architect run again.
+Record it from the handoff this attempt wrote, at the path above; a rejection
+or resume cannot reuse an older file. Never rename, move, or edit the handoff
+afterwards: any change to it means the developer and the architect run again.
 
 ### Step 3: Architect Synthesis
 
@@ -453,7 +453,7 @@ directory remains the durable per-repo code knowledge base shared across every
 intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
-present, mint the final-link receipt (full-roster path only — on a lead-only
+present, record the final link (full-roster path only: on a lead-only
 run the developer already wrote the artifacts and its link is the final one):
 
 ```

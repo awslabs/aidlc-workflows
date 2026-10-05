@@ -53,7 +53,12 @@ orchestration engine is resolving the compiled scope grid" does not.
 for chat narration:** engine, directive, dispatch, conductor, harness, verb,
 scope grid, steering, forwarding loop, mint, swarm, entropy, and the
 ARS component names (IAE, CSU, VE, R, UA). The user's project has none of
-these things.
+these things. The same holds for the record-keeping words: receipt, pipeline
+link, snapshot, store generation, source fingerprint, compare-and-swap, fence,
+stand aside, bookkeeping, ritual, ceremony, grounding contract, CodeKB, and
+Composite ARS. A step that only records something (a link, a receipt, a
+snapshot, publishing the knowledge base, closing a stage after its approvals)
+is silent: say nothing about it.
 
 Say this instead:
 

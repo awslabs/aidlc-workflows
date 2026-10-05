@@ -34,11 +34,12 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
 3. **`directive.construction_checkpoint`** uses **Unit and skeleton checkpoints**
    below. The Unit body has already run; do not regenerate it or report the
    whole Code Generation stage complete for this Unit.
-4. **`directive.construction_policy.completion_only === true`** is bookkeeping
-   after recorded Unit approvals. It must also carry
+4. **`directive.construction_policy.completion_only === true`** closes the stage
+   after its Units were approved. It must also carry
    `human_completion_required: false`. Skip the body, questions, reviewer, and
-   learnings prompt. Report `awaiting-approval`, then `approved`, for the emitted
-   `directive.stage`, both without `--user-input`, and re-run `next`. If the
+   learnings prompt, and say nothing about this step. Report
+   `awaiting-approval`, then `approved`, for the emitted `directive.stage`,
+   both without `--user-input`, and re-run `next`. If the
    metadata contradicts itself or a report refuses, explain the error and stop;
    do not manufacture approval or retry generation.
 5. **`directive.construction_policy.offer_autonomy === true`** uses **Autonomy
@@ -305,10 +306,9 @@ options:
 ```
 
 Map **Continue automatically** to `autonomous` and **Review each checkpoint** to
-`gated`. Record the explicit answer with
-`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, then re-run
-`next`. Do not log this choice with `log decision`/`log answer`: `set-autonomy`
-owns its receipt, and logging an interview answer first consumes the human turn.
+`gated`. Record the explicit answer only with
+`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, never with
+`log decision` or `log answer` first, then re-run `next`.
 Escalation requires a fresh human turn; revocation to `gated` does not.
 
 Explicit on-demand requests remain valid at any point during Construction.

@@ -669,7 +669,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
-  "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
+  "guardPolicyRationale": "<1-2 plain sentences for the person: what happens when an input changes after approval (strict: it is approved again; relaxed or off: it is recorded, they are told in one line, and work goes on) and why that suits this work>",
   "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "collaborators": "on | off", "review_cap": "adversarial | advisory | none" },
   "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "creationSettings": { "learnings": "off", "review": "adversarial" },
@@ -698,8 +698,10 @@ for a task-less front composition, derive it from the proposed work the human
 will approve. Never return a front/report proposal that would create from only a scope name.
 
 `guardPolicy` is REQUIRED for every mode and is ONE value with a 1-2 sentence
-`guardPolicyRationale` naming the fences it lowers and why an input change
-after approval should reopen it, or be recorded and continue. `strict` lowers
+`guardPolicyRationale` the person reads on the gate row: in their words, what
+happens when an input changes after approval and why that suits this work.
+Never name fences, checks, tools, or fields such as `custom_start`, and never
+say where the value was copied from. `strict` lowers
 no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, and continues,
 and also stands the plan-approval and review-freeze checks aside; `off` does
@@ -707,7 +709,8 @@ that and stands the state-transition and reviewer-scope checks aside too. No
 value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md` in the order
 the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
-then strict when neither line is present) and say so in the rationale. When the
+then strict when neither line is present) and say in the rationale that it is
+this kind of work's usual setting. When the
 human has asked for a stricter value, keep theirs on every re-dispatch: the
 plan stays matched and creation applies it. The final `validate-grid --matched`
 run rejects only a value below the stock default. For `mode: "custom"` copy

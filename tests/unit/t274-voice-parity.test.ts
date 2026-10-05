@@ -336,3 +336,81 @@ describe("t272 §4 Construction keeps its own voice rules", () => {
     expect(read("core/aidlc-common/conductor.md")).toContain("skeleton ceremony");
   });
 });
+
+// =========================================================================
+// §5: steps that only keep records are silent, and the prose that the agent
+// repeated to the person in live runs stays reworded.
+// =========================================================================
+describe("t274 §5 record-keeping steps are never narrated", () => {
+  const flat = (rel: string): string => read(rel).replace(/\s+/g, " ");
+
+  // Words seen in live runs, said to the person about steps that only record.
+  const RECORD_KEEPING = [
+    "receipt",
+    "pipeline link",
+    "snapshot",
+    "store generation",
+    "source fingerprint",
+    "compare-and-swap",
+    "fence",
+    "stand aside",
+    "bookkeeping",
+    "ritual",
+    "ceremony",
+    "grounding contract",
+    "CodeKB",
+    "Composite ARS",
+  ] as const;
+  test("the voice contract reserves the record-keeping words and keeps those steps silent", () => {
+    const protocol = flat(PROTOCOL_REL);
+    const start = protocol.indexOf("The same holds for the record-keeping words");
+    expect(start).toBeGreaterThan(-1);
+    const sentence = protocol.slice(start, start + 400);
+    expect(RECORD_KEEPING.filter((w) => !sentence.includes(w))).toEqual([]);
+    expect(protocol).toContain("A step that only records something");
+    expect(protocol).toContain("is silent: say nothing about it.");
+  });
+
+  // Each retired line explained machinery the agent then said in chat.
+  const RETIRED: Array<{ rel: string; phrases: string[] }> = [
+    {
+      rel: "core/aidlc-common/protocols/stage-protocol-construction.md",
+      phrases: ["is bookkeeping after recorded Unit approvals", "owns its receipt", "consumes the human turn"],
+    },
+    {
+      rel: "core/aidlc-common/stages/inception/reverse-engineering.md",
+      phrases: ["mint link 1", "mint the final-link receipt", "binds the receipt to its path, write time, and SHA-256"],
+    },
+    {
+      rel: "core/agents/aidlc-composer-agent.md",
+      phrases: ["which fences this value lowers", "naming the fences it lowers"],
+    },
+  ];
+  for (const { rel, phrases } of RETIRED) {
+    test(`${rel} no longer carries the narrated machinery`, () => {
+      const body = flat(rel);
+      expect(phrases.filter((p) => body.includes(p))).toEqual([]);
+    });
+  }
+
+  test("reverse engineering keeps its record steps silent", () => {
+    const body = flat("core/aidlc-common/stages/inception/reverse-engineering.md");
+    expect(body).toContain("the person hears only what the scan found in their code");
+  });
+
+  test("the composer offers no kill-switch line when none is set", () => {
+    expect(flat("core/knowledge/aidlc-composer-agent/composing.md"))
+      .toContain("When none is set, the proposal says nothing about kill switches.");
+  });
+
+  for (const rel of [
+    "core/knowledge/aidlc-product-lead-agent/reviewing.md",
+    "core/knowledge/aidlc-architecture-reviewer-agent/reviewing.md",
+  ]) {
+    test(`${rel}: findings are written in the project's terms`, () => {
+      expect(flat(rel)).toContain(
+        "never which stage rule, contract, or protocol step it breaks",
+      );
+    });
+  }
+});
