@@ -503,6 +503,8 @@ export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   confirm_command: string;
   compose_command: string;
   scope_commands: Array<{ scope: string; command: string }>;
+  /** The offer's answers as the person sees them, in order: go ahead, then compose. */
+  choices: Array<{ label: string; command: string }>;
 }
 
 export interface ComposeOfferAskDirective extends AskDirectiveBase {
@@ -881,6 +883,7 @@ const ASK_FIELDS = [
   "plan_approval",
   "existing_code_command",
   "new_project_command",
+  "choices",
 ] as const;
 const PRINT_FIELDS = ["kind", "message", "next_stage"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -1104,6 +1107,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "state_signature",
         "existing_code_command",
         "new_project_command",
+        "choices",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -1123,6 +1127,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "confirm_command", kind, errors);
         checkString(o, "compose_command", kind, errors);
         checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "choices", "label", kind, errors);
         rejectUnexpected(
           "scope-confirm",
           {
@@ -1130,6 +1135,7 @@ export function validateDirective(obj: unknown): ValidationResult {
             confirm_command: true,
             compose_command: true,
             scope_commands: true,
+            choices: true,
           },
         );
       } else if (o.ask_type === "compose-offer") {
@@ -2484,6 +2490,16 @@ if (import.meta.main) {
         {
           scope: "feature",
           command: "aidlc engine orchestrate next --scope feature --request a1b2c3d4",
+        },
+      ],
+      choices: [
+        {
+          label: "Go ahead with the \"bugfix\" plan",
+          command: "aidlc engine orchestrate next --scope bugfix --request a1b2c3d4",
+        },
+        {
+          label: "Tailor a plan to this task",
+          command: "aidlc engine orchestrate next compose --request a1b2c3d4",
         },
       ],
     },

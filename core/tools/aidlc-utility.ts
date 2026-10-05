@@ -66,7 +66,14 @@ import {
   redactSecretPatterns,
   stateShowsCompletion,
 } from "./aidlc-doctor-bundle.ts";
-import { sha256Bytes, TEAM_MEMORY_FILES } from "./aidlc-distribution.ts";
+import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcDispatcherTarget,
+  aidlcHookRegistrationHashes,
+  isCustomClaudeStatusLine,
+  sha256Bytes,
+  TEAM_MEMORY_FILES,
+} from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
   consumedArtifactProducerCollisions,
@@ -116,11 +123,13 @@ import {
 } from "./aidlc-unit.ts";
 import {
   isBindableIntentRecordName,
+  isSafeIntentRecordName,
   activeIntent,
   addPendingPersonLines,
   markPersonLinesHeard,
   staleStageLine,
   activeWorkflowDescriptions,
+  runningWorkflows,
   readActiveIntentCursor,
   activeSpace,
   authoritativeProjectDescription,
@@ -357,7 +366,10 @@ import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { isRuleStale } from "./aidlc-rule-schema.ts";
 import {
   captureStageValidationBasis,
+  codeArrivedStageLine,
   inspectStageValidity,
+  stageLabel,
+  staleStageNote,
 } from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
@@ -1729,10 +1741,66 @@ function pendingOrganicGate(
 
 function pendingDuration(ageMs: number): string {
   const minutes = Math.floor(Math.max(0, ageMs) / (60 * 1000));
-  if (minutes < 60) return `${minutes}m`;
+  const words = (count: number, unit: string): string => `${count} ${unit}${count === 1 ? "" : "s"}`;
+  if (minutes < 60) return words(minutes, "minute");
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  if (hours < 48) return words(hours, "hour");
+  return words(Math.floor(hours / 24), "day");
+}
+
+// The shipped personas' names. Status says only these: persona files and the
+// state file are project text, so another persona is "a custom agent" and a
+// stored value that is no persona is not shown.
+const SHIPPED_AGENT_NAMES: Readonly<Record<string, string>> = {
+  "aidlc-architect-agent": "Architect Agent",
+  "aidlc-architecture-reviewer-agent": "Architecture Reviewer",
+  "aidlc-aws-platform-agent": "AWS Platform Agent",
+  "aidlc-compliance-agent": "Compliance Agent",
+  "aidlc-composer-agent": "Composer Agent",
+  "aidlc-delivery-agent": "Delivery Agent",
+  "aidlc-design-agent": "Design Agent",
+  "aidlc-developer-agent": "Developer Agent",
+  "aidlc-devsecops-agent": "DevSecOps Agent",
+  "aidlc-operations-agent": "Operations Agent",
+  "aidlc-pipeline-deploy-agent": "Pipeline & Deploy Agent",
+  "aidlc-product-agent": "Product Agent",
+  "aidlc-product-lead-agent": "Product Lead",
+  "aidlc-quality-agent": "Quality Agent",
+};
+
+function agentDisplayName(slug: string): string | null {
+  if (Object.hasOwn(SHIPPED_AGENT_NAMES, slug)) return SHIPPED_AGENT_NAMES[slug];
+  return /^[a-z0-9][a-z0-9-]{0,79}$/.test(slug) ? "a custom agent" : null;
+}
+
+// An engine timestamp as a person reads it: the date and the minute, in UTC.
+function plainUtc(timestamp: string): string {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp)
+    ? `${timestamp.slice(0, 10)} ${timestamp.slice(11, 16)} UTC`
+    : timestamp;
+}
+
+// When this work last scanned the existing code, also when Reverse Engineering
+// ran on its own and the stage counts leave it out. Read from the stage's
+// completion in the work's audit trail; nothing when it never ran.
+function codeScannedClause(projectDir: string, intent: string | undefined, space: string): string {
+  try {
+    // A part of the trail that cannot be read could hold the latest scan, so
+    // no time is said then.
+    const unreadable: string[] = [];
+    const events = readAuditShardEvents(projectDir, intent, space, unreadable);
+    if (unreadable.length > 0) return "";
+    const last = events
+      .filter((row) => row.event === "STAGE_COMPLETED" && auditBlockField(row.block, "Stage") === "reverse-engineering")
+      .map((row) => row.timestamp)
+      .filter((timestamp) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(timestamp))
+      .sort()
+      .at(-1);
+    return last ? `, scanned ${plainUtc(last)}` : "";
+  } catch {
+    // An unreadable audit trail leaves the line as it was.
+    return "";
+  }
 }
 
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
@@ -1768,13 +1836,25 @@ To get started:
   const phase = getField(content, "Lifecycle Phase") || "Unknown";
   const currentStage = getField(content, "Current Stage") || "Unknown";
   const status = getField(content, "Status") || "Unknown";
-  const activeAgent = getField(content, "Active Agent") || "None";
-  const lastCompleted = getField(content, "Last Completed Stage") || "None";
-  const nextStage = getField(content, "Next Stage") || "None";
+  // Who is on it and what was done or comes next, in the names the person
+  // sees elsewhere; a setup step or an empty value says nothing.
+  const agentSlug = (getField(content, "Active Agent") ?? "").trim();
+  const agentName = agentSlug === "" || agentSlug === "None" || agentSlug === "orchestrator"
+    ? null
+    : agentDisplayName(agentSlug);
+  const lastStage = findStageBySlug((getField(content, "Last Completed Stage") ?? "").trim());
+  const nextNode = findStageBySlug((getField(content, "Next Stage") ?? "").trim());
+  const lastName = lastStage === undefined || lastStage.phase === "initialization" ? null : stageLabel(lastStage, lastStage.slug);
+  const nextName = nextNode === undefined ? null : stageLabel(nextNode, nextNode.slug);
+  const agentLine = agentName === null ? "" : `Active Agent:   ${agentName}\n`;
+  const lastLine = lastName === null ? "" : `Last Completed: ${lastName}\n`;
+  const nextLine = nextName === null ? "" : `Next Stage:     ${nextName}\n`;
   // Resolved, not the raw line: a memory layer holding strict shows as strict
   // from that file even when the intent's own line says relaxed.
   let guardPolicyDisplay: string;
-  // Only the checks that are off, grouped by why: every check on says nothing.
+  // Only the checks someone switched off (the person for this work, or this
+  // machine's environment), grouped by why. The checks a lower Guard Policy
+  // turns off go with its line, which already says where the policy came from.
   let fencesOffLine = "";
   try {
     const resolution = resolveGuardPolicy(projectDir, content, {
@@ -1786,7 +1866,7 @@ To get started:
     // edited asks again; the Plan Approval line below is the plan stop itself.
     const offBySource = new Map<string, string[]>();
     for (const fence of GUARD_FENCES) {
-      if (fences[fence].value !== "off") continue;
+      if (fences[fence].value !== "off" || fences[fence].source.startsWith("guard policy ")) continue;
       const source = fenceSourceLabel(fences[fence]);
       offBySource.set(source, [...(offBySource.get(source) ?? []), fence === "plan-approval" ? "plan re-approval" : fence]);
     }
@@ -1806,8 +1886,11 @@ To get started:
 
   // Find current stage number
   const currentEntry = graph.find((s) => s.slug === currentStage);
+  const currentName = currentEntry === undefined
+    ? currentStage
+    : stageLabel(currentEntry, currentEntry.slug) ?? "this stage";
   const stageDisplay = currentEntry
-    ? `${currentEntry.name} (${currentEntry.number})`
+    ? `${currentName} (${currentEntry.number})`
     : currentStage;
 
   // Gate awareness — when the current stage's checkbox is [?] or [R], the
@@ -1817,7 +1900,7 @@ To get started:
   const currentCheckbox = checkboxesAll.find((c) => c.slug === currentStage);
   let statusLine = status;
   if (currentCheckbox?.state === "awaiting-approval") {
-    const displayName = currentEntry?.name ?? currentStage;
+    const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
     try {
       const pending = pendingOrganicGate(
@@ -1826,14 +1909,14 @@ To get started:
       );
       if (pending) {
         statusLine +=
-          ` (waiting since ${pending.timestamp}, ` +
-          `~${pendingDuration(Date.now() - pending.timestampMs)})`;
+          ` (waiting since ${plainUtc(pending.timestamp)}, ` +
+          `about ${pendingDuration(Date.now() - pending.timestampMs)})`;
       }
     } catch {
       // Status remains useful when the ledger is absent, unreadable, or stale.
     }
   } else if (currentCheckbox?.state === "revising") {
-    const displayName = currentEntry?.name ?? currentStage;
+    const displayName = currentName;
     const revisionCount = getField(content, "Revision Count");
     // If the Revision Count field is missing, omit the count rather than
     // render a literal "?" — state files authored before the field existed
@@ -1845,7 +1928,7 @@ To get started:
     // Post-approve window: the stage was approved (→ [x]) but the orchestrator
     // hasn't called `advance` yet, so Current Stage still points here. Tell
     // the user honestly rather than showing "Running" on a completed stage.
-    const displayName = currentEntry?.name ?? currentStage;
+    const displayName = currentName;
     statusLine = `${displayName} approved - ready to advance`;
   }
 
@@ -1891,12 +1974,12 @@ To get started:
         switch (c.state) {
           case "completed":
             return "\u2588";
+          // A stage at work, waiting for approval, or being revised is in
+          // hand: the Status line says which.
           case "in-progress":
-            return "\u2592";
           case "awaiting-approval":
-            return "?";
           case "revising":
-            return "R";
+            return "\u2592";
           case "skipped":
             return "S";
           default:
@@ -1930,10 +2013,14 @@ To get started:
       .filter((issue) => !issue.direct)
       .map((issue) => issue.stage);
     const earliest = directlyStale[0] ?? validity.issues[0]?.stage ?? null;
-    if (validity.issues.length > 0 && earliest !== null) {
-      validityOutput =
-        `Changed since approved: ${stageNames([...directlyStale, ...needsRevalidation])}. ` +
-        `To redo it, type \`${entrySkillInvocation()} --stage ${earliest}\`.\n`;
+    const earliestIssue = validity.issues.find((issue) => issue.stage === earliest);
+    const earliestName = earliest === null ? null : stageLabel(findStageBySlug(earliest), earliest);
+    if (earliestName !== null && earliestIssue) {
+      // The same line the next step says, and the same way to act on it.
+      const others = [...directlyStale, ...needsRevalidation].filter((slug) => slug !== earliest);
+      const otherNames = stageNames(others);
+      validityOutput = staleStageNote(earliestName, earliestIssue, content) +
+        `${otherNames ? ` Also affected: ${otherNames}.` : ""}\n`;
     }
   } catch {
     // Unreadable receipts change nothing the person can act on here.
@@ -1945,12 +2032,19 @@ To get started:
   const projectTypeDisplay = projectType === null
     ? ""
     : `Project Type:   ${projectType === "Brownfield" ? "existing code" : "new project"}` +
-      `${getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON ? " (you said so)" : ""}\n`;
+      `${getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON ? " (you said so)" : ""}` +
+      `${projectType === "Brownfield" ? codeScannedClause(projectDir, selection.intent ?? undefined, selection.space) : ""}\n`;
   const depth = getField(content, "Depth");
   const testStrategy = getField(content, "Test Strategy");
+  // Where the depth came from, as the other settings say: the scope's own, or
+  // set for this piece of work.
+  const scopeDepth = loadScopeMapping()[scope]?.depth;
+  const depthSource = scopeDepth !== undefined && scopeDepth.toLowerCase() === (depth ?? "").toLowerCase()
+    ? `from scope ${scope}`
+    : "set for this piece of work";
   const depthDisplay = depth === null
     ? ""
-    : `Depth:          ${depth}${testStrategy && testStrategy !== depth ? ` (tests: ${testStrategy})` : ""}\n`;
+    : `Depth:          ${depth} (${depthSource})${testStrategy && testStrategy !== depth ? `, tests: ${testStrategy}` : ""}\n`;
   // Solo unit-major Construction keeps Current Stage on the first per-unit
   // stage while each Unit works through the later ones, so the active Unit's
   // own step is named too, once its recorded values check out (#1411).
@@ -1962,6 +2056,22 @@ To get started:
     currentNode !== undefined && isPerUnitStage(currentNode)
       ? `Current Step:   ${stepStage.slug} for unit ${stepUnit}\n`
       : "";
+  // Other work still running in this space, so the person sees it and how to
+  // reach it: the same list config and doctor use, so archived and finished
+  // work stays out. A record named outside the record-name shape is not listed.
+  let others: string[] = [];
+  try {
+    others = selection.intent === null
+      ? []
+      : runningWorkflows(projectDir)
+        .filter((run) => run.space === selection.space && run.dirName !== selection.intent && isSafeIntentRecordName(run.dirName))
+        .map((run) => run.dirName);
+  } catch {
+    // Other work that cannot be read is left out; this work's status still shows.
+  }
+  const alsoOpen = others.length === 0
+    ? ""
+    : `Also open:      ${others.join(", ")} (type \`${entrySkillInvocation()} intent ${others.length === 1 ? others[0] : "<name>"}\` to switch)\n`;
   const output = `AI-DLC Workflow Status
 ==============================
 Project:        ${project}
@@ -1969,16 +2079,13 @@ ${plan ? `Plan:           ${plan} (this piece of work only)` : `Scope:          
 ${projectTypeDisplay}${depthDisplay}Phase:          ${phase}
 Current Stage:  ${stageDisplay}
 ${currentStep}Status:         ${statusLine}
-Active Agent:   ${activeAgent}
-Guard Policy:   ${guardPolicyDisplay}
+${agentLine}Guard Policy:   ${guardPolicyDisplay}
 ${fencesOffLine}${ceremonyDisplay}
 Completion:     ${completed}/${total} stages (${pct}%)${skipped > 0 ? ` - ${skipped} skipped` : ""}
 
 Phase Progress:
 ${phaseProgress}
-${validityOutput ? `${validityOutput}\n` : ""}Last Completed: ${lastCompleted}
-Next Stage:     ${nextStage}
-`;
+${validityOutput ? `${validityOutput}\n` : ""}${lastLine}${nextLine}${alsoOpen}`;
   if (isTeamUnitOwnership(content)) {
     const selectorArgs = [
       ...(flags.intent ? ["--intent", flags.intent] : []),
@@ -2825,10 +2932,30 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function projectSettingsRepair(distribution: string): string {
+  const invoke = aidlcInvocation();
+  const source = invoke === "aidlc"
+    ? ""
+    : ` --from <the runtime/${distribution} root you copied from>`;
+  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
+}
+
+const FLOW_ALTERING_CLAUDE_HOOKS = new Set([
+  "continue-workflow",
+  "deliver-stage-rules",
+  "plan-approval-guard",
+  "review-freeze",
+  "reviewer-scope",
+  "state-transition-guard",
+]);
+
 function projectedFileRepair(
   distribution: string,
   relativePath: string,
 ): string {
+  if (relativePath === ".claude/settings.json") {
+    return projectSettingsRepair(distribution);
+  }
   const invoke = aidlcInvocation();
   if (invoke === "aidlc") {
     return `run \`${invoke} config --force\` to restore ${relativePath} from the installed runtime`;
@@ -3895,6 +4022,7 @@ export async function collectDoctorReport(
     let expectedHooks: string[] = [];
     let settingsReadable = true;
     let settingsHooks: unknown;
+    let customStatusLine = false;
     try {
       const raw = readFileSync(settingsForHooks, "utf-8");
       // jq-free: collect every distinct aidlc-*.ts basename referenced anywhere
@@ -3902,7 +4030,12 @@ export async function collectDoctorReport(
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
       const parsed = JSON.parse(raw) as unknown;
-      settingsHooks = isPlainObject(parsed) ? parsed.hooks : undefined;
+      const parsedSettings = isPlainObject(parsed) ? parsed : {};
+      settingsHooks = parsedSettings.hooks;
+      customStatusLine = isCustomClaudeStatusLine(
+        parsedSettings.statusLine,
+        projectDir,
+      );
       const commands: string[] = [];
       const collectCommands = (value: unknown): void => {
         if (Array.isArray(value)) return void value.forEach(collectCommands);
@@ -3914,19 +4047,10 @@ export async function collectDoctorReport(
       };
       collectCommands(parsed);
       const refs = new Set<string>();
-      const dispatcher =
-        '(?:\\baidlc|\\bbun\\s+(?:"[^"]*[\\\\/]aidlc\\.ts"|\'[^\']*[\\\\/]aidlc\\.ts\'|[^\\s"\']*[\\\\/]aidlc\\.ts))';
       for (const command of commands) {
-        for (const match of command.matchAll(/aidlc-[A-Za-z0-9_-]+\.ts/g)) {
-          refs.add(match[0]);
-        }
-        const dispatcherHook = new RegExp(
-          `${dispatcher}\\s+engine\\s+hook\\s+([A-Za-z0-9_-]+)\\b`,
-        ).exec(command);
-        if (dispatcherHook) refs.add(`aidlc-${dispatcherHook[1]}.ts`);
-        if (new RegExp(`${dispatcher}\\s+engine\\s+statusline\\b`).test(command)) {
-          refs.add("aidlc-statusline.ts");
-        }
+        const target = aidlcDispatcherTarget(command, true, projectDir);
+        if (target === "statusline") refs.add("aidlc-statusline.ts");
+        else if (target !== null) refs.add(`aidlc-${target}.ts`);
       }
       expectedHooks = [...refs].sort();
     } catch {
@@ -3968,31 +4092,78 @@ export async function collectDoctorReport(
           files?: Record<string, string>;
           entries?: Record<string, Record<string, string>>;
         };
-        // Refresh preserves the project's registrations. Compare only with the
-        // install baseline: extra hook files belong to the project, not AI-DLC.
+        // Compare with the install baseline: extra hook files and registrations
+        // belong to the project, not AI-DLC.
         if (expectedHooks.length > 0) {
           const hooksPrefix = `${harness}/hooks/`;
           for (const file of Object.keys(manifest?.files ?? {})) {
             if (!file.startsWith(hooksPrefix)) continue;
             const basename = file.slice(hooksPrefix.length);
+            if (customStatusLine && basename === "aidlc-statusline.ts") continue;
             if (!/^aidlc-[a-z0-9-]+\.ts$/.test(basename) || expectedHooks.includes(basename)) continue;
             results.push({
               pass: false,
               label: `${basename} shipped but not wired in .claude/settings.json - AI-DLC enforcement for it is off`,
-              fix: `re-add the hook entry, or rerun \`${aidlcInvocation()} config --force\` to restore the shipped wiring`,
+              fix: projectSettingsRepair("claude"),
             });
           }
         }
-        const shippedHooksHash = manifest?.entries?.[".claude/settings.json"]?.hooks;
-        if (
-          typeof shippedHooksHash === "string" &&
-          (settingsHooks === undefined || sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash)
-        ) {
-          results.push({
-            pass: false,
-            label: "hooks in .claude/settings.json differ from the shipped wiring (you changed them)",
-            fix: `rerun \`${aidlcInvocation()} config --force\` to restore the shipped registrations`,
-          });
+        const hookEntries = manifest?.entries?.[".claude/settings.json"] ?? {};
+        const expectedHookHashes = Object.fromEntries(
+          Object.entries(hookEntries)
+            .filter(([key]) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+            .map(([key, hash]) => [key.slice(AIDLC_HOOK_ENTRY_PREFIX.length), hash]),
+        );
+        const ownedTargets = new Set(Object.keys(expectedHookHashes));
+        if (ownedTargets.size > 0) {
+          const currentHookHashes = aidlcHookRegistrationHashes(
+            settingsHooks,
+            ownedTargets,
+            projectDir,
+          );
+          const drifted = [...ownedTargets].filter((target) =>
+            currentHookHashes[target] !== expectedHookHashes[target]
+          );
+          const blocking = drifted.filter((target) =>
+            FLOW_ALTERING_CLAUDE_HOOKS.has(target)
+          );
+          const advisory = drifted.filter((target) =>
+            !FLOW_ALTERING_CLAUDE_HOOKS.has(target)
+          );
+          for (const target of blocking) {
+            results.push({
+              pass: false,
+              label:
+                `Flow-altering AI-DLC hook ${target} differs from the shipped event, matcher, or command`,
+              fix: projectSettingsRepair("claude"),
+            });
+          }
+          if (advisory.length > 0) {
+            results.push({
+              pass: true,
+              severity: "warn",
+              label:
+                `AI-DLC hook registrations in .claude/settings.json differ from the shipped wiring: ${advisory.join(", ")}`,
+              fix: projectSettingsRepair("claude"),
+            });
+          }
+        } else {
+          // Baselines from before per-target ownership recorded the complete
+          // hooks object. Any drift is blocking until refresh migrates that
+          // baseline: the old record cannot prove that a flow-altering
+          // registration still has its shipped event, matcher, and command.
+          const shippedHooksHash = hookEntries.hooks;
+          if (
+            typeof shippedHooksHash === "string" &&
+            sha256Bytes(canonical(settingsHooks)) !== shippedHooksHash
+          ) {
+            results.push({
+              pass: false,
+              label:
+                "Claude hook wiring differs from its legacy shipped baseline; refresh is required before flow-altering hooks can be verified",
+              fix: projectSettingsRepair("claude"),
+            });
+          }
         }
       } catch {
         // Legacy and unmanifested projects have no shipped baseline to compare.
@@ -10120,7 +10291,10 @@ export function scanSummary(scan: ScanResult): string {
 }
 
 function stageNames(slugs: readonly string[]): string {
-  return slugs.map((slug) => findStageBySlug(slug)?.name ?? slug).join(", ");
+  return slugs
+    .map((slug) => stageLabel(findStageBySlug(slug), slug))
+    .filter((name): name is string => name !== null)
+    .join(", ");
 }
 
 // Record repos found later the way creation records them, on the work's
@@ -10294,8 +10468,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
           .map((stage) => stage.slug);
         staleNamed.push(...doneWithoutCode.map((slug) => stageNames([slug])));
         if (doneWithoutCode.length === 1) {
-          const name = stageNames(doneWithoutCode);
-          lines.push(`${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`);
+          lines.push(codeArrivedStageLine(stageNames(doneWithoutCode)));
         } else if (doneWithoutCode.length > 1) {
           lines.push(
             `${stageNames(doneWithoutCode)} ran before the code was here; say "redo" and a stage's name to include it there.`,
@@ -10331,7 +10504,11 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       addPendingPersonLines(projectDir, selection.sessionId, [narration]);
     // Having heard which stage is behind, the chat is not told again by the
     // out-of-date warning that follows.
-    if (selection.sessionId !== null) markPersonLinesHeard(projectDir, selection.sessionId, staleNamed.map(staleStageLine));
+    if (selection.sessionId !== null) markPersonLinesHeard(
+      projectDir,
+      selection.sessionId,
+      staleNamed.flatMap((name) => [staleStageLine(name), codeArrivedStageLine(name)]),
+    );
     process.stdout.write(`${JSON.stringify(flags["then-rerun"] === "true"
       ? {
         kind: "print",

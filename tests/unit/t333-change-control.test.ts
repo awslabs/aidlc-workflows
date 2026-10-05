@@ -768,9 +768,8 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
     expect(status.status, status.stderr).toBe(0);
     expect(status.stdout).toContain(`${STATUS_POLICY}off (set by you)\n`);
-    expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval, review-freeze, state-transition, reviewer-scope (guard policy off (set by you))\n`,
-    );
+    // The checks the policy turns off go with its line, not listed again.
+    expect(status.stdout).not.toContain(STATUS_FENCES);
     expect(run(UTILITY, ["config-get", "guard-policy"], proj, FENCE_ENV_CLEAR).stdout).toBe("off (set by you)\n");
     const listed = run(UTILITY, ["config-list", "--json"], proj, FENCE_ENV_CLEAR);
     expect(listed.status, listed.stderr).toBe(0);
@@ -843,9 +842,12 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const { proj } = project("poc");
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
     expect(status.stdout).toContain(`${STATUS_POLICY}off (from scope poc)\n`);
-    expect(status.stdout).toContain(
-      `${STATUS_FENCES}plan re-approval, review-freeze, state-transition, reviewer-scope (guard policy off (from scope poc))\n`,
-    );
+    // The scope's own checks are not named: the Guard Policy line says it.
+    expect(status.stdout).not.toContain(STATUS_FENCES);
+    expect(status.stdout).not.toContain("review-freeze");
+    // A check switched off on this machine is named on its own.
+    const machine = run(UTILITY, ["status"], proj, { ...FENCE_ENV_CLEAR, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
+    expect(machine.stdout).toContain(`${STATUS_FENCES}human-presence (env AIDLC_SKIP_HUMAN_PRESENCE_GUARD)\n`);
     const strict = project("enterprise");
     const strictStatus = run(UTILITY, ["status"], strict.proj, FENCE_ENV_CLEAR);
     expect(strictStatus.stdout).toContain(`${STATUS_POLICY}strict (from scope enterprise)\n`);
@@ -1856,10 +1858,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(auditBlockField(restoredRows[0].block, "Scope")).toBe("classic");
     expect(auditBlockField(restoredRows[0].block, "Source")).toBe("you");
     expect(run(UTILITY, ["config-get", "guard.review-freeze"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (set by you)\n");
-    // Status lists what is off, so the raised check drops out of the list.
-    expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).toContain(
-      `${STATUS_FENCES}plan re-approval, state-transition, reviewer-scope (guard policy off (from scope classic))\n`,
-    );
+    // Status lists only what someone switched off, and raising one is not that.
+    expect(run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR).stdout).not.toContain(STATUS_FENCES);
     const again = run(dispatcher, ["engine", "config", "set", "guard.review-freeze", "on"], proj, FENCE_ENV_CLEAR);
     expect(again.status, again.stderr).toBe(0);
     expect(again.stdout).toContain("Fence review-freeze is already on");
@@ -2808,7 +2808,7 @@ describe("t333 (10) retired policy confirmation", () => {
       expect(guarded.stdout.toString()).toBe("");
       expect(rowsOf(proj, "GUARD_STOOD_ASIDE")).toHaveLength(0);
       if (policy === "relaxed") {
-        expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+        expect(guarded.stderr.toString()).toContain(" The plan-approval setting is unchanged.");
       }
       const fence = run(UTILITY, ["config-get", "guard.plan-approval"], proj, FENCE_ENV_CLEAR);
       expect(fence.status, fence.stderr).toBe(0);

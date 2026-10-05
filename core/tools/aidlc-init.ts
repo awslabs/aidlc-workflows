@@ -41,11 +41,17 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcHookRegistrationHashes,
+  aidlcHookRegistrations,
+  aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
   hostToolPath,
   insertJsoncSetting,
+  isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
+  legacyAidlcHookTarget,
   mergeBlock,
   type ProjectionDescriptor,
   projectionFiles,
@@ -286,6 +292,7 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  retiredManagedFiles: Set<string>;
   projectOverlays?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
@@ -4534,6 +4541,38 @@ const CLAUDE_SHIPPED_KEYS = [
   "hooks",
 ];
 
+// Exact Claude dist bytes present in version tags before these direct hooks
+// were retired. A manifestless file is removable only when its hash is here;
+// names, imports, and other source heuristics never establish ownership.
+const RELEASED_LEGACY_CLAUDE_HOOK_HASHES: Readonly<Record<string, ReadonlySet<string>>> = {
+  "audit-logger": new Set([
+    "sha256:064eac85c2f71d9832fc93c65a36b22a0af795539b349c9400952d25c66647f7",
+    "sha256:3294da0207cf7d18e48872ffc2efbfb910baacbd4ba18392807a731e9cac801a",
+  ]),
+  "mint-presence": new Set([
+    "sha256:ff7556c56f6bebe0bc447be6632ccc34d14bb68b11220ad8e36bfd0bc37d2b90",
+  ]),
+  "runtime-compile": new Set([
+    "sha256:8a54c7bad431576d829597ecfa02447a74d13e09d0fb878fc37a69e0486efd6a",
+    "sha256:f1bb53cfefb4d9be8b238dbcd080001dc8d68a5a3c120459b0eb73670d63c965",
+    "sha256:fc754dd871fb86b94ca870b486dc0ed2f3bd842168ffa95655f6dfc2d93c7838",
+  ]),
+  "sensor-fire": new Set([
+    "sha256:c88f3c8817ad5864b895185858d9006fb81ebf50644ac3f160a8bbd10c0a0a51",
+    "sha256:fe4d6f041236d5a3f04c6dd7da78beb9afaef02c0543ba49e77853441a714d79",
+  ]),
+  stop: new Set([
+    "sha256:00cfdd6fb288ed3b1317dd0b1fd7b5850992683f9d1fea96b8eee3b3695d3cb5",
+    "sha256:3cdb0888452c13c1706490be0c9b4948ae0a73d0fdc09ff1aff8ee00b1158fe8",
+    "sha256:4aee4a7bc1d8b6bc9ad50513630e2f3d37ab44e7cea810d756a0355c881d07fa",
+    "sha256:71fb8ef269917355b6bbd37392df751947283e54af6fe437552e24d6c63253cc",
+  ]),
+  "sync-statusline": new Set([
+    "sha256:35a7c593e6f05768bc92ceaa9596f4112aecad8c8820a5e9f7b32eb090f9871e",
+    "sha256:549109978d1f335cc1ac530a1381f06b0d5dab29edbeff72565563d8cc66d682",
+  ]),
+};
+
 function preserveClaudeProviderFields(
   projectDir: string,
   stagedRoot: string,
@@ -4542,27 +4581,136 @@ function preserveClaudeProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): Set<string> {
+  const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return retiredManagedFiles;
   const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
   const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
-  const pristine = sha256File(currentPath) === prior?.files[relative];
   const priorEntries = prior?.entries?.[relative];
-  const frameworkOwnedClean = priorEntries
-    ? CLAUDE_SHIPPED_KEYS.every((key) => {
-      const priorHash = priorEntries[key];
-      if (!priorHash) return !Object.hasOwn(current, key);
-      return Object.hasOwn(current, key) &&
-        sha256Bytes(canonical(current[key])) === priorHash;
-    })
-    : pristine;
+  const incomingHookHashes = aidlcHookRegistrationHashes(staged.hooks);
+  const recordedHookTargets = Object.keys(priorEntries ?? {})
+    .filter((key) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+    .map((key) => key.slice(AIDLC_HOOK_ENTRY_PREFIX.length));
+  const registeredLegacyTargets = new Set<string>();
+  for (const groups of Object.values(isRecord(current.hooks) ? current.hooks : {})) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
+      for (const item of group.hooks) {
+        if (!isRecord(item) || typeof item.command !== "string") continue;
+        const target = legacyAidlcHookTarget(item.command);
+        if (target !== null) registeredLegacyTargets.add(target);
+      }
+    }
+  }
+  const attributableLegacyTargets = [...registeredLegacyTargets].filter((target) => {
+    const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+    if (prior?.files[hookRelative] !== undefined) return true;
+    if (prior !== null) return false;
+    const hookPath = join(projectDir, hookRelative);
+    if (!regularFile(hookPath)) return false;
+    return RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target]?.has(
+      sha256File(hookPath),
+    ) ?? false;
+  });
+  const ownedHookTargets = new Set([
+    ...Object.keys(incomingHookHashes),
+    ...recordedHookTargets,
+    ...attributableLegacyTargets,
+  ]);
+  if (prior === null) {
+    for (const target of attributableLegacyTargets) {
+      if (Object.hasOwn(incomingHookHashes, target)) continue;
+      const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+      if (!regularFile(join(stagedRoot, hookRelative))) {
+        retiredManagedFiles.add(hookRelative);
+      }
+    }
+  }
+  // Start with the shipped object's key order so a pristine refresh is byte-identical.
+  if (canonical(current.hooks) !== canonical(staged.hooks)) {
+    const currentOwnedHooks = aidlcHookRegistrations(
+      current.hooks,
+      ownedHookTargets,
+      projectDir,
+    );
+    const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
+      ? currentOwnedHash !== priorEntries.hooksAidlc
+      : priorEntries?.hooks !== undefined
+      ? currentOwnedHash !== priorEntries.hooks
+      : canonical(currentOwnedHooks) !==
+        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+    if (hadLocalHookDrift) {
+      // A settings file the project wrote before AI-DLC has none of its hooks yet.
+      notes.push(Object.keys(currentOwnedHooks).length === 0
+        ? "added the AI-DLC hook registrations to .claude/settings.json; your own settings were kept."
+        : "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.");
+    }
+    const hooks = isRecord(staged.hooks) ? { ...staged.hooks } : {};
+    for (const [event, groups] of Object.entries(isRecord(current.hooks) ? current.hooks : {})) {
+      if (!Array.isArray(groups)) continue;
+      const userGroups = groups.flatMap((group: unknown) => {
+        if (!isRecord(group) || !Array.isArray(group.hooks)) return [group];
+        const items = group.hooks.filter((item: unknown) =>
+          !isRecord(item) || typeof item.command !== "string" ||
+          !ownedHookTargets.has(aidlcHookTarget(item.command, projectDir) ?? "")
+        );
+        return items.length > 0 ? [{ ...group, hooks: items }] : [];
+      });
+      if (userGroups.length > 0) {
+        hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...userGroups];
+      }
+    }
+    staged.hooks = hooks;
+  }
+  const permissions = isRecord(current.permissions) ? current.permissions : {};
+  const shippedPermissions = isRecord(staged.permissions) ? staged.permissions : {};
+  const shippedAllow = Array.isArray(shippedPermissions.allow) ? shippedPermissions.allow : [];
+  const userAllow = Array.isArray(permissions.allow) ? permissions.allow : [];
+  if (shippedAllow.some((entry: unknown) => !userAllow.includes(entry))) {
+    notes.push(
+      "added the AI-DLC command allow entries that were missing from .claude/settings.json; your other permissions were kept.",
+    );
+  }
+  staged.permissions = {
+    ...permissions,
+    allow: [...shippedAllow, ...userAllow.filter((entry: unknown) => !shippedAllow.includes(entry))],
+  };
+  // A kept personal value is reported only when this release ships a different
+  // value than the one recorded last time; otherwise the choice stands silently.
+  const shippedChanged = (key: string): boolean =>
+    priorEntries?.[key] === undefined ||
+    sha256Bytes(canonical(staged[key])) !== priorEntries[key];
+  if (
+    Object.hasOwn(current, "statusLine") &&
+    isCustomClaudeStatusLine(current.statusLine, projectDir)
+  ) {
+    if (shippedChanged("statusLine")) {
+      notes.push(
+        "kept your statusLine in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.statusLine = current.statusLine;
+  }
+  if (
+    Object.hasOwn(current, "companyAnnouncements") &&
+    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
+  ) {
+    if (shippedChanged("companyAnnouncements")) {
+      notes.push(
+        "kept your companyAnnouncements in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.companyAnnouncements = current.companyAnnouncements;
+  }
   for (const [key, value] of Object.entries(current)) {
     if (key === "env") continue;
-    // Preserve project-owned additions. Shipped enforcement keys remain
-    // baseline-owned so drift conflicts and --force restores them.
+    // Every other top-level setting belongs to the project.
     if (!CLAUDE_SHIPPED_KEYS.includes(key)) {
       staged[key] = value;
     }
@@ -4626,7 +4774,7 @@ function preserveClaudeProviderFields(
   }
   staged.env = { ...stagedEnv, ...currentEnv };
   writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
-  return frameworkOwnedClean;
+  return retiredManagedFiles;
 }
 
 const CODEX_FRAMEWORK_TABLES = new Set([
@@ -4850,9 +4998,12 @@ function preserveUserProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
+  notes: string[],
+  retiredManagedFiles: Set<string>,
 ): boolean {
   if (harness === "claude") {
-    return preserveClaudeProviderFields(
+    // Claude settings merge per entry, so the refreshed file always applies.
+    for (const rel of preserveClaudeProviderFields(
       projectDir,
       stagedRoot,
       harnessDir,
@@ -4860,7 +5011,9 @@ function preserveUserProviderFields(
       nextProvider,
       projectFlags,
       prior,
-    );
+      notes,
+    )) retiredManagedFiles.add(rel);
+    return true;
   } else if (harness === "codex") {
     return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior);
   } else if (harness === "opencode") {
@@ -4922,6 +5075,10 @@ function prepareRefreshSource(
       CLAUDE_SHIPPED_KEYS.filter((key) => Object.hasOwn(settings, key))
         .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
     );
+    entries[rel].hooksAidlc = sha256Bytes(canonical(aidlcHookRegistrations(settings.hooks)));
+    for (const [target, hash] of Object.entries(aidlcHookRegistrationHashes(settings.hooks))) {
+      entries[rel][`${AIDLC_HOOK_ENTRY_PREFIX}${target}`] = hash;
+    }
   } else if (!projectProjection && entries && descriptor.distribution === "codex") {
     const rel = `${descriptor.harnessDir}/config.toml`;
     const config = readFileSync(join(sourceRoot, rel), "utf-8");
@@ -4948,7 +5105,7 @@ function prepareRefreshSource(
     projectFlags === null &&
     diagnosticsOverride === undefined
   ) {
-    return { root: sourceRoot, regenerated: new Set(), entries, notes };
+    return { root: sourceRoot, regenerated: new Set(), retiredManagedFiles: new Set(), entries, notes };
   }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-refresh-"));
   try {
@@ -5085,7 +5242,9 @@ function prepareRefreshSource(
     }
   }
   // Preserve project-owned provider/model fields and unrelated additions.
-  // Framework-owned enforcement entries remain tied to the baseline.
+  // Claude's AI-DLC entries are refreshed in place; Codex's framework-owned
+  // entries remain tied to the baseline.
+  const retiredManagedFiles = new Set<string>();
   const configurationOwnershipClean = preserveUserProviderFields(
     projectDir,
     root,
@@ -5095,6 +5254,8 @@ function prepareRefreshSource(
     normalizeProvidersRecord(staged.providers),
     projectFlags,
     prior,
+    notes,
+    retiredManagedFiles,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -5348,7 +5509,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, projectOverlays, entries, notes };
+  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -10335,6 +10496,16 @@ export async function main(
       retainBaseline,
       prepared.projectOverlays,
     );
+    for (const rel of prepared.retiredManagedFiles) {
+      const target = join(projectDir, rel);
+      if (!pathPresent(target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({
+        path: rel,
+        action: "remove",
+        detail: "retired attributable manifestless hook",
+      });
+    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,

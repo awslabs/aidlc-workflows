@@ -3872,12 +3872,12 @@ export function listIntents(
   return infos;
 }
 
-// The workflows still running in a project, as `<space>/<record dir>`: every
-// space's intents that neither the registry nor the state file marks completed
-// or archived. config refuses to refresh a harness tree while any runs, and
-// doctor names the same list.
-export function activeWorkflowDescriptions(projectDir: string): string[] {
-  const active: string[] = [];
+// The workflows still running in a project: every space's intents that neither
+// the registry nor the state file marks completed or archived. config refuses
+// to refresh a harness tree while any runs, doctor names the same list, and
+// status names the others in its space.
+export function runningWorkflows(projectDir: string): Array<{ space: string; dirName: string; slug: string }> {
+  const running: Array<{ space: string; dirName: string; slug: string }> = [];
   for (const space of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space.name)) {
       if (
@@ -3896,15 +3896,21 @@ export function activeWorkflowDescriptions(projectDir: string): string[] {
         const status = getField(readFileSync(path, "utf-8"), "Status");
         if (status === "Completed" || status === "Archived") continue;
       }
-      // Printed for the person and read by agents: committed names pass the
-      // model-facing name rules, else the intent's slug or a placeholder
-      // stands in.
-      active.push(`${SPACE_NAME_REGEX.test(space.name) ? space.name : "(unnamed space)"}/${
-        isSafeIntentRecordName(intent.dirName) ? intent.dirName : intentDisplayLabel({ slug: intent.slug })
-      }`);
+      running.push({ space: space.name, dirName: intent.dirName, slug: intent.slug });
     }
   }
-  return active;
+  return running;
+}
+
+// The same list as `<space>/<record dir>`. Printed for the person and read by
+// agents: committed names pass the model-facing name rules, else the intent's
+// slug or a placeholder stands in.
+export function activeWorkflowDescriptions(projectDir: string): string[] {
+  return runningWorkflows(projectDir).map(({ space, dirName, slug }) =>
+    `${SPACE_NAME_REGEX.test(space) ? space : "(unnamed space)"}/${
+      isSafeIntentRecordName(dirName) ? dirName : intentDisplayLabel({ slug })
+    }`
+  );
 }
 
 // Materialize the active-space cursor without overwriting a concurrent explicit
@@ -20378,12 +20384,12 @@ export function lastWorkspaceSourceFailure(): WorkspaceSourceFailure | null {
 }
 
 /** ` (reason: <code> at <path>)` for the last failed walk, or "" when none is recorded. */
+// The path is the workspace's own name, so the refusals that carry this
+// suffix leave it to the doctor, which names it on its source boundary row.
 export function workspaceSourceFailureSuffix(): string {
   const failure = lastSourceFailure;
   if (failure === null) return "";
-  const where = failure.path === undefined
-    ? ""
-    : ` at ${failure.repo === undefined ? failure.path : `${failure.repo}/${failure.path}`}`;
+  const where = failure.path === undefined ? "" : `; ${aidlcInvocation()} doctor names the path`;
   return ` (reason: ${failure.code}${where})`;
 }
 

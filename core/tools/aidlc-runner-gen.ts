@@ -752,8 +752,8 @@ preserving any \`--request\` id rather than rebuilding the request.
   \`${scope}\` (the new work is likely the same flavour that made the user reach for
   this command), but if the new work clearly fits a DIFFERENT scope, propose that
   instead, and name it so the human can correct it. **Lead the affirmative option
-  with "Yes"** (e.g. "Yes, start a second intent"). Starting a workflow is a
-  mutation gated on a human yes.
+  with "Yes"** (e.g. "Yes, start a second intent"). Never create it without
+  their explicit yes.
 - **On CONFIRM**, re-run \`next\` with \`--new-intent\`, the confirmed scope, and the
   new-work text:
 

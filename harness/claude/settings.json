@@ -5,7 +5,8 @@
   "permissions": {
     "allow": [
       "Edit(/**)",
-      "Bash(bun .claude/tools/*)",
+      "Bash(bun .claude/tools/aidlc.ts engine *)",
+      "Bash(bun .claude/tools/aidlc-*)",
       "Bash(date -u *)",
       "Task",
       "WebSearch"

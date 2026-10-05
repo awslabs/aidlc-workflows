@@ -525,16 +525,17 @@ export function receiptDetail(
   return null;
 }
 
+// The refused path or command can come from the workspace, so it stays out of
+// the refusal: the agent knows what it tried, and the way on is the same.
 export function mutationBlockReason(
-  target: string,
   unit: string | null,
   opaqueShell = false,
   detail: string | null = null,
 ): string {
   const scope = unit === null ? "the zero-Unit stage-level implementation" : `unit ${unit}`;
   const action = opaqueShell
-    ? `run mutation-capable ${target}`
-    : `modify workspace path "${target}"`;
+    ? "run mutation-capable shell commands"
+    : "modify workspace paths";
   return (
     `Code generation cannot ${action} for ${scope} because ` +
     `the plan, unit-test instructions, and current Testing Contract do not have a current ` +
@@ -1927,20 +1928,22 @@ async function evaluate(
   // hands over may be built: before that, the `brief` it would name refuses too.
   let handoffDefect: HandoffDefect | null = null;
   let rulesArriving: string | null = null;
+  // Plain sentences: some hosts (Codex) show a hook's refusal to the person as
+  // it is written. A path or command the reason quotes stays on the one line.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
+  const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
-    process.stderr.write(`${JSON.stringify({
-      error: `Code Generation source provenance could not be committed. ${reason} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.`,
-      code: "CODE_GENERATION_PROVENANCE_UNAVAILABLE",
-    })}\n`);
+    process.stderr.write(
+      `Code Generation source provenance could not be committed. ${oneLine(reason)} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.\n`,
+    );
     return 2;
   };
   // `lead` false: the reason is already a whole refusal that says what cannot happen.
   const refuseExecutionIneligible = (reason: string, lead = true): number => {
-    process.stderr.write(`${JSON.stringify({
-      error: `${lead ? "Code Generation cannot start: " : ""}${reason.trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.`,
-      code: "CODE_GENERATION_EXECUTION_INELIGIBLE",
-    })}\n`);
+    process.stderr.write(
+      `${lead ? "Code Generation cannot start: " : ""}${oneLine(reason).trim().replace(/\.*$/, ".")} The plan-approval setting is unchanged.\n`,
+    );
     return 2;
   };
   let blockedMutation: {
@@ -2143,9 +2146,7 @@ async function evaluate(
         };
         if (verdict.block) {
           blockedMutation = {
-            target:
-              outsideRecord ??
-              `shell command: ${(mutation.shellCommand ?? "").trim().slice(0, 160)}`,
+            target: outsideRecord ?? (mutation.shellCommand ?? "").trim().slice(0, 160),
             unit,
             opaqueShell: outsideRecord === undefined,
             detail: receiptDetail([evidence], verdict.mentioned),
@@ -2169,7 +2170,6 @@ async function evaluate(
       ? authorityBlockReason(authorityFailure, standing, asked)
       : blockedMutation
       ? mutationBlockReason(
-          blockedMutation.target,
           blockedMutation.unit,
           blockedMutation.opaqueShell,
           detail ?? blockedMutation.detail,

@@ -326,7 +326,6 @@ import {
   pendingPersonLines,
   personLineHeard,
   PLAN_FIELD,
-  staleStageLine,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -411,7 +410,7 @@ import {
   guardPreflight as stateGuardPreflight,
   parkWorkflow,
 } from "./aidlc-state.ts";
-import { inspectStageValidity } from "./aidlc-validity.ts";
+import { inspectStageValidity, stageLabel, staleStageNote } from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import {
@@ -525,10 +524,11 @@ function projectStageValidityAdvisory(
     const state = validity.warnings.length > 0 ? "unavailable" : "drifted";
     // What the person hears, for any kind of change: which finished stage is
     // behind and what to say to redo it. The details stay in the fields.
-    const name = earliest ? nodeForSlug(earliest)?.name ?? earliest : null;
+    const name = earliest ? stageLabel(nodeForSlug(earliest), earliest) : null;
+    const earliestIssue = validity.issues.find((issue) => issue.stage === earliest);
     const warning = state === "drifted"
-      ? name
-        ? staleStageLine(name)
+      ? name && earliestIssue
+        ? staleStageNote(name, earliestIssue, stateContent)
         : `Some finished stages may be out of date; ${entrySkillInvocation()} --status shows which.`
       : stageValidityUnchecked();
     // This chat already heard it, in the reply that named the stage.
@@ -1845,16 +1845,23 @@ function scopeConfirmAskDirective(
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
+  const confirmCommand = `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`;
+  const composeCommand = `${tool} next compose --request ${stored.id}${carried}`;
   return {
     kind: "ask",
     ask_type: "scope-confirm",
     response_route: "next",
     question,
     proposed_scope: proposedScope,
-    confirm_command:
-      `${tool} next --scope ${shellArg(proposedScope)} --request ${stored.id}${carried}`,
-    compose_command: `${tool} next compose --request ${stored.id}${carried}`,
+    confirm_command: confirmCommand,
+    compose_command: composeCommand,
     scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
+    // The answers the question offers, worded for the person, so a host that
+    // shows options shows these instead of ones the agent makes up.
+    choices: [
+      { label: `Go ahead with the "${proposedScope}" plan`, command: confirmCommand },
+      { label: "Tailor a plan to this task", command: composeCommand },
+    ],
   };
 }
 

@@ -1629,8 +1629,8 @@ would be required before it can safely participate in validity propagation.
 
 The projection remains read-only and advisory. `next` keeps its normal
 directive kind and adds a machine-readable `stage_validity` field for stale,
-revalidation, or unavailable results. Untracked-only histories appear in
-`/aidlc --status` rather than every `next`.
+revalidation, or unavailable results. `/aidlc --status` says the same
+out-of-date line as `next`; untracked-only histories are not shown.
 The warning names the earliest affected stage and the words to redo it (the
 same move as `/aidlc --stage <earliest-affected-stage>`), but this release does
 not enforce it. Schema-1, receipt-less, and capture-failed

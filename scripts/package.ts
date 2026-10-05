@@ -999,6 +999,7 @@ function buildTree(
     });
   }
   expandCursorToolAllows(treeRoot, m);
+  expandClaudeToolAllows(treeRoot, m);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1082,13 +1083,52 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   };
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
+  // The copy channel's AI-DLC command entries (the tool rewrite above has
+  // already turned their `bun <dir>/tools/aidlc...` into `aidlc engine ...`)
+  // give way to the one trusted prefix.
   value.permissions!.allow = [
     ...allow.filter((entry) =>
       entry !== "Bash" &&
-      !(typeof entry === "string" && entry.startsWith("Bash(bun "))
+      !(typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc ")))
     ),
     `Bash(${trustedCommand("*")})`,
   ];
+  writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Claude's authored settings.json names AI-DLC's tool scripts with one glob.
+// The projection lists, in its place, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// each tool script it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then shows Claude
+// Code's own prompt. Both trees get it; the native rewrite then drops every
+// bun entry.
+function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.tierFlavor !== "claude") return;
+  const settingsPath = join(treeRoot, "settings.json");
+  const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions?: { allow?: unknown } };
+  const allow = value.permissions?.allow;
+  // The authored entries name the tools folder as written (`.claude`), which
+  // a renamed harness folder keeps, so the expansion uses the same spelling.
+  const glob = Array.isArray(allow)
+    ? allow.find((entry): entry is string =>
+      typeof entry === "string" && /^Bash\(bun \S+\/tools\/aidlc-\*\)$/.test(entry)
+    )
+    : undefined;
+  if (!Array.isArray(allow) || glob === undefined) {
+    throw new Error("[claude] settings.json has no Bash(bun <dir>/tools/aidlc-*) entry to expand");
+  }
+  const toolsDir = glob.slice("Bash(bun ".length, -"/aidlc-*)".length);
+  const tool = (script: string) => `Bash(bun ${toolsDir}/${script}`;
+  value.permissions!.allow = allow.flatMap((entry) =>
+    entry === glob
+      ? [
+        ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+        ...copyChannelToolScripts().flatMap((script) => [`${tool(script)})`, `${tool(script)} *)`]),
+      ]
+      : [entry]
+  );
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 

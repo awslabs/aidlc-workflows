@@ -5,8 +5,10 @@ import {
   getField,
   parseCheckboxes,
   readAllAuditShards,
+  staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import {
   resolveArtifactInstances,
   type ArtifactResolutionOptions,
@@ -712,6 +714,35 @@ export function propagateStageInvalidation(
  * tree, then propagate drift through observed stage-level dependencies.
  * The function is read-only with respect to workflow state.
  */
+/**
+ * A stage as the person hears it named: a shipped stage by its own name, and a
+ * plugin's stage by its slug, the name the person types to go there (its
+ * display name is the plugin's own text). A slug of any other shape is not
+ * named. The engine's advisory and status both name stages this way.
+ */
+export function stageLabel(stage: { slug: string; name: string; plugin?: string } | undefined, slug: string): string | null {
+  if (stage !== undefined && stage.plugin === undefined) return stage.name;
+  const typed = stage?.slug ?? slug;
+  return STAGE_SLUG_RE.test(typed) ? typed : null;
+}
+
+/**
+ * What the person hears about a finished stage that is behind, and the one way
+ * to act on it. When the project type changed to existing code after the stage
+ * ran, the code arriving is the reason it gives; otherwise an input changed.
+ * The engine's advisory and status both say it this way.
+ */
+export function staleStageNote(name: string, issue: Pick<StageValidityIssue, "reasons">, stateContent: string): string {
+  return issue.reasons.includes("project-type") && projectTypeFrom(stateContent) === "brownfield"
+    ? codeArrivedStageLine(name)
+    : staleStageLine(name);
+}
+
+// A finished stage that ran before the project's code was there, and the redo.
+export function codeArrivedStageLine(name: string): string {
+  return `${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`;
+}
+
 export function inspectStageValidity(
   projectDir: string,
   stateContent: string,

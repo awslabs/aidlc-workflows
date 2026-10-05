@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
+// covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, function:runningWorkflows, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 - retire the user-facing --init; the engine auto-creates the first intent
@@ -22,6 +22,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1065,6 +1066,33 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(b).not.toBe(a);
     return { a, b };
   }
+
+  test("status names other open work and how to switch to it", () => {
+    const { a, b } = createTwo();
+    const status = util(["status"]).stdout;
+    expect(status).toContain(`Also open:      ${a} (type \`/aidlc intent ${a}\` to switch)\n`);
+    expect(status).not.toContain(`Also open:      ${b}`);
+    // Archived work is not open.
+    expect(util(["intent", "archive", a]).status).toBe(0);
+    expect(util(["status"]).stdout).not.toContain("Also open:");
+  });
+
+  test("status leaves out work its state file says is finished, and a record named outside the record-name shape", () => {
+    const { a } = createTwo();
+    const stateA = join(recordPath(a), "aidlc-state.md");
+    const running = readFileSync(stateA, "utf-8");
+    writeFileSync(stateA, running.replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
+    expect(registryStatus(a)).toBe("in-flight");
+    expect(util(["status"]).stdout).not.toContain("Also open:");
+    writeFileSync(stateA, running);
+    const odd = "odd`name";
+    renameSync(recordPath(a), recordPath(odd));
+    const rows = readIntentRegistry(proj).map((row) => (row.dirName === a ? { ...row, dirName: odd } : row));
+    writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+    const shown = util(["status"]).stdout;
+    expect(shown).not.toContain("Also open:");
+    expect(shown).not.toContain(odd);
+  });
 
   test("archiving the active intent flips registry + state, audits into its own shard, and clears the cursor", () => {
     const { a, b } = createTwo();

@@ -815,7 +815,7 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
             tool_name: tool, tool_input: input,
           }), unbindable);
           expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
-          expect(guarded.stderr).toContain("CODE_GENERATION_PROVENANCE_UNAVAILABLE");
+          expect(guarded.stderr).toContain("Code Generation source provenance could not be committed.");
           expect(guarded.stderr).toContain("workspace source cannot be bound");
           expect(guarded.stdout).not.toContain("Continuing past");
           expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
@@ -883,7 +883,7 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
               tool_name: tool, tool_input: input,
             }));
             expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
-            expect(guarded.stderr).toContain("CODE_GENERATION_PROVENANCE_UNAVAILABLE");
+            expect(guarded.stderr).toContain("Code Generation source provenance could not be committed.");
             expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
             expect(guarded.stdout).not.toContain("Continuing past");
           }

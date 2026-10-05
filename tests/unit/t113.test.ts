@@ -164,6 +164,16 @@ function ask(): Record<string, unknown> {
         command: "bun .claude/tools/aidlc-orchestrate.ts next --scope 'feature' --request a1b2c3d4",
       },
     ],
+    choices: [
+      {
+        label: "Go ahead with the \"bugfix\" plan",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next --scope bugfix --request a1b2c3d4",
+      },
+      {
+        label: "Tailor a plan to this task",
+        command: "bun .claude/tools/aidlc-orchestrate.ts next compose --request a1b2c3d4",
+      },
+    ],
   };
 }
 
@@ -611,7 +621,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("command-bearing asks require their typed payload fields", () => {
     const cases: Array<[Record<string, unknown>, string[]]> = [
-      [ask(), ["proposed_scope", "confirm_command", "compose_command", "scope_commands"]],
+      [ask(), ["proposed_scope", "confirm_command", "compose_command", "scope_commands", "choices"]],
       [composeOfferAsk(), ["compose_command", "scope_commands"]],
       [intentPickAsk(), ["available_intents", "select_commands"]],
       [unitPausedAsk(), ["stage", "unit", "resume_command"]],
@@ -623,6 +633,13 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
         expect(validateDirective(missing).valid).toBe(false);
         expect(validateDirective({ ...directive, [field]: 42 }).valid).toBe(false);
       }
+    }
+  });
+
+  test("only scope-confirm carries the offer's choices, each a label and a command", () => {
+    expect(validateDirective({ ...composeOfferAsk(), choices: (ask() as { choices: unknown }).choices }).valid).toBe(false);
+    for (const entry of [{ label: "Go ahead" }, { command: "x" }, { label: 1, command: "x" }, { label: "Go", command: "x", extra: 1 }]) {
+      expect(validateDirective({ ...ask(), choices: [entry] }).valid).toBe(false);
     }
   });
 
