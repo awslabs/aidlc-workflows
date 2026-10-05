@@ -1979,6 +1979,37 @@ describe("t242 state-transition ownership guard", () => {
     expect(rows[0]).toContain("**Details**: aidlc-state.ts checkbox");
   });
 
+  test("a conversation that has not joined the workflow is not stopped by the hook with an offer to turn off a check that is off", () => {
+    // The hook kept the check up for a chat outside the workflow and offered to
+    // turn it off, though Guard Policy off already had. The state tool's own
+    // check reads the same policy, so it decides.
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    // No cursor names the record, so this chat stands outside it.
+    const cursor = join(dirname(dirname(statePath)), "active-intent");
+    if (existsSync(cursor)) writeFileSync(cursor, "");
+    const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts approve feasibility" },
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain("offer to turn the state-transition check off");
+  });
+
   test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {
     const project = createTestProject();
     projects.push(project);

@@ -1161,6 +1161,21 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
   return null;
 }
 
+function mainSessionStandsOutside(sessionId: unknown): boolean {
+  let projectDir: string;
+  try {
+    projectDir = resolveProjectDirFromHook(import.meta.url);
+  } catch {
+    return false;
+  }
+  const workflow = enterHookWorkflow(projectDir, sessionId);
+  try {
+    return hookStandsOutside(workflow);
+  } finally {
+    workflow.restore();
+  }
+}
+
 export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
@@ -1216,6 +1231,11 @@ export async function run(input: string): Promise<number> {
   const verb = directStateTransition(parsed.tool_input?.command ?? "");
   if (verb !== null) {
     if (standAside(`aidlc-state.ts ${verb}`)) return 0;
+    // A conversation that has not joined the workflow: the state tool's own
+    // check reads the same Guard Policy for the work it changes, and refuses
+    // with the same words where the check holds, so this hook does not stop it
+    // with an offer to turn off a check that may already be off.
+    if (agentType.length === 0 && mainSessionStandsOutside(parsed.session_id)) return 0;
     const switchSentence = agentType.length === 0
       ? fenceSwitchSentence(resolveProjectDirFromHook(import.meta.url), "state-transition")
       : "";
