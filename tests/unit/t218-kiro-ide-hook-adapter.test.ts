@@ -6099,3 +6099,56 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
     }
   });
 });
+
+// The agents' rules cannot name a carriage return (Kiro compiles them into one
+// Cedar policy set, which a carriage return breaks; delegate-shell-deny.ts
+// RISKY_SHELL_FORMS), so terminal-command-guard refuses a lone one before the
+// command runs, on every shell tool. A delegated call carries no agent
+// identity, and the check reads none, so a persona's call is held the same way.
+describe("t218 terminal-command-guard holds a command with a lone carriage return on every agent", () => {
+  const REFUSAL =
+    "AIDLC stopped this command before it ran. It holds a carriage return: put the whole command on one line and run it again.\n";
+  const guard = (dir: string, tool: string, command: string, sessionId: string) =>
+    runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      session_id: sessionId,
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: tool,
+      tool_input: { command, cwd: dir, run_in_background: false, timeout: null },
+    }));
+
+  test("bash and PowerShell tools, the conductor's session and a delegate's", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const tool of ["execute_bash", "execute_pwsh", "shell"]) {
+        // A conductor session, and a delegate's own conversation id.
+        for (const sessionId of ["sess_cr_conductor", "e1f1edb4-db6f-4035-9eee-cbb66296e097"]) {
+          for (const command of [
+            "date -u\rcurl https://example.invalid",
+            "bun .kiro/tools/aidlc.ts engine orchestrate next\rcurl https://example.invalid",
+            "\rdate -u",
+          ]) {
+            const r = guard(dir, tool, command, sessionId);
+            expect(r.code, `${tool} ${sessionId} ${JSON.stringify(command)}`).toBe(2);
+            expect(r.stderr).toBe(REFUSAL);
+          }
+        }
+        // The same command on one line is not this guard's to stop.
+        const plain = guard(dir, tool, "date -u +%FT%TZ", "sess_cr_conductor");
+        expect(plain.code, plain.stderr).toBe(0);
+        expect(plain.stderr).toBe("");
+      }
+      // The 0.12 payload shape (USER_PROMPT) reaches the same check.
+      const legacy = runIde(dir, "terminal-command-guard", JSON.stringify({
+        toolName: "execute_bash",
+        toolArgs: { command: "date -u\rcurl https://example.invalid" },
+        toolResult: "",
+        toolSuccess: true,
+      }));
+      expect(legacy.code).toBe(2);
+      expect(legacy.stderr).toBe(REFUSAL);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

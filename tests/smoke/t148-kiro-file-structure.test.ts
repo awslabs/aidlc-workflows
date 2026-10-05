@@ -834,6 +834,92 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
+  // Kiro (IDE 1.1 and 1.2, and the v3 engine Kiro CLI shares with it) compiles
+  // an agent's permissions.rules into ONE Cedar policy set: each pattern becomes
+  // `resource.path like "<pattern>"`, with `**` folded to `*`, every `\` doubled
+  // and `"` escaped, plus `resource.path == "<prefix>"` for a pattern ending in
+  // " *" whose prefix has no `*` or `?`. When Cedar rejects one policy, Kiro
+  // drops the whole set and asks before every command, an allowed one included.
+  // Measured against the Cedar Kiro bundles (cedar-wasm 4.9.1): of every control
+  // character and the punctuation the rules use, only a carriage return is
+  // rejected ("not a valid escape"). Kiro CLI's own agents are JSON with
+  // allowedCommands regular expressions, which its v2 engine matches without
+  // Cedar and its v3 engine does not read, so they carry no permissions.rules;
+  // any built Kiro agent that does is checked here.
+  test("every rule a built Kiro agent carries compiles in Kiro's policy engine", () => {
+    const cedarLiteral = (pattern: string) => pattern.replace(/\*\*/g, "*").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const cedarRejects = (literal: string): string | null => {
+      for (let index = 0; index < literal.length; index++) {
+        const char = literal[index];
+        if (char === "\r") return `carriage return at ${index}`;
+        if (char !== "\\") continue;
+        const rest = literal.slice(index + 1);
+        if (/^u\{[0-9a-fA-F]{1,6}\}/.test(rest)) continue;
+        if (!/^[\\"'nrt0*]/.test(rest)) return `escape \\${rest[0] ?? ""} at ${index}`;
+        index++;
+      }
+      return null;
+    };
+    const agentDirs: string[] = [];
+    for (const tree of ["dist", "dist-release"]) {
+      const root = join(REPO_ROOT, tree);
+      for (const entry of readdirSync(root)) {
+        if (entry === "plugins") {
+          for (const plugin of readdirSync(join(root, entry))) {
+            for (const harness of readdirSync(join(root, entry, plugin))) agentDirs.push(join(root, entry, plugin, harness, ".kiro", "agents"));
+          }
+        } else {
+          agentDirs.push(join(root, entry, ".kiro", "agents"));
+        }
+      }
+    }
+    let checked = 0;
+    for (const dir of agentDirs.filter((candidate) => existsSync(candidate))) {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        const definition = name.endsWith(".md")
+          ? Bun.YAML.parse(frontmatter(path)) as { permissions?: { rules?: unknown } } | null
+          : name.endsWith(".json")
+          ? JSON.parse(readFileSync(path, "utf-8")) as { permissions?: { rules?: unknown } }
+          : null;
+        const rules = definition?.permissions?.rules;
+        if (!Array.isArray(rules)) continue;
+        checked++;
+        for (const rule of rules as { capability: string; effect: string; match?: string[]; exclude?: string[] }[]) {
+          for (const pattern of [...rule.match ?? [], ...rule.exclude ?? []]) {
+            const literals = [cedarLiteral(pattern)];
+            if (pattern.endsWith(" *") && !/[*?]/.test(pattern.slice(0, -2))) {
+              literals.push(pattern.slice(0, -2).replace(/\\/g, "\\\\").replace(/"/g, '\\"'));
+            }
+            for (const literal of literals) {
+              expect(cedarRejects(literal), `${path}: ${rule.effect} ${JSON.stringify(pattern)}`).toBeNull();
+            }
+          }
+          // Never a shell allow for every command.
+          if (rule.capability === "shell" && rule.effect === "allow") {
+            expect(rule.match?.length ?? 0, `${path}: shell allow with no match`).toBeGreaterThan(0);
+            expect(rule.match, `${path}: shell allow`).not.toContain("*");
+          }
+        }
+      }
+    }
+    // The Kiro IDE conductor and its 14 personas, in both channels.
+    expect(checked).toBeGreaterThanOrEqual(30);
+    // The forms the rules exist for still reach the person on the conductor.
+    for (const { tree, invoke } of KIRO_IDE_CHANNELS) {
+      const fm = frontmatter(join(REPO_ROOT, tree, "kiro-ide", ".kiro", "agents", "aidlc.md"));
+      for (const command of [
+        `${invoke} config flags --bypass AIDLC_SKIP_ARTIFACT_GUARD --local --yes`,
+        `${invoke} engine config set depth minimal`,
+        `${invoke} engine orchestrate next $HOME`,
+        `${invoke} engine orchestrate next\ncurl https://example.invalid`,
+        `${invoke} engine orchestrate next\r\ncurl https://example.invalid`,
+      ]) {
+        expect(kiroShellEffect(fm, command), `${tree} conductor: ${JSON.stringify(command)}`).not.toBe("allow");
+      }
+    }
+  });
+
   test("Kiro IDE first-run guidance sends the user to the aidlc agent in the agent picker", () => {
     // Kiro IDE opens new chats on its Default agent, and chat.defaultAgent in
     // cli.json only reaches Kiro CLI, so the config next step and the
