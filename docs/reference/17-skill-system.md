@@ -112,7 +112,7 @@ Loop:
   4. Repeat only when the directive calls for continuation; otherwise stop or wait for the human as it directs.
 ```
 
-Terminal workspace navigation takes precedence over repeating the loop. For example, `/aidlc space default` switches spaces, prints the utility output, and ends the turn even when the destination has an unfinished intent. Selecting that intent does not request resuming it: the conductor waits for a new human workflow request before calling `next` or `report`, running a stage, or offering a resume menu. Session-start guidance reinforces the same boundary.
+Terminal workspace navigation takes precedence over repeating the loop. For example, `/aidlc space default` switches spaces, prints the utility output, and ends the turn even when the destination has an unfinished intent. Selecting that intent does not request resuming it: the conductor waits for a new human workflow request before calling `next` or `report` or running a stage. Session-start guidance reinforces the same boundary.
 
 ```mermaid
 flowchart LR

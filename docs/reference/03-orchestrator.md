@@ -146,7 +146,7 @@ When the active intent's `aidlc-state.md` exists and a new harness session re-en
 1. The session-start hook reads the state file and injects the persisted scope, phase, stage, status, agent, and next action.
 2. It flags `.aidlc-engine/recovery.md` (in the intent's record dir) when present so the conductor can check for compaction-related state corruption.
 3. On bare `/aidlc` re-entry, the conductor calls `next --resume` and continues.
-4. When the person asks to redo, jump, or start fresh, the engine routes their words and returns the exact follow-up move.
+4. When the person asks to redo, jump, or start fresh, the conductor reads which one they mean and reports it as a typed choice (`report --result resumed --choice ...`); the engine routes that choice, never the person's words, and returns the exact follow-up move.
 
 Under solo unit-major Construction, Current Stage stays on the first per-unit stage while each Unit works through the later ones. The session-start context therefore names the active Unit's own stage (`Active Unit: <unit> on <stage>` and `Current Step: <stage> for unit <unit>`). Once any Unit has finished work, Redo names no jump, because a redo jump would throw away every Unit's finished work. It names `aidlc-jump.ts reopen --via redo` for that Unit's step instead, with no question, so only that Unit redoes it from a new attempt: the step the Unit is on or paused at (its build progress and Plan Approval do not carry over), the summary's step, or at a Unit checkpoint the last step the Unit did. The agent tells the person in one line what is redone; for Code Generation that is the plan too, which comes back to them for approval unless plan approval is off. A step the Unit has not started yet has nothing to reset, so Redo there tells the conductor to re-run `next` and do it. The reopen records Redo as the answer to that step's artifact re-use question, so the step's directive carries `artifact_reuse` and the conductor redoes it without asking Keep, Modify or Redo again. The other Units keep their finished work, reviews, Plan Approvals and checkpoint approvals.
 
@@ -1158,8 +1158,8 @@ is not raised on `next`: the guard accepts it and says it once. A document that
 is gone, a project-type change and a stage-graph change still are, and
 `/aidlc --status` still lists every stage behind.
 Inspection-unavailable stages remain a per-turn advisory because they need
-attention. Receipt-less histories are reported as untracked by
-`/aidlc --status` only, so migration does not add a warning to every `next`.
+attention. Receipt-less histories are not shown by `next` or by
+`/aidlc --status`, so migration adds no warning.
 
 The suggested recovery uses the existing explicit jump path:
 
