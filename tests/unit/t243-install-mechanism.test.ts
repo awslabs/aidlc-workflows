@@ -4176,6 +4176,44 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A refresh refuses rather than overwrite the person's edit to a shipped
+  // file, and names both ways forward: each one it names goes through.
+  test("a refresh over an edited shipped file names moving it aside or --force, and both go through", () => {
+    const project = temp("aidlc-t243-refresh-conflict-");
+    mkdirSync(join(project, ".git"));
+    const args = ["config", "--project-dir", project, "--from", CLAUDE_RELEASE, "--harness", "claude", "--mcp", "none"];
+    const installed = run(INIT, args, project);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const rel = join(".claude", "agents", "aidlc-developer-agent.md");
+    const file = join(project, rel);
+    const shipped = readFileSync(file, "utf-8");
+    const refuse = () => {
+      writeFileSync(file, `${shipped}\nmy own notes\n`);
+      const refused = run(INIT, args, project);
+      expect(refused.status).toBe(4);
+      const out = refused.stdout.replace(/\s+/g, " ");
+      expect(out).toContain(".claude/agents/aidlc-developer-agent.md (locally modified or unowned)");
+      expect(out).toContain(
+        "to keep your version, move .claude/agents/aidlc-developer-agent.md somewhere else and run the same command again",
+      );
+      expect(out).toContain("run it again with --force");
+      expect(readFileSync(file, "utf-8")).toBe(`${shipped}\nmy own notes\n`);
+    };
+
+    refuse();
+    const aside = join(project, "my-developer-agent.md");
+    renameSync(file, aside);
+    const moved = run(INIT, args, project);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
+    expect(readFileSync(file, "utf-8")).toBe(shipped);
+    expect(readFileSync(aside, "utf-8")).toContain("my own notes");
+
+    refuse();
+    const forced = run(INIT, [...args, "--force"], project);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(readFileSync(file, "utf-8")).toBe(shipped);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("unmarked gitignore hiding committed records configures with a warning naming the rule", () => {
     const project = temp("aidlc-t243-hidden-records-");
     expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
