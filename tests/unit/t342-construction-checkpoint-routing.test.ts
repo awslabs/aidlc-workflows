@@ -56,6 +56,7 @@ function fixture(options: Options = {}) {
 ## Project Information
 - **Project**: Construction checkpoint routing
 - **Project Type**: Greenfield
+- **Project Type Source**: you
 - **Scope**: feature
 - **State Version**: 8
 ## Runtime State
