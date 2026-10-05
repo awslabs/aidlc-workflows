@@ -10,7 +10,7 @@
 // Mechanism = none: pure in-process reads of the shipped dist agent JSONs plus
 // RegExp evaluation. No spawn, no LLM.
 //
-// The shipped allowlist grants ONLY project-relative `.kiro/tools/<file>.ts`
+// The shipped allowlist grants ONLY AI-DLC's own project-relative `.kiro/tools/`
 // invocations. Absolute paths are excluded because a path only has to be SHAPED
 // like a tool path, not be trustworthy: a grant for any `/.../.kiro/tools/*.ts`
 // pre-approves running a file from a world-writable directory (verified live:
@@ -201,8 +201,12 @@ const MUST_ALLOW = [
   "bun .kiro/tools/aidlc-utility.ts status",
   "bun .kiro/tools/aidlc-state.ts get",
   'bun .kiro/tools/aidlc-log.ts decision --text "safe words"',
-  "bun run .kiro/tools/aidlc-version.ts",
-  'bun ".kiro/tools/aidlc-version.ts"',
+  "bun run .kiro/tools/aidlc-utility.ts status",
+  'bun ".kiro/tools/aidlc-utility.ts" status',
+  "bun .kiro/tools/aidlc.ts engine orchestrate next",
+  "bun .kiro/tools/aidlc.ts --doctor",
+  "bun .kiro/tools/aidlc.ts config providers --show --json",
+  "bun .kiro/tools/aidlc-utility.ts",
   "date -u",
   "date -u +%Y-%m-%dT%H:%M:%SZ",
 ];
@@ -240,8 +244,33 @@ const MUST_ASK = [
 // here would encode a refusal the binary does not perform, and would let an
 // over-broad allow entry hide behind a separator.
 const MUST_ALLOW_CHAINS = [
-  "bun .kiro/tools/aidlc-version.ts && date -u",
+  "bun .kiro/tools/aidlc-utility.ts status && date -u",
   "bun .kiro/tools/aidlc-orchestrate.ts next --status && bun .kiro/tools/aidlc-state.ts get",
+];
+
+// Only AI-DLC's own workflow commands run unprompted: a command that changes the
+// machine's AI-DLC install, the scripts behind one, any config change however
+// its flags are spelled, and a longer file name all wait for the person.
+const MUST_ASK_OUTSIDE_THE_WORKFLOW = [
+  "bun .kiro/tools/aidlc.ts use 2.10.0",
+  "bun .kiro/tools/aidlc.ts update",
+  "bun .kiro/tools/aidlc.ts update --check",
+  "bun .kiro/tools/aidlc.ts rollback",
+  "bun .kiro/tools/aidlc.ts uninstall --yes",
+  "bun .kiro/tools/aidlc.ts system config global set offline true",
+  "bun .kiro/tools/aidlc.ts --yes update",
+  "bun .kiro/tools/aidlc-lifecycle.ts use 2.10.0",
+  "bun .kiro/tools/aidlc-lifecycle.ts",
+  "bun .kiro/tools/aidlc-machine-config.ts set offline true",
+  "bun .kiro/tools/aidlc-init.ts --pin 2.10.0",
+  "bun .kiro/tools/aidlc-doctor.ts",
+  "bun .kiro/tools/aidlc.ts config --pin 2.10.0",
+  "bun .kiro/tools/aidlc.ts config --channel",
+  "bun .kiro/tools/aidlc.ts config models --gl\"obal\" --yes",
+  "bun .kiro/tools/aidlc.ts config models --deciding-effort high --project --yes",
+  "bun .kiro/tools/aidlc.ts config models --show --json --global",
+  "bun .kiro/tools/aidlc-log.tsx",
+  "bun .kiro/tools/aidlc-log.ts.bak run",
 ];
 
 // Destructive forms must be denied outright, not merely sent to an approver.
@@ -417,6 +446,15 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
         for (const cmd of MUST_ALLOW_CHAINS) {
           expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``)
             .toBe("allow");
+        }
+      }
+    });
+
+    test(`${harness}: anything outside AI-DLC's own workflow commands waits for the person`, () => {
+      for (const agent of agents) {
+        const eb = execBash(harness, agent);
+        for (const cmd of MUST_ASK_OUTSIDE_THE_WORKFLOW) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should ask for \`${cmd}\``).toBe("ask");
         }
       }
     });

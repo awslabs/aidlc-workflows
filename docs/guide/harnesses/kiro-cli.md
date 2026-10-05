@@ -184,7 +184,14 @@ literal escape-looking text remain unchanged.
 
 **Start the session from the project root.** Native installs pre-approve the
 installed `aidlc` command. Source/development copies pre-approve only
-project-relative `bun .kiro/tools/<tool>.ts` commands; absolute paths,
+AI-DLC's own workflow commands, run project-relative: the engine commands
+(`bun .kiro/tools/aidlc.ts engine ...`), the read-only `doctor`, `version`,
+`--doctor`, `status`, `config <section> --show --json` and
+`config <section> --help`, and the AI-DLC tool scripts
+(`bun .kiro/tools/aidlc-<tool>.ts`). A `config` change, the commands that change
+the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`,
+`system`) with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`,
+`aidlc-lifecycle.ts`, `aidlc-machine-config.ts`), absolute paths,
 `KIRO_PROJECT_DIR` expansion, and a line that adds a command that is not
 pre-approved (a `cd` before it, or a pipe or `&&` into another command) still
 ask.
@@ -239,7 +246,7 @@ CLI on its v3 engine, use the
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no session-end / pre-compaction hooks) |
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
-| Permissions | `settings.json` allowlist | Source-generated projection: project-relative framework `bun .kiro/tools/<tool>.ts` calls and `date -u`; native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
+| Permissions | `settings.json` allowlist | Source-generated projection: AI-DLC's own project-relative workflow commands (engine, read-only dispatcher commands, AI-DLC tool scripts) and `date -u`; native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | Ships the same 5 in `.kiro/settings/mcp.json`, all disabled by default; flip `"disabled": false` per server to enable it. Context7 is keyless on Kiro because Kiro sends configured HTTP header values verbatim instead of expanding environment placeholders. All 14 delegated personas opt in through `includeMcpJson: true` plus `@<server>` tool grants; the conductor gets none. |
 

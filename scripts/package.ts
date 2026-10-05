@@ -1000,6 +1000,7 @@ function buildTree(
   }
   expandCursorToolAllows(treeRoot, m);
   expandClaudeToolAllows(treeRoot, m);
+  expandKiroToolAllows(treeRoot, m);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1130,6 +1131,48 @@ function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
       : [entry]
   );
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+// Kiro CLI's authored agents name AI-DLC's tool scripts with one pattern
+// (any script, any arguments). The projection lists, in its place, the
+// dispatcher's engine commands, each dispatcher command a copy channel
+// pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
+// the tool scripts it pre-approves (copyChannelToolScripts), bare or followed
+// by arguments, never a longer file name. A script behind a machine-changing
+// command, and any config command but the read-only forms, then waits for the
+// person in Kiro CLI. Both trees get it; the native rewrite then turns every
+// bun entry into the one trusted prefix.
+function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
+  if (m.name !== "kiro") return;
+  const agentsDir = join(treeRoot, "agents");
+  const prefix = (dir: string) => `bun (run )?["']?${dir}/`;
+  let expanded = 0;
+  for (const file of walk(agentsDir).filter((path) => path.endsWith(".json"))) {
+    const value = JSON.parse(readFileSync(file, "utf-8")) as {
+      toolsSettings?: { execute_bash?: { allowedCommands?: unknown } };
+    };
+    const allowed = value.toolsSettings?.execute_bash?.allowedCommands;
+    if (!Array.isArray(allowed)) continue;
+    const next = allowed.flatMap((entry) => {
+      const match = typeof entry === "string"
+        ? /^bun \(run \)\?\["']\?(\S+)\/tools\/\[A-Za-z0-9\._-\]\+\\\.ts\["']\?\( \.\*\)\?$/.exec(entry)
+        : null;
+      if (match === null) return [entry];
+      expanded++;
+      const tools = `${match[1]}/tools`;
+      const scripts = copyChannelToolScripts().map((script) => escapeRegExp(script.slice(0, -".ts".length)));
+      return [
+        `${prefix(tools)}aidlc\\.ts["']? engine( .*)?`,
+        ...copyChannelDispatcherCommands().map((command) =>
+          `${prefix(tools)}aidlc\\.ts["']? ${escapeRegExp(command)}`
+        ),
+        `${prefix(tools)}(${scripts.join("|")})\\.ts["']?( .*)?`,
+      ];
+    });
+    value.toolsSettings!.execute_bash!.allowedCommands = next;
+    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+  }
+  if (expanded === 0) throw new Error("[kiro] no agent names the tools-folder pattern to expand");
 }
 
 // Cursor's authored cli.json names AI-DLC's tool scripts with one glob. The
