@@ -11033,46 +11033,11 @@ export function commandTurnHint(projectDir: string): string {
 // With `replies`, the turn must be a reply, not only a command to AIDLC; with
 // `requests`, anything but a question about a switch. With `intent` and
 // `space`, the turn must be on that work's record.
-// What the person asks for in a message is carried out, not used up, by the
-// decisions recorded after it: an approval they gave in the same message, or
-// the engine's own approval under autonomous Construction. It stands until a
-// question is put to them after it (or they grant autonomy, which is their
-// answer to one). A decision itself still needs a reply of its own
-// (humanRepliedSinceGate). Turns at the same second in two shards are
-// unordered, so they prove nothing.
-const QUESTION_PUT_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL", "QUESTION_UNANSWERED"]);
-function requestOutlivesDecisions(projectDir: string, intent?: string, space?: string): boolean {
-  try {
-    const rows = readAuditShardEvents(projectDir, intent, space);
-    const turns = rows.filter((row) => row.event === "HUMAN_TURN");
-    const latestTs = turns.reduce((latest, row) => (row.timestamp > latest ? row.timestamp : latest), "");
-    const latest = turns.filter((row) => row.timestamp === latestTs);
-    if (latest.length === 0 || latest.some((row) => row.shardIndex !== latest[0].shardIndex)) return false;
-    const turn = latest.reduce((last, row) => (row.pos > last.pos ? row : last));
-    if (!isRequestTurn(turn)) return false;
-    return !rows.some((row) =>
-      (row.timestamp > turn.timestamp ||
-        (row.timestamp === turn.timestamp && (row.shardIndex !== turn.shardIndex || row.pos > turn.pos))) &&
-      (QUESTION_PUT_EVENTS.has(row.event) ||
-        (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous"))
-    );
-  } catch {
-    return false;
-  }
-}
-
 export function personSpokeSinceGate(
   projectDir: string,
   options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
 ): boolean {
-  const state = humanTurnState(projectDir, options);
-  if (
-    state !== "acted" &&
-    !(options.requests === true && (state === "answered" || state === "consumed") &&
-      requestOutlivesDecisions(projectDir, options.intent, options.space))
-  ) {
-    return false;
-  }
+  if (humanTurnState(projectDir, options) !== "acted") return false;
   try {
     return readAuditShardEvents(projectDir, options.intent, options.space).some((row) =>
       options.replies ? isReplyTurn(row) : options.requests ? isRequestTurn(row) : row.event === "HUMAN_TURN");

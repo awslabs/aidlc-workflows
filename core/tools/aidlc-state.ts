@@ -2158,8 +2158,7 @@ export interface ParkResult {
 function handlePark(_args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const attendedSession = humanTurnMintAllowed();
-  // Their stop outlives the run's own approvals after it (personSpokeSinceGate).
-  const replied = attendedSession && personSpokeSinceGate(pd, { requests: true });
+  const replied = attendedSession && personSpokeSinceGate(pd);
   const activation = hookActivation();
   const missedReply = attendedSession && !replied &&
     (activation?.missedReply !== undefined || activation?.missesReplies === true) &&
