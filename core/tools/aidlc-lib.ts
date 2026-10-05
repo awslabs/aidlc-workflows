@@ -24672,7 +24672,12 @@ export function personAtOwnTerminal(projectDir?: string, env: NodeJS.ProcessEnv 
   const tty = (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
   if (!tty) return false;
   if (["vscode", "cursor", "kiro"].includes((env.TERM_PROGRAM ?? "").toLowerCase())) return false;
-  if (Object.keys(env).some((key) => /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key))) {
+  // A host marks the processes it starts; a person's shell may still carry a
+  // tool's own settings (where it keeps its config), which say nothing.
+  if (Object.keys(env).some((key) =>
+    /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key) &&
+    !/^(?:CODEX_HOME|COPILOT_HOME|OPENCODE_CONFIG_DIR|OPENCODE_CONFIG)$/i.test(key)
+  )) {
     return false;
   }
   try {

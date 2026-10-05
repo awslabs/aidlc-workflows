@@ -471,6 +471,22 @@ describe("a person at their own terminal is told the step that works there", () 
     expect(ran.message ?? "").not.toContain("AI-DLC cannot see a chat in this terminal");
   });
 
+  test("a tool's own config setting in the person's shell is not a host marker", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    for (const key of ["CODEX_HOME", "COPILOT_HOME", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG"]) {
+      const env = attendedEnv(ownTerminal());
+      for (const name of Object.keys(env)) if (HOST_MARKER.test(name)) delete env[name];
+      env[key] = join(proj, "tool-config");
+      const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next"], env);
+      expect(r.code, r.stderr).toBe(0);
+      const message = (JSON.parse(r.stdout) as Printed).message ?? "";
+      expect(message, key).toContain("AI-DLC cannot see a chat in this terminal");
+      expect(message, key).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
+    }
+  });
+
   test("a refused approval or answer at their own terminal names the same switch", () => {
     const h = HARNESSES[0];
     const proj = installed(h);
