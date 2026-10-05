@@ -50,6 +50,7 @@ import {
   stateDigest,
   workspaceSourceFingerprint,
   readActiveDirectiveMarker,
+  readPlanApprovalViolation,
   workspaceSourceState,
   writeSessionIntentUuid,
 } from "../../core/tools/aidlc-lib.ts";
@@ -3057,6 +3058,45 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       expect(readAudit(dir)).not.toContain(
         "**Event**: PLAN_APPROVAL_RECORDED",
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Under a lowered Guard Policy an approved plan that changed since is still
+  // approved: the fallback for payloads with no arguments builds on, as the
+  // core guard does, and the build's own writes poison nothing. Strict asks.
+  test.each([["off", 0], ["strict", 2]] as const)("Guard Policy %s: an approved plan edited later, then an opaque call", (policy, code) => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(seededRecordDir(dir), "construction", "code-generation", "code-generation-plan.md");
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`)).code).toBe(0);
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+      if (policy === "off") {
+        const memory = join(dir, "aidlc", "spaces", "default", "memory");
+        mkdirSync(memory, { recursive: true });
+        writeFileSync(join(memory, "project.md"), "# Project\n\n## Guard Policy\n\nMode: off\n", "utf-8");
+      }
+      // The person edits the approved plan by hand.
+      writeFileSync(plan, `${readFileSync(plan, "utf-8")}\n- [ ] Add a log line\n`, "utf-8");
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(false);
+      expect(runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "execute_bash", toolArgs: {} })).code).toBe(code);
+      if (policy === "off") {
+        writeFileSync(join(dir, "src", "legacy-generated.ts"), "export const generated = true;\n");
+        expect(runIde(dir, "audit-and-sensors", ctx("fs_write", "Created the src/legacy-generated.ts file.")).code).toBe(0);
+        expect(readPlanApprovalViolation(dir)).toBeNull();
+        expect(runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "fs_write", toolArgs: {} })).code).toBe(0);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
