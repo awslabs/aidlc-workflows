@@ -26,6 +26,7 @@ import {
   PHASES,
   parseCheckboxes,
   parseStateStageSuffixes,
+  readActiveDirectiveMarker,
   readStateFile,
   reviewArtifactEntries,
   resolveProjectDir,
@@ -457,9 +458,13 @@ function handleExecute(args: string[]): void {
   // Get current stage for audit
   const currentSlug = getField(content, "Current Stage") || "state-init";
   // Where the person was: the active Unit's own step in a unit-at-a-time walk,
-  // which Current Stage does not name.
+  // which Current Stage does not name, or else the step the engine last put to
+  // them (a Unit's code plan, say) while it still matches this state.
   const unitStage = getField(content, "Unit Stage")?.trim() ?? "";
-  const cameFrom = graph.some((node) => node.slug === unitStage) ? unitStage : currentSlug;
+  const shownStage = readActiveDirectiveMarker(pd, content)?.stage?.trim() ?? "";
+  const cameFrom = graph.some((node) => node.slug === unitStage)
+    ? unitStage
+    : shownStage !== targetSlug && graph.some((node) => node.slug === shownStage) ? shownStage : currentSlug;
 
   // States that count as "in-flight" (skip on forward jump, reset on backward jump)
   const IN_FLIGHT_STATES: CheckboxState[] = [
