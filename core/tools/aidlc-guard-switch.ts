@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
@@ -6,6 +6,8 @@ import {
   latestPersonTurn,
   personSpokeSinceGate,
   assertChangeControlLedgerWritable,
+  auditBlockField,
+  auditFilePath,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
@@ -230,6 +232,32 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
 
 // Pure state transformation plus audit/output preparation. CLI setters and the
 // human-turn hook call this under the intent lock and commit audit before state.
+// The old value of the Guard Policy row the human-turn hook wrote for `value`
+// as this turn's message arrived: it applies a typed `--guard-policy` before
+// recording the turn, so the row sits just before the latest HUMAN_TURN. A
+// setter run for the same value then says what changed, not that it was
+// "already" so. A row after that turn is the agent's own earlier run.
+function guardPolicyTypedThisTurn(projectDir: string, value: string, intent?: string, space?: string): string | null {
+  let blocks: string[];
+  try {
+    blocks = readFileSync(auditFilePath(projectDir, intent, space), "utf-8").replace(/\r\n/g, "\n").split("\n---\n");
+  } catch {
+    return null;
+  }
+  let turns = 0;
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const event = auditBlockField(blocks[index], "Event");
+    if (event === "HUMAN_TURN" && ++turns === 2) return null;
+    if (event === "GUARD_POLICY_SET") {
+      return turns === 1 && auditBlockField(blocks[index], "New Value") === value &&
+          auditBlockField(blocks[index], "Source") === "you"
+        ? auditBlockField(blocks[index], "Old Value")
+        : null;
+    }
+  }
+  return null;
+}
+
 export function applyIntentSettings(
   projectDir: string,
   content: string,
@@ -476,8 +504,13 @@ export function applyIntentSettings(
   if (ccRequest !== undefined && changeControl !== null) {
     const previous = cc.rawStateValue;
     const line = formatGuardPolicy(changeControl, ccRequest.source);
+    const alreadyLine = (): string => {
+      const appliedFrom = guardPolicyTypedThisTurn(projectDir, changeControl, selection.intent, selection.space);
+      if (appliedFrom === null) return `Guard Policy is already ${line}`;
+      return appliedFrom === changeControl ? `Guard Policy is ${line}` : `Guard Policy changed: ${appliedFrom} to ${line}`;
+    };
     if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
-      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${line}`);
+      if (!scopeDefault("guard-policy")) lines.push(alreadyLine());
     } else {
       // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
       // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.
@@ -501,7 +534,7 @@ export function applyIntentSettings(
           lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
         }
       } else if (!scopeDefault("guard-policy")) {
-        lines.push(`Guard Policy is already ${line}`);
+        lines.push(alreadyLine());
       }
     }
   }

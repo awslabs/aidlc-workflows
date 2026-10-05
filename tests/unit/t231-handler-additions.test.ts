@@ -196,7 +196,8 @@ describe("t231 config get/list/set handlers", () => {
       "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
     ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
-    expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    // The hook applied the policy as this turn arrived: the setter says what changed.
+    expect(changed.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
     expect(changed.stdout).toContain("Fence state-transition is already off");
     expect(renameNotices(changed.stderr)).toBe(0);
     // The eight settings the human names, collaborators reading its scope

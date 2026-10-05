@@ -778,9 +778,10 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
+    // Run again in the turn the hook applied it, the setter says what changed.
     const unchanged = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Guard Policy is already off (set by you)");
+    expect(unchanged.stdout).toContain("Guard Policy changed: strict to off (set by you)");
     expect(guardPolicyRows(proj)).toEqual(rows);
     expect(resolveGuardPolicy(proj).value).toBe("off");
     const status = run(UTILITY, ["status"], proj, FENCE_ENV_CLEAR);
@@ -909,6 +910,23 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(bare.message).toContain("--guard-policy requires <strict|relaxed|off>.");
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toHaveLength(0);
+  });
+
+  // The human-turn hook applied the typed switch as the message arrived. When
+  // the agent then runs the setter too, the person hears what changed, not
+  // that it was "already" so; in a later turn it was.
+  test("a setter run for the Guard Policy the hook applied this turn says what changed", () => {
+    const { proj } = project("enterprise");
+    recordHumanPrompt(proj, "/aidlc --guard-policy off");
+    const same = run(UTILITY, ["config-change", "--guard-policy", "off"], proj);
+    expect(same.status, same.stderr).toBe(0);
+    expect(same.stdout).toContain("Guard Policy changed: strict to off (set by you)");
+    expect(same.stdout).not.toContain("already");
+    expect(guardPolicyRows(proj)).toHaveLength(1);
+    recordHumanPrompt(proj, "thanks");
+    const later = run(UTILITY, ["config-change", "--guard-policy", "off"], proj);
+    expect(later.status, later.stderr).toBe(0);
+    expect(later.stdout).toContain("Guard Policy is already off (set by you)");
   });
 
   test("the retired --change-control flag still routes, prints the one-line notice once, and is never echoed", () => {
@@ -2295,7 +2313,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const before = readFileSync(state, "utf-8");
     const unchanged = run(UTILITY, ["config-change", "--guard-policy", value], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain(`Guard Policy is already ${value} (set by you)`);
+    expect(unchanged.stdout).toContain(`Guard Policy changed: strict to ${value} (set by you)`);
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(guardPolicyRows(proj)).toEqual(rows);
   });
@@ -2830,7 +2848,7 @@ describe("t333 (10) retired policy confirmation", () => {
     expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
     const unchanged = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(unchanged.stdout).toContain("Guard Policy is already off (set by you)");
+    expect(unchanged.stdout).toContain("Guard Policy changed: strict to off (set by you)");
     expect(readFileSync(state, "utf-8")).toBe(confirmed);
     expect(guardPolicyRows(proj)).toEqual(rows);
     const next = runOrchestrateNext(ORCHESTRATE, proj);

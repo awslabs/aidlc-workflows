@@ -575,7 +575,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
-    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(unchanged.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
@@ -603,7 +603,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
-    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(unchanged.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const original = p.confirm();
     p.write(p.artifact, artifactBody());
@@ -632,7 +632,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.state()).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     const unchanged = succeeded(p.tool("utility", ["config-change", "--change-control", "relaxed"]), "Repeat the hook-applied Guard Policy");
-    expect(unchanged.stdout).toContain("Guard Policy is already relaxed (set by you)");
+    expect(unchanged.stdout).toMatch(/Guard Policy changed: \w+ to relaxed \(set by you\)/);
     expect(p.events("GUARD_POLICY_SET")).toHaveLength(1);
     p.confirm();
     p.write(p.artifact, artifactBody());
