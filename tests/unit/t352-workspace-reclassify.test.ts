@@ -513,6 +513,21 @@ describe("t352 code that arrives as Construction starts", () => {
     expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
     expect(next(proj).ask_type).not.toBe("project-type");
   });
+
+  // Only the first Construction stage counts as just entered: a jump past
+  // Construction straight into an Operation stage is work under way.
+  test("a jump from before Construction straight into Operation asks nothing about the folder", () => {
+    const proj = project();
+    expect(create(proj, "express").status).toBe(0);
+    const operation = loadGraph().find((stage) =>
+      stage.phase === "operation" && stageLine(state(proj), stage.slug)?.endsWith("EXECUTE"));
+    expect(operation, "express runs an Operation stage").toBeDefined();
+    edit(proj, (s) => mark(s, operation!.slug, "-")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, `- **Current Stage**: ${operation!.slug}`));
+    addRepo(proj);
+    expect(constructionHasStarted(state(proj), recordDir(proj))).toBe(true);
+    expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
+  });
 });
 
 describe("t352 reclassify: existing code after a new-project start", () => {

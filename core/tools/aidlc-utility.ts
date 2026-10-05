@@ -10272,9 +10272,10 @@ export function constructionHasStarted(content: string, workRecordDir?: string |
   if (started.length !== 1 || !workRecordDir) return started.length > 0;
   // Only just entered: an approval moved the cursor onto the first
   // Construction stage and nothing of it is written yet, so nothing was built
-  // for a new project.
+  // for a new project. A jump straight into Operation is work under way.
   const [only] = started;
   return !(
+    only.phase === "construction" &&
     only.slug === getField(content, "Current Stage") &&
     states.get(only.slug) === "in-progress" &&
     !holdsAnyFile(join(workRecordDir, "construction"))
