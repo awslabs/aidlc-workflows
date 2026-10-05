@@ -857,9 +857,10 @@ tool's mechanical screen verbatim. Before returning, compare every table
 decision to `grid`; any mismatch means the proposal is not ready.
 
 **These tables are supporting evidence, not the headline.** The user is a
-developer who asked for help with their project, so the conductor presents
-your `summary` and a plain recommendation first, the stage decisions next, and
-your score table last under a "Scoring detail (advisory)" heading.
+developer who asked for help with their project, so the conductor presents a
+short offer: a plain recommendation and your `summary` in plain words. Your
+stage decisions, and then your score table under a "Scoring detail (advisory)"
+heading, are shown when the person asks for them.
 
 This is a WORDING rule and changes no decision you make. Your matched-vs-custom
 choice, your folds, and every EXECUTE/SKIP call are governed by Steps 1-7 and
@@ -906,12 +907,11 @@ the proposal beneath the table.
 
 ### Step 9: Gate
 
-The conductor renders your proposal to the human as three blocks - a plain
-recommendation plus the validator's `summary`, then your stage-decision table,
-then your ARS scores table under a "Scoring detail (advisory)" heading - and
-holds approve/edit/reject. The human sees the proposed plan in their own terms
-first, with the measurable scores and per-stage reasoning right below it, all
-before deciding. Never write before explicit human approval.
+The conductor renders your proposal to the human as a short offer - a plain
+recommendation plus the validator's `summary` in plain words - and holds
+approve/edit/reject. The human decides on the plan in their own terms; your
+stage-decision table and ARS scores table (under a "Scoring detail (advisory)"
+heading) are shown when they ask. Never write before explicit human approval.
 
 On **Edit**, apply the requested grid, Guard Policy, or settings changes, re-run `validate-grid` with the route the edit leaves, and
 rebuild both `summary` and the full stage-decision table before re-presenting.
