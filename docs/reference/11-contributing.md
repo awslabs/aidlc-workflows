@@ -251,9 +251,10 @@ single state write. When the Guard Policy value moves, call
 `assertChangeControlLedgerWritable` before any write. A memory layer's
 `Mode: strict` refuses an explicit `--guard-policy relaxed` or `--guard-policy
 off` for the entire command, including companion settings and scope changes.
-Scope changes may raise a scope-owned Guard Policy automatically, but preserve
-the current stored value when the new default is lower; memory continues to
-control the effective value.
+Scope changes may raise a scope-owned Guard Policy automatically. A lower
+default follows the new scope only when the person asked for the scope change;
+otherwise the current stored value stays and the output says so in one line.
+Memory continues to control the effective value.
 
 Preserve state and event contracts: `review adversarial` stores an empty
 `Review Override`; explicit Guard Policy values use `(set by you)`, explicit
