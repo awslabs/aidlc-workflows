@@ -135,7 +135,6 @@ import {
   writeFileAtomic,
   harnessDir,
 } from "./aidlc-lib.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
 
 // --- Exit-code convention (plan §2) ---
@@ -307,10 +306,12 @@ function readRuntimeStageRow(
 // Recomputing is exact, not a guess: compile derives the row's memory_path
 // itself, as relativeMemoryPath(<the stage's phase>, <slug>, <record prefix>)
 // (aidlc-runtime.ts). A recorded row still wins so a graph that knows better
-// keeps winning (the legacy flat layout), and the fallback says so on stderr —
-// the same recompute-and-warn posture aidlc-orchestrate.ts takes for a missing
-// or stale bolt_dag. The record prefix is resolved against the space + intent
-// PINNED at surface time, not the live cursor compile happens to read.
+// keeps winning (the legacy flat layout). The fallback is silent: the path is
+// exact and the graph compiles at the next transition, so there is nothing for
+// the person to do, and a harness that shows tool stderr (Codex) would repeat a
+// warning once per stage surfaced. The record prefix is resolved against the
+// space + intent PINNED at surface time, not the live cursor compile happens to
+// read.
 // A row that exists without a memory_path is corruption and still fails.
 function resolveMemoryPath(
   projectDir: string,
@@ -332,17 +333,11 @@ function resolveMemoryPath(
       1
     );
   }
-  const derived = relativeMemoryPath(
+  return relativeMemoryPath(
     stage.phase,
     slug,
     relativeRecordDir(projectDir, intent, space)
   );
-  process.stderr.write(
-    `aidlc-learnings: no compiled memory_path for "${slug}"; derived ${derived} from the ` +
-      `stage graph. runtime-graph.json is machine-local and is compiled at the next ` +
-      `transition — \`${aidlcToolInvocation("runtime")} compile\` rebuilds it now.\n`
-  );
-  return derived;
 }
 
 // A Construction checkpoint the person approves covers every stage its Unit
