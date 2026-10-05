@@ -188,11 +188,13 @@ function recordCommand(p: string): string {
 
 function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
   recordCommand(p);
+  // The env is passed so a scope seam a test sets while it runs reaches the
+  // tool on Windows too, where a child does not see later process.env writes.
   const invoke = (args: string[]) => {
     const result = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-bolt.ts"), "checkpoint", "--unit", unit,
       "--kind", kind, ...args, "--project-dir", p,
-    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: process.env });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
     return JSON.parse(result.stdout);
   };
