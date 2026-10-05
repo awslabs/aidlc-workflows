@@ -11449,6 +11449,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-checkpoint-wave-edit.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
@@ -11503,6 +11507,10 @@
       "unitId": "function:unitLifecycleSnapshot",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t-checkpoint-wave-edit.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t324-team-unit-progress-gates.test.ts",
           "mechanism": "cli"
@@ -14933,6 +14941,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-checkpoint-wave-edit.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
@@ -15677,6 +15689,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-checkpoint-wave-edit.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-recorded-bypass-parity.test.ts",
           "mechanism": "cli"
         },
@@ -15806,6 +15822,10 @@
         },
         {
           "file": "tests/unit/t-checkpoint-review-none.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-checkpoint-wave-edit.test.ts",
           "mechanism": "cli"
         },
         {
