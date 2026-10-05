@@ -11027,17 +11027,68 @@ export function commandTurnHint(projectDir: string): string {
     : "";
 }
 
+// The person's latest message still stands for what it asks for, though
+// decisions were recorded after it: each was the approval they gave in that
+// same message ("approve, and turn plan approval off"; one plan question
+// counts once however many Units it approves), or the run's own approval,
+// which records no choice of theirs (no User Input, or Autonomous: true;
+// they said "stop" while it ran on its own). Any other decision after it, a
+// second approval, or an approval after a message that was no reply (so not
+// from it) uses it up, as it does everywhere else. Turns at the same second
+// in two shards are unordered, so they prove nothing.
+function requestOutlivesItsApproval(projectDir: string, intent?: string, space?: string): boolean {
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(projectDir, intent, space, unreadable);
+    if (unreadable.length > 0) return false;
+    const turns = rows.filter((row) => row.event === "HUMAN_TURN");
+    const latestTs = turns.reduce((latest, row) => (row.timestamp > latest ? row.timestamp : latest), "");
+    const latest = turns.filter((row) => row.timestamp === latestTs);
+    if (latest.length === 0 || latest.some((row) => row.shardIndex !== latest[0].shardIndex)) return false;
+    const turn = latest.reduce((last, row) => (row.pos > last.pos ? row : last));
+    if (!isRequestTurn(turn)) return false;
+    const theirs = new Set<string>();
+    for (const row of rows) {
+      const after = row.timestamp > turn.timestamp ||
+        (row.timestamp === turn.timestamp && (row.shardIndex !== turn.shardIndex || row.pos > turn.pos));
+      if (!after) continue;
+      if (row.event === "GATE_APPROVED") {
+        if (auditBlockField(row.block, "User Input") === null || auditBlockField(row.block, "Autonomous") === "true") continue;
+        theirs.add(`${row.shardIndex}:${row.pos}`);
+      } else if (row.event === "PLAN_APPROVAL_RECORDED") {
+        theirs.add("plan");
+      } else if (
+        GATE_RESOLUTION_EVENTS.has(row.event) || row.event === "QUESTION_UNANSWERED" ||
+        (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous")
+      ) {
+        return false;
+      }
+    }
+    return theirs.size === 0 || (theirs.size === 1 && isReplyTurn(turn));
+  } catch {
+    return false;
+  }
+}
+
 // A person has spoken since the last decision, and that is on record: a human
 // turn exists (an empty ledger, which reads as acted for older workflows, does
 // not count). Lowering a check the person asked for in their own words needs it.
 // With `replies`, the turn must be a reply, not only a command to AIDLC; with
 // `requests`, anything but a question about a switch. With `intent` and
-// `space`, the turn must be on that work's record.
+// `space`, the turn must be on that work's record. With `outlivesApproval`,
+// for what the message asks for (a setter, a stop), the approval given in it
+// and the run's own approvals do not use it up (requestOutlivesItsApproval).
+// An approval or an answer never reads it that way: each needs a reply of its own.
 export function personSpokeSinceGate(
   projectDir: string,
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; outlivesApproval?: boolean } = {},
 ): boolean {
-  if (humanTurnState(projectDir, options) !== "acted") return false;
+  if (
+    humanTurnState(projectDir, options) !== "acted" &&
+    !(options.outlivesApproval === true && requestOutlivesItsApproval(projectDir, options.intent, options.space))
+  ) {
+    return false;
+  }
   try {
     return readAuditShardEvents(projectDir, options.intent, options.space).some((row) =>
       options.replies ? isReplyTurn(row) : options.requests ? isRequestTurn(row) : row.event === "HUMAN_TURN");
@@ -11051,7 +11102,8 @@ export function personSpokeSinceGate(
 // a switch. An unattended driver has no person behind it. Turning one of the
 // person's checks off from the agent's command needs this, wherever it is asked.
 export function personAskedSinceGate(projectDir: string): boolean {
-  return process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true });
+  return process.env.AIDLC_UNATTENDED !== "1" &&
+    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
 }
 
 // The person's checks a setter switches for this piece of work, and the values

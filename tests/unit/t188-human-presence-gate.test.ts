@@ -1617,3 +1617,133 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     });
   });
 });
+
+// One message can approve and ask for more ("approve, and turn plan approval
+// off"), or say stop while the run approves on its own. The approval given in
+// that message, and the run's own approvals, leave the rest of it standing;
+// any other decision after it uses it up, and an approval or an answer still
+// needs a reply of its own.
+describe("t188: what the person's message asks for outlives the approval given in it", () => {
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+  });
+
+  afterEach(() => cleanupTestProject(proj));
+
+  function setter(args: string[]): { rc: number; out: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  function openGate(): string {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    return slug;
+  }
+
+  const planApproval = () => /- \*\*Plan Approval\*\*: (\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
+
+  test("approve, and turn plan approval off: both halves of the one message are carried out", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking.");
+    expect(planApproval()).toBe("off");
+  });
+
+  test("approve the plan, and turn plan approval off: one plan answer for several Units counts once", () => {
+    recordHumanTurn(proj);
+    for (const unit of ["core", "extra"]) {
+      appendAuditEntry("PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan", "Asked By": "engine", Unit: unit }, proj);
+    }
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(planApproval()).toBe("off");
+  });
+
+  test("the same request after an approval from an earlier message waits for the person to say it again", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    // Their next message answered a question: it is spent, and the approval was not from it.
+    const next = field(proj, "Current Stage");
+    expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
+    recordHumanTurn(proj);
+    expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
+    const refused = setter(["config-change", "--plan-approval", "off"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("No reply from the person has arrived since the last decision");
+    expect(planApproval()).not.toBe("off");
+    // The step the refusal names: they ask, and the setter runs.
+    recordHumanTurn(proj);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+  });
+
+  test("an approval after a message that was only a command to AIDLC came from the reply before it, so the command carries nothing more", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const refused = setter(["config-change", "--plan-approval", "off"]);
+    expect(refused.rc).not.toBe(0);
+    expect(planApproval()).not.toBe("off");
+  });
+
+  test("the approval itself still needs a reply of its own: one message never approves two gates", () => {
+    const slug = openGate();
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const second = openGate();
+    expect(second).not.toBe(slug);
+    expect(guarded(proj, ["approve", second, "--user-input", "Approve"]).rc).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  test("a stop while the run approves on its own is theirs: the park goes through, and next says parked", () => {
+    setAutonomous(proj);
+    recordHumanTurn(proj);
+    const stage = field(proj, "Current Stage");
+    appendAuditEntry("GATE_APPROVED", { Stage: stage, Unit: "core", Checkpoint: "Construction Unit Approval", Autonomous: "true" }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: stage }, proj);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Parked By**: person");
+    const next = spawnSync(BUN, [ORCHESTRATE, "next", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(JSON.parse(next.stdout).kind, `${next.stdout}${next.stderr}`).toBe("parked");
+  });
+
+  test("a stop the autonomy grant or an answer used up waits for the person to say it again", () => {
+    setAutonomous(proj);
+    recordHumanTurn(proj);
+    appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: field(proj, "Current Stage"), Autonomous: "true" }, proj);
+    const granted = guarded(proj, ["park"]);
+    expect(granted.rc).not.toBe(0);
+    expect(granted.out).toContain("no reply from the person is on record");
+    recordHumanTurn(proj);
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "chosen by the agent" }, proj);
+    expect(guarded(proj, ["park"]).rc).not.toBe(0);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).not.toContain("- **Parked**:");
+    // The step it names: when the person asks to stop, park then.
+    recordHumanTurn(proj);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+  });
+});

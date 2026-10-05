@@ -436,11 +436,12 @@ export function applyIntentSettings(
     die(guardSwitchRefusal(lowering[0], "config"));
   }
   // Lowering a fence is the person's call. Their typed switch carries it out,
-  // and so does this setter when a person has spoken since the last decision:
+  // and so does this setter when a person has spoken since the last decision
+  // (the approval they gave in the same message leaves the rest of it standing):
   // the conductor runs what they asked for, in their own words.
   if (
     lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
-    !personSpokeSinceGate(projectDir, { requests: true })
+    !personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
   ) {
     // A question about the switch ("skip plan approval?") asks for nothing.
     die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
@@ -449,7 +450,8 @@ export function applyIntentSettings(
   const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
   // Asked for in the chat (not typed): each check it turns off is said in one
   // line, in their words, with the way back, instead of the setter's own line.
-  const askedInChat = lowering.length > 0 && !typedByPerson && personSpokeSinceGate(projectDir, { requests: true });
+  const askedInChat = lowering.length > 0 && !typedByPerson &&
+    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
   const saidAsAsked = (key: string): boolean =>
     askedInChat && key !== "plan-approval" && lowering.some((item) => item.key === key);
 
