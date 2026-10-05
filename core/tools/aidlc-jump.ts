@@ -8,6 +8,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
 import { stageLabel } from "./aidlc-validity.ts";
 import {
+  addPendingPersonLines,
   type CheckboxState,
   countCheckboxes,
   emitError,
@@ -29,6 +30,7 @@ import {
   reviewArtifactEntries,
   resolveProjectDir,
   resolveStage,
+  resolveWorkflowSelection,
   type StageEntry,
   setCheckbox,
   removeField,
@@ -173,6 +175,17 @@ export function forwardJumpNotice(
   const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   return `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}. ` +
     `To go back, type \`${entrySkillInvocation()} --stage ${cameFrom}\`.`;
+}
+
+// A backward jump says where it moved and how to return: the forward jump back
+// to the step the person was on. It rides the next step the agent speaks from,
+// because the backward instruction stays as the guard recovery knows it.
+export function backwardJumpNotice(
+  target: { slug: string; name: string; plugin?: string },
+  from: { slug: string; name: string; plugin?: string },
+): string {
+  return `Moved back to ${stageLabel(target, target.slug) ?? "that stage"}. ` +
+    `To return to ${stageLabel(from, from.slug) ?? "where you were"}, type \`${entrySkillInvocation()} --stage ${from.slug}\`.`;
 }
 
 if (import.meta.main) {
@@ -686,6 +699,9 @@ function handleExecute(args: string[]): void {
   const notice = direction === "forward"
     ? forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom)
     : undefined;
+  const from = graph.find((node) => node.slug === cameFrom);
+  const session = direction === "backward" && from ? resolveWorkflowSelection(pd).sessionId : null;
+  if (session && from) addPendingPersonLines(pd, session, [backwardJumpNotice(targetStage, from)]);
 
   console.log(
     JSON.stringify({
