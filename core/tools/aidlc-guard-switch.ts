@@ -340,6 +340,34 @@ export function applyIntentSettings(
       }
     }
   }
+  // The person's Guard Policy word covers every check: this work's own
+  // per-check entries go with it (below), except a check this command names.
+  // A check they had kept on that the word turns off is a lowering too.
+  const wholePolicy = ccRequest?.source === "you" && changeControl !== null;
+  const namedFences = new Set(fenceRequests.map((request) => request.fence));
+  const withoutPerCheckEntries = (text: string): string => {
+    const off = parseGuardsOffLine(getField(text, GUARDS_OFF_FIELD));
+    const on = parseGuardsOnLine(getField(text, GUARDS_ON_FIELD));
+    const keepOff = off.filter((fence) => namedFences.has(fence));
+    const keepOn = on.filter((fence) => namedFences.has(fence));
+    let updated = text;
+    if (keepOff.length !== off.length) updated = setGuardsOffLine(updated, keepOff);
+    if (keepOn.length !== on.length) updated = setGuardsOnLine(updated, keepOn);
+    return updated;
+  };
+  if (wholePolicy) {
+    const policyContent = setGuardPolicyLine(content, formatGuardPolicy(changeControl, ccRequest.source));
+    const cleared = withoutPerCheckEntries(policyContent);
+    if (cleared !== policyContent) {
+      const now = resolveFences(cc, content);
+      const after = resolveFences(resolveGuardPolicy(projectDir, cleared, { selection }), cleared);
+      for (const fence of SWITCHABLE_GUARD_FENCES) {
+        if (!namedFences.has(fence) && now[fence].value === "on" && after[fence].value === "off") {
+          lowering.push({ key: `guard.${fence}`, value: "off" });
+        }
+      }
+    }
+  }
   // Only a value below the one in force lowers anything: off to relaxed raises
   // the checks, and needs no one's word.
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off") &&
@@ -472,6 +500,34 @@ export function applyIntentSettings(
         }
       } else if (!scopeDefault("guard-policy")) {
         lines.push(`Guard Policy is already ${line}`);
+      }
+    }
+  }
+  if (wholePolicy) {
+    const cleared = withoutPerCheckEntries(content);
+    if (cleared !== content) {
+      const policy = resolveGuardPolicy(projectDir, content, { selection });
+      const before = resolveFences(policy, content);
+      const after = resolveFences(policy, cleared);
+      content = cleared;
+      for (const fence of SWITCHABLE_GUARD_FENCES) {
+        if (before[fence].value === after[fence].value) continue;
+        const fenceFields = {
+          Guard: fence, Scope: getField(content, "Scope") ?? "", Source: ccRequest.source,
+          ...(askedIn && after[fence].value === "off" ? { "Person Reply": askedIn } : {}),
+        };
+        audit.push(
+          after[fence].value === "off"
+            ? { eventType: "GUARD_DISABLED", fields: fenceFields }
+            : { eventType: "GUARD_RESTORED", fields: fenceFields },
+        );
+        if (!saidAsAsked(`guard.${fence}`)) {
+          lines.push(
+            after[fence].value === "off"
+              ? `Fence ${fence} is off for this piece of work (logged; back on for the next one)`
+              : `Fence ${fence} is back on for this piece of work`,
+          );
+        }
       }
     }
   }

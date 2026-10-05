@@ -570,7 +570,10 @@ For the three switchable fences, `config-change --guard.<fence> off|on` writes
 the `Guards Off` or `Guards On` line in canonical order as
 `<comma list> (set by you)` or `none`, and one `GUARD_DISABLED` or
 `GUARD_RESTORED` row. Setting `on` can raise a policy-lowered fence and records
-that override in `Guards On` with `GUARD_RESTORED`. `/aidlc --status` names each fence
+that override in `Guards On` with `GUARD_RESTORED`. A Guard Policy word the person
+sets (source `you`) clears both lines, except a fence the same command names,
+with one `GUARD_DISABLED` or `GUARD_RESTORED` row per fence that changes; a fence
+it turns off counts as a lowering. `/aidlc --status` names each fence
 the person or an environment kill switch turned off on its `Checks off:` line,
 grouped by where the setting came from and worded by `fenceSourceLabel` as
 `formatFence` words it: `set by you` or `env <VAR>`. A fence the Guard Policy

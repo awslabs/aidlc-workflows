@@ -1347,7 +1347,10 @@ by you)` into `aidlc-state.md` and one `GUARD_DISABLED` audit row carrying
 `Guard`, `Scope`, and `Source`; switching it back on removes it from that list and
 writes `GUARD_RESTORED`. Setting `on` raises a policy-lowered fence, records it in
 `- **Guards On**: <comma list> (set by you)`, and writes `GUARD_RESTORED` with the
-same fields. Repeating a setting already in force is a no-op that says so;
+same fields. Setting the Guard Policy word yourself clears both lines (except a
+fence the same command names), writing the same rows for each fence that
+changes, so `off` leaves none on and `strict` leaves none off; a single-fence
+switch after it still applies. Repeating a setting already in force is a no-op that says so;
 setting `on` for a policy-lowered fence is not a no-op. Neither state line accepts
 human presence, and a persisted human-presence entry is ignored.
 `/aidlc --status` prints a `Checks off:` line naming each one you or an
