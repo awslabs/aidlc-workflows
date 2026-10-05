@@ -1222,4 +1222,27 @@ describe("t343 a batch checkpoint finds the session it runs in", () => {
     expect(approved.code, approved.out).toBe(0);
     expect(gates(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
   });
+
+  // With no session to find, the agent retries with the session it asked in,
+  // and the person's recorded reply is never asked for again.
+  test("with no session to find, a recorded batch reply goes through on a retry with --session", () => {
+    const pd = fixture();
+    converge(pd);
+    const named = "t343-named-session";
+    const outside = { AIDLC_SESSION_OVERRIDE: "", AIDLC_SESSION_OVERRIDE_SOURCE: "" };
+    const batch = ["--batch", "1", "--units", BATCH.join(",")];
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", ...batch, "--session", named], outside);
+    expect(asked.code, asked.out).toBe(0);
+    choice(pd, named, "Approve");
+    const missed = tool(pd, "bolt", ["swarm-checkpoint", "--action", "approve", ...batch, "--user-input", "Approve"], outside);
+    expect(missed.code).not.toBe(0);
+    expect(missed.out).toContain("Could not tell which session this is.");
+    expect(missed.out).not.toContain("Re-ask");
+    expect(readProtectedResponse(pd, named)).not.toBeNull();
+    const retried = tool(pd, "bolt", [
+      "swarm-checkpoint", "--action", "approve", ...batch, "--user-input", "Approve", "--session", named,
+    ], outside);
+    expect(retried.code, retried.out).toBe(0);
+    expect(gates(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([named]);
+  });
 });

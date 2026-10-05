@@ -1292,6 +1292,9 @@ function handleSetAutonomy(args: string[]): void {
 // the session it runs in, the same way the engine does; `--session` is only an
 // override, so an agent never has to look its own session up. When two
 // sessions claim this process, the resolver's own refusal names the way out.
+// The person's approval or rejection needs it as much as the ask does: with no
+// session to find, the agent retries the same action with the one it asked
+// in, and the reply the person already gave is never asked for again.
 function checkpointSession(pd: string, flagged: string | undefined, required: boolean): string {
   const session = flagged?.trim() || resolveInvokingSessionId(pd) || "";
   if (required && !session) {
@@ -1330,12 +1333,12 @@ function handleCheckpoint(args: string[]): void {
       break;
     case "approve":
       result = approveConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, false),
+        pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
-        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, false),
+        pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
       );
       break;
     default:
@@ -1361,10 +1364,12 @@ function handleSwarmCheckpoint(args: string[]): void {
       result = askSwarmCheckpoint(pd, batch, units, checkpointSession(pd, flags.session, true));
       break;
     case "approve":
-      result = approveSwarmCheckpoint(pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, false));
+      result = approveSwarmCheckpoint(
+        pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+      );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, false));
+      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
       break;
     default:
       error("swarm-checkpoint --action must be status, ask, approve or reject");

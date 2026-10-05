@@ -1893,6 +1893,31 @@ describe("t341 a checkpoint finds the session it runs in", () => {
     expect(readProtectedQuestion(pd, "t341-owner")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // When no session can be found, the agent retries the same action with the
+  // session it asked in; the reply the person already gave is never asked again.
+  test.each([
+    ["approve", "Approve", "GATE_APPROVED"],
+    ["reject", "Request Changes", "GATE_REJECTED"],
+  ] as const)("with no session to find, a recorded reply to %s goes through on a retry with --session", (action, reply, event) => {
+    const pd = project();
+    pass(pd);
+    const { AIDLC_SESSION_OVERRIDE: _session, AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...outside } = process.env;
+    const named = "t341-named-session";
+    const asked = cli(pd, "bolt", route("ask", "--session", named), outside);
+    expect(asked.code, asked.out).toBe(0);
+    submitCommandChoice(pd, named, reply, outside);
+    const answer = ["--user-input", reply, ...(action === "reject" ? ["--reason", "rename the store"] : [])];
+    const missed = cli(pd, "bolt", route(action, ...answer), outside);
+    expect(missed.code).not.toBe(0);
+    expect(missed.out).toContain("Could not tell which session this is.");
+    expect(missed.out).not.toContain("Re-ask");
+    expect(readProtectedResponse(pd, named)).not.toBeNull();
+    const retried = cli(pd, "bolt", route(action, ...answer, "--session", named), outside);
+    expect(retried.code, retried.out).toBe(0);
+    expect(readAuditShardEvents(pd).filter((row) => row.event === event)
+      .map((row) => auditBlockField(row.block, "Session"))).toEqual([named]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The checkpoint finds its own session, so no shipped step or doc may tell the
   // agent to pass one: an agent told to pass one goes looking for it, and on Kiro
   // that was a permission prompt to read the person's environment.
