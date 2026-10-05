@@ -771,40 +771,37 @@ function runtimePathSurfaces(platform: NodeJS.Platform): string {
 function runtimeRemediation(
   name: "bun" | "aidlc",
   platform: NodeJS.Platform,
+  harness: ModelHarness,
   status: "interactive-only" | "missing" = "missing",
   foundAt?: string,
 ): string {
+  const tool = HARNESS_PRODUCT_NAMES[harness];
   if (status === "interactive-only" && platform !== "win32") {
-    // Found on this shell's PATH: a harness started from a terminal hands that
+    // Found on this shell's PATH: a tool started from a terminal hands that
     // PATH to its hooks, so only a desktop or service launch can miss it. The
     // baseline reads no shell rc file, so editing one never clears this row.
-    const channel = name === "bun"
-      ? "This project is a copy-channel projection, so its hooks run through Bun; " +
-        "a native install runs them through the aidlc command instead. "
-      : "";
     const dir = foundAt ? dirname(foundAt) : name === "bun" ? "~/.bun/bin" : "~/.local/bin";
-    return `${channel}A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. ` +
-      `If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart the harness. ` +
+    return `Nothing needs changing when you start ${tool} from a terminal: it hands that terminal's PATH to AI-DLC's hooks. ` +
+      `If you start it from a desktop icon, the dock, or a service and AI-DLC's hooks do not run, add ${dir} to ${runtimePathSurfaces(platform)}, then restart ${tool}. ` +
       "Editing .bashrc or .zshrc does not change this check.";
   }
   if (name === "bun") {
-    // Only a copy-channel projection runs its hooks through bun; a native
-    // install routes them through `aidlc`. Say so, because a user who never
-    // chose the copy channel cannot otherwise tell why Bun is being asked for.
-    const channel =
-      "This project is a copy-channel projection, so its hooks run through Bun; " +
-      "a native install runs them through the aidlc command instead. ";
+    // Only a copied AI-DLC runs its hooks through bun; an installed one routes
+    // them through `aidlc`. Say so, because a user who never chose to copy it
+    // cannot otherwise tell why Bun is being asked for.
+    const why = "AI-DLC in this project runs on Bun (the installed aidlc command does not need it). ";
     return platform === "win32"
-      ? `${channel}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
-      : `${channel}Install Bun, then add ~/.bun/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
+      ? `${why}Install Bun, then add its install directory to the Windows User or Machine PATH, not only a shell profile.`
+      : `${why}Install Bun, then add ~/.bun/bin to the PATH ${tool} starts with (${runtimePathSurfaces(platform)}), not only .zshrc or .bash_profile.`;
   }
   return platform === "win32"
     ? "Add the aidlc command directory to the Windows User or Machine PATH."
-    : `Add ~/.local/bin to the login-independent PATH the harness inherits (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
+    : `Add ~/.local/bin to the PATH ${tool} starts with (${runtimePathSurfaces(platform)}), not only an interactive shell rc file.`;
 }
 
 function binaryProbe(
   name: "bun" | "aidlc",
+  harness: ModelHarness,
   required: boolean,
   baselinePath: string,
   interactivePath: string,
@@ -831,14 +828,14 @@ function binaryProbe(
       required,
       status: "interactive-only",
       interactivePath: interactive,
-      remediation: runtimeRemediation(name, platform, "interactive-only", interactive),
+      remediation: runtimeRemediation(name, platform, harness, "interactive-only", interactive),
     };
   }
   return {
     name,
     required,
     status: "missing",
-    remediation: runtimeRemediation(name, platform),
+    remediation: runtimeRemediation(name, platform, harness),
   };
 }
 
@@ -1021,8 +1018,8 @@ export function probeRuntime(
     baselinePath,
     commandFiles,
     binaries: [
-      binaryProbe("bun", requirements.bun, baselinePath, interactivePath, options),
-      binaryProbe("aidlc", requirements.aidlc, baselinePath, interactivePath, options),
+      binaryProbe("bun", harness, requirements.bun, baselinePath, interactivePath, options),
+      binaryProbe("aidlc", harness, requirements.aidlc, baselinePath, interactivePath, options),
     ],
     cli: options.includeHarnessCli === false
       ? {

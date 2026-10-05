@@ -738,7 +738,7 @@ AI-DLC doctor
 
 Machine
   warn  Runtime hook PATH: bun is on this shell's PATH (/home/user/.bun/bin/bun) but not on the system-wide PATH
-        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add /home/user/.bun/bin to the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf, then restart the harness. Editing .bashrc or .zshrc does not change this check.
+        fix: Nothing needs changing when you start Claude Code from a terminal: it hands that terminal's PATH to AI-DLC's hooks. If you start it from a desktop icon, the dock, or a service and AI-DLC's hooks do not run, add /home/user/.bun/bin to the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf, then restart Claude Code. Editing .bashrc or .zshrc does not change this check.
   warn  Update: update check unavailable while offline
         fix: run `bun .claude/tools/aidlc.ts update --check`
   ok    4 checks passed

@@ -411,7 +411,10 @@ describe("t294 runtime diagnostics", () => {
       `Runtime hook PATH: bun is on this shell's PATH (${join(project, "interactive-bin", "bun")}) but not on the system-wide PATH`,
     );
     if (process.platform !== "win32") {
-      expect(row?.fix).toContain("A harness you start from a terminal normally hands that terminal's PATH to its hooks");
+      expect(row?.fix).toContain("Nothing needs changing when you start Claude Code from a terminal: it hands that terminal's PATH to AI-DLC's hooks.");
+      // The person's tool by name, never AI-DLC's own words for how it ships.
+      expect(row?.fix).not.toContain("harness");
+      expect(row?.fix).not.toContain("copy-channel");
       // The directory named is the one bun was found in, not a default.
       expect(row?.fix).toContain(`add ${join(project, "interactive-bin")} to `);
       expect(row?.fix).toContain("Editing .bashrc or .zshrc does not change this check.");
@@ -713,7 +716,7 @@ describe("t294 runtime diagnostics", () => {
       darwin: expect.stringMatching(/^(?!.*\/etc\/environment).*\/etc\/paths\.d/),
       linux: expect.stringMatching(/\/etc\/environment.*\/etc\/login\.defs.*environment\.d/),
       bun: expect.stringMatching(
-        /^This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead\. .*\/etc\/environment/,
+        /^Nothing needs changing when you start Claude Code from a terminal: .*\/etc\/environment/,
       ),
     });
   });
@@ -5681,7 +5684,7 @@ process.exit(0);
     }
   });
 
-  test("a bun-requiring projection names the copy channel in its runtime remediation", () => {
+  test("a bun-requiring copy says why Bun is needed, in the person's words", () => {
     const project = temp("aidlc-t294-copy-runtime-");
     mkdirSync(join(project, ".git"));
     cpSync(join(DIST, "claude"), project, { recursive: true });
@@ -5701,8 +5704,9 @@ process.exit(0);
     }));
     const bunIssue = issues.find((issue) => issue.id.includes("bun"));
     expect(bunIssue, issues.map((issue) => issue.id).join(",")).toBeDefined();
-    expect(bunIssue?.remediation).toContain("copy-channel projection");
-    expect(bunIssue?.remediation).toContain("native install runs them through the aidlc command");
+    expect(bunIssue?.remediation).toContain("AI-DLC in this project runs on Bun (the installed aidlc command does not need it).");
+    expect(bunIssue?.remediation).not.toContain("copy-channel");
+    expect(bunIssue?.remediation).not.toContain("harness");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {

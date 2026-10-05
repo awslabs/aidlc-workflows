@@ -1058,6 +1058,11 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
         .toContain(`${aidlcToolInvocation("runtime")} compile`);
       expect(finding?.remedy, "remedy must not send the user to the stage-graph compiler")
         .not.toContain(aidlcToolInvocation("graph"));
+      // What the person reads names their next step, not AI-DLC's hook names.
+      expect(finding?.remedy).toContain("AI-DLC's hooks are not running here: doctor's hooks check says what to do.");
+      for (const internal of ["rebuild-stage-graph", "harness", "heartbeat"]) {
+        expect(finding?.remedy).not.toContain(internal);
+      }
     }
   });
 
