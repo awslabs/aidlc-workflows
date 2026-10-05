@@ -1436,10 +1436,16 @@ describe("t305 real receipt and guard flows", () => {
     review(project, record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(project, "shared.ts"), "export const s=2\n"); review(project, record, "beta", [{ path: "shared.ts" }]);
     const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
     // alpha's shared path moved only to what beta's review recorded; beta's own bytes never moved.
-    expect([...freshReviewReceipts(project, state, stage).unitSourceAttributed]).toEqual(["alpha"]);
-    // An edit after beta's review matches no review, so nothing is attributed.
+    const built = freshReviewReceipts(project, state, stage);
+    expect([...built.unitSourceAttributed]).toEqual(["alpha"]);
+    expect([...built.unitSourceMoved.keys()]).toEqual([]);
+    // An edit after beta's review matches no review, so nothing is attributed:
+    // both Units' reviewed code moved, and each owes its next review pass.
     writeFileSync(join(project, "shared.ts"), "export const s=3\n");
-    expect([...freshReviewReceipts(project, state, stage).unitSourceAttributed]).toEqual([]);
+    const edited = freshReviewReceipts(project, state, stage);
+    expect([...edited.unitSourceAttributed]).toEqual([]);
+    expect([...edited.unitSourceMoved.keys()].sort()).toEqual(["alpha", "beta"]);
+    expect(edited.unitSourceMoved.get("alpha")).toEqual({ nextIteration: 2, recoverySpent: false });
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {

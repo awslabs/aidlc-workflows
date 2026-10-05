@@ -14248,6 +14248,10 @@ export interface FreshReviewReceipts {
    *  attempt recorded for paths it claims: another Unit's own reviewed build,
    *  not an edit after the review. Their review's source binding still holds. */
   unitSourceAttributed: Set<string>;
+  /** Units whose reviewed source moved to bytes no review in this attempt
+   *  recorded (an edit outside any review), under every Guard Policy and
+   *  whether or not a newer claim shields the path, with their next review. */
+  unitSourceMoved: Map<string, StaleReviewProgress>;
   /** Effective stage-entry source baseline for unclaimed-path verification. */
   sourceBaseline: SourceBaselineResult;
   /** Current source listing from the guard's single workspace walk, when needed. */
@@ -18246,6 +18250,7 @@ export function freshReviewReceipts(
     unitStale: new Set(),
     freshUnitClaims: new Map(),
     unitSourceAttributed: new Set(),
+    unitSourceMoved: new Map(),
     sourceBaseline: { state: "legacy" },
     currentSourceListing: null,
     stageStaleProgress: null,
@@ -18862,6 +18867,7 @@ export function freshReviewReceipts(
 
   const freshUnitClaims = new Map<string, SourceClaimModel>();
   const unitSourceAttributed = new Set<string>();
+  const unitSourceMoved = new Map<string, StaleReviewProgress>();
   if (sourceFreshnessApplies && currentSourceListing !== null) {
     const newerFreshClaims: SourceClaimModel[] = [];
     // What each newer validated review recorded, newest first: a path it claims
@@ -18955,6 +18961,9 @@ export function freshReviewReceipts(
             movedPathKeys.push(pathKey);
           }
           if (movedAtAll && allReviewedByNewer) unitSourceAttributed.add(unit);
+          if (movedAtAll && !allReviewedByNewer) {
+            unitSourceMoved.set(unit, { nextIteration: receipt.iteration + 1, recoverySpent: receipt.recovery });
+          }
           newerReviewedSources.push({ claims: claimModel, listing: reviewedListing });
           if (movedPathKeys.length > 0) {
             if (isRelaxed()) {
@@ -19102,6 +19111,7 @@ export function freshReviewReceipts(
     unitStale,
     freshUnitClaims,
     unitSourceAttributed,
+    unitSourceMoved,
     sourceBaseline,
     currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
     stageStaleProgress,

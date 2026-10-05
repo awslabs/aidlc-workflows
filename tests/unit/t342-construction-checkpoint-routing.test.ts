@@ -123,7 +123,12 @@ function next(p: string) {
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as {
     kind: string; stage: string; unit?: string; gate?: boolean; batch?: number;
-    construction_checkpoint?: { kind: string; unit: string; human_required: boolean; verification_command: string | null; command_authorized: boolean };
+    construction_checkpoint?: {
+      kind: string; unit: string; human_required: boolean; verification_command: string | null; command_authorized: boolean;
+      ready?: boolean; rereview?: { stage: string; iteration: number; command: string };
+      rechecked?: { verdict: string; approved_before: boolean };
+    };
+    reviewer?: string;
     construction_policy?: { offer_autonomy: boolean; completion_only: boolean; human_completion_required: boolean };
     artifact_reuse?: { decision: string; unit: string };
     ask_type?: string; narration?: string; plan_approval?: { status?: string; feedback?: string };
@@ -2177,5 +2182,67 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const p = fixture();
     expect(next(p)).toMatchObject({ stage: "functional-design", unit: "alpha" });
     expect(redo(p)).toContain("execute --target functional-design --direction redo");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // One review through the logger, as a real run records it: the request, the
+  // reviewer's file in the slot it names, then the verdict.
+  function reviewThroughLog(p: string, args: string[]) {
+    const requested = tool(p, "log", args);
+    if (requested.status !== 0) return { ...requested, request: null };
+    const request = JSON.parse(requested.stdout.trim().split(/\r?\n/).at(-1)!) as {
+      recovery?: string; reviewFile: string; change_notices?: string[];
+    };
+    const iteration = args[args.indexOf("--iteration") + 1];
+    mkdirSync(dirname(join(p, request.reviewFile)), { recursive: true });
+    writeFileSync(join(p, request.reviewFile), `**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n` +
+      `**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`);
+    const recorded = tool(p, "log", [...args, "--verdict", "READY"]);
+    expect(recorded.status, recorded.out).toBe(0);
+    return { ...requested, request };
+  }
+
+  // Classic settings: one review pass per stage, Guard Policy off. alpha's code
+  // is edited after the person approved it; the next step re-checks it with no
+  // question, and the person is asked once.
+  test("an approved Unit whose code changed is re-checked at once and asked about once", () => {
+    const p = fixture();
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Review Override**: none", "- **Review Override**: advisory")
+      .replace("- **Change Control**: strict", "- **Guard Policy**: off"));
+    for (const slug of stages) {
+      cover(p, "alpha", [slug], false);
+      const reviewed = reviewThroughLog(p, [
+        "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+      ]);
+      expect(reviewed.status, reviewed.out).toBe(0);
+      cover(p, "alpha", [slug]);
+    }
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    const floor = latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha");
+    writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+
+    const beat = next(p);
+    const recheck = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", "2"];
+    const rechecked = reviewThroughLog(p, recheck);
+    expect(rechecked.status, rechecked.out).toBe(0);
+    expect(rechecked.request?.recovery).toBe("stale-receipt");
+    expect(rechecked.request?.change_notices).toBeUndefined();
+    expect(beat.construction_checkpoint?.unit, JSON.stringify(beat)).toBe("alpha");
+    expect(beat.construction_checkpoint?.rereview?.command).toContain(recheck.join(" "));
+    expect(beat.reviewer).toBe(REVIEWER);
+    expect(beat.protocol_modules).toEqual(["reviewer", "construction"]);
+
+    const asked = next(p);
+    expect(asked.construction_checkpoint).toMatchObject({
+      unit: "alpha", ready: true, rechecked: { verdict: "READY", approved_before: true },
+    });
+    expect(asked.construction_checkpoint?.rereview).toBeUndefined();
+    expect(asked.protocol_modules).toEqual(["construction"]);
+    approve(p, "alpha");
+    expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+    expect(jumped(p)).toBe(0);
+    expect(latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha")).toBe(floor);
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

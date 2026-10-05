@@ -1270,7 +1270,7 @@ describe("t341 review evidence is independent of project check success", () => {
     }
   }
 
-  for (const changeControl of ["strict", "relaxed"]) {
+  for (const changeControl of ["strict", "relaxed", "off"]) {
     test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit asks again (${changeControl})`, () => {
       const dir = project();
       writeFileSync(seededStateFile(dir), setField(setField(state(), "Review Override", "advisory"),
@@ -1288,9 +1288,16 @@ describe("t341 review evidence is independent of project check success", () => {
       expect(current.errors).toEqual([]);
       expect(current.fingerprint).toBe(approved.fingerprint);
       expect(current.approved).toBe(true);
-      // An edit after that matches no review, so alpha's approval no longer holds.
+      expect(current.rereview).toBeFalsy();
+      // An edit after that matches no review, so alpha's approval no longer holds,
+      // and the checkpoint names the one review that re-checks alpha's code.
       writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 3;\n");
-      expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(false);
+      const edited = resolveConstructionCheckpoint(dir, "alpha", "unit");
+      expect(edited.approved).toBe(false);
+      expect(edited.errors).toEqual(["code-generation: current artifact/source-bound terminal review evidence is required."]);
+      expect(edited.rereview).toMatchObject({ stage: "code-generation", iteration: 2 });
+      expect(edited.rereview?.command).toContain("--unit alpha --iteration 2");
+      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow(edited.rereview!.command);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 

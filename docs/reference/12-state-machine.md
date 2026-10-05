@@ -358,7 +358,11 @@ checkpoint reads the same receipts: when every claimed path that moved since a
 Unit's review now holds exactly the bytes a newer review in the attempt recorded
 for a path it claims (`unitSourceAttributed`), the checkpoint binds that Unit's
 reviewed source, so another Unit's own reviewed build keeps an approved
-checkpoint approved, and any other change asks again.
+checkpoint approved, and any other change asks again. Such a change, one no
+review recorded, puts the Unit in `unitSourceMoved` under every Guard Policy.
+With checkpoints on, the logger grants that Unit its one `stale-receipt`
+recovery for it, and the checkpoint carries the request as `rereview`, so the
+code is re-checked before the person is asked once.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every

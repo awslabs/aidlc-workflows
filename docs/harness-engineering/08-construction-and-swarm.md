@@ -130,9 +130,11 @@ autonomy grant or a silent switch to swarm execution.
 ## Checkpoint and approval evidence
 
 When `run-stage` carries `construction_checkpoint`, the Unit body and reviews
-have already run. Route it before body/reviewer/gate logic. With
-`command_authorized: false`, ask the verification-command question and complete
-the human decision/answer/setter flow before any `verify`, then re-run `next`.
+have already run; a `rereview` field names the one re-check of code changed
+since its review, run first without asking. Route it before body/reviewer/gate
+logic. With `command_authorized: false`, ask the verification-command question
+and complete the human decision/answer/setter flow before any `verify`, then
+re-run `next`.
 Otherwise run `bolt checkpoint --action verify --unit <unit> --kind <unit|skeleton>`;
 it executes the recorded, human-authorized command, not text selected at verify
 time. Approve only current verified evidence and show "Verified with

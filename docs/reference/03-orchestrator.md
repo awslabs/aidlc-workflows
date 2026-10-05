@@ -544,7 +544,9 @@ working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with
 `construction_checkpoint`: `{kind, unit, stages, fingerprint, ready, verified,
 approved, human_required, verification_command, command_authorized, errors,
-proof_path}`. `verification_command` is the full canonical recorded command,
+proof_path}`, plus `rereview` (`{stage, reviewer, iteration, command}`) when only
+the Unit's reviewed code changed since its review, and `rechecked`
+(`{verdict, approved_before}`) when the current review is that re-check. `verification_command` is the full canonical recorded command,
 never an abbreviated display label. A skeleton checkpoint requires an actual end-to-end project check,
 current artifact/source/attempt-bound proof,
 and a real human approval. An ordinary Unit checkpoint requires verification
@@ -589,7 +591,9 @@ proof file cannot verify a Unit.
 through the team path, then `swarm_checkpoint` or `construction_checkpoint`
 through their checkpoint commands before body/reviewer/settle handling. It never
 regenerates a finished Unit because the directive says `run-stage`. Checkpoint
-approval/rejection returns to `next`, not whole-stage report-approval. Missing/stale
+approval/rejection returns to `next`, not whole-stage report-approval. A
+`rereview` is run at once, without a question, and the re-checked checkpoint is
+one approval question with no learnings question. Other missing/stale
 evidence is repaired through its owning review/receipt procedure, consulting the
 human as needed; verification must never be invented. The
 [checkpoint commands](../guide/12-cli-commands.md#aidlc-engine-bolt-checkpoint-verify-and-approve-a-completed-unit)

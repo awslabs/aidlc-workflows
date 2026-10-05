@@ -2812,10 +2812,15 @@ function handleReview(args: string[]): void {
           single: flags.single === "true",
         })
       : null;
+    // A review of a Unit whose code changed after its review, with checkpoints
+    // on, re-checks that change: it is reviewed, not accepted as a change.
+    const recheck = flags.unit !== undefined &&
+      getField(state, "Construction Checkpoints") === "enabled" &&
+      receipts?.unitSourceMoved.has(flags.unit) === true;
     if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
       governedChangeControl(pd, state, { intent, space });
       notices.push(...recordAcceptedChanges(pd, [
-        ...(receipts?.acceptedChanges ?? []),
+        ...(receipts?.acceptedChanges ?? []).filter((change) => !recheck || change.unit !== flags.unit),
         ...(summaryEvidence.ok ? summaryEvidence.acceptedChanges ?? [] : []),
       ], { intent, space }));
     }
@@ -2928,11 +2933,18 @@ function handleReview(args: string[]): void {
           (flags.unit
             ? receipts.unitStale.has(flags.unit)
             : receipts.stageStale);
+        // With Construction checkpoints on, a Unit whose reviewed code changed
+        // outside any review must be reviewed again before its checkpoint, under
+        // every Guard Policy: that is the one recovery pass.
+        const unitSourceScopeStale =
+          receipts !== null && flags.unit !== undefined && !artifactScopeStale &&
+          getField(state, "Construction Checkpoints") === "enabled" &&
+          receipts.unitSourceMoved.has(flags.unit);
         const scopeStale =
           process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
           fields.Workflow === undefined &&
           receipts !== null &&
-          (sourceScopeStale || artifactScopeStale);
+          (sourceScopeStale || artifactScopeStale || unitSourceScopeStale);
         const sourceRecoverySpent =
           sourceScopeStale &&
           (receipts?.sourceRecoverySpent === true ||

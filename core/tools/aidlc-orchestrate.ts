@@ -7736,18 +7736,28 @@ function applyConstructionCheckpointShape(
     proof_path: checkpoint.proof_path,
     verification_command: checkpoint.verification_command,
     command_authorized: checkpoint.command_authorized,
+    ...(checkpoint.rereview ? { rereview: checkpoint.rereview } : {}),
+    ...(checkpoint.rechecked ? { rechecked: checkpoint.rechecked } : {}),
   };
   if (directive.construction_policy) {
     directive.construction_policy.human_completion_required = checkpoint.human_required;
   }
-  delete directive.reviewer;
-  delete directive.review_artifact;
-  delete directive.review_class;
-  delete directive.reviewer_max_iterations;
-  directive.protocol_modules = ["construction"];
+  // A re-check of changed code dispatches the reviewer; any other checkpoint
+  // has had its reviews.
+  if (!checkpoint.rereview) {
+    delete directive.reviewer;
+    delete directive.review_artifact;
+    delete directive.review_class;
+    delete directive.reviewer_max_iterations;
+  }
+  directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
   // A checkpoint the person approves offers one learnings ritual for the
-  // stages it covers, as a stage's own approval gate does.
-  if (directive.ceremony.learnings === "on" && checkpoint.human_required) {
+  // stages it covers, as a stage's own approval gate does. A re-check of
+  // changed code asks only for the approval.
+  if (
+    directive.ceremony.learnings === "on" && checkpoint.human_required &&
+    !checkpoint.rereview && !checkpoint.rechecked
+  ) {
     directive.protocol_modules.push("learnings");
   }
 }
