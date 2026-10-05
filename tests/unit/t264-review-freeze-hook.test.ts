@@ -40,6 +40,7 @@ import {
   test,
 } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { homedir } from "node:os";
 import {
   cpSync,
   existsSync,
@@ -623,6 +624,24 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(targets("Push-Location -StackName s; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
     expect(writeTargets("Bash", { command: "pushd +; echo x > y" }, "/p")
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).toEqual(["/p/y"]);
+    // ~, $HOME and ${HOME} take a backslash and any case, as PowerShell reads them.
+    const home = (process.env.HOME || homedir()).replaceAll("\\", "/").replace(/^[A-Za-z]:/, "");
+    for (const command of [
+      "Set-Content -Path ~\\r\\x -Value v",
+      "Set-Content -Path $HOME\\r\\x -Value v",
+      "Set-Content -Path $home\\r\\x -Value v",
+      "Set-Content -Path $" + "{Home}\\r\\x -Value v",
+      "Set-Location ~\\r; Set-Content -Path x -Value v",
+    ]) {
+      expect(targets(command), command).toContain(`${home}/r/x`);
+    }
+    // POSIX: bash's cd takes +1 as a directory; pushd's +1 and pushd -n stay put.
+    const posix = (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p").map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    expect(posix("cd +1 && echo x > y")).toContain("/p/+1/y");
+    expect(posix("pushd +1 && echo x > y")).toEqual(["/p/y"]);
+    expect(posix("pushd -n d && echo x > y")).toEqual(["/p/y"]);
+    expect(posix("pushd -n -- d && echo x > y")).toEqual(["/p/y"]);
     // The POSIX reading of the same line drops the backslashes.
     expect(writeTargets("Bash", { command: "cd .kiro\\hooks; echo x > y.json" }, "/p")
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");

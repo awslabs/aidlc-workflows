@@ -1120,6 +1120,8 @@ describe("t242 state-transition ownership guard", () => {
       // Order is not modelled: a cd after a write also counts for it, which
       // only refuses more, and only for a protected path.
       ["echo x > hooks/y.json; cd .kiro", 2],
+      // `pushd -n` adds to the stack and stays in the directory.
+      ["pushd -n .kiro; echo x > hooks/y.json", 0],
       ["cd docs && echo x > README.md", 0],
       ["cd src && echo x > hooks/y.json", 0],
     ] as Array<[string, number]>) {
@@ -1144,6 +1146,30 @@ describe("t242 state-transition ownership guard", () => {
       env,
     });
     expect(quoted.status).toBe(2);
+  });
+
+  // bash's cd takes +1 as a directory name (only pushd reads it as a stack
+  // entry), here a link to .kiro. Windows cannot create the link unprivileged.
+  test.skipIf(process.platform === "win32")("runtime integrity reads `cd +1` as the directory +1", () => {
+    const project = createTestProject();
+    projects.push(project);
+    mkdirSync(join(project, ".kiro", "hooks"), { recursive: true });
+    symlinkSync(".kiro", join(project, "+1"));
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd +1 && echo x > hooks/y.json", 2],
+      ["pushd +1 && echo x > hooks/y.json", 0],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
   });
 
   // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
@@ -1183,6 +1209,10 @@ describe("t242 state-transition ownership guard", () => {
       ["execute_pwsh", { command: "Set-Content .kiro\\hooks\\y.json x" }, runtime],
       ["execute_pwsh", { command: "'x' | Tee-Object .kiro\\hooks\\y.json" }, runtime],
       ["execute_pwsh", { command: "Set-Location .kiro\\hooks; Set-Content y.json x" }, runtime],
+      // $HOME, ${HOME} and ~ with backslashes and in any case (HOME is the project's parent).
+      ["execute_pwsh", { command: `Set-Content $HOME\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: "Set-Content $" + `{home}\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: `Set-Content ~\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
     ] as const) {
       const r = runIde(tool_name, tool_input);
       expect(r.status, tool_name).toBe(2);

@@ -1520,10 +1520,15 @@ function shellHome(): string {
 // or null. The quoting is gone by the time a word gets here and a quoted `~` is
 // not expanded, so callers keep the literal reading of a `~` word beside this
 // one; a `$HOME` word has no literal reading (a word with `$` resolves to none).
-function homeReading(word: string): string | null {
+function homeReading(word: string, powerShell = false): string | null {
+  // PowerShell takes \ as a separator and its variable names ignore case.
+  const text = powerShell ? word.replaceAll("\\", "/") : word;
   const braced = "$" + "{HOME}";
   for (const prefix of ["~", "$HOME", braced]) {
-    if (word === prefix || word.startsWith(`${prefix}/`)) return join(shellHome(), word.slice(prefix.length));
+    const head = text.slice(0, prefix.length);
+    if (!(powerShell ? head.toUpperCase() === prefix.toUpperCase() : head === prefix)) continue;
+    const rest = text.slice(prefix.length);
+    if (rest === "" || rest.startsWith("/")) return join(shellHome(), rest);
   }
   return null;
 }
@@ -1584,13 +1589,14 @@ function withoutRedirections(segment: string): string {
  * (options and redirections aside) and a leading `~`, `$HOME` or `${HOME}`
  * name $HOME. The order of the segments, loops, functions, subshells and
  * pipelines is not modelled, so a write can also be read from a directory it
- * never runs in. A computed target ($VAR, glob), `cd -` and stack operands
- * (`+1`) add nothing. Past the cap the oldest collected directories are
+ * never runs in. A computed target ($VAR, glob), `cd -`, `pushd`'s stack
+ * operands (`+1`; `cd +1` names a directory) and `pushd -n` add nothing. Past the cap the oldest collected directories are
  * dropped, never `cwd`, $HOME or the newest, so an absolute `cd` late in a
  * long command still counts. A command `shell` names as PowerShell is read
  * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
  * their -Path, -LiteralPath or first positional value, a `\` as a separator,
- * and a bare Set-Location names $HOME.
+ * and a bare Set-Location names $HOME; `~`, `$HOME` and `${HOME}` there take
+ * either separator and any case.
  */
 export function shellDirectoryRoots(
   command: string,
@@ -1619,7 +1625,7 @@ export function shellDirectoryRoots(
       const dir = normalizeShellTarget(operand, root);
       if (dir) next.add(dir);
     }
-    const reading = homeReading(operand);
+    const reading = homeReading(operand, shell === "powershell");
     if (reading) next.add(resolve(reading));
     for (const dir of next) add(dir, dir === home);
   };
@@ -1635,9 +1641,13 @@ export function shellDirectoryRoots(
     if (!invocation || !SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) continue;
     const { name, args } = invocation;
     const end = args.indexOf("--");
+    // Only pushd reads +N as a stack entry (bash's cd takes it as a directory),
+    // and `pushd -n` adds to the stack without changing directory.
+    const pushd = name.toLowerCase() === "pushd";
+    if (pushd && (end >= 0 ? args.slice(0, end) : args).includes("-n")) continue;
     const operand = end >= 0
       ? args[end + 1]
-      : args.find((arg) => !arg.startsWith("-") && !/^\+\d*$/.test(arg));
+      : args.find((arg) => !arg.startsWith("-") && !(pushd && /^\+\d*$/.test(arg)));
     if (operand !== undefined) {
       change(operand);
       continue;
@@ -1732,7 +1742,7 @@ function shellWriteTargetsFrom(
     rawWords?.push(raw);
     const target = resolveTarget(raw);
     if (target) out.push(target);
-    const home = homeReading(raw);
+    const home = homeReading(raw, powerShell);
     if (home) out.push(resolve(home));
   };
   const isDirectory = (raw: string | undefined): boolean => {
