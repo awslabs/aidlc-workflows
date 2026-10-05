@@ -1436,8 +1436,18 @@ export function recordPlanApprovalAnswer(
           return { complete: true, message: `The person's choice, "${ANSWER_LABELS[theirs]}", is already recorded. Run next.` };
         }
         // Nothing is built while the question is open: "I'll edit the files"
-        // after an answer is their latest word, and the editing starts now.
-        if (answer.choice === "edit") return startEditing(projectDir, record);
+        // after an answer is their latest word, and the editing starts now. It
+        // needs a reply of theirs after that answer was recorded.
+        if (answer.choice === "edit") {
+          const turns = humanTurnCount(projectDir);
+          if (recorded.some((result) => result.turns === undefined || result.turns >= turns)) {
+            throw new Error(
+              `The person's choice, "${ANSWER_LABELS[theirs]}", is recorded and they have not replied since. ` +
+                "Record \"I'll edit the files\" when they say so in a reply after it.",
+            );
+          }
+          return startEditing(projectDir, record);
+        }
         const corrected = answer.choice === "approve"
           ? correctReadRequestChanges(projectDir, session, named
             .filter((result) => result.choice === "request-changes").map((result) => result.unit))

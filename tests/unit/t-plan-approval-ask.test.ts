@@ -619,6 +619,17 @@ describe("the engine asks for Plan Approval", () => {
     expect(again.plan_approval?.editing).toBe(true);
   });
 
+  test("I'll edit the files with no reply after the recorded answer changes nothing", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc 1");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    const early = answer(proj, "I'll edit the files");
+    expect(early.code).not.toBe(0);
+    expect(early.message).toContain("they have not replied since");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
   test("I'll edit the files after Request Changes opens edit mode", () => {
     const proj = project();
     askFor(proj);
