@@ -1211,7 +1211,7 @@ describe("t242 state-transition ownership guard", () => {
       ["execute_pwsh", { command: "Set-Content .kiro\\hooks\\y.json x" }, runtime],
       ["execute_pwsh", { command: "'x' | Tee-Object .kiro\\hooks\\y.json" }, runtime],
       ["execute_pwsh", { command: "Set-Location .kiro\\hooks; Set-Content y.json x" }, runtime],
-      // $HOME, ${HOME} and ~ with backslashes and in any case (HOME is the project's parent).
+      // $HOME, ${HOME} and ~ with backslashes and in any case (HOME and USERPROFILE are the project's parent).
       ["execute_pwsh", { command: `Set-Content $HOME\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
       ["execute_pwsh", { command: "Set-Content $" + `{home}\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
       ["execute_pwsh", { command: `Set-Content ~\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],

@@ -1511,35 +1511,64 @@ function isNullDevice(raw: string): boolean {
 export const SHELL_DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 const MAX_SHELL_ROOTS = 64;
 
-// The home directory a bare `cd` or a leading `~` names.
-function shellHome(): string {
-  return process.env.HOME || homedir();
+// The directories a bare `cd` or a leading `~` or $HOME can name: HOME, else
+// the OS home. PowerShell takes `~` and $HOME from its user profile instead,
+// which can differ from HOME (USERPROFILE, or HOMEDRIVE and HOMEPATH, on
+// Windows), so for a PowerShell command every one of them is a reading.
+function shellHomes(powerShell: boolean): string[] {
+  const homes = [process.env.HOME || homedir()];
+  if (powerShell) {
+    homes.push(homedir());
+    if (process.env.USERPROFILE) homes.push(process.env.USERPROFILE);
+    if (process.env.HOMEDRIVE && process.env.HOMEPATH) homes.push(process.env.HOMEDRIVE + process.env.HOMEPATH);
+  }
+  return [...new Set(homes.map((home) => resolve(home)))];
 }
 
-// A word's reading with a leading `~`, `$HOME` or `${HOME}` expanded to $HOME,
-// or null. The quoting is gone by the time a word gets here and a quoted `~` is
-// not expanded, so callers keep the literal reading of a `~` word beside this
-// one; a `$HOME` word has no literal reading (a word with `$` resolves to none).
-function homeReading(word: string, powerShell = false): string | null {
-  // PowerShell takes \ as a separator and its variable names ignore case. Its
-  // `~` and $HOME are the user profile, which on Windows is USERPROFILE.
+// A PowerShell `$env:` variable: names ignore case on Windows only.
+function powerShellEnv(name: string): string | undefined {
+  if (process.platform !== "win32") return process.env[name];
+  const key = Object.keys(process.env).find((candidate) => candidate.toUpperCase() === name.toUpperCase());
+  return key === undefined ? undefined : process.env[key];
+}
+
+// A word's readings with a leading `~`, `$HOME` or `${HOME}` expanded to each
+// of shellHomes, or none. The quoting is gone by the time a word gets here and
+// a quoted `~` is not expanded, so callers keep the literal reading of a `~`
+// word beside these; a `$HOME` word has no literal reading (a word with `$`
+// resolves to none). A PowerShell word also takes `\` as a separator, its own
+// variable names in any case, and `$env:HOME` or `$env:USERPROFILE` (braced
+// too) from the hook's environment: an assignment to one earlier in the same
+// command is not seen.
+function homeReadings(word: string, powerShell = false): string[] {
   const text = powerShell ? word.replaceAll("\\", "/") : word;
   const braced = (name: string) => "$" + `{${name}}`;
-  const profile = process.platform === "win32" ? process.env.USERPROFILE || homedir() : shellHome();
-  const homes: Array<[string, string | undefined]> = powerShell
-    ? [
-      ["~", profile], ["$HOME", profile], [braced("HOME"), profile],
-      ["$env:HOME", process.env.HOME], [braced("env:HOME"), process.env.HOME],
-      ["$env:USERPROFILE", process.env.USERPROFILE], [braced("env:USERPROFILE"), process.env.USERPROFILE],
-    ]
-    : [["~", shellHome()], ["$HOME", shellHome()], [braced("HOME"), shellHome()]];
-  for (const [prefix, home] of homes) {
-    const head = text.slice(0, prefix.length);
-    if (!home || !(powerShell ? head.toUpperCase() === prefix.toUpperCase() : head === prefix)) continue;
-    const rest = text.slice(prefix.length);
-    if (rest === "" || rest.startsWith("/")) return join(home, rest);
+  const homes = shellHomes(powerShell);
+  const prefixes: Array<[string, string[], boolean]> = [
+    ["~", homes, powerShell], ["$HOME", homes, powerShell], [braced("HOME"), homes, powerShell],
+  ];
+  if (powerShell) {
+    for (const name of ["HOME", "USERPROFILE"]) {
+      const value = powerShellEnv(name);
+      const named = value ? [value] : [];
+      prefixes.push([`$env:${name}`, named, process.platform === "win32"], [braced(`env:${name}`), named, process.platform === "win32"]);
+    }
   }
-  return null;
+  for (const [prefix, bases, anyCase] of prefixes) {
+    const head = text.slice(0, prefix.length);
+    // `$env:` itself ignores case everywhere; the name after it only on Windows.
+    const colon = prefix.indexOf(":") + 1;
+    const matches = anyCase
+      ? head.toUpperCase() === prefix.toUpperCase()
+      : colon > 0
+        ? head.slice(0, colon).toUpperCase() === prefix.slice(0, colon).toUpperCase() &&
+          head.slice(colon) === prefix.slice(colon)
+        : head === prefix;
+    if (!matches) continue;
+    const rest = text.slice(prefix.length);
+    if (rest === "" || rest.startsWith("/")) return bases.map((base) => resolve(join(base, rest)));
+  }
+  return [];
 }
 
 // A segment with its redirections removed, so `cd 2>/dev/null` is read as a
@@ -1605,14 +1634,15 @@ function withoutRedirections(segment: string): string {
  * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
  * their -Path, -LiteralPath or first positional value, a `\` as a separator,
  * and a bare Set-Location names $HOME; `~`, `$HOME`, `${HOME}`, `$env:HOME`
- * and `$env:USERPROFILE` there take either separator and any case.
+ * and `$env:USERPROFILE` there take either separator (see homeReadings), and
+ * `~`, $HOME and a bare Set-Location name each of PowerShell's homes.
  */
 export function shellDirectoryRoots(
   command: string,
   cwd = process.cwd(),
   shell: CommandShell = "posix",
 ): string[] {
-  const home = resolve(shellHome());
+  const homes = shellHomes(shell === "powershell");
   const roots = [resolve(cwd)];
   const pinned = new Set(roots);
   const add = (dir: string, pin = false) => {
@@ -1634,13 +1664,12 @@ export function shellDirectoryRoots(
       const dir = normalizeShellTarget(operand, root);
       if (dir) next.add(dir);
     }
-    const reading = homeReading(operand, shell === "powershell");
-    if (reading) next.add(resolve(reading));
-    for (const dir of next) add(dir, dir === home);
+    for (const reading of homeReadings(operand, shell === "powershell")) next.add(reading);
+    for (const dir of next) add(dir, homes.includes(dir));
   };
   if (shell === "powershell") {
     for (const operand of powerShellLocationChanges(command, 0)) {
-      if (operand === null) add(home, true);
+      if (operand === null) for (const home of homes) add(home, true);
       else change(operand);
     }
     return roots;
@@ -1664,7 +1693,7 @@ export function shellDirectoryRoots(
     }
     // `cd -` and pushd's stack operands name a directory this command cannot see.
     const previous = args.some((arg) => /^[+-]\d*$/.test(arg));
-    if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) add(home, true);
+    if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) for (const home of homes) add(home, true);
   }
   return roots;
 }
@@ -1752,8 +1781,7 @@ function shellWriteTargetsFrom(
     rawWords?.push(raw);
     const target = resolveTarget(raw);
     if (target) out.push(target);
-    const home = homeReading(raw, powerShell);
-    if (home) out.push(resolve(home));
+    out.push(...homeReadings(raw, powerShell));
   };
   const isDirectory = (raw: string | undefined): boolean => {
     if (!raw) return false;
