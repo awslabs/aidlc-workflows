@@ -40,6 +40,7 @@ import { codexHeadlessArgs, setupCodexProject } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import { turnEvidence, type CodexTurn } from "../harness/codex-turn-evidence.ts";
+import { exactCodexUtilityArgv } from "../harness/codex-workspace-evidence.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
@@ -127,16 +128,20 @@ function commandOutputs(stdout: string): string[] {
 }
 
 // Codex exec can keep a finished command's output as empty. True when the turn
-// ran the engine's `next` and Codex kept nothing of what it printed.
+// ran exactly the engine's `next` (with `--resume` at most, nothing composed
+// around it) and Codex kept nothing of what it printed.
 function blankEngineNext(stdout: string): boolean {
   return stdout.split("\n").filter((entry) => entry.trim()).some((line) => {
     const event = JSON.parse(line) as {
       type?: string;
       item?: { type?: string; command?: unknown; aggregated_output?: unknown; exit_code?: unknown };
     };
-    return event.type === "item.completed" && event.item?.type === "command_execution" &&
-      typeof event.item.command === "string" && /engine orchestrate next\b/.test(event.item.command) &&
-      event.item.aggregated_output === "" && event.item.exit_code === 0;
+    if (event.type !== "item.completed" || event.item?.type !== "command_execution" ||
+      typeof event.item.command !== "string") return false;
+    const argv = exactCodexUtilityArgv(event.item.command);
+    const next = argv !== null && argv.slice(0, 3).join(" ") === "engine orchestrate next" &&
+      argv.slice(3).every((flag) => flag === "--resume");
+    return next && event.item.aggregated_output === "" && event.item.exit_code === 0;
   });
 }
 
