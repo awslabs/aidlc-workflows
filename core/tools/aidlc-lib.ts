@@ -18425,13 +18425,7 @@ export function freshReviewReceipts(
   const isRelaxed = (): boolean => {
     if (resolvedRelaxed === null) {
       changeControlRead = true;
-      try {
-        resolvedRelaxed =
-          resolveGuardPolicy(projectDir, stateContent, { selection: options.selection }).value !==
-          "strict";
-      } catch {
-        resolvedRelaxed = false;
-      }
+      resolvedRelaxed = guardPolicyAcceptsChanges(projectDir, stateContent, { selection: options.selection });
     }
     return resolvedRelaxed;
   };
@@ -36130,6 +36124,24 @@ export function resolveGuardPolicy(
 }
 /** Retired alias of resolveGuardPolicy. */
 export const resolveChangeControl = resolveGuardPolicy;
+
+/**
+ * The one reading of whether this run records and announces a changed input
+ * instead of stopping on it: the effective Guard Policy is relaxed or off,
+ * whatever its source (a shipped, plugin or composed scope, a memory layer, or
+ * the person's own switch). A policy that cannot be read counts as strict.
+ */
+export function guardPolicyAcceptsChanges(
+  projectDir: string,
+  stateContent?: string | null,
+  options: { selection?: WorkflowSelectionOptions } = {},
+): boolean {
+  try {
+    return resolveGuardPolicy(projectDir, stateContent, { selection: options.selection }).value !== "strict";
+  } catch {
+    return false;
+  }
+}
 
 /** The one sentence a chat or flag flip gets while a memory layer holds strict. */
 export function guardPolicyMemoryStrictRefusal(
