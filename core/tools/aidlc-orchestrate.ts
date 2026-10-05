@@ -233,6 +233,7 @@ import {
   humanPresenceGuardDisabled,
   isNonAnswer,
   personSpokeSinceGate,
+  planApprovalAskIsOpen,
   recordDir,
   engineDir,
   isPlainObject,
@@ -7021,7 +7022,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(planChanges ? planChangeDirective(planChanges, command, null) : turnEndingPrint(
+      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd)) : turnEndingPrint(
         `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
       ));
       return;
@@ -7034,13 +7035,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // same-as-current --scope: no sibling modifier may be silently discarded.
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
-      emit(planChanges ? planChangeDirective(planChanges, command, plan) : turnEndingPrint(
+      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd)) : turnEndingPrint(
         `Run \`${command}\` to update the configuration, then print its output verbatim and stop.`,
       ));
       return;
     }
     if (planChanges) {
-      emit(planChangeDirective(planChanges, null, plan));
+      emit(planChangeDirective(planChanges, null, plan, planApprovalAskIsOpen(pd)));
       return;
     }
   }
@@ -10490,7 +10491,14 @@ function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
   plan: { scope: string; stateContent: string } | null,
+  // The code plan's question is open: once the change is made, it is the open
+  // step again, so what the person says next is kept as their answer to it.
+  planWaits = false,
 ): PrintDirective {
+  const end = planWaits
+    ? ` Then run \`${aidlcToolInvocation("orchestrate")} next\`: the code plan still waits for the person's answer, ` +
+      "so do not show its question again, and stop."
+    : " Then stop.";
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
@@ -10508,7 +10516,7 @@ function planChangeDirective(
   if (skip.length === 0 && add.length === 0) {
     return turnEndingPrint(
       `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
-        `"${noted} The plan is unchanged." Then stop.`,
+        `"${noted} The plan is unchanged."${end}`,
     );
   }
   const flips = (skipped: string[], added: string[]): string => [
@@ -10527,7 +10535,7 @@ function planChangeDirective(
       "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
       "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
-      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}" Then stop.`,
+      `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}"${end}`,
   );
 }
 
