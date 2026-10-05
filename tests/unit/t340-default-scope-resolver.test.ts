@@ -59,6 +59,9 @@ function childEnv(project: string, scope?: string): NodeJS.ProcessEnv {
     AIDLC_HARNESS_DIR: ".claude",
     // Do not inherit a machine-level defaultScope or ceremony policy.
     AIDLC_INSTALL_ROOT: join(project, ".machine"),
+    // No chat runs here, so no hook leaves a heartbeat; these runs are about
+    // the scope, not about hooks that never ran.
+    AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
   });
   if (scope !== undefined) env.AWS_AIDLC_DEFAULT_SCOPE = scope;
   return env;
