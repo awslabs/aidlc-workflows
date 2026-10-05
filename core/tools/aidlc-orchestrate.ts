@@ -12437,10 +12437,19 @@ function emitTypedResumeChoice(
     emit(errorDirective(unitProblem));
     return;
   }
+  // "... and stop there": the move is made, then the workflow is parked in
+  // place of the `next` that would carry on with it. --park says the person
+  // asked for that; without it, the conductor still reads their words for it.
+  const stopThere = `${flags.park === true
+    ? " The person also asked to stop there for now: make"
+    : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
+    `to re-run \`next\`, then run \`${aidlcInvocation()} park\` in place of that \`next\` and act on its \`parked\` directive.`;
+  const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
+    directive.kind === "print" ? printDirective(`${directive.message}${stopThere}`) : directive;
   if (choice === "resume") {
-    emit(printDirective(
+    emit(move(printDirective(
       `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
-    ));
+    )));
     return;
   }
   // The Units the person named travel with the move, so it is their work that
@@ -12460,9 +12469,9 @@ function emitTypedResumeChoice(
       ));
       return;
     }
-    emit(printDirective(
+    emit(move(printDirective(
       `Redo accepted. Run \`next --stage ${shellArg(step)}${units}\`; it reopens that step for the Units named and says plainly if it cannot.`,
-    ));
+    )));
     return;
   }
   if (choice === "redo" && unitStep !== undefined) {
@@ -12471,15 +12480,15 @@ function emitTypedResumeChoice(
     // block's first stage. With nothing written for it yet, there is nothing to
     // throw away: doing it now starts it from the start.
     if (!validScopes().has(scope)) {
-      emit(redoCurrentStage(pd, scope, stateContent, slug));
+      emit(move(redoCurrentStage(pd, scope, stateContent, slug)));
       return;
     }
-    emit(printDirective(unitMajorRedo(pd, scope, stateContent, slug) ??
-      `Redo accepted at "${unitStep}": nothing is written for it yet, so it starts from the start. Re-run \`next\` and do "${unitStep}".`));
+    emit(move(printDirective(unitMajorRedo(pd, scope, stateContent, slug) ??
+      `Redo accepted at "${unitStep}": nothing is written for it yet, so it starts from the start. Re-run \`next\` and do "${unitStep}".`)));
     return;
   }
   if (choice === "redo") {
-    emit(redoCurrentStage(pd, scope, stateContent, slug));
+    emit(move(redoCurrentStage(pd, scope, stateContent, slug)));
     return;
   }
   if (choice === "jump") {
@@ -12495,15 +12504,15 @@ function emitTypedResumeChoice(
       emit(errorDirective(`No stage is named "${target}". Say the stage again by its name.`));
       return;
     }
-    emit(printDirective(
+    emit(move(printDirective(
       `Jump accepted. Run \`next --stage ${node.slug}${units}\`; the direction and the target are worked out and checked for you.`,
-    ));
+    )));
     return;
   }
   if (choice === "fresh") {
-    emit(printDirective(
+    emit(move(printDirective(
       "Start-fresh accepted. When the person has said what the new work is (ask them if they have not), run `next --new-intent` with their description as one single-quoted argument, quoted the way the engine's own commands quote a person's words; the work in progress stays as it is, and the new work starts alongside it.",
-    ));
+    )));
     return;
   }
   emit(errorDirective(

@@ -652,6 +652,51 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "STAGE_REVISING")).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("SP4g: \"take me back to X and stop there\" makes the move, then parks instead of carrying on", () => {
+    const p = projWithState("state-jumped.md");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    const stopAsked = "The person also asked to stop there for now: make the move";
+    const parkInstead = " park` in place of that `next` and act on its `parked` directive.";
+    // Every move a re-entry request names keeps the stop the person asked for,
+    // and without --park the conductor still checks their words for one.
+    for (const extra of [
+      ["--choice", "jump", "--target", "market-research"],
+      ["--choice", "redo"],
+      ["--choice", "redo", "--target", "market-research"],
+      ["--choice", "redo", "--unit", "beta"],
+      ["--choice", "resume"],
+      ["--choice", "fresh"],
+    ]) {
+      const stopped = report(...extra, "--park");
+      expect(stopped.kind, extra.join(" ")).toBe("print");
+      expect(stopped.message, extra.join(" ")).toContain(stopAsked);
+      expect(stopped.message, extra.join(" ")).toContain(parkInstead);
+      const plain = report(...extra);
+      expect(plain.message, extra.join(" ")).not.toContain(stopAsked);
+      expect(plain.message, extra.join(" ")).toContain("If the person also asked to stop there for now, make the move");
+      expect(plain.message, extra.join(" ")).toContain(parkInstead);
+    }
+    // An error or a question back to the person names no move to stop after.
+    expect(report("--choice", "jump", "--target", "no-such-stage", "--park").message).not.toContain("park`");
+    expect(report("--choice", "jump", "--park").message).not.toContain("park`");
+
+    // Followed through: the jump is made, the park lands on the stage jumped
+    // to, and nothing after it starts.
+    const asked = report("--choice", "jump", "--target", "market-research", "--park");
+    expect(asked.message).toContain("Run `next --stage market-research`");
+    const move = directive(run(ORCHESTRATE, ["next", "--stage", "market-research", "--project-dir", p]));
+    const command = /`[^`]*aidlc-jump\.ts (execute [^`]+)`/.exec(move.message)?.[1];
+    expect(command, move.message).toBeDefined();
+    const jumped = run(JUMP, [...(command as string).split(" "), "--project-dir", p]);
+    expect(jumped.status, jumped.out).toBe(0);
+    const parked = directive(run(ORCHESTRATE, ["park", "--project-dir", p]));
+    expect(parked.kind).toBe("parked");
+    const state = readFileSync(statePath(p), "utf-8");
+    expect(state).toMatch(/^- \*\*Current Stage\*\*: market-research$/m);
+    expect(state).toMatch(/^- \*\*Parked At Stage\*\*: market-research$/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // ============================================================
   // Special path 5: CREATE (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-create move + creates NO state; (b) a named scope
