@@ -601,7 +601,7 @@ export function resolveConstructionCheckpoint(
 function requireReady(result: ConstructionCheckpoint): void {
   if (!result.ready) {
     const rereview = result.rereview
-      ? ` Its code changed since its review: request the re-check with \`${result.rereview.command}\`, record the verdict, then verify.`
+      ? ` What ${result.rereview.stage} reviewed changed since its review: request the re-check with \`${result.rereview.command}\`, record the verdict, then verify.`
       : "";
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }

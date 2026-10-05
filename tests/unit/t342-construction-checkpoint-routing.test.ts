@@ -2554,6 +2554,14 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(beat.construction_checkpoint?.rereview, JSON.stringify(beat)).toMatchObject({
         stage: "nfr-requirements", iteration: index + 2,
       });
+      if (index === 0) {
+        // Verifying first names what changed as the stage's own reviewed work.
+        recordCommand(p);
+        const early = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
+        expect(early.status, early.out).not.toBe(0);
+        expect(early.out).toContain("What nfr-requirements reviewed changed since its review: request the re-check with");
+        expect(early.out).not.toContain("Its code changed");
+      }
       const rechecked = reviewThroughLog(p, [
         "review", "--stage", "nfr-requirements", "--reviewer", REVIEWER, "--unit", "alpha", "--iteration", String(index + 2),
       ]);
