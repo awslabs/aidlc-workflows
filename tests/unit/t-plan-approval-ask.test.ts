@@ -2213,6 +2213,63 @@ describe("what the engine names while a plan waits", () => {
   });
 });
 
+// A project whose files cannot all be read (a very large repository, a link
+// that loops) is no stop when Guard Policy is relaxed or off, or plan approval
+// is off: the plan is asked about, or built as written, and the build starts
+// with one line. Strict with plan approval on still names the repair.
+describe("a project whose files cannot all be read", () => {
+  function unreadable<T>(run: () => T): T {
+    const before = process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES;
+    process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES = "1";
+    try {
+      return run();
+    } finally {
+      if (before === undefined) delete process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES;
+      else process.env.AIDLC_TEST_SOURCE_MAX_ENTRIES = before;
+    }
+  }
+
+  test.each(["relaxed", "off"] as const)("under %s the plan is asked, approved and built, with one line", (policy) => {
+    const proj = project(policy);
+    unreadable(() => {
+      writePlan(proj);
+      const asked = next(proj);
+      expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+      expect(asked.ask_type).toBe("plan-approval");
+      reply(proj, "1");
+      expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+      const build = next(proj);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval).toEqual({ status: "approved" });
+      const begun = posture(proj, "begin", null);
+      expect(begun.status, begun.stderr).toBe(0);
+      expect(begun.stdout).toContain("Building without a check of the project's files");
+    });
+  });
+
+  test("plan approval off under strict builds the plan as written", () => {
+    const proj = project("strict", "off");
+    unreadable(() => {
+      writePlan(proj);
+      const build = next(proj);
+      expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+      expect(build.plan_approval?.status).toBe("approved");
+      const begun = posture(proj, "begin", null);
+      expect(begun.status, begun.stderr).toBe(0);
+    });
+  });
+
+  test("strict with plan approval on still says what to repair before asking", () => {
+    const proj = project("strict");
+    unreadable(() => {
+      writePlan(proj);
+      const stopped = next(proj);
+      expect(stopped.kind, JSON.stringify(stopped)).toBe("error");
+      expect(stopped.message).toContain("cannot be presented");
+    });
+  });
+});
+
 describe("stopping for now at Code Generation", () => {
   // Coming back the next day: the unpark the engine names gets through the
   // guard, and the approved plan is built with no new question.

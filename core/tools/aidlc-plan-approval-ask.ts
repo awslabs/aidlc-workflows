@@ -49,6 +49,7 @@ import {
   steeringPayloadAuthenticAt,
   steeringTokenKeyPathFor,
   toPosix,
+  UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
@@ -63,6 +64,7 @@ import {
 } from "./aidlc-lib.ts";
 import {
   approvalFingerprint,
+  codeGenerationBuildsWithoutSource,
   codeGenerationExecutionAllowed,
   codeGenerationRecordDir,
   codeGenerationTargetId,
@@ -689,8 +691,13 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   }
   const asking = states.filter((state): state is Extract<TargetState, { kind: "ask" }> => state.kind === "ask");
   // Approval needs a workspace source that can be read, or generation could
-  // never start from it. Say so before asking, never after.
-  if (workspaceSourceState(projectDir) === null) {
+  // never start from it. Say so before asking, never after. With the
+  // plan-approval check standing aside the build starts without that record,
+  // so the question is asked (and plan approval off builds) as usual.
+  if (
+    workspaceSourceState(projectDir) === null &&
+    !units.every((unit) => codeGenerationBuildsWithoutSource(projectDir, { unit }, asking.length === 0))
+  ) {
     return { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
   }
   if (asking.length === 0 && setting !== null) {
@@ -883,8 +890,10 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const read = readTestingContract(plan);
   if (!("contract" in read) || !instructions.trim()) return;
+  // Plan approval off asks nothing; a project whose files cannot all be read
+  // builds without a record of where it started.
   const source = workspaceSourceState(projectDir);
-  if (source === null) return;
+  const sourceFingerprint = source?.fingerprint ?? UNBINDABLE_FINGERPRINT;
   const authority = resolveCodeGenerationAuthority(projectDir, { unit });
   const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
   const view = targetView(projectDir, unit);
@@ -892,7 +901,7 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
     `Built without asking: ${reason}.`,
-    view, [], fingerprint, source.fingerprint, PLAN_APPROVAL_OFF_ANSWER, BUILT_WITHOUT_ASKING_INTRO,
+    view, [], fingerprint, sourceFingerprint, PLAN_APPROVAL_OFF_ANSWER, BUILT_WITHOUT_ASKING_INTRO,
   );
   const questionsFile = toPosix(relative(projectDir, questionsPath));
   const receipt: PlanApprovalRuntimeReceipt = {
@@ -906,19 +915,19 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
-    plannedSourceSha256: source.fingerprint,
+    plannedSourceSha256: sourceFingerprint,
     session: "engine",
     challengeId: "plan-approval-off",
     choice: "Approve Plan",
     questionsSha256: createHash("sha256").update(questions, "utf-8").digest("hex"),
-    certifiedSourceSha256: source.fingerprint,
+    certifiedSourceSha256: sourceFingerprint,
     status: "approved",
     skipped: { source: setting.source },
   };
   withActiveDirectiveLock(projectDir, () => {
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
-    writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
+    if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });
   appendAuditEntryUnlocked("PLAN_APPROVAL_SKIPPED", {
     Stage: STAGE,
@@ -1031,19 +1040,20 @@ function approveTarget(
     return repair(`the Testing Contract in ${view.plan_path} has missing or inconsistent executable fields.`);
   }
   const source = workspaceSourceState(projectDir);
-  if (source === null) {
+  if (source === null && !codeGenerationBuildsWithoutSource(projectDir, { unit })) {
     return {
       ok: false,
       notice: `AIDLC Plan Approval: nothing was recorded because the workspace source cannot be read right now` +
         `${workspaceSourceFailureSuffix()}. Run next for the repair.`,
     };
   }
+  const sourceFingerprint = source?.fingerprint ?? UNBINDABLE_FINGERPRINT;
   const authority = resolveCodeGenerationAuthority(projectDir, { unit });
   const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
   const asked = record.targets.find((target) => target.unit === unit)?.fingerprint;
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
-    record.question, view, record.choices, fingerprint, source.fingerprint, APPROVED_ANSWER,
+    record.question, view, record.choices, fingerprint, sourceFingerprint, APPROVED_ANSWER,
   );
   const questionsFile = toPosix(relative(projectDir, questionsPath));
   const receipt: PlanApprovalRuntimeReceipt = {
@@ -1057,18 +1067,18 @@ function approveTarget(
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
-    plannedSourceSha256: source.fingerprint,
+    plannedSourceSha256: sourceFingerprint,
     session,
     challengeId: record.askId,
     choice: "Approve Plan",
     questionsSha256: createHash("sha256").update(questions, "utf-8").digest("hex"),
-    certifiedSourceSha256: source.fingerprint,
+    certifiedSourceSha256: sourceFingerprint,
     status: "approved",
   };
   withActiveDirectiveLock(projectDir, () => {
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
-    writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
+    if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });
   appendAuditEntryUnlocked("PLAN_APPROVAL_RECORDED", {
     Stage: STAGE,

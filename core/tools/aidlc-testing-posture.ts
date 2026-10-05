@@ -431,6 +431,30 @@ function generationSourceUnavailableMessage(): string {
     PLAN_APPROVAL_BREAK_GLASS_REMEDY;
 }
 
+/**
+ * With the plan-approval check standing aside (Guard Policy relaxed or off),
+ * or plan approval off for this plan, a project whose files cannot all be read
+ * is built without a record of where the build started, instead of stopping:
+ * that record only serves a comparison those settings do not make. The
+ * approval stays the person's own.
+ */
+export function codeGenerationBuildsWithoutSource(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  planApprovalSkipped = false,
+): boolean {
+  if (planApprovalSkipped) return true;
+  try {
+    return codeGenerationPlanApprovalFence(projectDir, target).decision === "stand-aside";
+  } catch {
+    return false;
+  }
+}
+
+export function buildWithoutSourceNotice(): string {
+  return `Building without a check of the project's files: they could not all be read${workspaceSourceFailureSuffix()}.`;
+}
+
 // Re-baseline the `[Planned Source]` tag in a questions file to `fingerprint`.
 // Used only before the challenge is minted: after that the prompt hash binds
 // the file bytes and the receipt's certified source is the baseline instead.
@@ -2374,8 +2398,10 @@ function continuationMaterial(
     !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
   let sourceChange: AcceptedChange | undefined;
   if (receipt.status !== "generation" && receipt.override === undefined) {
+    // The fence is lowered here, so a project whose files cannot all be read
+    // builds without the comparison (generation start says so in one line).
     const current = workspaceSourceState(projectDir);
-    if (current === null) return null;
+    if (current === null) return { artifacts };
     if (!sameWorkspaceSource(receipt.certifiedSourceSha256, current.fingerprint)) {
       const judged = judgePlanSourceDrift(
         projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, true,
@@ -4294,7 +4320,7 @@ export function evaluateCodeGenerationApproval(
       candidate.choice === "Approve Plan" && runtimeIdentityMatches(candidate, recordedIdentity) &&
       candidate.status !== "generation" && candidate.override === undefined
       ? workspaceSourceState(projectDir) : undefined;
-    if (currentSource === null) {
+    if (currentSource === null && !codeGenerationBuildsWithoutSource(projectDir, target, candidate?.skipped !== undefined)) {
       empty.executionFailure = generationSourceUnavailableMessage();
       empty.reason = empty.executionFailure;
       return empty;
@@ -4382,7 +4408,8 @@ export function evaluateCodeGenerationApproval(
       receipt !== null &&
       receipt.status !== "generation" &&
       receipt.override === undefined &&
-      (currentSource ?? workspaceSourceState(projectDir)) === null
+      (currentSource ?? workspaceSourceState(projectDir)) === null &&
+      !codeGenerationBuildsWithoutSource(projectDir, target, receipt.skipped !== undefined)
     ) {
       empty.executionFailure = generationSourceUnavailableMessage();
       empty.reason = empty.executionFailure;
@@ -4468,7 +4495,17 @@ function publishCodeGenerationStart(
   const stateBefore = workspaceSourceState(projectDir);
   const sourceBefore = stateBefore?.fingerprint ?? null;
   if (sourceBefore === null) {
-    throw new Error(generationSourceUnavailableMessage());
+    if (!codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined)) {
+      throw new Error(generationSourceUnavailableMessage());
+    }
+    // Nothing to compare at the start or after it: the build begins from the
+    // files as they are, said in one line.
+    writePlanApprovalReceipt(projectDir, {
+      ...receipt,
+      certifiedSourceSha256: UNBINDABLE_FINGERPRINT,
+      status: "generation",
+    });
+    return [...changeNotices, buildWithoutSourceNotice()];
   }
   if (!sameWorkspaceSource(receipt.certifiedSourceSha256, sourceBefore)) {
     // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
@@ -4542,7 +4579,9 @@ export function beginCodeGenerationBatch(
     withActiveDirectiveLock(projectDir, () => {
       const selected = [...new Map(targets.map((target) => [codeGenerationTargetId(target), target])).values()];
       const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target));
-      const needsSource = prepared.some(({ receipt }) => receipt.status !== "generation" && receipt.override === undefined);
+      const needsSource = prepared.some(({ authority, receipt }) =>
+        receipt.status !== "generation" && receipt.override === undefined &&
+        !codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined));
       const sourceBefore = needsSource ? workspaceSourceFingerprint(projectDir) : null;
       if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
       const originals: PlanApprovalRuntimeReceipt[] = [];

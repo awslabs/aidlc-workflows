@@ -773,11 +773,15 @@ describe("t334 F20 combined content and source changes", () => {
   }
 });
 
-describe("t334 F20 provenance failures do not reopen or bypass the lowered approval fence", () => {
+describe("t334 F20 an unreadable source never reopens the approval, and with the check lowered the build goes ahead", () => {
   const unbindable = { AIDLC_TEST_SOURCE_MAX_ENTRIES: "1" };
+  // Guard Policy relaxed or off, or strict with the plan-approval check turned
+  // off for this work: the project's files cannot all be read (a very large
+  // repository, a link that loops), so the build starts from them as they
+  // are, says so in one line, and keeps the person's approval and answers.
   for (const mode of ["relaxed", "off", "strict"] as const) {
     for (const edited of [false, true]) {
-      test(`${mode}, content ${edited ? "edited" : "unchanged"}: unbindable source blocks execution until repaired`, () => {
+      test(`${mode}, content ${edited ? "edited" : "unchanged"}: an unbindable source builds with one line`, () => {
         const project = createProject(mode, mode === "strict" ? "off" : undefined);
         const questions = presentPlan(project);
         const session = `unbound-${mode}-${edited}`;
@@ -787,52 +791,33 @@ describe("t334 F20 provenance failures do not reopen or bypass the lowered appro
         expect(answer(project, questions, session).code).toBe(0);
         const originalQuestions = readFileSync(questions, "utf-8");
         const approvals = approvalRows(project);
-        const receipts = receiptFiles(project);
         const statePath = join(seededRecordDir(project), "aidlc-state.md");
         const state = readFileSync(statePath, "utf-8");
         const plan = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
         if (edited) writeFileSync(plan, `${readFileSync(plan, "utf-8")}\n- [ ] Revised work.\n`);
-        const handoff = brief(project);
-        expect(handoff.code, handoff.stderr).toBe(0);
 
         const verified = runChangeControlTool([BUN, POSTURE, "verify", "--stage-level", "--project-dir", project], project, undefined, unbindable);
-        expect(verified.code, verified.stderr).toBe(2);
-        expect(JSON.parse(verified.stdout)).toMatchObject({ ok: false, execution_allowed: false });
-        expect(JSON.parse(verified.stdout).reason).toContain("workspace source cannot be bound");
+        expect(verified.code, verified.stderr).toBe(0);
+        expect(JSON.parse(verified.stdout)).toMatchObject({ execution_allowed: true });
         expect(JSON.parse(verified.stdout).reason).not.toContain("approve the plan again");
-        for (const command of ["begin", "brief"]) {
-          const result = runChangeControlTool([BUN, POSTURE, command, "--stage-level", "--project-dir", project], project, undefined, unbindable);
-          expect(result.code).not.toBe(0);
-          expect(result.stderr).toContain("workspace source cannot be bound");
-          expect(result.stdout).toBe("");
-        }
-        for (const [tool, input] of [
-          ["Write", { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" }],
-          ["Task", { subagent_type: "aidlc-developer-agent", prompt: handoff.stdout }],
-        ] as const) {
-          const guarded = runChangeControlTool([BUN, GUARD], project, JSON.stringify({
-            hook_event_name: "PreToolUse", session_id: session, cwd: project,
-            tool_name: tool, tool_input: input,
-          }), unbindable);
-          expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(2);
-          expect(guarded.stderr).toContain("Code Generation source provenance could not be committed.");
-          expect(guarded.stderr).toContain("workspace source cannot be bound");
-          expect(guarded.stdout).not.toContain("Continuing past");
-          expect(guarded.stderr).not.toContain('"ask_type":"guard-recovery"');
-        }
-        expect(receiptFiles(project)).toEqual(receipts);
+        const handoff = runChangeControlTool([BUN, POSTURE, "brief", "--stage-level", "--project-dir", project], project, undefined, unbindable);
+        expect(handoff.code, handoff.stderr).toBe(0);
+        const begun = runChangeControlTool([BUN, POSTURE, "begin", "--stage-level", "--project-dir", project], project, undefined, unbindable);
+        expect(begun.code, begun.stderr).toBe(0);
+        expect(begun.stdout).toContain("Building without a check of the project's files");
+        const guarded = runChangeControlTool([BUN, GUARD], project, JSON.stringify({
+          hook_event_name: "PreToolUse", session_id: session, cwd: project,
+          tool_name: "Write", tool_input: { file_path: join(project, "src/base.ts"), content: "export const base = 2;\n" },
+        }), unbindable);
+        expect(guarded.code, `${guarded.stdout}\n${guarded.stderr}`).toBe(0);
+        // The approval and the person's answers are untouched; no new question.
         expect(approvalRows(project)).toEqual(approvals);
-        expect(acceptedRows(project)).toHaveLength(0);
         expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
         expect(readFileSync(statePath, "utf-8")).toBe(state);
-        // Repairing the source walk (removing the test-only budget fault) lets
-        // the same approval continue; no new human turn or answer is issued.
+        // Once the files can be read again the same build carries on.
         const resumed = begin(project);
         expect(resumed.code, resumed.stderr).toBe(0);
-        expect(readFileSync(statePath, "utf-8")).toBe(state);
-        expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
         expect(approvalRows(project)).toEqual(approvals);
-        expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(!edited);
       }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
     }
   }
