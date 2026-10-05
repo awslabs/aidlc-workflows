@@ -1109,11 +1109,18 @@ function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
   const settingsPath = join(treeRoot, "settings.json");
   const value = JSON.parse(readFileSync(settingsPath, "utf-8")) as { permissions?: { allow?: unknown } };
   const allow = value.permissions?.allow;
-  const glob = `Bash(bun ${m.harnessDir}/tools/aidlc-*)`;
-  if (!Array.isArray(allow) || !allow.includes(glob)) {
-    throw new Error(`[claude] settings.json has no ${glob} entry to expand`);
+  // The authored entries name the tools folder as written (`.claude`), which
+  // a renamed harness folder keeps, so the expansion uses the same spelling.
+  const glob = Array.isArray(allow)
+    ? allow.find((entry): entry is string =>
+      typeof entry === "string" && /^Bash\(bun \S+\/tools\/aidlc-\*\)$/.test(entry)
+    )
+    : undefined;
+  if (!Array.isArray(allow) || glob === undefined) {
+    throw new Error("[claude] settings.json has no Bash(bun <dir>/tools/aidlc-*) entry to expand");
   }
-  const tool = (script: string) => `Bash(bun ${m.harnessDir}/tools/${script}`;
+  const toolsDir = glob.slice("Bash(bun ".length, -"/aidlc-*)".length);
+  const tool = (script: string) => `Bash(bun ${toolsDir}/${script}`;
   value.permissions!.allow = allow.flatMap((entry) =>
     entry === glob
       ? [
