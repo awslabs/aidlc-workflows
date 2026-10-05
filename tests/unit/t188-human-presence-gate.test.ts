@@ -318,7 +318,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusal).toContain('agent "aidlc" needs upgrading for this agent engine, using "default"');
     expect(refusal).toContain('"Type /agent and pick aidlc, then carry on."');
     expect(refusal).toContain(
-      '"Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc"',
+      '"Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc, ' +
+        'then type /aidlc to carry on."',
     );
     expect(refusal).not.toContain("reply again");
     expect(refusal).not.toContain("ACP");

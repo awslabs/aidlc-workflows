@@ -67,7 +67,8 @@ const HARNESSES: Harness[] = [
     dir: ".kiro",
     lines: () => [
       "Type /agent and pick aidlc, then carry on.",
-      "Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc",
+      "Quit Kiro and start it again in this folder with: kiro-cli chat --agent-engine v2 --agent aidlc, " +
+        "then type /aidlc to carry on.",
     ],
   },
   {
@@ -81,6 +82,7 @@ const HARNESSES: Harness[] = [
   },
 ];
 const COPILOT = HARNESSES[2];
+const OPENCODE = HARNESSES[4];
 
 const projects: string[] = [];
 const outsides: string[] = [];
@@ -406,6 +408,109 @@ describe("before any workflow, next stops when the person's message left no hear
     const proj = installed(COPILOT);
     expect(isStop(next(proj, COPILOT, { AIDLC_UNATTENDED: "1" }))).toBe(false);
     expect(isStop(next(proj, COPILOT, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }))).toBe(false);
+  });
+});
+
+// Where the tool's step is a restart (opencode, Kiro CLI, the Copilot CLI),
+// the new chat never saw the request the first `next` stopped with. The
+// person types the entry word alone and the work carries on with that
+// request, once; new words of theirs replace it.
+describe("the request the first next stopped with carries on after the restart", () => {
+  const REQUEST = "add a dark mode toggle to the settings page";
+  const LINE = "Carrying on with your earlier request.";
+  const kept = (proj: string) => join(proj, "aidlc", ".aidlc-sessions", "kept-request.json");
+  type Routed = Printed & { narration?: string };
+  const noWorkflow = (directive: Printed) =>
+    directive.kind === "error" && (directive.message ?? "").includes("No workflow state found");
+
+  for (const h of HARNESSES) {
+    test(`${h.name}: the entry word alone carries on with the request, once`, () => {
+      const proj = installed(h);
+      expect(isStop(next(proj, h, {}, ["--", REQUEST]))).toBe(true);
+      beat(proj, "record-human-turn");
+      const picked = next(proj, h) as Routed;
+      expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+      expect(JSON.stringify(picked)).toContain(REQUEST);
+      expect(existsSync(kept(proj))).toBe(false);
+      expect(noWorkflow(next(proj, h))).toBe(true);
+    });
+  }
+
+  test("a named scope is kept with the words, so the work starts as first asked", () => {
+    const proj = installed(OPENCODE);
+    expect(isStop(next(proj, OPENCODE, {}, ["bugfix", "fix the flag parser"]))).toBe(true);
+    beat(proj, "record-human-turn");
+    const picked = next(proj, OPENCODE) as Routed;
+    expect(picked.kind, JSON.stringify(picked)).toBe("print");
+    expect(picked.message ?? "").toContain("intent-create");
+    expect(picked.message ?? "").toContain("bugfix");
+  });
+
+  test("their new words win: the earlier request is dropped and never comes back", () => {
+    const proj = installed(OPENCODE);
+    expect(isStop(next(proj, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
+    beat(proj, "record-human-turn");
+    const routed = next(proj, OPENCODE, {}, ["--", "fix the flag parser"]) as Routed;
+    expect(JSON.stringify(routed)).toContain("fix the flag parser");
+    expect(JSON.stringify(routed)).not.toContain(REQUEST);
+    expect(routed.narration ?? "").not.toContain(LINE);
+    expect(existsSync(kept(proj))).toBe(false);
+    expect(noWorkflow(next(proj, OPENCODE))).toBe(true);
+  });
+
+  test("a bare next that stops again, or a help or status check, keeps it for later", () => {
+    const proj = installed(OPENCODE);
+    expect(isStop(next(proj, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
+    expect(isStop(next(proj, OPENCODE))).toBe(true);
+    beat(proj, "record-human-turn");
+    next(proj, OPENCODE, {}, ["--help"]);
+    next(proj, OPENCODE, {}, ["--status"]);
+    const picked = next(proj, OPENCODE) as Routed;
+    expect(picked.narration ?? "", JSON.stringify(picked)).toStartWith(LINE);
+    expect(JSON.stringify(picked)).toContain(REQUEST);
+  });
+
+  test("only a request kept within the last day, on this machine's own folder, is used", () => {
+    // Older than a day.
+    const old = installed(OPENCODE);
+    expect(isStop(next(old, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
+    const record = JSON.parse(readFileSync(kept(old), "utf-8")) as { at: number };
+    writeFileSync(kept(old), JSON.stringify({ ...record, at: Date.now() - 25 * 60 * 60 * 1000 }), "utf-8");
+    beat(old, "record-human-turn");
+    expect(noWorkflow(next(old, OPENCODE))).toBe(true);
+
+    // Any other command in its place is not run.
+    const other = installed(OPENCODE);
+    expect(isStop(next(other, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
+    const otherRecord = JSON.parse(readFileSync(kept(other), "utf-8")) as Record<string, unknown>;
+    for (const args of [["config", "set", "guard.plan-approval", "off"], ["--report", "/etc/hosts"], ["intent", "x"]]) {
+      writeFileSync(kept(other), JSON.stringify({ ...otherRecord, args }), "utf-8");
+      beat(other, "record-human-turn");
+      expect(noWorkflow(next(other, OPENCODE)), args.join(" ")).toBe(true);
+    }
+
+    // Behind a link it is neither read nor removed.
+    const linked = installed(OPENCODE);
+    expect(isStop(next(linked, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
+    const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-kept-request-outside-"));
+    outsides.push(outside);
+    cpSync(dirname(kept(linked)), outside, { recursive: true });
+    rmSync(dirname(kept(linked)), { recursive: true, force: true });
+    symlinkSync(outside, dirname(kept(linked)), DIR_LINK);
+    beat(linked, "record-human-turn");
+    expect(noWorkflow(next(linked, OPENCODE))).toBe(true);
+    expect(existsSync(join(outside, "kept-request.json"))).toBe(true);
+  });
+
+  test("a stop behind a linked sessions folder keeps nothing there", () => {
+    const proj = installed(OPENCODE);
+    const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-kept-request-outside-"));
+    outsides.push(outside);
+    mkdirSync(join(proj, "aidlc"), { recursive: true });
+    rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+    symlinkSync(outside, join(proj, "aidlc", ".aidlc-sessions"), DIR_LINK);
+    expect(isStop(next(proj, OPENCODE, {}, ["--", REQUEST]))).toBe(true);
+    expect(existsSync(join(outside, "kept-request.json"))).toBe(false);
   });
 });
 
