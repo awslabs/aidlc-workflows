@@ -917,6 +917,21 @@ describe("asked before the piece of work exists", () => {
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
   });
 
+  // From the guard matrix: typed beside --skip, the switches were dropped, and
+  // the person had to say plan approval off again.
+  test("typed beside the request's own flags, it counts for the new work too", () => {
+    const proj = emptyProject();
+    const context = reply(proj,
+      "/aidlc --project-type greenfield --skip user-stories --collaborators off --guard-policy off --plan-approval off build the export");
+    expect(context).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+    expect(context).toContain("Guard Policy off for the work you are asking for (set by you).");
+    const asked = requestOf(proj, "build the export", ["--skip", "user-stories", "--plan-approval", "off"]);
+    expect(asked.message).toContain("--plan-approval off");
+    const made = utility(proj, ["intent-create", "--request", asked.id, "--skip", "user-stories", "--plan-approval", "off"]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPlanApproval(proj)).toBe("off (set by you)");
+  });
+
   test("the agent passing the flag with no such turn is refused", () => {
     const proj = emptyProject();
     const asked = requestOf(proj, "build the export");

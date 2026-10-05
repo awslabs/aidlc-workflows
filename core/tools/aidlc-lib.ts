@@ -36585,6 +36585,11 @@ const TYPED_INTENT_SETTING_KEYS = new Set([
   "guard.reviewer-scope",
 ]);
 
+// The request's own flags, which carry no switch: the switches typed beside
+// them still count ("/aidlc --project-type brownfield --plan-approval off add
+// the export").
+const TYPED_REQUEST_FLAGS = new Set(["skip", "add", "project-type", "collaborators"]);
+
 // "skip plan approval", "turn off plan approval for this work", "no more plan
 // approvals", "plan approval off": an instruction, never a question.
 const PLAN_APPROVAL_OFF_WORDS_RE = new RegExp(
@@ -36717,6 +36722,7 @@ export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAns
       scope = value;
       continue;
     }
+    if (!configForm && TYPED_REQUEST_FLAGS.has(configKey)) continue;
     // `guard.plan-approval` is another way to say `plan-approval`: one switch,
     // no plan stops. Whether an edited plan asks again is Guard Policy's call.
     const currentKey = configKey === "change-control"

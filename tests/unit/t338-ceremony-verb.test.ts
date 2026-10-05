@@ -669,6 +669,14 @@ describe("t338 summary confirmation off is the person's switch", () => {
     expect(parsed.settings.map((setting) => setting.key)).not.toContain("summary-confirmation");
   });
 
+  test("the request's own flags carry no switch, and an unknown flag still drops every switch", () => {
+    const beside = parseTypedGuardSwitchRequest("/aidlc --skip user-stories --project-type brownfield --plan-approval off build B");
+    expect(beside.newWorkPlanApprovalOff).toBe(true);
+    expect(beside.switches).toEqual([]);
+    const unknown = parseTypedGuardSwitchRequest("/aidlc --bogus x --plan-approval off build B");
+    expect(unknown.newWorkPlanApprovalOff).toBeUndefined();
+  });
+
   test.each([
     "/aidlc --summary-confirmation off build unrelated B",
     "/aidlc should I use --summary-confirmation off?",
