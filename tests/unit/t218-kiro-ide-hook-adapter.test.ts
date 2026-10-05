@@ -2474,6 +2474,65 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  // The supported builds fill every PreToolUse input, so a call the guards
+  // cannot read is refused rather than judged as one with no target: inside or
+  // outside a workflow, and with the review freeze switched off.
+  test("a call the guards cannot read is refused before either guard runs", () => {
+    for (const withState of [true, false]) {
+      const dir = scratchProject(withState);
+      try {
+        const file = join(dir, "aidlc", "notes.md");
+        for (const [target, hookFile] of [
+          ["review-freeze", "aidlc-review-freeze.ts"],
+          ["state-transition-guard", "aidlc-state-transition-guard.ts"],
+        ] as const) {
+          const capture = join(dir, `${target}-unreadable.jsonl`);
+          writeFileSync(join(dir, ".kiro", "hooks", hookFile), recordingGuard(capture), "utf-8");
+          const call = (payload: Record<string, unknown>) =>
+            JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, session_id: "S-IDE", ...payload });
+          for (const [stdin, why] of [
+            [call({ tool_name: "fs_write", tool_input: {} }), "fs_write names no file"],
+            [call({ tool_name: "fs_write", tool_input: { target_file: file, text: "x" } }), "fs_write names no file"],
+            [call({ tool_name: "delete_file", tool_input: { explanation: "x" } }), "delete_file names no file"],
+            [call({ tool_name: "execute_bash", tool_input: {} }), "execute_bash carries no command"],
+            [call({ tool_name: "execute_pwsh", tool_input: { command: ["Set-Content", "x"] } }), "execute_pwsh carries no command"],
+            [call({ tool_name: "shell", tool_input: { command: "  " } }), "shell carries no command"],
+            [call({ tool_name: 7, tool_input: { path: file } }), "malformed (toolName)"],
+            [call({ tool_input: { path: file } }), "names no tool"],
+            ["{not json", "malformed (JSON)"],
+            ["", "names no tool"],
+          ] as const) {
+            for (const env of [{}, { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }]) {
+              const r = runIdeStdin(dir, target, stdin, { AIDLC_COMPILED_EXECUTABLE: "", ...env });
+              expect(r.code, `${target} ${why}`).toBe(2);
+              expect(r.stderr, `${target} ${why}`).toContain("AI-DLC cannot check this Kiro tool call");
+              expect(r.stderr, `${target} ${why}`).toContain(why);
+              expect(r.stderr).toContain("Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. Update Kiro");
+            }
+          }
+          expect(existsSync(capture), target).toBe(false);
+          // A command that writes nothing is readable: the guard judges it.
+          const pwd = runIdeStdin(dir, target, call({ tool_name: "execute_bash", tool_input: { command: "pwd" } }), {
+            AIDLC_COMPILED_EXECUTABLE: "",
+          });
+          expect(pwd.code, target).toBe(0);
+          expect(readFileSync(capture, "utf-8").trim().split("\n"), target).toHaveLength(1);
+        }
+        const native = runIdeDispatcherStdin(dir, "review-freeze", JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          session_id: "S-IDE",
+          tool_name: "fs_write",
+          tool_input: {},
+        }));
+        expect(native.code).toBe(2);
+        expect(native.stderr).toContain("fs_write names no file");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   // Both registrations carry a matcher so Kiro starts them only for the tools
   // the adapter forwards (the tool-name table's guarded writes and shells; t245
   // pins each matcher to the table), and each forwarded name reaches the guard.

@@ -191,11 +191,22 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   runs project PreToolUse hooks on a delegated agent's own calls too, with the
   conductor's `session_id` and no agent identity, and honours exit 2 there
   (measured on IDE 1.2.4 over `invoke_sub_agent` with `fs_write`), so both
-  guards judge a delegate's call as the conductor's. A legacy argument-less
-  payload carries no target, so both allow it.
+  guards judge a delegate's call as the conductor's. Every PreToolUse payload
+  of the supported builds (Kiro IDE 1.1.70, Kiro CLI 2.24.1 and later) names
+  its tool and fills its input, so a call neither guard can read (malformed
+  fields, no tool name, a write tool with no path field the adapter reads, a
+  shell tool with no command) is refused with exit 2 before either runs,
+  whatever the workflow, Guard Policy or `AIDLC_DISABLE_REVIEW_FREEZE_HOOK`;
+  the refusal names those builds and says to update Kiro. A legacy
+  argument-less payload is one such call. A readable command that writes
+  nothing is still forwarded.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the
   shared target-aware guard, a shell call judged from its own `cwd` as above. Kiro IDE 0.12 identifies the tool but supplies an
-  empty argument object, so the adapter uses a mediated planned-source protocol:
+  empty argument object, so the adapter uses a mediated planned-source protocol
+  (this guard's own handling: on this row the review-freeze and
+  state-transition registrations above refuse such a call, so the planning
+  write it admits does not run, and a write window it opened stays a recovery
+  latch as described below):
   only the measured `fs_write` and `str_replace` tools remain available while
   planning; shell, append, delete, patch, aliases, and custom mutation tools stop
   before approval. After a canonical plan write the adapter injects the current

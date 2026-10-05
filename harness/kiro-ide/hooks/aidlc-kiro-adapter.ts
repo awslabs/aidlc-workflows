@@ -72,6 +72,9 @@
 //     fingerprint/decision/answer ownership after canonical record writes,
 //     and bind approval to the planned workspace source the questions file
 //     records.
+//   - review-freeze, state-transition-guard: forward a write or shell call in
+//     the shared guards' shape; refuse a call they cannot read (malformed, no
+//     tool name, a write naming no file, a shell call with no command).
 //   - session-start: retain the modern session_id or derive a legacy identity
 //     from the measured IDE host-instance environment.
 //   - record-human-turn: Kiro IDE 1.1.14 runs no SessionStart hook when a chat
@@ -1914,6 +1917,30 @@ function shellToolCwd(toolName: string, toolArgs: Record<string, unknown>): stri
     : projectDir;
 }
 
+// What review-freeze and state-transition-guard cannot read in this call, or
+// null when they can. Every PreToolUse payload of the supported builds (Kiro
+// IDE 1.1.70, Kiro CLI 2.24.1 and later) names the tool and fills its input,
+// so a call they cannot read is refused rather than judged as one with no
+// target. A readable command that writes nothing still goes to the guards.
+function unreadableGuardCall(): string | null {
+  if ((ide.malformedFields?.length ?? 0) > 0) {
+    return `its hook payload is malformed (${ide.malformedFields?.join(", ")})`;
+  }
+  const toolName = ide.toolName ?? "";
+  if (toolName === "") return "its hook payload names no tool";
+  const toolArgs = ide.toolArgs ?? {};
+  if (isGuardedWriteTool(toolName) && inputPaths(toolArgs).length === 0) {
+    return `${toolName} names no file`;
+  }
+  if (
+    isKiroShellTool(toolName) &&
+    (typeof toolArgs.command !== "string" || toolArgs.command.trim() === "")
+  ) {
+    return `${toolName} carries no command`;
+  }
+  return null;
+}
+
 function inputPaths(input: Record<string, unknown>): string[] {
   const paths: string[] = [];
   const add = (value: unknown) => {
@@ -1965,6 +1992,21 @@ type Forward = { hook: string; input: Record<string, unknown> } | null;
 let promptSessionStart = "";
 
 function buildForward(): Forward {
+  // Ahead of the malformed-payload drop below: for these two guards an
+  // unreadable call is refused, whatever the workflow, fence or off-switch.
+  if (target === "review-freeze" || target === "state-transition-guard") {
+    const unreadable = unreadableGuardCall();
+    if (unreadable !== null) {
+      return {
+        hook: "__unreadable_guard_call__",
+        input: {
+          reason:
+            `AI-DLC cannot check this Kiro tool call: ${unreadable}. ` +
+            "AI-DLC supports Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. Update Kiro, then try again.",
+        },
+      };
+    }
+  }
   if (PAYLOAD_TARGETS.has(target) && (ide.malformedFields?.length ?? 0) > 0) {
     recordHookDrop(
       projectDir,
@@ -2853,6 +2895,10 @@ if (fwd === null) {
 }
 if (fwd.hook === "__legacy_plan_approval_block__") {
   process.stderr.write(`${String(fwd.input.reason ?? "Plan Approval blocked this tool.")}\n`);
+  return 2;
+}
+if (fwd.hook === "__unreadable_guard_call__") {
+  process.stderr.write(`${String(fwd.input.reason)}\n`);
   return 2;
 }
 hookDebug(projectDir, "kiro-adapter", "forward", {
