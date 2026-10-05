@@ -17,6 +17,7 @@ import {
   guardPolicyAcceptsChanges,
   hasUnsafeSingleLineCharacter,
   consumeProtectedQuestion,
+  unitPlainName,
   withdrawProtectedQuestions,
   changeRequestWords,
   readProtectedResponse,
@@ -211,7 +212,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     } else if (artifact !== null && reviewedArtifact !== artifact) {
       changedAfterCheck(unit, `${unit}: required outputs no longer match the review verified by native convergence.`, {
         changed: null, recorded: reviewedArtifact ?? "", current: artifact,
-        notice: `Unit ${unit}'s Code Generation documents changed after the batch was checked. Kept them.`,
+        notice: `The ${unitPlainName(unit)} Unit's Code Generation documents changed after its batch was checked. Kept them.`,
       });
       if (acceptsChanges) boundArtifact = reviewedArtifact;
     }
@@ -250,7 +251,7 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
         const paths = sourceListingChangedPaths(claimed(projected), claimed(listing));
         changedAfterCheck(unit, `${unit}: claimed source differs from the verified native Source Commit`, {
           changed: paths, recorded: checked, current: source,
-          notice: `Files from unit ${unit} changed after its batch was checked: ${renderChangedPaths(paths)}. Kept them.`,
+          notice: `Files from the ${unitPlainName(unit)} Unit changed after its batch was checked: ${renderChangedPaths(paths)}. Kept them.`,
         });
         // Kept: the batch stays bound to the source it was checked with.
         if (acceptsChanges) source = checked;

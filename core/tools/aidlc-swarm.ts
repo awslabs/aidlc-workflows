@@ -94,6 +94,7 @@ import {
   auditBlockField,
   auditShardDir,
   authorizedVerificationCommand,
+  unitPlainName,
   withdrawProtectedQuestions,
   boltSlugForUnit,
   BoltIdentityError,
@@ -666,7 +667,7 @@ function reviewerReceiptError(
       accepted.push({
         checkpoint: "review-receipt", stage, unit, changed: null,
         recorded: snapshot?.manifestSha256 ?? recordedUnitFp, current: manifest.rawBytesSha256,
-        notice: `Unit ${unit}'s list of files changed after its review. Kept the review.`,
+        notice: `The ${unitPlainName(unit)} Unit's list of files changed after it was reviewed. Kept the review.`,
       });
     } else if (
       !manifest.ok ||
@@ -758,7 +759,7 @@ function reviewerReceiptError(
           checkpoint: "review-receipt", stage, unit, changed: outsideClaims.sort(),
           recorded: recordedUnitFp,
           current: `sha256:${createHash("sha256").update(outsideClaims.join("\n")).digest("hex")}`,
-          notice: `Unit ${unit} also changed ${renderChangedPaths(outsideClaims)} outside its planned files. Kept them.`,
+          notice: `The ${unitPlainName(unit)} Unit also changed ${renderChangedPaths(outsideClaims)} outside its planned files. Kept them.`,
         });
       } else if (outsideClaims.length > 0) {
         const rendered = outsideClaims.slice(0, 10).join(", ") +
