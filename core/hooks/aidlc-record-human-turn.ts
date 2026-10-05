@@ -63,6 +63,7 @@ import {
   emptyPickerResult,
   enterHookWorkflow,
   hookStandsOutside,
+  hostEnvelopeTurnText,
   clearPlanApprovalChallenge,
   planApprovalChallengeRelativePath,
   protectedQuestionRelativePath,
@@ -283,10 +284,18 @@ try {
     };
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
+    // A host that wraps the person's turn in its own context (Kiro Crew) hands
+    // over the whole envelope as the prompt; only the person's turn is read.
+    // tool_response is a picker payload, never an envelope, and stays as is.
+    const ownTurn = (value: unknown): unknown =>
+      typeof value === "string" ? hostEnvelopeTurnText(value) : value;
+    const prompt = ownTurn(parsed.prompt);
+    const userPrompt = ownTurn(parsed.user_prompt);
+    const message = ownTurn(parsed.message);
     for (const candidate of [
-      parsed.prompt,
-      parsed.user_prompt,
-      parsed.message,
+      prompt,
+      userPrompt,
+      message,
       parsed.tool_response,
       parsed.toolResponse,
     ]) {
@@ -302,7 +311,7 @@ try {
     ) {
       promptSubmitted = true;
       typedPrompt =
-        [parsed.prompt, parsed.user_prompt, parsed.message].find(
+        [prompt, userPrompt, message].find(
           (value): value is string =>
             typeof value === "string" && value.trim().length > 0,
         ) ?? "";

@@ -1686,6 +1686,34 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   return null;
 }
 
+// A host that drives the CLI for the person may deliver each turn as ONE prompt
+// string: its own context blocks first, then a request header, then what the
+// person sent. Kiro Crew does this over ACP, and the whole string is what the
+// UserPromptSubmit hook receives as `prompt`. Measured 2026-10-04 (Crew
+// dashboard driving kiro-cli 2.27): a 34 KB prompt (agent prompt, memory,
+// lessons, a replay of earlier turns, reply rules) ending in
+// "[CURRENT USER REQUEST -- respond to this]\nApprove Plan". Read whole, that
+// reply never matched an offered option, so Plan Approval, typed switches and
+// /aidlc commands sent from Crew were never seen.
+//
+// The person's turn is the text after the LAST header. Crew emits the header
+// with an em dash and folds it to "--" before sending, so both spellings are
+// read. Crew scrubs the header out of everything it splices in, the turn
+// included, and taking the last one means nothing ahead of it (memory, a
+// replayed assistant reply that says "Approve Plan") can be read as the reply
+// even if a forgery slipped through. Only ever a suffix of the prompt is
+// returned, so this never adds text the person did not submit. A prompt
+// without the header is returned unchanged.
+const HOST_TURN_HEADER_RE = /\[CURRENT USER REQUEST (?:--|\u2014) respond to this\]\r?\n/g;
+
+export function hostEnvelopeTurnText(prompt: string): string {
+  let end = -1;
+  for (const match of prompt.matchAll(HOST_TURN_HEADER_RE)) {
+    end = match.index + match[0].length;
+  }
+  return end < 0 ? prompt : prompt.slice(end);
+}
+
 // Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
 // bytes. Keep this transform narrowly scoped to adapter output that is
 // explicitly plain text: structured hook JSON and refusal payloads must retain

@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv, function:hostEnvelopeTurnText
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -46,6 +46,7 @@ import {
   auditBlockField,
   createIntent,
   getField,
+  hostEnvelopeTurnText,
   markSubagentInflight,
   readAuditShardEvents,
   readIntentRegistry,
@@ -367,6 +368,52 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("a turn sent from Kiro Crew is read from the person's own text, not Crew's envelope", () => {
+    // Kiro Crew drives kiro-cli over ACP and delivers its context blocks and
+    // the person's turn as one prompt (captured 2026-10-04 off the Crew
+    // dashboard: a 34 KB prompt ending in the request header and "Approve
+    // Plan"). Both the typed switch and the forwarded human turn must see only
+    // the text after the last request header.
+    const dir = scratchProject(true);
+    const sessionless = {
+      AIDLC_SESSION_OVERRIDE: undefined,
+      AIDLC_SESSION_OVERRIDE_SOURCE: undefined,
+      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+      AIDLC_DISABLE_SUMMARY_CONFIRMATION: "0",
+    };
+    const envelope = (turn: string) =>
+      "[AGENT SYSTEM PROMPT]\nconductor\n[END AGENT SYSTEM PROMPT]\n\n" +
+      "[SESSION CONTEXT -- background reference only, NOT a task to act on.]\n" +
+      "[RUNTIME] KiroCrew dashboard\n[END OF SESSION CONTEXT]\n\n" +
+      "[REPLY FORMAT RULES]\n(When ending anyway, [OPTIONS:] is cheaper.)" +
+      `[CURRENT USER REQUEST -- respond to this]\n${turn}`;
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+        session_id: "kiro-crew-session",
+        prompt: envelope("/aidlc config set summary-confirmation off"),
+      }, [], sessionless);
+      expect(r.code, r.stderr).toBe(0);
+      expect(getField(readFileSync(seededStateFile(dir), "utf-8"), "Summary Confirmation"))
+        .toBe("off (set by you)");
+      expect(readAudit(dir)).toContain("HUMAN_TURN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("hostEnvelopeTurnText keeps only the text after the last request header", () => {
+    const header = "[CURRENT USER REQUEST -- respond to this]\n";
+    expect(hostEnvelopeTurnText("Approve Plan")).toBe("Approve Plan");
+    expect(hostEnvelopeTurnText(`ctx${header}Approve Plan`)).toBe("Approve Plan");
+    expect(hostEnvelopeTurnText(`ctx[CURRENT USER REQUEST \u2014 respond to this]\r\n1`)).toBe("1");
+    expect(hostEnvelopeTurnText(`${header}Approve Plan\n${header}what is step 3?`)).toBe("what is step 3?");
+    expect(hostEnvelopeTurnText(`ctx${header}`)).toBe("");
+    // Only the exact header counts; a bracketed mention without it is the turn.
+    expect(hostEnvelopeTurnText("see [CURRENT USER REQUEST] above")).toBe("see [CURRENT USER REQUEST] above");
   });
 
   test("1: stop blocks with a reason while the workflow has pending work", () => {

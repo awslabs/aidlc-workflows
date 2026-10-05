@@ -55,6 +55,7 @@ import {
   fenceCommandOutput,
   hasOpenGate,
   hookDebug,
+  hostEnvelopeTurnText,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAidlcAgentFile,
@@ -337,7 +338,10 @@ if (target === "verb-intercept") {
   // The whole turn's only job here is to deterministically handle a terminal
   // command; anything else falls through to the conductor untouched (exit 0, no
   // output → Kiro proceeds to the LLM normally). Advisory: any failure fails open.
-  const invocation = extractNextInvocation(kiro.prompt ?? "");
+  // Kiro Crew delivers its own context blocks and the person's turn as one
+  // prompt; only the turn is the person's command or reply (hostEnvelopeTurnText).
+  const humanPrompt = hostEnvelopeTurnText(kiro.prompt ?? "");
+  const invocation = extractNextInvocation(humanPrompt);
   const args = invocation.args;
   const cmd = classifyTerminalCommand(args);
   // Turn-clock: bump a per-turn counter EVERY time this seam fires (it fires
@@ -376,7 +380,7 @@ if (target === "verb-intercept") {
     runCore("aidlc-record-human-turn.ts", {
       hook_event_name: "UserPromptSubmit",
       ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
-      prompt: kiro.prompt ?? "",
+      prompt: humanPrompt,
     });
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
