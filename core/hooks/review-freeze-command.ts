@@ -1511,17 +1511,13 @@ function isNullDevice(raw: string): boolean {
 export const SHELL_DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 const MAX_SHELL_ROOTS = 64;
 
-// The directories a bare `cd` or a leading `~` or $HOME can name: HOME, else
-// the OS home. PowerShell takes `~` and $HOME from its user profile instead,
-// which can differ from HOME (USERPROFILE, or HOMEDRIVE and HOMEPATH, on
-// Windows), so for a PowerShell command every one of them is a reading.
+// The directories a bare `cd` or a leading `~` or $HOME names: HOME, else the
+// OS home. PowerShell on Windows takes them from its user profile instead
+// (USERPROFILE, or HOMEDRIVE and HOMEPATH), never from HOME.
 function shellHomes(powerShell: boolean): string[] {
-  const homes = [process.env.HOME || homedir()];
-  if (powerShell) {
-    homes.push(homedir());
-    if (process.env.USERPROFILE) homes.push(process.env.USERPROFILE);
-    if (process.env.HOMEDRIVE && process.env.HOMEPATH) homes.push(process.env.HOMEDRIVE + process.env.HOMEPATH);
-  }
+  if (!powerShell || process.platform !== "win32") return [resolve(process.env.HOME || homedir())];
+  const homes = [process.env.USERPROFILE || homedir()];
+  if (process.env.HOMEDRIVE && process.env.HOMEPATH) homes.push(process.env.HOMEDRIVE + process.env.HOMEPATH);
   return [...new Set(homes.map((home) => resolve(home)))];
 }
 
@@ -1536,39 +1532,21 @@ function powerShellEnv(name: string): string | undefined {
 // of shellHomes, or none. The quoting is gone by the time a word gets here and
 // a quoted `~` is not expanded, so callers keep the literal reading of a `~`
 // word beside these; a `$HOME` word has no literal reading (a word with `$`
-// resolves to none). A PowerShell word also takes `\` as a separator, its own
-// variable names in any case, and `$env:HOME` or `$env:USERPROFILE` (braced
-// too) from the hook's environment: an assignment to one earlier in the same
-// command is not seen.
+// resolves to none). A PowerShell word also takes `\` as a separator, its
+// variable names in any case, and a leading `$env:NAME` (braced too) from the
+// hook's environment: an assignment to it earlier in the same command, and a
+// word built from two variables, are not read.
 function homeReadings(word: string, powerShell = false): string[] {
   const text = powerShell ? word.replaceAll("\\", "/") : word;
-  const braced = (name: string) => "$" + `{${name}}`;
-  const homes = shellHomes(powerShell);
-  const prefixes: Array<[string, string[], boolean]> = [
-    ["~", homes, powerShell], ["$HOME", homes, powerShell], [braced("HOME"), homes, powerShell],
-  ];
-  if (powerShell) {
-    for (const name of ["HOME", "USERPROFILE"]) {
-      const value = powerShellEnv(name);
-      const named = value ? [value] : [];
-      prefixes.push([`$env:${name}`, named, process.platform === "win32"], [braced(`env:${name}`), named, process.platform === "win32"]);
-    }
-  }
-  for (const [prefix, bases, anyCase] of prefixes) {
-    const head = text.slice(0, prefix.length);
-    // `$env:` itself ignores case everywhere; the name after it only on Windows.
-    const colon = prefix.indexOf(":") + 1;
-    const matches = anyCase
-      ? head.toUpperCase() === prefix.toUpperCase()
-      : colon > 0
-        ? head.slice(0, colon).toUpperCase() === prefix.slice(0, colon).toUpperCase() &&
-          head.slice(colon) === prefix.slice(colon)
-        : head === prefix;
-    if (!matches) continue;
-    const rest = text.slice(prefix.length);
-    if (rest === "" || rest.startsWith("/")) return bases.map((base) => resolve(join(base, rest)));
-  }
-  return [];
+  const named = powerShell ? /^\$(?:\{env:(\w+)\}|env:(\w+))/i.exec(text) : null;
+  const home = named ? null : (powerShell ? /^(?:~|\$HOME|\$\{HOME\})/i : /^(?:~|\$HOME|\$\{HOME\})/).exec(text);
+  const lead = named ?? home;
+  if (lead === null) return [];
+  const rest = text.slice(lead[0].length);
+  if (rest !== "" && !rest.startsWith("/")) return [];
+  const value = named ? powerShellEnv(named[1] ?? named[2]) : undefined;
+  const bases = named ? (value ? [value] : []) : shellHomes(powerShell);
+  return bases.map((base) => resolve(join(base, rest)));
 }
 
 // A segment with its redirections removed, so `cd 2>/dev/null` is read as a
@@ -1625,17 +1603,16 @@ function withoutRedirections(segment: string): string {
  * and each literal `cd`/`pushd`/`chdir`/`Set-Location` target resolved from
  * every directory collected anywhere in the command. A bare `cd` or `chdir`
  * (options and redirections aside) and a leading `~`, `$HOME` or `${HOME}`
- * name $HOME. The order of the segments, loops, functions, subshells and
+ * name $HOME (see shellHomes). The order of the segments, loops, functions, subshells and
  * pipelines is not modelled, so a write can also be read from a directory it
  * never runs in. A computed target ($VAR, glob), `cd -`, `pushd`'s stack
  * operands (`+1`; bash's `cd +1` names a directory) and `pushd -n` add nothing. Past the cap the oldest collected directories are
- * dropped, never `cwd`, $HOME or the newest, so an absolute `cd` late in a
+ * dropped, never `cwd`, a home or the newest, so an absolute `cd` late in a
  * long command still counts. A command `shell` names as PowerShell is read
  * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
  * their -Path, -LiteralPath or first positional value, a `\` as a separator,
- * and a bare Set-Location names $HOME; `~`, `$HOME`, `${HOME}`, `$env:HOME`
- * and `$env:USERPROFILE` there take either separator (see homeReadings), and
- * `~`, $HOME and a bare Set-Location name each of PowerShell's homes.
+ * and a bare Set-Location names its homes; `~`, `$HOME`, `${HOME}` and
+ * `$env:NAME` there take either separator (see homeReadings).
  */
 export function shellDirectoryRoots(
   command: string,
@@ -1718,7 +1695,7 @@ const POWERSHELL_LOCATION_COMMANDS: Record<string, "set-location" | "push-locati
 
 // The directory operands of a PowerShell command line's location changes, in
 // groups too, with `\` read as a separator; null for a bare Set-Location,
-// read as $HOME. `-` and `+` (the location history) add nothing.
+// read as each of shellHomes. `-` and `+` (the location history) add nothing.
 function powerShellLocationChanges(command: string, depth: number): Array<string | null> {
   if (depth > 8) return [];
   const nested: string[] = [];

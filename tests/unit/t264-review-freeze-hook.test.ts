@@ -624,11 +624,12 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(writeTargets("Bash", { command: "pushd +; echo x > y" }, "/p")
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).toEqual(["/p/y"]);
     // ~, $HOME and ${HOME} take a backslash and any case, as PowerShell reads
-    // them, and name each home PowerShell can use: HOME and its user profile.
-    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    // them: from HOME, and on Windows from the user profile instead.
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, T264_HOME: process.env.T264_HOME };
     try {
       process.env.HOME = "/ph";
       process.env.USERPROFILE = "/pu";
+      const [profile, other] = process.platform === "win32" ? ["/pu", "/ph"] : ["/ph", "/pu"];
       for (const command of [
         "Set-Content -Path ~\\r\\x -Value v",
         "Set-Content -Path $HOME\\r\\x -Value v",
@@ -636,10 +637,14 @@ describe("t264 (a) judgeFreeze decision table", () => {
         "Set-Content -Path $" + "{Home}\\r\\x -Value v",
         "Set-Location ~\\r; Set-Content -Path x -Value v",
       ]) {
-        expect(targets(command), command).toEqual(expect.arrayContaining(["/ph/r/x", "/pu/r/x"]));
+        expect(targets(command), command).toContain(`${profile}/r/x`);
+        expect(targets(command), command).not.toContain(`${other}/r/x`);
       }
-      expect(targets("Set-Location; Set-Content -Path x -Value v")).toEqual(expect.arrayContaining(["/ph/x", "/pu/x"]));
+      expect(targets("Set-Location; Set-Content -Path x -Value v")).toContain(`${profile}/x`);
       expect(targets("Set-Content -Path $env:HOME\\r\\x -Value v")).toContain("/ph/r/x");
+      // Any leading $env:NAME is read from the hook's environment.
+      process.env.T264_HOME = "/pe";
+      expect(targets("Set-Content -Path $env:T264_HOME\\r\\x -Value v")).toContain("/pe/r/x");
       expect(targets("Set-Content -Path $" + "{ENV:USERPROFILE}\\r\\x -Value v")).toContain("/pu/r/x");
       // An $env: name ignores case on Windows only.
       expect(targets("Set-Content -Path $env:home\\r\\x -Value v").includes("/ph/r/x")).toBe(process.platform === "win32");
