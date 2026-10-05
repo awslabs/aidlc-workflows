@@ -155,6 +155,36 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toHaveLength(1);
   });
 
+  test("one menu submission backs as many answers as it carried picks, and no more", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    // One menu asks two questions; the person picks on both and submits once.
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture", Decision: "Anything to add for next time?" });
+    drive.sent('{"Keep this note?":"Keep (project)","Anything to add for next time?":"Nothing to add"}', 2);
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Keep (project)" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Nothing to add" });
+    expect(drive.unbacked()).toEqual([]);
+    // A third answer has no pick behind it.
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Add a note" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Add a note"');
+  });
+
+  test("a typed reply backs one answer, even to a menu of two questions", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Q1-Q2: scale, auth" });
+    drive.sent("small, and Cognito");
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: small" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q2: Cognito" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Q2: Cognito"');
+  });
+
   test("a later question supersedes an earlier one, as the engine pairs them", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
