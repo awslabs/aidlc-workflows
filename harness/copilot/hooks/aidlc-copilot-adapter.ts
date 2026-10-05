@@ -478,14 +478,23 @@ export async function run(
       const root = normalizeDriveLetter(realpathSync(projectDir));
       let probe = resolve(projectDir, terminalPath(value));
       while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
-      // On Windows a word such as `A: yes,B: no` reads as a path on drive A:.
-      // A drive that does not exist holds no file, so it reaches nothing.
-      if (/^[A-Za-z]:[\\/]$/.test(probe) && !existsSync(probe)) return true;
       const rel = relative(root, normalizeDriveLetter(realpathSync(probe)));
       return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
     } catch {
       return false;
     }
+  }
+  // The person's words in a recorded answer or decision are text, never a
+  // path: on Windows `--options "A: yes,B: no"` would read as drive A:.
+  const FREE_TEXT_FLAGS = new Set(["--options", "--details", "--decision", "--reason"]);
+  function withoutFreeText(args: readonly string[]): string[] {
+    const kept: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--") { kept.push(...args.slice(i)); break; }
+      if (!FREE_TEXT_FLAGS.has(args[i].split("=")[0])) kept.push(args[i]);
+      else if (!args[i].includes("=")) i++;
+    }
+    return kept;
   }
   function argumentsStayInProject(args: readonly string[]): boolean {
     return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
@@ -572,9 +581,10 @@ export async function run(
     if (clean[0]?.startsWith("-") && !["--version", "--status", "--help"].includes(clean[0])) return false;
     const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
     const rest = clean.slice(at + 2);
+    const recordsWords = route.id === "log" && (clean[at + 1] === "answer" || clean[at + 1] === "decision");
     return !keepsPrompt(route.id, clean[at + 1] ?? "", rest, personMayLift) &&
       !clean.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
-      argumentsStayInProject(clean);
+      argumentsStayInProject(recordsWords ? withoutFreeText(clean) : clean);
   }
 
   function personActedSinceGate(): boolean {

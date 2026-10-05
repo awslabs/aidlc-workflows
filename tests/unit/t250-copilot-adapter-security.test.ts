@@ -2122,13 +2122,18 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           'aidlc engine log answer --stage requirements-analysis --details "a ^& b"',
         ]) expect(decision(command, shell), `${shell}: ${command}`).not.toBe("allow");
       }
-      // On Windows a word naming a drive that does exist is still a place
-      // outside the project, so it keeps the prompt.
-      const otherDrive = process.platform === "win32"
-        ? "CDEFGHIJKLMNOPQRSTUVWXYZ".split("").find((letter) => letter !== s.projectRoot[0].toUpperCase() && existsSync(`${letter}:\\`))
-        : undefined;
-      if (otherDrive) {
-        expect(decision(`aidlc engine log decision --stage requirements-analysis --decision "Q?" --options "${otherDrive}: elsewhere"`)).toBeUndefined();
+      // The words of a recorded answer or decision are text by their flag,
+      // whatever drives exist: `D: ...` is not a path on drive D:.
+      expect(decision('aidlc engine log answer --stage requirements-analysis --details "D: keep the end date included"')).toBe("allow");
+      expect(decision('aidlc engine log answer --stage requirements-analysis --reason "C: the plan reads fine"')).toBe("allow");
+      // Every other argument keeps the rule, on Windows too: an output or input
+      // path on another drive keeps the prompt even when that drive is absent.
+      if (process.platform === "win32") {
+        for (const command of [
+          "aidlc doctor --export --output Z:\\diagnostics",
+          "aidlc engine learnings persist --slug requirements-analysis --selections-json Z:\\file.json",
+          'aidlc engine log answer --stage requirements-analysis --questions-file "Z:\\answers.md" --details "A: yes"',
+        ]) expect(decision(command), command).toBeUndefined();
       }
     } finally {
       s.cleanup();
