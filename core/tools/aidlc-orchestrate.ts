@@ -7471,14 +7471,13 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(openGateReplyDirective(gateStage, words.id));
       return;
     }
-    // Words alone (no setting typed with them) may ask to redo, jump to a
-    // stage, or start fresh, read the same way; a setting typed with them is
-    // asked about with them, as below.
-    const carried = carriedRoutingFlags(flags);
-    if (`${carried.creation}${carried.newWork}${carried.existingWork}${carried.planChanges}` === "") {
+    // Words alone (nothing `next` reads as a flag, scope, verb or noun) may
+    // ask to redo, jump to a stage, or start fresh, read the same way; words
+    // with a setting typed beside them are asked about with it, as below.
+    if (nextArgsAreOnlyWords(args)) {
       const words = saveQuestion(
         pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
-        undefined, routingSettings(carried),
+        undefined, routingSettings(carriedRoutingFlags(flags)),
       );
       emit(reentryReplyDirective(words.id));
       return;
