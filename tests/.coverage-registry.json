@@ -6818,6 +6818,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:OWN_TERMINAL_PRESENCE_STEP",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:pairedReviewCompletions",
       "minMechanism": "none",
       "coveredBy": [
@@ -7348,6 +7355,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:personAtOwnTerminal",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
           "mechanism": "cli"
         }
       ],
