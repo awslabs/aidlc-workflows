@@ -96,6 +96,8 @@ import {
   personCheckSwitchAllowed,
   personSpokeSinceGate,
   readActiveDirectiveMarker,
+  readAuditShardEvents,
+  reviewerDispatchPath,
   spacesRoot,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
@@ -827,6 +829,43 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
   }
 }
 
+// A review the person asked for while the plan waits writes only its open
+// request's own review file (the Review File of a REVIEW_REQUESTED with no
+// REVIEW_COMPLETED for its request id yet) and, while one is open, the reviewer
+// dispatch record beside it. Nothing is open when the trail cannot be read.
+function openReviewRequestFiles(projectDir: string): string[] {
+  try {
+    const record = docsRoot(projectDir);
+    const open = new Map<string, string>();
+    for (const row of readAuditShardEvents(projectDir)) {
+      const id = auditBlockField(row.block, "Request Id");
+      if (id === null) continue;
+      if (row.event === "REVIEW_COMPLETED") open.delete(id);
+      if (row.event !== "REVIEW_REQUESTED") continue;
+      const file = auditBlockField(row.block, "Review File");
+      if (file !== null) open.set(id, resolve(record, file));
+    }
+    return open.size === 0 ? [] : [...open.values(), resolve(reviewerDispatchPath(projectDir))];
+  } catch {
+    return [];
+  }
+}
+
+// One of those files exactly, reached through no symlink and not hard-linked
+// to another file.
+function isOpenReviewTarget(projectDir: string, target: string, files: string[]): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (!files.some((file) => normalizeDriveLetter(file) === normalizeDriveLetter(targetAbs))) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
 // The composer's grid proposal (composerProposalPath) is engine scratch that
 // only validate-grid reads: not source, not a plan file, and nothing reads an
 // approval from it. A composition requested while Code Generation is current
@@ -1238,6 +1277,8 @@ const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
   { noun: "recompose", asked: true, admits: (afterNoun) => onlyFlags(afterNoun, ["--skip", "--add", "--reason"]) },
   { noun: "intent", verbs: ["create"], asked: true },
   { noun: "workspace", verbs: ["reclassify", "codekb-scope-diff"], asked: true },
+  // A review the person asks for: its request and its verdict.
+  { noun: "log", verbs: ["review"], asked: true },
 ];
 
 function engineDirectedWhilePlanWaits(args: readonly string[], personAsked: () => boolean): boolean {
@@ -2255,6 +2296,13 @@ async function evaluate(
         if (
           WRITE_TOOLS.has(toolName) && !mutation.opaqueShell && mutation.targets.length > 0 &&
           mutation.targets.every((candidate) => isRepliedPlanFileTarget(projectDir, candidate, editable))
+        ) return 0;
+        // A review the person asked for runs while the plan waits: its own
+        // review file and dispatch record, and nothing else.
+        const reviewing = openReviewRequestFiles(projectDir);
+        if (
+          reviewing.length > 0 && !mutation.opaqueShell && mutation.targets.length > 0 &&
+          mutation.targets.every((candidate) => isOpenReviewTarget(projectDir, candidate, reviewing))
         ) return 0;
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);

@@ -2185,6 +2185,42 @@ describe("what the engine names while a plan waits", () => {
     }
   });
 
+  test("a review the person asks for runs while the plan waits: its request, its own review file and dispatch record, nothing else", () => {
+    const proj = waitingPlan();
+    const request = "bun .claude/tools/aidlc.ts engine log review --stage code-generation --reviewer aidlc-architecture-reviewer-agent --iteration 2";
+    // A move the person asks for: it waits for them to have spoken.
+    expect(guardBash(proj, request).code).toBe(2);
+    reply(proj, "before I approve the plan, have the reviewer look at it again");
+    expect(guardBash(proj, request).code, guardBash(proj, request).stderr).toBe(0);
+    expect(guardBash(proj, `${request} --verdict READY`).code).toBe(0);
+    // The request it records names the reviewer's file.
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim());
+    const reviewFile = ".aidlc-engine/reviews/code-generation/stage/a1/2.0123456789abcdef0123456789abcdef.review.md";
+    const dispatch = join(record, ".aidlc-engine", "reviewer-dispatch.json");
+    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(2);
+    expect(guardWrite(proj, dispatch).code).toBe(2);
+    appendAuditEntry("REVIEW_REQUESTED", {
+      Stage: "code-generation", Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "2",
+      "Request Id": "review:0123456789abcdef0123456789abcdef", "Review File": reviewFile,
+    }, proj);
+    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(0);
+    expect(guardWrite(proj, dispatch).code).toBe(0);
+    expect(guardBash(proj, `rm ${dispatch}`).code).toBe(0);
+    // Everything else still waits for the plan answer.
+    expect(guardWrite(proj, join(record, ".aidlc-engine", "reviews", "code-generation", "stage", "a1", "3.other.review.md")).code).toBe(2);
+    expect(guardWrite(proj, join(record, "construction", "code-generation", "code-summary.md")).code).toBe(2);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    expect(guardBash(proj, `printf x > ${dispatch}; printf x > src/a.ts`).code).toBe(2);
+    // Once the review completes, its files wait again.
+    appendAuditEntry("REVIEW_COMPLETED", {
+      Stage: "code-generation", Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "2", Verdict: "READY",
+      "Request Id": "review:0123456789abcdef0123456789abcdef",
+    }, proj);
+    expect(guardWrite(proj, join(record, reviewFile)).code).toBe(2);
+    expect(guardWrite(proj, dispatch).code).toBe(2);
+  });
+
   test("a move the person asked for waits for them to have spoken", () => {
     const proj = waitingPlan();
     const jump = "bun .claude/tools/aidlc-jump.ts execute --target nfr-requirements --direction backward --scope poc";
