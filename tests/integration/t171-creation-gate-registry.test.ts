@@ -1479,7 +1479,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8"), "the other workflow is untouched").toBe(stateBefore);
     });
 
-    test("hostile scope names stay one argv value in scope commands and the migration remedy", () => {
+    test("a name that is not a scope name is never offered as a scope, and nothing in it runs", () => {
       const hostile = "evil scope; touch pwned";
       const mapping = { ...loadScopeMapping(), [hostile]: loadScopeMapping().poc };
       const mappingPath = join(proj, "..", `${basename(proj)}-scope-mapping.json`);
@@ -1489,17 +1489,16 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = JSON.parse(runEmittedCommand(`${ORCH_SH} next 'fix the login bug'`, proj, env).stdout.trim());
         expect(ask.ask_type).toBe("scope-confirm");
         const id: string = ask.confirm_command.match(/--request ([0-9a-f]{8})/)?.[1] ?? "";
-        const row = ask.scope_commands.find((entry: { scope: string }) => entry.scope === hostile);
-        expect(row, "every valid scope has a command").toBeDefined();
-        expect(emittedArgv(row.command)).toEqual(["next", "--scope", hostile, "--request", id]);
+        const rows = ask.scope_commands as Array<{ scope: string; command: string }>;
+        expect(rows.map((row) => row.scope)).toContain("poc");
+        expect(rows.map((row) => row.scope)).not.toContain(hostile);
+        for (const row of rows) expect(emittedArgv(row.command)).toEqual(["next", "--scope", row.scope, "--request", id]);
         const flat = join(proj, "aidlc-docs");
         mkdirSync(flat, { recursive: true });
         writeFileSync(join(flat, "aidlc-state.md"), "# AI-DLC State Tracking\n## Project Information\n- **Scope**: feature\n", "utf-8");
         const refused = runEmittedCommand(`${UTIL_SH} intent-create --scope '${hostile}' --request ${id}`, proj, env);
-        expect(refused.status).toBe(1);
-        const remedy = refused.out.match(/Run `([^`]+)` once to move it/)?.[1];
-        expect(remedy, refused.out).toBeDefined();
-        expect(emittedArgv(remedy!).slice(-2)).toEqual(["--scope", hostile]);
+        expect(refused.status, refused.out).toBe(1);
+        expect(refused.out).not.toContain("once to move it");
         expect(existsSync(join(proj, "pwned"))).toBe(false);
       } finally {
         rmSync(mappingPath, { force: true });

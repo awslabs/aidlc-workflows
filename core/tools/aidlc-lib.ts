@@ -33695,7 +33695,9 @@ let _validScopes: ReadonlySet<string> | null = null;
 
 export function validScopes(): ReadonlySet<string> {
   if (!_validScopes) {
-    _validScopes = new Set(Object.keys(loadScopeMapping()).sort());
+    // A name that is not a scope name (only a fixture mapping can carry one)
+    // is never offered or run as a scope.
+    _validScopes = new Set(Object.keys(loadScopeMapping()).filter(isScopeName).sort());
   }
   return _validScopes;
 }
