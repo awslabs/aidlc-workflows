@@ -41,6 +41,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -205,6 +206,8 @@ const MUST_ALLOW = [
   'bun ".kiro/tools/aidlc-utility.ts" status',
   "bun .kiro/tools/aidlc.ts engine orchestrate next",
   "bun .kiro/tools/aidlc.ts --doctor",
+  // Turning a recorded check back on, in the one form the skills name.
+  ...RECORDABLE_PROJECT_BYPASSES.map((name) => `bun .kiro/tools/aidlc.ts config flags --clear-bypass ${name} --yes`),
   "bun .kiro/tools/aidlc.ts config providers --show --json",
   "bun .kiro/tools/aidlc-utility.ts",
   "date -u",
@@ -269,6 +272,15 @@ const MUST_ASK_OUTSIDE_THE_WORKFLOW = [
   "bun .kiro/tools/aidlc.ts config models --gl\"obal\" --yes",
   "bun .kiro/tools/aidlc.ts config models --deciding-effort high --project --yes",
   "bun .kiro/tools/aidlc.ts config models --show --json --global",
+  // Turning a check off, and a form that changes something else as well.
+  "bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
+  "bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --bypass AIDLC_DISABLE_SENSORS --yes",
+  "bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --bypass AIDLC_DISABLE_SENSORS",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --question-retention-days 1",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --global",
+  "bun .kiro/tools/aidlc.ts config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
   "bun .kiro/tools/aidlc-log.tsx",
   "bun .kiro/tools/aidlc-log.ts.bak run",
 ];

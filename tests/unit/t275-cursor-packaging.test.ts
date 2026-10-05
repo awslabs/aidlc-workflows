@@ -53,6 +53,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools, resolveAction } from "../../core/tools/aidlc.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -277,6 +278,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc-utility.ts",
       "bun .cursor/tools/aidlc-utility.ts codekb-path",
       "bun .cursor/tools/aidlc-log.ts answers --stage x",
+      // Turning a recorded check back on, in the one form the skills name.
+      ...RECORDABLE_PROJECT_BYPASSES.map((name) => `bun .cursor/tools/aidlc.ts config flags --clear-bypass ${name} --yes`),
     ]) {
       expect(cursorShellEffect(cli, command), command).toBe("allow");
     }
@@ -301,6 +304,15 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc.ts config models --deciding-effort high --project --yes",
       "bun .cursor/tools/aidlc.ts config models --show --json --global",
       "bun .cursor/tools/aidlc.ts doctor --fix",
+      // Turning a check off, and a form that changes something else as well.
+      "bun .cursor/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
+      "bun .cursor/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --bypass AIDLC_DISABLE_SENSORS --yes",
+      "bun .cursor/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --bypass AIDLC_DISABLE_SENSORS",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --question-retention-days 1",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --global",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
       // A file whose name only starts with a tool script's.
       "bun .cursor/tools/aidlc-log.tsx answers --stage x",
       "bun .cursor/tools/aidlc-log.ts.bak answers --stage x",

@@ -1338,16 +1338,23 @@ export function copyChannelToolScripts(): string[] {
 
 // The dispatcher's public commands, outside its engine namespace, that a copy
 // channel pre-approves, each spelled exactly as AI-DLC runs it: the doctor and
-// version utilities and config's read-only forms. A host that matches text as
-// written cannot tell a quoted or re-spelled machine-wide config flag from a
-// project one, so every other config command is left to the host's prompt.
+// version utilities, config's read-only forms, and turning one recorded check
+// back on (`config flags --clear-bypass <switch> --yes`, the form the skills
+// name), which only ever raises a check. A host that matches text as written
+// cannot tell a quoted or re-spelled machine-wide config flag from a project
+// one, so every other config command, turning a check off included, is left to
+// the host's prompt.
 export function copyChannelDispatcherCommands(): string[] {
+  // Only the packager and the tests ask for this list, so the settings reader
+  // loads here and the dispatcher's own start stays as light as before.
+  const { RECORDABLE_PROJECT_BYPASSES } = require("./aidlc-settings.ts") as typeof import("./aidlc-settings.ts");
   return [
     "doctor",
     "version",
     "--doctor",
     "status",
     ...CONFIG_SECTIONS.flatMap((section) => [`config ${section} --show --json`, `config ${section} --help`]),
+    ...RECORDABLE_PROJECT_BYPASSES.map((name) => `config flags --clear-bypass ${name} --yes`),
   ];
 }
 

@@ -187,8 +187,10 @@ installed `aidlc` command. Source/development copies pre-approve only
 AI-DLC's own workflow commands, run project-relative: the engine commands
 (`bun .kiro/tools/aidlc.ts engine ...`), the read-only `doctor`, `version`,
 `--doctor`, `status`, `config <section> --show --json` and
-`config <section> --help`, and the AI-DLC tool scripts
-(`bun .kiro/tools/aidlc-<tool>.ts`). A `config` change, the commands that change
+`config <section> --help`, turning a check back on with
+`config flags --clear-bypass <switch> --yes`, and the AI-DLC tool scripts
+(`bun .kiro/tools/aidlc-<tool>.ts`). Any other `config` change (turning a check
+off included), the commands that change
 the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`,
 `system`) with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`,
 `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`), absolute paths,

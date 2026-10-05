@@ -54,6 +54,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES } from "../../core/tools/aidlc.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const SETTINGS_PATH = join(AIDLC_SRC, "settings.json");
@@ -172,6 +173,33 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     }
   });
 
+  // Turning a recorded check back on only raises it, so the one form the
+  // skills name runs as it is. Turning a check off stays the person's click,
+  // and so does any form that changes something else as well.
+  test("turning a recorded check back on runs with no prompt; turning one off shows Claude Code's prompt", () => {
+    const flags = "bun .claude/tools/aidlc.ts config flags";
+    for (const name of RECORDABLE_PROJECT_BYPASSES) {
+      expect(claudeBashEffect(`${flags} --clear-bypass ${name} --yes`), name).toBe("allow");
+    }
+    const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+    for (const command of [
+      `${flags} --bypass ${check} --local --yes`,
+      `${flags} --bypass ${check} --yes`,
+      `${flags} --bypass ${check} --global --yes`,
+      `${flags} --clear-bypass ${check} --bypass AIDLC_DISABLE_SENSORS --yes`,
+      `${flags} --bypass AIDLC_DISABLE_SENSORS --clear-bypass ${check} --yes`,
+      `${flags} --clear-bypass ${check} --yes --bypass AIDLC_DISABLE_SENSORS`,
+      `${flags} --clear-bypass ${check} --yes --question-retention-days 1`,
+      `${flags} --clear-bypass ${check} --yes --project-dir ../other`,
+      `${flags} --clear-bypass ${check} --yes --global`,
+      `${flags} --clear-bypass AIDLC_NOT_A_SWITCH --yes`,
+      `${flags} --clear-bypass "${check}" --yes`,
+      `${flags} --clear-bypass ${check} --yes && ${flags} --bypass AIDLC_DISABLE_SENSORS --local --yes`,
+    ]) {
+      expect(claudeBashEffect(command), command).toBe("prompt");
+    }
+  });
+
   // Every script behind a route that can change the machine prompts, so a new
   // one cannot slip in.
   test("the scripts behind every machine-changing command prompt", () => {
@@ -216,8 +244,12 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     expect(named.size).toBeGreaterThan(20);
     // A config change is the person's to approve in Claude Code's prompt; its
     // read-only forms run as they are, for every section.
+    const raise = new RegExp(
+      `^bun \\.claude/tools/aidlc\\.ts config flags --clear-bypass (?:${RECORDABLE_PROJECT_BYPASSES.join("|")}) --yes$`,
+    );
     const configChange = (command: string) =>
-      /^bun \.claude\/tools\/aidlc\.ts config\b/.test(command) && !/ --(?:show --json|help)$/.test(command);
+      /^bun \.claude\/tools\/aidlc\.ts config\b/.test(command) && !/ --(?:show --json|help)$/.test(command) &&
+      !raise.test(command);
     // The skill names the command-line tool's own help only as the command not
     // to run ("`--help` goes here too ... is the command-line tool's own help,
     // not the AI-DLC help the person asked for"), so it needs no entry.
@@ -225,6 +257,11 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     for (const span of named) {
       const commands = span.includes("<section>")
         ? CONFIG_SECTIONS.map((section) => span.replace("<section>", section))
+        : span.includes("<switch>")
+        ? RECORDABLE_PROJECT_BYPASSES.map((name) => span.replace("<switch>", name))
+        : span.includes("AIDLC_DISABLE_<NAME>")
+        ? RECORDABLE_PROJECT_BYPASSES.filter((name) => name.startsWith("AIDLC_DISABLE_"))
+          .map((name) => span.replace("AIDLC_DISABLE_<NAME>", name))
         : [span];
       for (const command of commands) {
         expect(claudeBashEffect(command), command).toBe(configChange(command) ? "prompt" : "allow");
