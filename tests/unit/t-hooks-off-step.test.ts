@@ -1,4 +1,4 @@
-// covers: function:hooksOffAgentStep, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, subcommand:aidlc-orchestrate:next
+// covers: function:hooksOffAgentStep, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, function:personAtOwnTerminal, subcommand:aidlc-orchestrate:next
 //
 // When the engine KNOWS a harness's hooks have never run in the joined
 // workflow, `next` does no work. It tells the agent what to do itself and the
@@ -435,5 +435,86 @@ describe("a refusal for a reply that was not recorded carries the same step when
       if (saved.project !== undefined) process.env.AIDLC_PROJECT_DIR = saved.project;
       else delete process.env.AIDLC_PROJECT_DIR;
     }
+  });
+});
+
+// A person driving AI-DLC from their own terminal, in a project no chat ever
+// ran, was stopped at every `next` with the chat tool's step, which a terminal
+// cannot take; approvals and answers were refused the same way.
+describe("a person at their own terminal is told the step that works there", () => {
+  const HOST_MARKER = /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i;
+  const ownTerminal = (extra: Record<string, string> = {}): Record<string, string> => {
+    const env: Record<string, string> = { AIDLC_TEST_CONFIG_TTY: "1", TERM_PROGRAM: "", ...extra };
+    return env;
+  };
+  function nextAt(proj: string, h: Harness, extra: Record<string, string>): Printed {
+    const env = attendedEnv(extra);
+    for (const key of Object.keys(env)) if (HOST_MARKER.test(key)) delete env[key];
+    const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next"], env);
+    expect(r.code, r.stderr).toBe(0);
+    return JSON.parse(r.stdout) as Printed;
+  }
+
+  test("next names the presence switch for their own terminal, and with it set the work runs", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const stopped = nextAt(proj, h, ownTerminal());
+    expect(stopped.kind).toBe("print");
+    expect(stopped.message ?? "").toContain("AI-DLC cannot see a chat in this terminal");
+    expect(stopped.message ?? "").toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
+    // The chat tool's own step is not given to a terminal.
+    expect(stopped.message ?? "").not.toContain(h.lines("")[0]);
+    // The named step works: the same next runs.
+    expect(isStop(nextAt(proj, h, ownTerminal({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" })))).toBe(false);
+    const ran = nextAt(proj, h, ownTerminal({ AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }));
+    expect(ran.message ?? "").not.toContain("AI-DLC cannot see a chat in this terminal");
+  });
+
+  test("a refused approval or answer at their own terminal names the same switch", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const saved: Record<string, string | undefined> = {};
+    const set = (key: string, value: string | undefined) => {
+      if (!(key in saved)) saved[key] = process.env[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    for (const key of Object.keys(process.env)) if (HOST_MARKER.test(key)) set(key, undefined);
+    set("AIDLC_UNATTENDED", undefined);
+    set("TERM_PROGRAM", undefined);
+    set("AIDLC_PROJECT_DIR", proj);
+    set("AIDLC_TEST_CONFIG_TTY", "1");
+    try {
+      const hint = unattendedHumanPresenceHint(proj);
+      expect(hint).toContain("AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1");
+      expect(hint).not.toContain(h.lines("")[0]);
+      set("AIDLC_TEST_CONFIG_TTY", undefined);
+      expect(unattendedHumanPresenceHint(proj)).not.toContain("AIDLC_SKIP_");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  test("an IDE terminal, or a project a chat has run in, keeps the chat tool's step and never names the switch", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    intentCreate(proj, h);
+    const markers: Array<Record<string, string>> = [{ TERM_PROGRAM: "vscode" }, { VSCODE_IPC_HOOK_CLI: "/tmp/vscode.sock" }, { CLAUDECODE: "1" }];
+    for (const extra of markers) {
+      const env = attendedEnv({ AIDLC_TEST_CONFIG_TTY: "1", ...extra });
+      const r = run(proj, [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next"], env);
+      const message = (JSON.parse(r.stdout) as Printed).message ?? "";
+      expect(message, JSON.stringify(extra)).toContain(`"${h.lines("")[0]}"`);
+      expect(message, JSON.stringify(extra)).not.toMatch(/AIDLC_SKIP_/);
+    }
+    // Without a terminal at both ends (an agent's tool call), nothing changes.
+    const piped = next(proj, h);
+    expect(isStop(piped)).toBe(true);
+    expect(piped.message ?? "").not.toMatch(/AIDLC_SKIP_/);
   });
 });

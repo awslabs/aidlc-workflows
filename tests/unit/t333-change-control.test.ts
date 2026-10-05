@@ -677,6 +677,18 @@ describe("t333 (3) resolution precedence", () => {
     const sentence = fenceSwitchSentence(proj, "review-freeze", content);
     expect(sentence).toContain("cannot be turned off from chat");
     expect(sentence).not.toContain("guard.review-freeze off");
+    // It says where the repair is made.
+    expect(sentence).toContain("correct it there");
+  });
+
+  test("an unreadable Guard Policy state line names the switch that repairs it, and that switch works", () => {
+    const { proj, state } = project("classic");
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "stricct (set by you)"));
+    const sentence = fenceSwitchSentence(proj, "state-transition", readFileSync(state, "utf-8"));
+    expect(sentence).toContain("cannot be turned off from chat");
+    expect(sentence).toContain("--guard-policy off` (or strict, or relaxed) to repair it");
+    recordHumanPrompt(proj, "/aidlc --guard-policy off");
+    expect(resolveGuardPolicy(proj).value).toBe("off");
   });
 
   test("a state file without the line stays strict for intents created before the setting", () => {

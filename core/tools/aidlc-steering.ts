@@ -7,6 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   errorMessage,
   resolveWorkflowSelection,
@@ -99,7 +100,9 @@ export function readRuleBundle(
         content: [],
         error:
           `Cannot load required stage rule "${entry.rel}" (${errorMessage(error)}). ` +
-          "The stage has not started. Restore the file or fix its permissions/UTF-8 encoding, then run `next` again.",
+          "The stage has not started. Put the file back (for example " +
+          `\`git checkout -- ${entry.rel}\` when the project tracks it), save it as UTF-8, or fix its permissions, ` +
+          `then run \`next\` again. \`${entrySkillInvocation()} --doctor\` names what is wrong with it.`,
       };
     }
     if (isSubstantiveRuleText(text)) content.push({ path: entry.rel, text });

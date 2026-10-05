@@ -33,6 +33,7 @@ import {
   errorMessage,
   getField,
   isReplyTurn,
+  personAtOwnTerminal,
   personRepliedAfter,
   latestMainWorkflowStageRunFloorForProject,
   PLAN_APPROVAL_ASK_TYPE,
@@ -1371,10 +1372,15 @@ export function recordPlanApprovalAnswer(
             'they meant something else, record "Review the plan" and the question comes back.',
         );
       }
-      throw new Error(
-        "The person has not replied to the plan question since it was shown. End the turn, wait for their " +
-          "reply, then record the choice they made.",
-      );
+      // From their own terminal no reply can be kept, so name the step that
+      // works there: they read the plan and build it without the question.
+      throw new Error(personAtOwnTerminal(projectDir)
+        ? "AI-DLC cannot see a chat in this terminal, so it cannot keep your answer to the plan question. To build " +
+          "the plan from this terminal, read it, then turn plan approval off for this work: run " +
+          `\`${aidlcDispatcherInvocation("config set guard.plan-approval off")}\` with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 ` +
+          "set, then run next."
+        : "The person has not replied to the plan question since it was shown. End the turn, wait for their " +
+          "reply, then record the choice they made.");
     }
     // Words kept since the question can be a question or a command to AIDLC
     // ("skip plan approval?"), which answers nothing: a choice needs a reply.

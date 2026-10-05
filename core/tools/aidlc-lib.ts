@@ -24663,6 +24663,32 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
   return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
 }
 
+// A person typing AI-DLC commands at their own terminal: both ends of the
+// command are a terminal, no IDE terminal or agent host marks the environment,
+// and no chat has ever been recorded in this project. An agent's tool call is
+// never read as this, so the terminal step below (which names the supervised
+// presence switch) is never offered to an agent whose hooks are not running.
+export function personAtOwnTerminal(projectDir?: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const tty = (process.stdin.isTTY === true && process.stdout.isTTY === true) || env.AIDLC_TEST_CONFIG_TTY === "1";
+  if (!tty) return false;
+  if (["vscode", "cursor", "kiro"].includes((env.TERM_PROGRAM ?? "").toLowerCase())) return false;
+  if (Object.keys(env).some((key) => /^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key))) {
+    return false;
+  }
+  try {
+    return readCurrentSessionId(resolveProjectDir(projectDir)) === null;
+  } catch {
+    return false;
+  }
+}
+
+// What a person at their own terminal does when AI-DLC cannot see a chat: the
+// supervised-session switch that lets their own commands count as theirs.
+export const OWN_TERMINAL_PRESENCE_STEP =
+  "AI-DLC cannot see a chat in this terminal, so it cannot tell your own commands from an agent's. To drive " +
+  "AI-DLC yourself from this terminal, run your AI-DLC commands with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 set; " +
+  "to work in a chat instead, open this folder in your AI tool and type your request there.";
+
 function plainProjectFile(projectDir: string, rel: string): boolean {
   try {
     const path = assertNoSymlinkInChainOrThrow(realpathSync(projectDir), rel);
@@ -27501,6 +27527,7 @@ export function unattendedHumanPresenceHint(projectDir?: string): string {
       "as a human reply. Unset AIDLC_UNATTENDED before returning to interactive " +
       "mode, then submit a new human response.";
   }
+  if (personAtOwnTerminal(projectDir)) return ` ${OWN_TERMINAL_PRESENCE_STEP}`;
   // Nothing on record tells a reply not sent yet from one the prompt hook
   // failed to record, so every such refusal also says what happened to a reply
   // the person did send, and never asks them to send it again. A host that runs
@@ -27929,9 +27956,21 @@ export function fenceSwitchSentence(
       "everyone on this repo. Changing that line there changes it."
     );
   } catch {
+    // Name the repair that works: a bad state line is rewritten by the typed
+    // switch (which reads it tolerantly); a bad memory line is fixed in its file.
+    let stateLineOnly = false;
+    try {
+      resolveGuardPolicy(projectDir, stateContent, { tolerateInvalidState: true });
+      stateLineOnly = true;
+    } catch {
+      // A memory layer's Mode line is the one that cannot be read.
+    }
     return (
       `Guard Policy could not be read, so the ${fence} check cannot be turned off from chat; ` +
-      "fix the policy before trying again."
+      (stateLineOnly
+        ? `type \`${entrySkillInvocation()} --guard-policy off\` (or strict, or relaxed) to repair it, then try again.`
+        : "a Guard Policy line in this space's org.md, team.md or project.md cannot be read: correct it there " +
+          "(Mode: strict, relaxed or off), then try again.")
     );
   }
 }

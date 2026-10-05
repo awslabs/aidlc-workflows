@@ -485,6 +485,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const empty = guarded(proj, ["park"]);
     expect(empty.rc, empty.out).not.toBe(0);
     expect(empty.out).toContain("no reply from the person is on record");
+    // It names the step that lets a stop through when the person's word is
+    // not on record, and that step is accepted.
+    expect(empty.out).toContain("set-autonomy --mode gated");
     // A reply on record, but the driver declared the run unattended.
     recordHumanTurn(proj);
     for (const tool of [STATE, KIRO_CLI_STATE]) {
@@ -495,6 +498,26 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     const attended = guarded(proj, ["park"]);
     expect(attended.rc, attended.out).toBe(0);
     expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  test("the step a refused autonomous park names is accepted, and the park then goes through", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    expect(guarded(proj, ["park"]).rc).not.toBe(0);
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const gated = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-bolt.ts"), "set-autonomy", "--mode", "gated", "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    expect(gated.status, `${gated.stdout}${gated.stderr}`).toBe(0);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked**:");
   });
 
   // One owner for every caller: with AIDLC_UNATTENDED=1 an autonomous run

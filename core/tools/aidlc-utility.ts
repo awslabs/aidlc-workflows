@@ -1402,7 +1402,8 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       die(
         `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
           violations.map((v) => `  - ${v}`).join("\n") +
-          `\nComplete or park the workflow(s) first (or keep the plugin enabled), then re-run select-plugins.`,
+          `\nComplete or archive the workflow(s) first (\`${entrySkillInvocation()} intent archive <name>\`; a parked workflow ` +
+          "still needs its plugin when it resumes), or keep the plugin enabled, then re-run select-plugins.",
       );
     }
 
@@ -8630,7 +8631,8 @@ function refuseUnlessArchivable(
     }).claimed.map((claim) => claim.unit);
   } catch (cause) {
     die(
-      `Intent "${dirName}" cannot be archived because team Unit claims could not be verified: ${errorMessage(cause)}`,
+      `Intent "${dirName}" cannot be archived because team Unit claims could not be verified: ${errorMessage(cause)} ` +
+        `Run \`${aidlcInvocation()} doctor\` for the exact fix, then archive it again.`,
     );
   }
   if (claimed.length > 0) {

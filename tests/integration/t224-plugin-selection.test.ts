@@ -424,7 +424,17 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     // quote-free substrings.
     expect(result.stderr).toContain("test-pro-validation");
     expect(result.stderr).toContain("owned by plugin");
-    expect(result.stderr).toContain("Complete or park the workflow(s) first");
+    // It names the step that works: a parked workflow still blocks the change
+    // (it needs its plugin to resume), an archived one does not.
+    expect(result.stderr).toContain("Complete or archive the workflow(s) first");
+    expect(result.stderr).toContain("intent archive");
+    const archived = runUtility(proj, ["intent", "archive", "strand-probe-deadbeef", "--reason", "turning its plugin off"]);
+    expect(archived.status, archived.stderr).toBe(0);
+    const deselected = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(deselected.status, deselected.stderr).toBe(0);
+    expect(runUtility(proj, ["select-plugins", "aidlc", PLUGIN]).status).toBe(0);
+    const unarchived = runUtility(proj, ["intent", "unarchive", "strand-probe-deadbeef"]);
+    expect(unarchived.status, unarchived.stderr).toBe(0);
 
     // A completed workflow no longer blocks the same change.
     const state = join(intentDir, "aidlc-state.md");

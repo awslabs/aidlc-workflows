@@ -311,6 +311,8 @@ import {
   hookActivation,
   hookLiveness,
   hooksOffAgentStep,
+  OWN_TERMINAL_PRESENCE_STEP,
+  personAtOwnTerminal,
   HOOKS_OFF_RERUN,
   hookStatusPathLinked,
   humanTurnMintAllowed,
@@ -646,8 +648,11 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
     flags.pluginCommand !== undefined || flags.knowledgeCommand !== undefined ||
     flags.claim !== undefined || flags.release !== undefined
   ) return null;
-  const step = hooksOffAgentStep(projectDir, HOOKS_OFF_RERUN);
-  if (step === null) return null;
+  const hostStep = hooksOffAgentStep(projectDir, HOOKS_OFF_RERUN);
+  if (hostStep === null) return null;
+  // A person at their own terminal, in a project no chat ever ran: the host's
+  // hook step does not apply, so name the step that works from here.
+  const step = personAtOwnTerminal(projectDir) ? OWN_TERMINAL_PRESENCE_STEP : hostStep;
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
     if (selection.intent === null) {
@@ -6646,7 +6651,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
 
   if (unitScope && (flags.stage || flags.phase)) {
     emit(errorDirective(
-      `This checkout is scoped to Unit "${unitScope.unit}"; explicit stage/phase jumps are refused in a scoped Unit checkout.`,
+      `This checkout is scoped to Unit "${unitScope.unit}"; explicit stage/phase jumps are refused in a scoped Unit checkout. ` +
+        `Run \`${entrySkillInvocation()}\` here to carry on with Unit "${unitScope.unit}", or make the jump from the project's main checkout.`,
     ));
     return;
   }
@@ -7350,7 +7356,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         } else {
           emit(noticeDirective(
             `Team Construction dispatcher could not compose its local board: ${errorMessage(e)} ` +
-              "Refusing to route Unit work until the local state, DAG, claims, and merge journals are consistent.",
+              "Refusing to route Unit work until the local state, DAG, claims, and merge journals are consistent. " +
+              `Run \`${aidlcInvocation()} doctor\` for the exact fix, then run next again.`,
           ));
           return;
         }
@@ -7363,7 +7370,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   const currentSlug = getField(stateContent, "Current Stage");
   if (!currentSlug || currentSlug.length === 0) {
     emit(errorDirective(
-      "State file has no Current Stage field — cannot determine the next stage.",
+      "State file has no Current Stage field, so the next stage cannot be determined. " +
+        `Run \`${aidlcInvocation()} doctor\` for the exact fix, then run next again.`,
     ));
     return;
   }
@@ -7429,7 +7437,8 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     if (currentState !== "in-progress" && currentState !== "revising" && currentState !== "skipped" && currentState !== "awaiting-approval") {
       emit(errorDirective(
         `Stage "${currentSlug}" is SKIP in the approved workflow plan but its active cursor state is ` +
-          `"${currentState ?? "missing"}". Refusing to emit run-stage; repair the inconsistent state before continuing.`,
+          `"${currentState ?? "missing"}". Refusing to emit run-stage. Run \`${aidlcInvocation()} doctor\` for the ` +
+          "exact fix, then run next again.",
       ));
       return;
     }
@@ -10426,7 +10435,7 @@ function emitSingleRunStage(
     return;
   }
   if (node.phase === "initialization") {
-    emit(errorDirective(SINGLE_INIT_ERROR));
+    emit(errorDirective(initStageError(SINGLE_INIT_ERROR, projectDir)));
     return;
   }
   // An isolated run never touches the plan or the cursor, so a stage the
@@ -10585,6 +10594,13 @@ function skippedJumpDirective(target: string, direction: string, current: string
 // valid:true), so the engine enforces it here rather than relaying a tool error.
 const INIT_JUMP_ERROR =
   `Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
+// With work already under way, asking for an initialization stage is asking to
+// look at the code again: name the rescan, which runs from here.
+function initStageError(base: string, projectDir: string): string {
+  if (!existsSync(engineStateFilePath(projectDir))) return base;
+  return `${base} To scan the code again for this work, type \`${entrySkillInvocation()} --project-type brownfield\` ` +
+    "(or `--project-type greenfield` for a new project).";
+}
 
 // Why a jump cannot reopen its target for the unit the person named, said
 // before anything changes. The person gets one line that speaks to them; the
@@ -10614,7 +10630,7 @@ function emitJumpDirective(
 ): "route" | undefined {
   // --phase initialization is rejected up front (applies with or without state).
   if (flags.phase && canonicalisePhase(flags.phase) === "initialization") {
-    emit(errorDirective(INIT_JUMP_ERROR));
+    emit(errorDirective(initStageError(INIT_JUMP_ERROR, projectDir)));
     return;
   }
 
@@ -10645,7 +10661,7 @@ function emitJumpDirective(
     // on the resolved target (covers --stage <init> against existing state).
     const targetNode = nodeForSlug(targetSlug);
     if (targetNode && targetNode.phase === "initialization") {
-      emit(errorDirective(INIT_JUMP_ERROR));
+      emit(errorDirective(initStageError(INIT_JUMP_ERROR, projectDir)));
       return;
     }
     if (resolved.targetSkipped) {
@@ -12639,7 +12655,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (readAutonomyMode(stateContent) === "autonomous") {
       emit(errorDirective(
         `Refusing blocking sensor override for "${slug}": Construction Autonomy Mode ` +
-          "is autonomous. Unattended runs must halt on blocking sensor failures.",
+          "is autonomous. Unattended runs must halt on blocking sensor failures. When the person " +
+          `chooses the override, run \`${aidlcToolInvocation("bolt")} set-autonomy --mode gated\` (Construction ` +
+          "then stops for approval at each Bolt), then report with the override again.",
       ));
       return;
     }

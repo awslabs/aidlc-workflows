@@ -1490,17 +1490,21 @@ describe("t248 deterministic steering delivery", () => {
 
   test("missing required rules block before stage work with repair guidance", () => {
     const proj = project();
-    rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
-    const result = invoke(proj, "next", [
-      "--scope",
-      "mvp",
-      "--stage",
-      "intent-capture",
-    ]).directive;
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    const org = readFileSync(orgPath);
+    rmSync(orgPath);
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const result = invoke(proj, "next", args).directive;
     expect(result.kind).toBe("error");
     expect(result.message).toContain("Cannot load required stage rule");
     expect(result.message).toContain("The stage has not started");
     expect(result.message).toContain("run `next` again");
+    // It names how to put the file back, and the doctor.
+    expect(result.message).toContain("git checkout -- aidlc/spaces/default/memory/org.md");
+    expect(result.message).toContain("--doctor");
+    // The named step works: with the file back, the same request starts the stage.
+    writeFileSync(orgPath, org);
+    expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
   });
 
   test("rejected background dispatch leaves no in-flight ledger", () => {

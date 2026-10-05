@@ -385,7 +385,8 @@ ones), but doctor lists such dropped edges as an advisory.
 `select-plugins` also refuses a change that would strand an active workflow:
 disabling the plugin that owns a running workflow's scope, or one that owns a
 pending EXECUTE stage in its plan, is rejected naming each dependency (complete
-or park the workflow first, or keep the plugin enabled). Doctor hard-fails on a
+or archive the workflow first, since a parked workflow still needs its plugin
+when it resumes, or keep the plugin enabled). Doctor hard-fails on a
 selection that already strands one.
 
 Composing a plugin does not auto-enable it when a selection already exists. The
