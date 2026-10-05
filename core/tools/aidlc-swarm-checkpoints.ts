@@ -200,12 +200,25 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     // do not run another checker or manufacture another review receipt.
     const review = latest(rows.filter((row) => row.event === "REVIEW_COMPLETED" &&
       auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit));
-    const reviewedArtifact = review ? auditBlockField(review.block, "Artifact Fingerprint") : null;
+    // What finalize kept after this review under relaxed or off: the review
+    // stands for the kept content, and finalize already said so once. The
+    // review row reaches this audit at merge, after finalize's row, so the
+    // two are ordered by time, not by position.
+    const keptRows = review ? rows.filter((row) => row.event === "CHANGE_ACCEPTED" &&
+      auditBlockField(row.block, "Checkpoint") === "review-receipt" &&
+      auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit &&
+      review.timestamp < row.timestamp) : [];
+    const reviewedOrKept = (field: string): string | null => {
+      const recorded = review ? auditBlockField(review.block, field) : null;
+      const kept = latest(keptRows.filter((row) => auditBlockField(row.block, "Recorded") === recorded));
+      return kept ? auditBlockField(kept.block, "Current") : recorded;
+    };
+    const reviewedArtifact = reviewedOrKept("Artifact Fingerprint");
     let boundArtifact = artifact;
     if (!review || !native || !attemptEventDefinitelyBefore(review, native) ||
       (rejection !== null && !attemptEventDefinitelyBefore(rejection, review)) ||
       !eventMatchesClaimAttempt(pd, review.block, unit) ||
-      auditBlockField(review.block, "Source Fingerprint") !== nativeSource ||
+      reviewedOrKept("Source Fingerprint") !== nativeSource ||
       auditBlockField(review.block, "Source Freshness Bypass") !== null ||
       auditBlockField(review.block, "Unit Source Binding Bypass") !== null) {
       errors.push(`${unit}: required outputs no longer match the review verified by native convergence.`);
@@ -231,8 +244,9 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       );
       if (!manifest.ok) throw new Error(manifest.reason);
       const committed = manifest.listing;
-      if (!review || unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256) !==
-        auditBlockField(review.block, "Unit Source Fingerprint")) {
+      // A Unit finalize kept a change for lands as it was kept, not as reviewed.
+      if (!review || (keptRows.length === 0 && unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256) !==
+        auditBlockField(review.block, "Unit Source Fingerprint"))) {
         throw new Error("source manifest or claimed source does not match the native reviewed binding");
       }
       const parentClaims = {

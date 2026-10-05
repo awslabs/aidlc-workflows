@@ -581,6 +581,9 @@ function reviewerReceiptError(
   const definition = resolveStage(stage);
   const accepted: AcceptedChange[] = [];
   let manifestKept = false;
+  // Under relaxed or off, what changed after a real review is kept and said
+  // once; under strict the Unit goes back for a fresh review.
+  const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
   const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
@@ -590,8 +593,7 @@ function reviewerReceiptError(
   if (
     recordedArtifactFp === null ||
     !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
-    currentArtifactFp === null ||
-    recordedArtifactFp !== currentArtifactFp
+    currentArtifactFp === null
   ) {
     return {
       error:
@@ -599,17 +601,37 @@ function reviewerReceiptError(
         `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`,
     };
   }
+  const documents = `${definition?.name ?? stage} documents`;
+  let artifactFingerprint = recordedArtifactFp;
+  if (recordedArtifactFp !== currentArtifactFp) {
+    if (!acceptsChanges) {
+      return {
+        error:
+          `claimed converged but unit "${unit}"'s ${documents} changed after its review; ` +
+          `re-invoke the reviewer against the current documents and record a fresh verdict before finalizing`,
+      };
+    }
+    accepted.push({
+      checkpoint: "review-receipt", stage, unit, changed: null,
+      recorded: recordedArtifactFp, current: currentArtifactFp,
+      notice: `The ${unitPlainName(unit)} Unit's ${documents} changed after it was reviewed. Kept them.`,
+    });
+    artifactFingerprint = currentArtifactFp;
+  }
+  const keptOnly = (): ReceiptCheck => ({
+    error: null, artifactFingerprint, ...(accepted.length > 0 ? { accepted } : {}),
+  });
 
   if (!definition?.workspace_requires) {
-    return { error: null, artifactFingerprint: recordedArtifactFp };
+    return keptOnly();
   }
   const recordedSourceFp = auditBlockField(latestTerminal.block, "Source Fingerprint");
   if (process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1") {
-    return { error: null, artifactFingerprint: recordedArtifactFp };
+    return keptOnly();
   }
   if (recordedSourceFp === null) {
     if (baseCommit === null) {
-      return { error: null, artifactFingerprint: recordedArtifactFp };
+      return keptOnly();
     }
     return {
       error:
@@ -618,10 +640,12 @@ function reviewerReceiptError(
     };
   }
   const currentSourceFp = worktreeSourceFingerprint(wt);
+  const sourceChanged = recordedSourceFp !== UNBINDABLE_FINGERPRINT && currentSourceFp !== null &&
+    !sameWorkspaceSource(recordedSourceFp, currentSourceFp);
   if (
     recordedSourceFp === UNBINDABLE_FINGERPRINT ||
     currentSourceFp === null ||
-    !sameWorkspaceSource(recordedSourceFp, currentSourceFp)
+    (sourceChanged && !acceptsChanges)
   ) {
     return {
       error:
@@ -630,6 +654,16 @@ function reviewerReceiptError(
         `re-invoke the reviewer against the current worktree source and record a fresh ` +
         `verdict before finalizing`,
     };
+  }
+  // The kept code is what finalize binds and lands.
+  let sourceFingerprint = recordedSourceFp;
+  if (sourceChanged) {
+    accepted.push({
+      checkpoint: "review-receipt", stage, unit, changed: null,
+      recorded: recordedSourceFp, current: currentSourceFp,
+      notice: `The ${unitPlainName(unit)} Unit's code changed after it was reviewed. Kept the change.`,
+    });
+    sourceFingerprint = currentSourceFp;
   }
 
   // Pre-upgrade worktrees have no attested base commit and retain migration
@@ -658,7 +692,6 @@ function reviewerReceiptError(
     const snapshot = readUnitSourceSnapshot(wt, stage, unit, recordedUnitFp);
     // Under relaxed or off the review stands when the Unit's manifest changed
     // after it or its review copy is not on this machine; the change is kept.
-    const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
     if (
       acceptsChanges && manifest.ok &&
       (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256)
@@ -777,8 +810,8 @@ function reviewerReceiptError(
   }
   return {
     error: null,
-    artifactFingerprint: recordedArtifactFp,
-    sourceFingerprint: recordedSourceFp,
+    artifactFingerprint,
+    sourceFingerprint,
     unitSourceFingerprint,
     ...(accepted.length > 0 ? { accepted } : {}),
     ...(manifestKept ? { manifestKept } : {}),
