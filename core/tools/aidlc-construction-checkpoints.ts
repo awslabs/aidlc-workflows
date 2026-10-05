@@ -466,6 +466,7 @@ function snapshot(
         artifactFingerprint: (definition, name) => reviewArtifactFingerprint(projectDir, definition, name, {
           boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
         }),
+        keepChangedWaveCompletions: true,
       });
       shared.lifecycle.set(slug, lifecycle);
     }
@@ -485,12 +486,10 @@ function snapshot(
       eventMatchesClaimAttempt(projectDir, row.block, unit),
     ));
     const completionFingerprint = completion && auditBlockField(completion.block, "Artifact Fingerprint");
-    if (
-      !lifecycle.receipts.has(unit) ||
-      completion?.event !== "UNIT_COMPLETED" ||
-      auditBlockField(completion.block, "Run floor") !== floor ||
-      (completionFingerprint !== null && completionFingerprint !== artifact)
-    ) errors.push(`${slug}: current Unit completion evidence is missing or stale.`);
+    const completed = lifecycle.receipts.has(unit) && completion?.event === "UNIT_COMPLETED" &&
+      auditBlockField(completion.block, "Run floor") === floor;
+    if (!completed) errors.push(`${slug}: current Unit completion evidence is missing or stale.`);
+    const completedArtifact = artifact;
 
     let source: string | null = null;
     let claimed: { model: SourceClaimModel; sha256: string } | null = null;
@@ -521,6 +520,7 @@ function snapshot(
       ? resolveReviewClass(stage.review_class ?? "adversarial", scope, state)
       : "none";
     let review: AuditShardEvent | null = null;
+    let reviewStale = false;
     if (reviewClass !== "none") {
       let receipts = shared.receipts.get(slug);
       if (!receipts) {
@@ -583,6 +583,7 @@ function snapshot(
         ))
       ) {
         errors.push(`${slug}: current artifact/source-bound terminal review evidence is required.`);
+        reviewStale = true;
         // Only the reviewed code or documents moved (no review is waiting):
         // the one recovery review re-checks them.
         const moved = receipts.unitSourceMoved.get(unit) ??
@@ -630,6 +631,14 @@ function snapshot(
         keptFiles = recorded.files;
       }
     }
+    // Outputs changed after the stage completed are a change to completed work:
+    // its review re-checks them, the Guard Policy accepts them, or, with reviews
+    // off, the checkpoint holds them and the person is asked about them.
+    if (
+      completed && completionFingerprint !== null && completionFingerprint !== completedArtifact &&
+      reviewClass !== "none" && !reviewStale && artifact === completedArtifact &&
+      !(review && completion && attemptEventDefinitelyBefore(completion, review))
+    ) errors.push(`${slug}: current Unit completion evidence is missing or stale.`);
     const files = source === null ? null
       : source === ownSource && claimed && listing ? restrictSourceListing(listing, claimed.model) : keptFiles;
     approvedEvidence[slug] = files !== null && source !== null && files.size <= APPROVED_FILES_CAP

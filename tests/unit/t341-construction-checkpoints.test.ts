@@ -585,8 +585,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const original = readFileSync(path, "utf-8");
     writeFileSync(path, `${original}\nChanged requirement\n`);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("completion");
+    // A document changed after its stage completed is checked again as it is
+    // now, and the person is asked about it (t-checkpoint-wave-edit).
+    expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).toMatchObject({ verified: true, approved: false });
     writeFileSync(path, original);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
+    pass(dir);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 2;\n");
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);

@@ -8305,11 +8305,14 @@ function unitLedgerFor(
 ): UnitLedger {
   const policyState = stateContent ?? loadStateFileIfPresent(projectDir);
   const receiptsRequired = policyState !== null && checkpointPolicyEnabled(policyState);
+  // A Unit's checkpoint re-checks or accepts a change to its completed work,
+  // so the stage is not handed back for it.
+  const keepChangedWaveCompletions = receiptsRequired;
   if (auditRows && stateContent) {
-    const snapshot = unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent);
+    const snapshot = unitLifecycleSnapshot(projectDir, slug, auditRows, stateContent, { keepChangedWaveCompletions });
     return { ...snapshot, inUse: snapshot.inUse || receiptsRequired };
   }
-  const receipts = unitCompletedReceipts(projectDir, slug);
+  const receipts = unitCompletedReceipts(projectDir, slug, { keepChangedWaveCompletions });
   const open = unitOpenCheckpoints(projectDir, slug);
   return {
     receipts,
