@@ -218,6 +218,10 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
     // read-only forms run as they are, for every section.
     const configChange = (command: string) =>
       /^bun \.claude\/tools\/aidlc\.ts config\b/.test(command) && !/ --(?:show --json|help)$/.test(command);
+    // The skill names the command-line tool's own help only as the command not
+    // to run ("`--help` goes here too ... is the command-line tool's own help,
+    // not the AI-DLC help the person asked for"), so it needs no entry.
+    named.delete("bun .claude/tools/aidlc.ts --help");
     for (const span of named) {
       const commands = span.includes("<section>")
         ? CONFIG_SECTIONS.map((section) => span.replace("<section>", section))
