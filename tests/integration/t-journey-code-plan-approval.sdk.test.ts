@@ -182,6 +182,12 @@ function isPlanQuestion(menu: CapturedAskUserQuestion): boolean {
   return labels.some((l) => /approve/i.test(l)) && labels.some((l) => /change/i.test(l));
 }
 
+// The agent's offer, after "skip plan approval?", to turn plan approval off:
+// the person was only asking, so they do not take it and go on.
+function isPlanApprovalOffOffer(menu: CapturedAskUserQuestion): boolean {
+  return menu.questions.some((q) => /plan approval/i.test(q.question) && q.options.some((o) => /\boff\b/i.test(o.label)));
+}
+
 function stageMode(state: string, slug: string): string | undefined {
   return new RegExp(`^- \\[.\\] ${slug} \\S+ (EXECUTE|SKIP)$`, "m").exec(state)?.[1];
 }
@@ -210,9 +216,9 @@ describe.skipIf(
         projectDir: proj,
         persistSession: true,
         // The plan question gets "Chat about this": the person's only answer
-        // to it is the one they type. Any other question the agent asks takes
-        // its first option.
-        chatAboutQuestionWhen: isPlanQuestion,
+        // to it is the one they type. So does an offer to turn plan approval
+        // off. Any other question the agent asks takes its first option.
+        chatAboutQuestionWhen: (menu) => isPlanQuestion(menu) || isPlanApprovalOffOffer(menu),
         nextMessage: (turn) => {
           turnEnds.push({
             turn: turn.turn,
