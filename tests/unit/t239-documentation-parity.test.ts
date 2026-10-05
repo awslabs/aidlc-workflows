@@ -589,6 +589,14 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
+    // It runs under strict only; relaxed and off accept the change with one line.
+    const stale = /exception holds under every (?:Guard Policy|value)/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
+  });
+
   test("documented Guard Policy defaults match every core scope's frontmatter", () => {
     const policies = new Map(scopeNames.map((scope) => [scope, scopeGuardPolicy(scope)]));
     const byPolicy = (value: string): string[] =>

@@ -545,8 +545,10 @@ later Units even under stage-major. The engine then emits a `run-stage` with
 `construction_checkpoint`: `{kind, unit, stages, fingerprint, ready, verified,
 approved, human_required, verification_command, command_authorized, errors,
 proof_path}`, plus `rereview` (`{stage, reviewer, iteration, command}`) when only
-the Unit's reviewed code changed since its review, and `rechecked`
-(`{verdict, approved_before}`) when the current review is that re-check. `verification_command` is the full canonical recorded command,
+the Unit's reviewed code changed since its review under Guard Policy `strict`
+(under `relaxed` and `off` the change is accepted and an approved Unit stays
+approved), and `rechecked` (`{verdict, approved_before}`) when the current review
+is that re-check. `verification_command` is the full canonical recorded command,
 never an abbreviated display label. A skeleton checkpoint requires an actual end-to-end project check,
 current artifact/source/attempt-bound proof,
 and a real human approval. An ordinary Unit checkpoint requires verification

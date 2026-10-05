@@ -24,6 +24,8 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   getField,
+  governedGuardPolicy,
+  guardPolicyAcceptsChanges,
   hasUnsafeSingleLineCharacter,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
@@ -43,6 +45,7 @@ import {
   readRegularFileNoFollowOrThrow,
   readStateFile,
   readUnitSourceManifest,
+  recordAcceptedChanges,
   recordDir,
   recordFileTargetOrThrow,
   renderReviewRequestCommand,
@@ -63,6 +66,7 @@ import {
   withAuditLock,
   workspaceSourceState,
   writeRecordFileNoFollow,
+  type AcceptedChange,
   type AuditShardEvent,
   type BoltDagResolution,
   type FreshReviewReceipts,
@@ -130,6 +134,9 @@ export interface ConstructionCheckpoint {
   /** The current review is that re-check. `approved_before` says the person
    *  had approved this Unit before its code changed. */
   rechecked: { verdict: string; approved_before: boolean } | null;
+  /** From verify: the one line for each change to this Unit's reviewed work
+   *  its Guard Policy accepted, said before the person is asked. */
+  change_notices?: string[];
 }
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
@@ -288,6 +295,7 @@ interface Snapshot {
   rows: AuditShardEvent[];
   state: string;
   verificationCommand: VerificationCommand | null;
+  accepted: AcceptedChange[];
 }
 
 function locked<T>(
@@ -335,6 +343,12 @@ function snapshot(
   let sourceStages = 0;
   let rereview: ConstructionCheckpoint["rereview"] = null;
   let recheckVerdict: string | null = null;
+  const accepted: AcceptedChange[] = [];
+  // Whether this work's Guard Policy records a change to a Unit's reviewed
+  // work with one line instead of stopping on it, read as the receipt scan
+  // reads it.
+  let accepting: boolean | null = null;
+  const acceptsChanges = (): boolean => (accepting ??= guardPolicyAcceptsChanges(projectDir, state));
 
   for (const slug of stages) {
     const stage = findStageBySlug(slug);
@@ -360,7 +374,7 @@ function snapshot(
     // Unit's fingerprint does not change when every Unit has skipped the stage
     // and the stage itself is marked skipped.
     if (lifecycle.skipped.has(unit)) continue;
-    const artifact = reviewArtifactFingerprint(projectDir, stage, unit, {
+    let artifact = reviewArtifactFingerprint(projectDir, stage, unit, {
       boltDag: dag, stateContent: state, requireRequiredArtifacts: true,
     });
     if (artifact === null) errors.push(`${slug}: required outputs are missing or unbindable.`);
@@ -413,6 +427,7 @@ function snapshot(
         });
         shared.receipts.set(slug, receipts);
       }
+      accepted.push(...receipts.acceptedChanges.filter((change) => change.unit === unit));
       review = onlyLatest(rows.filter((row) =>
         row.event === "REVIEW_COMPLETED" &&
         auditBlockField(row.block, "Stage") === slug &&
@@ -433,13 +448,22 @@ function snapshot(
         eventMatchesClaimAttempt(projectDir, row.block, unit),
       ));
       const binding = request ? reviewRequestBindingFromBlock(request.block) : null;
-      // Another Unit's own reviewed build of a path this Unit claims is not a
+      // Another Unit's own reviewed build of a path this Unit claims, or any
+      // change to its code or documents the Guard Policy accepts, is not a
       // change to this Unit's approved work: its review's binding still holds.
       const reviewedSource = review ? auditBlockField(review.block, "Unit Source Fingerprint") : null;
       if (
         stage.workspace_requires && source !== null && reviewedSource !== null &&
-        reviewedSource !== source && receipts.unitSourceAttributed.has(unit)
+        reviewedSource !== source && (
+          receipts.unitSourceAttributed.has(unit) ||
+          (receipts.unitSourceMoved.has(unit) && acceptsChanges())
+        )
       ) source = reviewedSource;
+      const reviewedArtifact = review ? auditBlockField(review.block, "Artifact Fingerprint") : null;
+      if (
+        artifact !== null && reviewedArtifact !== null && reviewedArtifact !== artifact &&
+        receipts.unitVerdicts.has(unit) && acceptsChanges()
+      ) artifact = reviewedArtifact;
       if (
         !review || !receipts.unitVerdicts.has(unit) ||
         !binding || !completionCarriesVerifiedReview(projectDir, binding, review.block) ||
@@ -546,7 +570,7 @@ function snapshot(
       auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!],
   };
   return {
-    root, rows, state, verificationCommand: shared.verificationCommand,
+    root, rows, state, verificationCommand: shared.verificationCommand, accepted,
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
@@ -601,6 +625,10 @@ export function verifyConstructionCheckpoint(
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
+    // A change to this Unit's reviewed work that its Guard Policy accepts is
+    // recorded and said once, before the person is asked to approve.
+    if (current.accepted.length > 0) governedGuardPolicy(projectDir, current.state);
+    const notices = recordAcceptedChanges(projectDir, current.accepted);
     const authorization = current.verificationCommand;
     if (!authorization) {
       throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
@@ -618,7 +646,7 @@ export function verifyConstructionCheckpoint(
     // Starting a new check revokes an earlier pass, including after a crash.
     writeRecordFileNoFollow(current.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     const selection = resolveWorkflowSelection(projectDir);
-    return { ...current, proof, command: authorization.command, intent: selection.intent!, space: selection.space };
+    return { ...current, proof, notices, command: authorization.command, intent: selection.intent!, space: selection.space };
   });
   // Match swarm checkConverged: preserve Bash project checks where available.
   const command = process.platform === "win32"
@@ -677,7 +705,8 @@ export function verifyConstructionCheckpoint(
       "Run floor": before.result.run_floor,
       ...claimAttemptFields(projectDir, unit),
     }, projectDir);
-    return resolveConstructionCheckpoint(projectDir, unit, kind);
+    const result = resolveConstructionCheckpoint(projectDir, unit, kind);
+    return before.notices.length > 0 ? { ...result, change_notices: before.notices } : result;
   }, before.intent, before.space);
 }
 

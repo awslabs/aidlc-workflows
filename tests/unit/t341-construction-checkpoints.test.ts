@@ -1271,7 +1271,8 @@ describe("t341 review evidence is independent of project check success", () => {
   }
 
   for (const changeControl of ["strict", "relaxed", "off"]) {
-    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit asks again (${changeControl})`, () => {
+    const edit = changeControl === "strict" ? "asks again" : "is accepted too";
+    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit ${edit} (${changeControl})`, () => {
       const dir = project();
       writeFileSync(seededStateFile(dir), setField(setField(state(), "Review Override", "advisory"),
         "Change Control", changeControl));
@@ -1289,10 +1290,18 @@ describe("t341 review evidence is independent of project check success", () => {
       expect(current.fingerprint).toBe(approved.fingerprint);
       expect(current.approved).toBe(true);
       expect(current.rereview).toBeFalsy();
-      // An edit after that matches no review, so alpha's approval no longer holds,
-      // and the checkpoint names the one review that re-checks alpha's code.
+      // An edit after that matches no review. Under relaxed and off it is an
+      // accepted change and alpha's approval stands; under strict the
+      // checkpoint names the one review that re-checks alpha's code.
       writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 3;\n");
       const edited = resolveConstructionCheckpoint(dir, "alpha", "unit");
+      if (changeControl !== "strict") {
+        expect(edited.errors).toEqual([]);
+        expect(edited.fingerprint).toBe(approved.fingerprint);
+        expect(edited.approved).toBe(true);
+        expect(edited.rereview).toBeFalsy();
+        return;
+      }
       expect(edited.approved).toBe(false);
       expect(edited.errors).toEqual(["code-generation: current artifact/source-bound terminal review evidence is required."]);
       expect(edited.rereview).toMatchObject({ stage: "code-generation", iteration: 2 });
@@ -1301,7 +1310,7 @@ describe("t341 review evidence is independent of project check success", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("requires current paired reviews and claimed source even under relaxed Change Control", () => {
+  test("requires current paired reviews; relaxed accepts a later edit of claimed source, strict re-checks it", () => {
     const dir = project();
     writeFileSync(seededStateFile(dir), setField(state(), "Review Override", "advisory"));
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").ready).toBe(false);
@@ -1336,6 +1345,9 @@ describe("t341 review evidence is independent of project check success", () => {
     writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"),
       "Change Control", "relaxed"));
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 99;\n");
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
+    writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"),
+      "Change Control", "strict"));
     expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("review");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

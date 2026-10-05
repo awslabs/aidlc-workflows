@@ -213,7 +213,8 @@ pass is not verification. A failed check halts. Re-run `next` after verification
 the resulting directive is the next source of truth about readiness and
 verification. Re-running `verify` withdraws every open checkpoint question and
 captured checkpoint response for this intent, in any session. Ask again only
-after the new verification reports `verified: true`.
+after the new verification reports `verified: true`. Say each `change_notices`
+line the verification returns, as written, before you ask.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
@@ -224,7 +225,10 @@ else is missing. Do not ask the person anything first: run `rereview.command`
 now (it opens the stage's one recovery review), dispatch `rereview.reviewer` for
 that request through the reviewer module, record its verdict with the
 `recordVerdict` command the request returned, re-run `next`, and verify. Either
-verdict is final for this re-check.
+verdict is final for this re-check. The re-check runs under Guard Policy
+`strict` only. Under `relaxed` and `off` a change to a Unit's code or documents
+after their review is accepted: no checkpoint carries `rereview`, the Unit's
+approval or readiness stands, and its one line arrives in `change_notices`.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.
 Repair the named missing review or receipt through its owning procedure,

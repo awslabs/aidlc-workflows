@@ -263,10 +263,12 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    remains this protocol's obligation under both values; under `relaxed` or
    `off` the review-freeze fence stands aside for work nobody directed and
    records `GUARD_STOOD_ASIDE` instead of refusing, so the obligation is met by
-   following this protocol rather than by a refusal. One exception holds under
-   every Guard Policy: with Construction checkpoints on, a Unit whose reviewed
-   code changed after its review gets that one recovery review, and its
-   checkpoint directs it (`construction_checkpoint.rereview`).
+   following this protocol rather than by a refusal. Construction checkpoints
+   read the same value: under `relaxed` and `off` a change to a Unit's code or
+   documents after their review is accepted there too, with one line, and the
+   Unit's approval stands. Under `strict`, a Unit whose reviewed code changed
+   after its review gets that one recovery review, and its checkpoint directs
+   it (`construction_checkpoint.rereview`).
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;

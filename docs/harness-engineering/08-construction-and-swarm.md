@@ -131,7 +131,8 @@ autonomy grant or a silent switch to swarm execution.
 
 When `run-stage` carries `construction_checkpoint`, the Unit body and reviews
 have already run; a `rereview` field names the one re-check of code changed
-since its review, run first without asking. Route it before body/reviewer/gate
+since its review, run first without asking (under Guard Policy `strict` only;
+under `relaxed` and `off` the change is accepted and the approval stands). Route it before body/reviewer/gate
 logic. With `command_authorized: false`, ask the verification-command question
 and complete the human decision/answer/setter flow before any `verify`, then
 re-run `next`.

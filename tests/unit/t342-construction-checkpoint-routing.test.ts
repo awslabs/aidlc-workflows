@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-bolt:checkpoint, subcommand:aidlc-state:set-construction-checkpoints, subcommand:aidlc-state:set-construction-execution, function:isAutonomousConstructionGate, function:isConstructionSwarmEnabled
-// covers: function:constructionCheckpointGaps
+// covers: function:constructionCheckpointGaps, function:guardPolicyAcceptsChanges
 // covers: function:REDO_REUSE_SOURCE
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
@@ -13,8 +13,9 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative } from "node:path";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
@@ -27,7 +28,7 @@ import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds, REDO_REUSE_SOURCE,
-  _resetStageGraphForTests,
+  _resetStageGraphForTests, _resetScopeMappingForTests,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -45,6 +46,7 @@ type Options = {
   autonomy?: "unset" | "gated" | "autonomous";
   legacy?: boolean;
   current?: string;
+  scope?: string;
 };
 
 function fixture(options: Options = {}) {
@@ -57,7 +59,7 @@ function fixture(options: Options = {}) {
 - **Project**: Construction checkpoint routing
 - **Project Type**: Greenfield
 - **Project Type Source**: you
-- **Scope**: feature
+- **Scope**: ${options.scope ?? "feature"}
 - **State Version**: 8
 ## Runtime State
 - **Revision Count**: 0
@@ -87,7 +89,7 @@ ${stages.map((stage) => `- [${stage === current ? "-" : " "}] ${stage} — EXECU
   for (const unit of ["alpha", "beta"]) {
     writeFileSync(join(p, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
   }
-  appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, p);
+  appendAuditEntry("WORKFLOW_STARTED", { Scope: options.scope ?? "feature" }, p);
   if (options.autonomy === "autonomous") {
     appendAuditEntry("AUTONOMY_MODE_SET", { Mode: "autonomous" }, p);
   }
@@ -2186,30 +2188,35 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // One review through the logger, as a real run records it: the request, the
-  // reviewer's file in the slot it names, then the verdict.
-  function reviewThroughLog(p: string, args: string[]) {
+  // reviewer's file in the slot it names, then the verdict. A `finding` makes
+  // it a NOT-READY review with that one finding.
+  function reviewThroughLog(p: string, args: string[], finding?: string) {
     const requested = tool(p, "log", args);
     if (requested.status !== 0) return { ...requested, request: null };
     const request = JSON.parse(requested.stdout.trim().split(/\r?\n/).at(-1)!) as {
       recovery?: string; reviewFile: string; change_notices?: string[];
     };
     const iteration = args[args.indexOf("--iteration") + 1];
+    const verdict = finding === undefined ? "READY" : "NOT-READY";
     mkdirSync(dirname(join(p, request.reviewFile)), { recursive: true });
-    writeFileSync(join(p, request.reviewFile), `**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n` +
-      `**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`);
-    const recorded = tool(p, "log", [...args, "--verdict", "READY"]);
+    writeFileSync(join(p, request.reviewFile), `**Verdict:** ${verdict}\n**Reviewer:** ${REVIEWER}\n` +
+      `**Iteration:** ${iteration}\n\n### Findings\n\n${finding === undefined ? "No blocking findings.\n" :
+        "| ID | Severity | Location | Finding | Required action | Status |\n|---|---|---|---|---|---|\n" +
+        `| R-01 | Major | ${finding} | It is not covered. | Cover it. | New |\n`}`);
+    const recorded = tool(p, "log", [...args, "--verdict", verdict]);
     expect(recorded.status, recorded.out).toBe(0);
     return { ...requested, request };
   }
 
-  // Classic settings: one review pass per stage, Guard Policy off. alpha's code
-  // is edited after the person approved it; the next step re-checks it with no
-  // question, and the person is asked once.
+  // One review pass per stage, Guard Policy strict (on classic, which asks for
+  // no summary confirmations). alpha's code is edited after the person
+  // approved it; the next step re-checks it with no question, and the person
+  // is asked once.
   test("an approved Unit whose code changed is re-checked at once and asked about once", () => {
-    const p = fixture();
+    const p = fixture({ scope: "classic" });
     writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
       .replace("- **Review Override**: none", "- **Review Override**: advisory")
-      .replace("- **Change Control**: strict", "- **Guard Policy**: off"));
+      .replace("- **Change Control**: strict", "- **Guard Policy**: strict (set by you)"));
     for (const slug of stages) {
       cover(p, "alpha", [slug], false);
       const reviewed = reviewThroughLog(p, [
@@ -2246,4 +2253,222 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha")).toBe(floor);
     expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A Unit built as a run records it: each stage's outputs, its review through
+  // the logger, then its completion. `edit` runs before the Code Generation
+  // review, as the Unit's own build would, and stays.
+  function buildReviewed(p: string, unit: string, edit?: () => void) {
+    let codeReviewed: ReturnType<typeof reviewThroughLog> | null = null;
+    for (const slug of stages) {
+      cover(p, unit, [slug], false);
+      if (slug === "code-generation") edit?.();
+      const reviewed = reviewThroughLog(p, [
+        "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", unit, "--iteration", "1",
+      ]);
+      expect(reviewed.status, reviewed.out).toBe(0);
+      if (slug === "code-generation") codeReviewed = reviewed;
+      appendAuditEntry("UNIT_COMPLETED", {
+        Stage: slug, Unit: unit, Mode: "wave",
+        "Run floor": latestMainWorkflowStageRunFloorForProject(p, slug, true, unit),
+        "Artifact Fingerprint": reviewArtifactFingerprint(p, findStageBySlug(slug)!, unit, { requireRequiredArtifacts: true })!,
+      }, p);
+    }
+    return codeReviewed!;
+  }
+
+  // An edit to alpha's first NFR Requirements document, as the write hook
+  // records it.
+  function editAlphaDocument(p: string, words: string): string {
+    const slug = "nfr-requirements";
+    const document = join(seededRecordDir(p), "construction", "alpha", slug,
+      artifactFilename(findStageBySlug(slug)!.produces![0]));
+    const file = relative(p, document).replaceAll("\\", "/");
+    writeFileSync(document, `${readFileSync(document, "utf-8")}\n${words}\n`);
+    appendAuditEntry("ARTIFACT_UPDATED", { File: file, Stage: slug, Unit: "alpha" }, p);
+    return file;
+  }
+
+  function codeReview(unit: string, iteration: number): string[] {
+    return ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", String(iteration)];
+  }
+
+  function acceptedFor(p: string, unit: string) {
+    return readAuditShardEvents(p).filter((row) =>
+      row.event === "CHANGE_ACCEPTED" && auditBlockField(row.block, "Unit") === unit);
+  }
+
+  const ALPHA_EDIT_LINE =
+    "src/alpha.ts changed after it was reviewed. Continuing to the gate with the diff (Guard Policy: relaxed or off).";
+
+  // The Guard Policy line as the work recorded it, on the scope it runs on,
+  // with the scope's own review level unless `review` overrides it.
+  function policyFixture(scope: string, policy: string, review: string | null = null): string {
+    const p = fixture({ scope });
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Review Override**: none\n", review === null ? "" : `- **Review Override**: ${review}\n`)
+      .replace("- **Change Control**: strict", `- **Guard Policy**: ${policy}`));
+    return p;
+  }
+
+  // A scope this install does not ship, added the way a plugin or a composed
+  // plan adds one: its own file and grid column (through the scope seams).
+  function withAddedScope(scope: { name: string; plugin?: string } | null, run: () => void) {
+    if (scope === null) return run();
+    const root = mkdtempSync(join(tmpdir(), "t342-scope-"));
+    const saved = { dir: process.env.AIDLC_SCOPES_DIR, grid: process.env.AIDLC_SCOPE_GRID };
+    try {
+      cpSync(join(AIDLC_SRC, "scopes"), join(root, "scopes"), { recursive: true });
+      writeFileSync(join(root, "scopes", `${scope.name}.md`), `---\nname: ${scope.name}\n` +
+        (scope.plugin ? `plugin: ${scope.plugin}\n` : "") +
+        "depth: Standard\nkeywords: []\ndescription: \"Ships Guard Policy off\"\nskeleton: off\n" +
+        `review_cap: advisory\nguard_policy: off\nsummary_confirmation: off\n---\n\n# ${scope.name} scope\n`);
+      const grid = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8"));
+      writeFileSync(join(root, "scope-grid.json"), JSON.stringify({ ...grid, [scope.name]: grid.classic }));
+      process.env.AIDLC_SCOPES_DIR = join(root, "scopes");
+      process.env.AIDLC_SCOPE_GRID = join(root, "scope-grid.json");
+      _resetScopeMappingForTests();
+      run();
+    } finally {
+      if (saved.dir === undefined) delete process.env.AIDLC_SCOPES_DIR;
+      else process.env.AIDLC_SCOPES_DIR = saved.dir;
+      if (saved.grid === undefined) delete process.env.AIDLC_SCOPE_GRID;
+      else process.env.AIDLC_SCOPE_GRID = saved.grid;
+      _resetScopeMappingForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // Guard Policy off, wherever it came from: a shipped scope's default, a
+  // plugin's scope, a composed scope, or the person's own switch; and relaxed,
+  // which accepts the change the same way. beta's build edits a file only alpha
+  // claims. alpha stays approved with no question, the change is said once,
+  // and a review the person asks for goes ahead.
+  for (const source of [
+    { from: "a shipped scope's default", scope: "classic", policy: "off (from scope classic)", added: null },
+    { from: "a plugin's scope", scope: "test-pro-classic", policy: "off (from scope test-pro-classic)",
+      added: { name: "test-pro-classic", plugin: "test-pro" } },
+    { from: "a composed scope", scope: "my-plan", policy: "off (from scope my-plan)", added: { name: "my-plan" } },
+    { from: "the person's switch", scope: "feature", policy: "off (set by you)", added: null, review: "advisory" },
+    { from: "the person's switch to relaxed", scope: "classic", policy: "relaxed (set by you)", added: null },
+  ]) {
+    test(`Guard Policy ${source.policy.split(" ")[0]} from ${source.from}: another Unit's edit keeps an approved Unit approved`, () => {
+      withAddedScope(source.added, () => {
+        const p = policyFixture(source.scope, source.policy, source.review ?? null);
+        buildReviewed(p, "alpha");
+        approve(p, "alpha");
+        const built = buildReviewed(p, "beta", () => writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n"));
+        const beat = next(p);
+        expect(beat.construction_checkpoint?.unit, JSON.stringify(beat)).toBe("beta");
+        expect(beat.construction_checkpoint?.rereview).toBeUndefined();
+        expect(approved(p, "alpha")).toBe(true);
+        expect(built.request?.change_notices).toEqual([ALPHA_EDIT_LINE]);
+        expect(acceptedFor(p, "alpha")).toHaveLength(1);
+
+        policyHuman(p, "Have the reviewer look at alpha's code again");
+        const asked = reviewThroughLog(p, codeReview("alpha", 2));
+        expect(asked.status, asked.out).toBe(0);
+        expect(next(p).construction_checkpoint).toMatchObject({
+          unit: "alpha", rechecked: { verdict: "READY", approved_before: true },
+        });
+        approve(p, "alpha");
+        expect(next(p).construction_checkpoint?.unit).toBe("beta");
+        expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED")).toEqual([]);
+        expect(jumped(p)).toBe(0);
+      });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // The same edit when beta's own manifest claims the file: beta's review
+  // covers those bytes, alpha stays approved, and the change is said once.
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: another Unit's edit of a file it also claims is said once and keeps the approval`, () => {
+      const p = policyFixture("classic", policy);
+      buildReviewed(p, "alpha");
+      approve(p, "alpha");
+      const manifest = join(seededRecordDir(p), "construction", "beta", "code-generation", "source-manifest.json");
+      const built = buildReviewed(p, "beta", () => {
+        writeFileSync(manifest, JSON.stringify({
+          stage: "code-generation", unit: "beta", version: 1, writes: [{ path: "src/beta.ts" }, { path: "src/alpha.ts" }],
+        }));
+        writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+      });
+      expect(next(p).construction_checkpoint?.unit).toBe("beta");
+      expect(approved(p, "alpha")).toBe(true);
+      expect(built.request?.change_notices).toEqual([ALPHA_EDIT_LINE]);
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // A hand edit to approved alpha's file, made outside any Unit. Nothing is
+  // asked; the next review of Code Generation says the change once.
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a hand edit to an approved Unit's file is said once and keeps the approval`, () => {
+      const p = policyFixture("classic", policy);
+      buildReviewed(p, "alpha");
+      approve(p, "alpha");
+      writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+      const built = buildReviewed(p, "beta");
+      expect(built.request?.change_notices).toEqual([ALPHA_EDIT_LINE]);
+      expect(next(p).construction_checkpoint?.unit).toBe("beta");
+      expect(approved(p, "alpha")).toBe(true);
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // Under relaxed and off, alpha's code changed after its review and before its
+  // checkpoint: verifying says the change once, and the person is asked as usual.
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a change before a Unit's first checkpoint is said once, then approved`, () => {
+      const p = policyFixture("classic", policy);
+      buildReviewed(p, "alpha");
+      writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const beat = next(p);
+      expect(beat.construction_checkpoint, JSON.stringify(beat)).toMatchObject({ unit: "alpha", ready: true });
+      expect(beat.construction_checkpoint?.rereview).toBeUndefined();
+      recordCommand(p);
+      const verified = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
+      expect(verified.status, verified.out).toBe(0);
+      expect(JSON.parse(verified.stdout).change_notices).toEqual([ALPHA_EDIT_LINE]);
+      approve(p, "alpha");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // An advisory review's finding fixed by editing the reviewed document, as a
+  // run does it. Under relaxed and off the edit stands: the checkpoint is ready
+  // with no remedy and no question, and verifying says the change once.
+  for (const policy of ["off (from scope classic)", "relaxed (set by you)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a review finding fixed in the document keeps the checkpoint open, said once`, () => {
+      const p = policyFixture("classic", policy);
+      const slug = "nfr-requirements";
+      let relativeDocument = "";
+      for (const stage of stages) {
+        cover(p, "alpha", [stage], false);
+        const reviewed = reviewThroughLog(p, [
+          "review", "--stage", stage, "--reviewer", findStageBySlug(stage)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+        ], stage === slug ? artifactFilename(findStageBySlug(slug)!.produces![0]) : undefined);
+        expect(reviewed.status, reviewed.out).toBe(0);
+        if (stage === slug) relativeDocument = editAlphaDocument(p, "Tests use a temporary notes file.");
+        appendAuditEntry("UNIT_COMPLETED", {
+          Stage: stage, Unit: "alpha", Mode: "wave",
+          "Run floor": latestMainWorkflowStageRunFloorForProject(p, stage, true, "alpha"),
+          "Artifact Fingerprint": reviewArtifactFingerprint(p, findStageBySlug(stage)!, "alpha", { requireRequiredArtifacts: true })!,
+        }, p);
+      }
+      const beat = next(p);
+      expect(beat.construction_checkpoint, JSON.stringify(beat)).toMatchObject({ unit: "alpha", ready: true });
+      expect(beat.construction_checkpoint?.rereview).toBeUndefined();
+      recordCommand(p);
+      const verified = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
+      expect(verified.status, verified.out).toBe(0);
+      expect(JSON.parse(verified.stdout)).toMatchObject({ errors: [], change_notices: [
+        `${relativeDocument} changed after it was reviewed. Continuing to the gate with the diff (Guard Policy: relaxed or off).`,
+      ] });
+      expect(readFileSync(join(p, relativeDocument), "utf-8")).toContain("Tests use a temporary notes file.");
+      approve(p, "alpha");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });

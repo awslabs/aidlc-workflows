@@ -4515,6 +4515,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:guardPolicyAcceptsChanges",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:guardPolicyAtLeast",
       "minMechanism": "none",
       "coveredBy": [

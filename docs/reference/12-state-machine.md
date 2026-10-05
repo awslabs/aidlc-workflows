@@ -361,8 +361,18 @@ reviewed source, so another Unit's own reviewed build keeps an approved
 checkpoint approved, and any other change asks again. Such a change, one no
 review recorded, puts the Unit in `unitSourceMoved` under every Guard Policy.
 With checkpoints on, the logger grants that Unit its one `stale-receipt`
-recovery for it, and the checkpoint carries the request as `rereview`, so the
-code is re-checked before the person is asked once.
+recovery for it, and under `strict` the checkpoint carries the request as
+`rereview`, so the code is re-checked before the person is asked once. Under
+`relaxed` and `off`, which the checkpoint reads through
+`guardPolicyAcceptsChanges` as the receipt scan does, a moved path or an edited
+reviewed document is an accepted change: the checkpoint binds the Unit's
+reviewed source and documents, keeps its approval or readiness, and one
+`CHANGE_ACCEPTED` row names what changed. The first later step that records
+changes writes it: a review request or completion of that stage, or that Unit's
+checkpoint `verify`, which returns the line as `change_notices`. For a
+Unit-bound receipt the scan names only the Unit's own paths and leaves out the
+workspace-wide `Reviewed source` line, since the whole workspace also moves
+with another Unit's own build.
 
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every

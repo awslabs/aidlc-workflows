@@ -18854,10 +18854,16 @@ export function freshReviewReceipts(
     (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
       currentSourceFingerprint === null ||
       (sourceMismatch && !isRelaxed()));
+  // A Unit's own source binding is compared path by path below, and says once
+  // which of its paths changed; the whole workspace also moves with another
+  // Unit's own build.
+  const unitBound = newestSourceUnit !== null && currentSourceListing !== null &&
+    sourceFreshnessApplies && (modernUnitReceipts.get(newestSourceUnit)?.fingerprint ?? null) !== null;
   if (
     sourceMismatch &&
     newestSourceFingerprint !== null &&
     currentSourceFingerprint !== null &&
+    !unitBound &&
     isRelaxed()
   ) {
     acceptedChanges.push({

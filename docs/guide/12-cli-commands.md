@@ -1838,7 +1838,10 @@ checkpoint will ask. Never invent or auto-approve a placeholder command.
 The engine names the Unit and checkpoint kind (`unit` or `skeleton`). The body,
 reviews, and receipts already exist; follow the checkpoint instead of rebuilding.
 When the Unit's code changed after its review, the checkpoint's `rereview` names
-the one re-check request, and the agent runs it before verifying:
+the one re-check request, and the agent runs it before verifying. That happens
+under Guard Policy `strict`; under `relaxed` and `off` the change is accepted
+instead, an approved Unit stays approved, and `verify` returns its one line as
+`change_notices`:
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>
