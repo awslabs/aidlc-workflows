@@ -50,8 +50,7 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookOutsideGate,
@@ -72,6 +71,7 @@ import {
   guardRefusalOutput,
   humanAuthorityState,
   hooksHealthDir,
+  writeHookStatusFile,
   intentRepos,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -177,9 +177,9 @@ export function judgeFreeze(
 // the quote-at-gate route for suggestions, and names the state-correct route
 // that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
-  "Ask the human what should change, then record their Request Changes " +
-  "decision before editing the document; that unlocks it for revision and a " +
-  "fresh review.";
+  "Record the person's Request Changes decision, with what they said should " +
+  "change (ask only if they have not said), before editing the document; that " +
+  "unlocks it for revision and a fresh review.";
 
 export function reviewFreezeRecoveryGuidance(
   projectDir: string,
@@ -210,9 +210,6 @@ export function blockReason(
 // --- Main ---------------------------------------------------------------------
 
 export async function run(input: string): Promise<number> {
-  // Deterministic off-switch: enforcement disabled entirely.
-  if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
-
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let payloadSession: unknown;
   try {
@@ -224,6 +221,15 @@ export async function run(input: string): Promise<number> {
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
     if (hookOutsideGate(workflow)) return 0;
+    // The heartbeat says the host ran this hook, so it comes before the off
+    // switch: the freeze switched off never looks like a host running no hooks.
+    try {
+      writeHookStatusFile(hooksHealthDir(projectDir), `${HOOK_NAME}.last`, isoTimestamp());
+    } catch {
+      // Heartbeat failure is non-fatal - never let it affect the decision.
+    }
+    // Deterministic off-switch: enforcement disabled entirely.
+    if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
   } finally {
     workflow.restore();
@@ -231,14 +237,6 @@ export async function run(input: string): Promise<number> {
 }
 
 async function checkFreeze(input: string, projectDir: string): Promise<number> {
-  try {
-    const healthDir = hooksHealthDir(projectDir);
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
-  } catch {
-    // Heartbeat failure is non-fatal - never let it affect the decision.
-  }
-
   let parsed: ClaudeCodeHookInput;
   try {
     const raw: unknown = JSON.parse(input);

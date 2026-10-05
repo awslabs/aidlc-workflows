@@ -20,13 +20,16 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
+  auditShardHostSegment,
   readActiveAuditShardEvents,
   UNTRUSTED_AUDIT_NOTICE,
   sortAttemptEvents,
   attemptEventIsCrossShardTied,
   BoltIdentityError,
   claimAttemptFields,
+  cloneIdFileContent,
   cloneIdPath,
+  entrySkillInvocation,
   errorMessage,
   hasUnsafeSingleLineCharacter,
   isoTimestamp,
@@ -91,6 +94,8 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
+  // Hook-owned: a question box closed with no answer (Codex's runs out).
+  "QUESTION_UNANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -191,6 +196,10 @@ const VALID_EVENT_TYPES = new Set([
   // Adaptive composer: an in-flight plan re-shape (pending-stage suffix flips
   // via the recompose verb). Emitted by aidlc-utility.ts handleRecompose.
   "RECOMPOSED",
+  // The person said the work is a new project or existing code: the folder
+  // rescanned and the type recorded as theirs. Emitted by aidlc-utility.ts
+  // handleReclassify.
+  "WORKSPACE_RECLASSIFIED",
   // A piece of work's plan kept as a reusable scope. Emitted by
   // aidlc-utility.ts handleScopeSave.
   "SCOPE_SAVED",
@@ -210,6 +219,7 @@ const VALID_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
   // Worktree lifecycle:
   //   WORKTREE_* emitted by aidlc-worktree.ts
@@ -290,6 +300,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_APPROVED: "Gate Approved",
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
+  QUESTION_UNANSWERED: "Question Unanswered",
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   VERIFICATION_COMMAND_RECORDED: "Verification Command Recorded",
   CONSTRUCTION_POLICY_RECORDED: "Construction Policy Recorded",
@@ -331,6 +342,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   GUARD_STOOD_ASIDE: "Guard Stood Aside",
   CEREMONY_SET: "Ceremony Set",
   RECOMPOSED: "Plan Recomposed",
+  WORKSPACE_RECLASSIFIED: "Workspace Reclassified",
   SCOPE_SAVED: "Scope Saved",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
@@ -341,6 +353,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
+  CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
   WORKTREE_CREATED: "Worktree Created",
   WORKTREE_MERGED: "Worktree Merged",
@@ -387,6 +400,9 @@ function jsonError(message: string): never {
 
 const CLI_RESERVED_EVENT_TYPES = new Set([
   "HUMAN_TURN",
+  // Hook-owned like HUMAN_TURN: it spends a person's turn, so only the hook
+  // that saw the empty question box may write it.
+  "QUESTION_UNANSWERED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
@@ -451,6 +467,7 @@ export interface AuditEntryInput {
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "HUMAN_TURN",
+  "QUESTION_UNANSWERED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -467,6 +484,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  // The applied Construction policy decides which stage starts are attempt
+  // boundaries for Unit receipts, so only its typed setters may record it.
+  "CONSTRUCTION_POLICY_SET",
   // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
   // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
   // owning verb verifies artifacts before committing — a CLI-forged receipt
@@ -486,6 +506,22 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "DOCUMENT_INDEXED",
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
+  // Bolt, fork and worktree lifecycle: reviewAttemptWindow opens, completes
+  // and merges an attempt from BOLT_STARTED / BOLT_COMPLETED / AUDIT_MERGED,
+  // audit-merge reads AUDIT_FORKED and an existing AUDIT_MERGED, and the
+  // worktree frontier reads WORKTREE_*. Their owning tools (aidlc-bolt,
+  // aidlc-audit, aidlc-state, aidlc-worktree) emit them through the library, so
+  // a CLI-appended row would claim a merge or a fork that never ran.
+  "BOLT_STARTED",
+  "BOLT_COMPLETED",
+  "BOLT_FAILED",
+  "AUDIT_FORKED",
+  "AUDIT_MERGED",
+  "STATE_FORKED",
+  "STATE_MERGED",
+  "WORKTREE_CREATED",
+  "WORKTREE_MERGED",
+  "WORKTREE_DISCARDED",
   // Commit-provenance anchors: `aidlc-attest.ts anchor` derives attribution
   // from receipts + evidence and deduplicates on (Commit, Repo). A CLI-forged
   // row would suppress the genuine derived anchor the same way a forged
@@ -526,6 +562,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
 const MERGE_PROTECTED_EVENT_TYPES = new Set([
   // Human authority (GATE_RESOLUTION_EVENTS + presence + autonomy).
   "HUMAN_TURN",
+  "QUESTION_UNANSWERED",
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
@@ -539,6 +576,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",
+  "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.
   "UNIT_STARTED",
   "UNIT_PAUSED",
@@ -1103,9 +1141,15 @@ function handleAppendRaw(
   );
   const safeHeading = redactProjectDirPrefix(heading, projectDir);
   for (const raw of expandedBody.split(/\r\n?|\n|\u2028|\u2029/)) {
-    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
+    // The same optional bullet the field readers accept (exactAuditField).
+    const line = raw.replace(/^-[ \t]*/, "");
     if (!line.startsWith("**Event**:")) continue;
     const value = line.slice("**Event**:".length).trim();
+    // An empty label reads nothing on its own line; refuse it rather than
+    // leave a reader to find the value on the next one.
+    if (value === "") {
+      jsonError("append-raw refuses a body with an empty **Event**: line; put the value on the same line.");
+    }
     if (VALID_EVENT_TYPES.has(value)) {
       jsonError(
         `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
@@ -1230,7 +1274,7 @@ function validateMergeDelta(delta: string): void {
 function exactAuditField(block: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [...block.matchAll(
-    new RegExp(`^(?:-\\s*)?\\*\\*${escaped}\\*\\*:\\s*(.*)$`, "gm"),
+    new RegExp(`^(?:-[ \\t]*)?\\*\\*${escaped}\\*\\*:[ \\t]*(.*)$`, "gm"),
   )];
   return matches.length === 1 ? matches[0][1].trim() : null;
 }
@@ -1379,7 +1423,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service")`);
   }
   if (!existsSync(wtPath)) {
     jsonError(
@@ -1422,7 +1466,10 @@ function handleAuditFork(args: string[], projectDir: string): void {
             ? fsConstants.O_NOFOLLOW
             : 0;
         const bytes = Buffer.from(
-          `${randomUUID().replace(/-/g, "").slice(0, 12)}\n`,
+          cloneIdFileContent(
+            randomUUID().replace(/-/g, "").slice(0, 12),
+            auditShardHostSegment(),
+          ),
         );
         let cloneFd: number | undefined;
         try {
@@ -1657,7 +1704,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);
   }
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service")`);
   }
 
   const wtSnapshot = readAuditSnapshot(projectDir, wtAuditPath);

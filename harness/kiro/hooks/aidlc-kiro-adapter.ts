@@ -53,10 +53,11 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
-  hasOpenGate,
+  relayAsTextBlock,
+  presenceFloorHolds,
   hookDebug,
-  humanActedSinceGate,
   humanPresenceGuardDisabled,
+  isAidlcAgentFile,
   isAutonomousMode,
   leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
@@ -64,6 +65,7 @@ import {
   stateFilePath,
   stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
+import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
@@ -191,7 +193,8 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
   const workers = agents.filter((agent) =>
     /^[a-z0-9][a-z0-9-]*-agent$/.test(agent) &&
     agent !== "aidlc-composer-agent" &&
-    existsSync(join(rosterDir, `${agent}.md`))
+    existsSync(join(rosterDir, `${agent}.md`)) &&
+    isAidlcAgentFile(join(rosterDir, `${agent}.md`))
   );
   if (workers.length === 0) return null;
   // Use the same active-space cursor as repointHarnessIncludes. Validate the
@@ -477,25 +480,6 @@ if (target === "verb-intercept") {
     out = cmd.error;
   } else {
     const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    const compiledArgs = (() => {
-      if (cmd.source === "plugin-verb") {
-        if (cmd.subcommand === "plugin-list") return ["plugin", "list", ...forwarded];
-        if (cmd.subcommand === "plugin-sync") return ["plugin", "sync", ...forwarded];
-        if (cmd.subcommand === "select-plugins") return ["plugin", "select", ...forwarded];
-        if (cmd.subcommand === "plugin-validate") return ["plugin", "validate", ...forwarded];
-        if (cmd.subcommand === "plugin-build") return ["plugin", "build", ...forwarded];
-        if (cmd.subcommand === "help") return ["plugin", "help"];
-      }
-      if (cmd.source === "knowledge-verb") {
-        // The knowledge verb IS the subcommand, so no translation table -- but
-        // the noun must be restored, since the compiled CLI dispatches on it.
-        if (cmd.subcommand === "help") return ["knowledge", "help"];
-        return ["knowledge", cmd.subcommand, ...forwarded];
-      }
-      if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
-      if (cmd.subcommand === "intent-create") return ["intent", "create", ...forwarded];
-      return [cmd.subcommand, ...forwarded];
-    })();
     // Which tool owns the subcommand. Every terminal family before DocumentKB
     // lived in aidlc-utility.ts, so this was a constant; `knowledge` verbs live
     // in their own tool, so the non-compiled path must pick one. Getting this
@@ -506,7 +490,7 @@ if (target === "verb-intercept") {
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(
       executable
-        ? [executable, "engine", ...compiledArgs]
+        ? [executable, ...terminalDispatcherArgv(cmd)]
         : [process.execPath, ...utilArgs],
       { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
@@ -541,7 +525,7 @@ if (target === "verb-intercept") {
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
       fenceCommandOutput(out),
   );
   return 0;
@@ -670,9 +654,10 @@ if (target === "guard-tool-call") {
       : null;
     if (isAutonomousMode(content)) return 0; // autonomous: never block
     if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
-    if (!hasOpenGate(content)) return 0; // no gate awaits approval
 
-    if (!humanActedSinceGate(cwd)) {
+    // The shared rule: a gate the person must answer, and no turn of theirs
+    // since it opened (see presenceFloorHolds).
+    if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
       process.stderr.write(
         "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
       );

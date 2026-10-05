@@ -177,11 +177,11 @@ interface ExportRun {
 }
 
 /** Spawn `doctor --export` and locate the produced report dir + archive. */
-function runExport(proj: string): ExportRun {
+function runExport(proj: string, tool: string = UTIL): ExportRun {
   const outDir = join(proj, "out");
   const res = spawnSync(
     BUN,
-    [UTIL, "doctor", "--export", "--project-dir", proj, "--output", outDir],
+    [tool, "doctor", "--export", "--project-dir", proj, "--output", outDir],
     { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...process.env } },
   );
   let bundleDir: string | null = null;
@@ -386,6 +386,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(gate.severity).toBe("error");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The remedy names the command this install's person types: $aidlc on Codex.
+  test("3b: the gate remedy names the install's own entry command", () => {
+    for (const [tool, entry] of [
+      [UTIL, "/aidlc"],
+      [join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-utility.ts"), "$aidlc"],
+    ] as const) {
+      const proj = freshProject();
+      seedCanaryIntent(proj);
+      const { bundleDir, out } = runExport(proj, tool);
+      expect(bundleDir, out).not.toBeNull();
+      const report = JSON.parse(readFileSync(join(bundleDir!, "report.json"), "utf-8"));
+      const gate = report.findings.find((f: { id: string }) => f.id === "gate-unresolved");
+      expect(gate.remedy).toContain(`Resolve it with \`${entry}\``);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("4: manifest.json carries real sha256 checksums, versions, hashed intent id, excluded + files", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
@@ -576,6 +592,22 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       },
     });
     expect(runDiagnosis(torn).some((f) => f.id === "state-audit-drift")).toBe(true);
+  });
+
+  test("13b: Rule 3 (drift) accepts a completed workflow the person archived", () => {
+    const completed = (stateContent: string) =>
+      runDiagnosis(diagInput({
+        stateContent,
+        timeline: {
+          stages: [],
+          workflowStartedRaw: "2026-01-10T00:00:00Z",
+          workflowStatus: "Archived",
+          workflowCompleted: true,
+          notes: [],
+        },
+      })).some((f) => f.id === "state-audit-drift");
+    expect(completed("- **Status**: Archived\n- **Archived From**: Completed\n")).toBe(false);
+    expect(completed("- **Status**: Archived\n- **Archived From**: Running\n")).toBe(true);
   });
 
   test("14: reconstructTimeline sets workflowCompleted from the latest run only (Arden r2 #2)", () => {
@@ -824,6 +856,25 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(a!.durationMs).toBeNull();
     // The latest start (not the first) anchors the attempt.
     expect(a!.startedRaw).toBe("2026-01-05T00:00:00Z");
+  });
+
+  test("16b: a stage skipped while its gate was open has no unresolved gate", () => {
+    const audit = [
+      "## awaiting",
+      "**Timestamp**: 2026-01-01T00:00:00Z",
+      "**Event**: STAGE_AWAITING_APPROVAL",
+      "**Stage**: alpha",
+      "",
+      "## skipped by a scope change",
+      "**Timestamp**: 2026-01-01T01:00:00Z",
+      "**Event**: STAGE_SKIPPED",
+      "**Stage**: alpha",
+      "",
+    ].join("\n");
+    const alpha = reconstructTimeline(audit, "- [S] alpha \u2014 SKIP\n").stages.find((s) => s.slug === "alpha");
+    expect(alpha?.gate).toBe("none");
+    const open = reconstructTimeline(audit.split("## skipped")[0], "").stages.find((s) => s.slug === "alpha");
+    expect(open?.gate).toBe("unresolved");
   });
 
   test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {

@@ -654,6 +654,13 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "workspace reclassify maps to utility reclassify",
+      routerArgs: ["engine", "workspace", "reclassify", "--project-type", "brownfield"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["reclassify", "--project-type", "brownfield"],
+      fixture: true,
+    },
+    {
       name: "workspace codekb maps to utility codekb-path",
       routerArgs: ["engine", "workspace", "codekb"],
       tool: "aidlc-utility.ts",
@@ -1284,7 +1291,7 @@ describe("t230 version-aware startup", () => {
       });
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(readFileSync(marker, "utf-8")).toBe("reserved\n");
-      expect(existsSync(join(machine, "reservations"))).toBe(false);
+      expect(readdirSync(join(machine, "reservations"))).toEqual([]);
     },
   );
 
@@ -2246,6 +2253,7 @@ describe("t230 dispatcher route completeness", () => {
       [["engine", "scope", "resolve-env"], "scope"],
       [["engine", "orchestrate", "help"], "engine-orchestrate-help"],
       [["engine", "workspace", "detect"], "workspace"],
+      [["engine", "workspace", "reclassify"], "workspace"],
       [["engine", "workspace", "codekb"], "workspace"],
       [["engine", "workspace", "codekb-scope-diff"], "workspace"],
       [["engine", "gen", "stage-table"], "gen"],
@@ -2879,7 +2887,7 @@ describe("t230 dispatcher help and errors", () => {
     expect(text).toContain(
       "Operations on this user's aidlc installation; never a system-wide or root install:",
     );
-    expect(text).toContain("  rollback: [--version <version>|--list]");
+    expect(text).toContain("  rollback: [<version>|--version <version>|--list]");
     expect(text).toContain("  completions: <bash|zsh|fish|powershell>");
     expect(text).toContain("  lifecycle: install-apply");
     expect(text).toContain("install-profile --profile <path>");
@@ -2960,6 +2968,14 @@ describe("t230 dispatcher help and errors", () => {
     );
   });
 
+  test("a system noun with no verb points to system help, not engine help", () => {
+    const res = viaDispatcher(["system", "versions"], REPO_ROOT);
+    expect(res.exitCode).toBe(2);
+    expect(res.stderr.toString("utf-8")).toBe(
+      "aidlc: missing verb for system noun 'versions'; try 'aidlc system --help'\n",
+    );
+  });
+
   test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
     const help = viaDispatcher(["engine", "plugin", "help"], REPO_ROOT);
     expect(help.exitCode).toBe(0);
@@ -3006,6 +3022,40 @@ describe("t230 dispatcher help and errors", () => {
     expect(graph.exitCode).not.toBe(0);
     expect(graph.stderr.toString("utf-8")).toContain("requires an installed project harness");
     expect(existsSync(join(projectDir, ".claude"))).toBe(false);
+  });
+});
+
+// A copy runs its tools through `bun <harness>/tools/aidlc.ts`, which spawns
+// each tool. Input piped to the command reaches the tool, read to its end even
+// when the writer is slow, as in the compiled binary.
+describe("t230 a tool run through the dispatcher reads piped input", () => {
+  test("validate-grid reads a proposal written slowly to stdin", async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-stdin-"));
+    tempProjects.add(projectDir);
+    cpSync(join(REPO_ROOT, "dist", "claude"), projectDir, { recursive: true });
+    const graph = JSON.parse(
+      readFileSync(join(projectDir, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string }>;
+    const proposal = JSON.stringify({ stages: Object.fromEntries(graph.map(({ slug }) => [slug, "EXECUTE"])) });
+    // A pipe, as a shell or a script's subprocess gives it.
+    const child = Bun.spawn([
+      BUN,
+      join(projectDir, ".claude", "tools", "aidlc.ts"),
+      "engine", "graph", "validate-grid", "--project-type", "greenfield", "--proposal", "/dev/stdin",
+    ], { cwd: projectDir, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    const half = Math.floor(proposal.length / 2);
+    child.stdin.write(proposal.slice(0, half));
+    child.stdin.flush();
+    await new Promise((wait) => setTimeout(wait, 400));
+    child.stdin.write(proposal.slice(half));
+    child.stdin.end();
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(code, `${stdout}${stderr}`).toBe(0);
+    expect(JSON.parse(stdout).valid, stdout).toBe(true);
   });
 });
 

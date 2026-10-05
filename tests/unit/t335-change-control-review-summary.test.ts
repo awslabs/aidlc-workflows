@@ -527,7 +527,7 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     });
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain(
-      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, or approve again.`,
+      `Cannot continue under a relaxed or off Guard Policy: the accepted change for \\"${STAGE}\\" could not be recorded in the audit ledger (injected ledger fault: t335). Repair the ledger, then run the same command again.`,
     );
     expect(printedNotices(refused.stdout)).toEqual([]);
     expect(acceptedRows(proj)).toHaveLength(0);
@@ -1064,7 +1064,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
       expect(blocked.code, blocked.stderr).toBe(2);
       expect(blocked.stderr).toContain(reason);
       if (mode !== "strict") {
-        expect(JSON.parse(blocked.stderr).code).toBe("CODE_GENERATION_EXECUTION_INELIGIBLE");
+        expect(blocked.stderr).toContain(" The plan-approval setting is unchanged.");
       }
       expect(blocked.stdout).toBe("");
       expect(approvalRows()).toHaveLength(0);
@@ -1097,7 +1097,7 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
     const selfAnswered = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
     expect(selfAnswered.status, selfAnswered.stdout).not.toBe(0);
-    expect(selfAnswered.stderr).toContain("actual offered choice from this prompt and session");
+    expect(selfAnswered.stderr).toContain("requires the person's reply to this prompt, in this session");
     assertBlocked("Plan Approval");
     const human = runHook(join(TOOLS, "aidlc.ts"), proj, {
       hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve Plan",

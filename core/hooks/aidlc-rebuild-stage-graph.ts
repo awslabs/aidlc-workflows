@@ -31,7 +31,7 @@
 // intent exists too.
 
 import { LONG_SUBPROCESS_TIMEOUT_MS } from "../tools/aidlc-runtime-budget.ts";
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import {
   consumeCreationReceipt,
@@ -47,6 +47,7 @@ import {
   hookChildEnv,
   hookDebug,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   listIntents,
@@ -248,8 +249,7 @@ if (audit.length === 0) {
 //    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
 //    is a per-hook liveness probe, not per-intent state.
 const healthDir = hooksHealthDir(projectDir, intent, space);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "rebuild-stage-graph.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "rebuild-stage-graph.last", isoTimestamp());
 
 // 6. Tail-read last 3 audit blocks. Three is the upper bound: a normal
 //    approve writes GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in
@@ -268,7 +268,7 @@ const last3 = blocks.slice(-3);
 //    runtime-graph at gate-start — without it, the gate ritual reads a
 //    stale memory_entries count snapshotted at STAGE_STARTED time
 //    (before the orchestrator wrote any §13 entries).
-const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
+const transitionRegex = /^\*\*Event\*\*:[ \t]*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|UNIT_MERGED|WORKFLOW_COMPLETED)[ \t]*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "rebuild-stage-graph", "transition-gate", { hasTransition, last3count: last3.length });
 if (!hasTransition) {

@@ -1,5 +1,6 @@
 // covers: function:workspaceSourceFingerprint
 // covers: function:gitCommitSourceListing
+// covers: function:unmergedRootSettingsNotices
 // covers: function:withWorkspaceSourceStateCache, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:revise
 //
 // t314 - reviewer receipts bound to workspace source state (#629).
@@ -2871,7 +2872,7 @@ describe("t314 multi-unit source attribution", () => {
     expect(dirty.out).toContain(
       "workspace source changed again after the one recovery review",
     );
-    expect(dirty.out).toContain('Ask \\"What should change?\\" for stage \\"code-generation\\"');
+    expect(dirty.out).toContain('already said what should change for stage \\"code-generation\\"');
     expect(dirty.out).toContain("their exact text unchanged");
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 });
@@ -3204,6 +3205,91 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
     expect(tree.stdout).toContain("reviewed.ts");
     expect(tree.stdout).not.toContain(".DS_Store");
     expect(tree.stdout).not.toContain(".coverage");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a setting recorded in the worktree after review neither blocks the claim nor enters the Source Commit", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "configured", "--base", "main"]);
+    const wt = wtPath(proj, "configured");
+    writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "configured", "READY", [{ path: "reviewed.ts" }]);
+
+    // A kill switch recorded while the unit runs is AI-DLC's setting, not its code.
+    writeFileSync(join(wt, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    writeFileSync(join(wt, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "configured",
+      "--claimed",
+      "configured",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+
+    const audit = readAllAuditShards(proj);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: configured[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      audit,
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync(
+      "git",
+      ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(tree.status).toBe(0);
+    expect(tree.stdout).toContain("reviewed.ts");
+    expect(tree.stdout).not.toContain("aidlc.settings");
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a Bolt merge lands the reviewed source and leaves a setting committed in its worktree behind, saying so", () => {
+    const proj = makeFixture();
+    runSwarm(proj, ["prepare", "--batch", "1", "--units", "tuned", "--base", "main"]);
+    const wt = wtPath(proj, "tuned");
+    writeFileSync(join(wt, "tuned.ts"), "export const tuned = true;\n");
+    recordReview(wt, "code-generation", REVIEWER, "tuned");
+    // A switch committed in the Bolt worktree after review: the Source Commit
+    // keeps the base's settings, so it never lands unreviewed.
+    writeFileSync(join(wt, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    git(wt, ["add", "--", "aidlc.settings.json"]);
+    git(wt, ["commit", "-qm", "record a switch after review"]);
+    const finalized = runSwarm(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "tuned",
+      "--claimed",
+      "tuned",
+      "--check-cmd",
+      `"${process.execPath}" -e "require('fs').accessSync('tuned.ts')"`,
+    ]);
+    expect(finalized.rc, finalized.diagnostic).toBe(0);
+    const sourceCommit = /\*\*Event\*\*: SWARM_UNIT_CONVERGED[\s\S]*?\*\*Unit name\*\*: tuned[\s\S]*?\*\*Source Commit\*\*: ([0-9a-f]{40})/.exec(
+      readAllAuditShards(proj),
+    )?.[1];
+    expect(sourceCommit).toBeDefined();
+    const tree = spawnSync("git", ["-C", proj, "ls-tree", "-r", "--name-only", sourceCommit ?? ""], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(tree.stdout).toContain("tuned.ts");
+    expect(tree.stdout).not.toContain("aidlc.settings");
+    const intent = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
+    const merge = spawnSync(BUN, [
+      WORKTREE_TOOL, "merge", "--slug", "tuned", "--target", "main",
+      "--strategy", "squash", "--intent", intent, "--project-dir", proj,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: proj, encoding: "utf-8" });
+    expect(merge.status, `${merge.stdout}${merge.stderr}`).toBe(0);
+    expect(existsSync(join(proj, "tuned.ts"))).toBe(true);
+    expect(existsSync(join(proj, "aidlc.settings.json"))).toBe(false);
+    const notice = "aidlc.settings.json changed in the Unit's worktree and was not merged; record settings in your own checkout with ";
+    expect(merge.stderr).toContain(`note: ${notice}`);
+    const result = JSON.parse(merge.stdout.trim().split("\n").pop() ?? "{}") as { notices?: string[] };
+    expect(result.notices?.[0]).toContain(notice);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("a swarm review recorded before files were excluded by name still finalizes after upgrading", () => {
@@ -4264,10 +4350,13 @@ process.stdin.on("end", () => server.stop(true));
       stdin: "pipe", stdout: "ignore", stderr: "pipe",
     });
     const remoteStderr = new Response(remote.stderr).text();
-    const requests = (): Array<{ event: string; delayed?: boolean }> =>
-      existsSync(trace)
-        ? readFileSync(trace, "utf-8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))
-        : [];
+    // The server can still be appending when this reads (the delayed request
+    // logs after finalize returns), so parse only newline-terminated lines.
+    const requests = (): Array<{ event: string; delayed?: boolean }> => {
+      if (!existsSync(trace)) return [];
+      const text = readFileSync(trace, "utf-8");
+      return text.slice(0, text.lastIndexOf("\n") + 1).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    };
     const failures: unknown[] = [];
     try {
       const startupDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;

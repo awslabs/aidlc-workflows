@@ -15,12 +15,16 @@ import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
   BLOCKED_STATE_TRANSITIONS,
+  DELEGATE_ADMITTED_VERBS,
+  DELEGATE_ROLE_ADMITTED_VERBS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
   directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
+import { resolveAction, ROUTES } from "../../dist/claude/.claude/tools/aidlc.ts";
+import { UTILITY_COMMANDS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
@@ -184,6 +188,8 @@ describe("t242 state-transition ownership guard", () => {
       "aidlc engine orchestrate report --stage feasibility --result completed",
       "aidlc engine state approve feasibility",
       "aidlc engine jump execute --target application-design",
+      "aidlc engine jump reopen --target nfr-design --units beta",
+      "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
       "/opt/aidlc/bin/aidlc engine orchestrate park",
     ]) {
       expect(isLifecycleBoundaryCommand(command), command).toBe(true);
@@ -205,8 +211,20 @@ describe("t242 state-transition ownership guard", () => {
       ],
       ["bun .claude/tools/aidlc-state.ts unpark", "aidlc-state.ts unpark"],
       [
+        "bun .claude/tools/aidlc-state.ts set-construction-execution swarm",
+        "aidlc-state.ts set-construction-execution",
+      ],
+      [
+        "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit u1",
+        "aidlc-state.ts unit",
+      ],
+      [
         "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis",
         "aidlc-jump.ts execute",
+      ],
+      [
+        "bun .claude/tools/aidlc-jump.ts reopen --target nfr-design --units beta",
+        "aidlc-jump.ts reopen",
       ],
       [
         "bun .claude/tools/aidlc-utility.ts recompose --add user-stories",
@@ -325,6 +343,56 @@ describe("t242 state-transition ownership guard", () => {
       ["aidlc continue steering-token", "aidlc continue"],
       ["aidlc report --result resumed --user-input 1", "aidlc report"],
       ["aidlc state unpark", "aidlc state unpark"],
+      ["aidlc engine state set-construction-checkpoints disabled", "aidlc engine state set-construction-checkpoints"],
+      ["aidlc engine state sync-unit-scope-stage --stage code-generation", "aidlc engine state sync-unit-scope-stage"],
+      ["aidlc engine state init --scope feature", "aidlc engine state init"],
+      ["bun .claude/tools/aidlc-utility.ts reclassify --type existing", "aidlc-utility.ts reclassify"],
+      ["aidlc engine workspace reclassify --type existing", "aidlc engine workspace reclassify"],
+      ["bun .claude/tools/aidlc-utility.ts select-plugins test-pro", "aidlc-utility.ts select-plugins"],
+      ["bun .claude/tools/aidlc-unit.ts gate u1 --decision approve", "aidlc-unit.ts gate"],
+      ["bun .claude/tools/aidlc-unit.ts land u1", "aidlc-unit.ts land"],
+      ["aidlc unit pin u1", "aidlc unit pin"],
+      ["bun .claude/tools/aidlc-utility.ts claim u1", "aidlc-utility.ts claim"],
+      ["bun .claude/tools/aidlc-bolt.ts set-autonomy --mode gated", "aidlc-bolt.ts set-autonomy"],
+      ["bun .claude/tools/aidlc-swarm.ts finalize", "aidlc-swarm.ts finalize"],
+      ["bun .claude/tools/aidlc-log.ts link --stage x", "aidlc-log.ts link"],
+      ["bun .claude/tools/aidlc-learnings.ts persist", "aidlc-learnings.ts persist"],
+      ["bun .claude/tools/aidlc-runtime.ts fragment-merge", "aidlc-runtime.ts fragment-merge"],
+      ["bun .claude/tools/aidlc-testing-posture.ts fingerprint --unit u1", "aidlc-testing-posture.ts fingerprint"],
+      ["bun .claude/tools/aidlc-plugin.ts sync", "aidlc-plugin.ts sync"],
+      ["bun .claude/tools/aidlc-utility.ts set-status x", "aidlc-utility.ts set-status"],
+      ["aidlc engine state set-status x", "aidlc engine state set-status"],
+      ["aidlc engine bolt hold-merge u1", "aidlc engine bolt hold-merge"],
+      ["bun .claude/tools/aidlc-utility.ts upgrade", "aidlc-utility.ts upgrade"],
+      ["aidlc engine plugin sync", "aidlc engine plugin sync"],
+      // A flag before the verb, read the way each script reads it.
+      ["bun .claude/tools/aidlc-swarm.ts --batch 1 finalize", "aidlc-swarm.ts finalize"],
+      ["bun .claude/tools/aidlc-testing-posture.ts --json begin", "aidlc-testing-posture.ts begin"],
+      ["bun .claude/tools/aidlc-testing-posture.ts --project-dir begin brief", "aidlc-testing-posture.ts begin"],
+      ["bun .claude/tools/aidlc-plugin.ts --json x sync", "aidlc-plugin.ts sync"],
+      ["bun .claude/tools/aidlc-state.ts --json x unpark", "aidlc-state.ts unpark"],
+      // The dispatcher drops its global flags before routing.
+      ["aidlc engine intent --json other-intent", "aidlc engine intent other-intent"],
+      ["aidlc --quiet space --json create other-space", "aidlc space create"],
+      ["aidlc engine plugin select --json test-pro", "aidlc engine plugin select"],
+      // The dispatcher's claim and release aliases run the utility's claim and release.
+      ["aidlc --claim u1", "aidlc --claim"],
+      ["aidlc engine --release u1", "aidlc engine --release"],
+      ["bun .claude/tools/aidlc.ts --claim u1", "aidlc.ts --claim"],
+      // Purging parked Bolt work.
+      ["bun .claude/tools/aidlc-worktree.ts purge --slug u1 --older-than 0", "aidlc-worktree.ts purge"],
+      ["bun .claude/tools/aidlc-worktree.ts --project-dir . purge --slug u1", "aidlc-worktree.ts purge"],
+      ["aidlc engine worktree --json purge --slug u1", "aidlc engine worktree purge"],
+      // The audit fork and merge-back primitives.
+      ["bun .claude/tools/aidlc-audit.ts audit-merge --slug u1", "aidlc-audit.ts audit-merge"],
+      ["bun .claude/tools/aidlc-audit.ts --project-dir . audit-fork --slug u1", "aidlc-audit.ts audit-fork"],
+      ["aidlc engine audit merge --slug u1", "aidlc engine audit merge"],
+      // Machine-wide settings: no delegate runs machine-config at all.
+      ["bun .claude/tools/aidlc-machine-config.ts global get offline", "aidlc-machine-config.ts"],
+      ["bun .claude/tools/aidlc-machine-config.ts global set offline on", "aidlc-machine-config.ts"],
+      ["bun .claude/tools/aidlc-machine-config.ts global clear offline", "aidlc-machine-config.ts"],
+      ["aidlc system config global set offline on", "aidlc system config global"],
+      ["bun .claude/tools/aidlc.ts engine audit fork --slug u1", "aidlc.ts engine audit fork"],
       ["aidlc scope change --scope mvp", "aidlc scope change"],
       ["aidlc config-change --depth comprehensive", "aidlc config-change"],
       ["aidlc intent other-intent", "aidlc intent other-intent"],
@@ -333,6 +401,10 @@ describe("t242 state-transition ownership guard", () => {
       [
         "cd project && aidlc jump execute --target requirements-analysis",
         "aidlc jump execute",
+      ],
+      [
+        "cd project && aidlc jump reopen --target nfr-design --units beta",
+        "aidlc jump reopen",
       ],
       ["env AIDLC_TEST=1 aidlc config set --depth comprehensive", "aidlc config set"],
       [
@@ -358,6 +430,67 @@ describe("t242 state-transition ownership guard", () => {
     for (let i = 0; i < 9; i++) nested = `bash -c ${JSON.stringify(nested)}`;
     expect(delegatedLifecycleCommand(nested)).not.toBeNull();
     expect(DELEGATED_STATE_MUTATIONS.has("unpark")).toBe(true);
+    // What the kiro-ide personas are admitted, all or one role, is a real verb of its script and
+    // never one this guard refuses with arguments (select-plugins is admitted
+    // as its bare query only). A script the dispatcher routes is checked
+    // against the verbs it hands that script; the utility against its command
+    // list; the rest against a case or command-table entry in their source.
+    const routed = new Map<string, Set<string>>();
+    for (const route of ROUTES) {
+      for (const verb of route.verbs) {
+        const action = resolveAction([
+          ...(route.namespace === "engine" || route.namespace === "system" ? [route.namespace] : []),
+          ...(route.group === "top" ? [] : [route.group]),
+          ...verb.split(" "),
+        ]);
+        if (action.type !== "delegate") continue;
+        if (!routed.has(action.tool)) routed.set(action.tool, new Set());
+        routed.get(action.tool)?.add(action.args[0] ?? "");
+      }
+    }
+    for (const agent of Object.keys(DELEGATE_ROLE_ADMITTED_VERBS)) {
+      expect(existsSync(join(REPO_ROOT, "core", "agents", `${agent}.md`)), agent).toBe(true);
+    }
+    for (const [file, verbs] of [
+      ...Object.entries(DELEGATE_ADMITTED_VERBS),
+      ...Object.values(DELEGATE_ROLE_ADMITTED_VERBS).flatMap((own) => Object.entries(own)),
+    ]) {
+      const source = readFileSync(join(REPO_ROOT, "core", "tools", file), "utf-8");
+      for (const verb of verbs) {
+        if (file === "aidlc-utility.ts") expect([...UTILITY_COMMANDS] as string[], verb).toContain(verb);
+        else if (routed.has(file)) expect([...(routed.get(file) ?? [])], `${file} ${verb}`).toContain(verb);
+        else expect(source, `${file} ${verb}`).toMatch(new RegExp(`case "${verb}"|^\\s+"?${verb}"?: `, "m"));
+        if (verb === "select-plugins") continue;
+        expect(delegatedLifecycleCommand(`bun .claude/tools/${file} ${verb} x`), `${file} ${verb}`).toBeNull();
+      }
+    }
+    // Reads stay open to a delegate.
+    for (const read of ["get", "count", "lookup", "resume"]) {
+      expect(delegatedLifecycleCommand(`bun .claude/tools/aidlc-state.ts ${read} x`), read).toBeNull();
+    }
+    for (const read of [
+      "bun .claude/tools/aidlc-unit.ts merge-status u1",
+      "bun .claude/tools/aidlc-unit.ts status",
+      "bun .claude/tools/aidlc-utility.ts select-plugins",
+      "aidlc engine plugin select",
+      "aidlc engine plugin select --json",
+      "aidlc engine intent --json",
+      "aidlc engine intent --all other-intent",
+      "bun .claude/tools/aidlc-log.ts answers",
+      "bun .claude/tools/aidlc-learnings.ts surface",
+      "bun .claude/tools/aidlc-runtime.ts read",
+      "bun .claude/tools/aidlc-testing-posture.ts brief --unit u1",
+      "bun .claude/tools/aidlc-worktree.ts merge u1",
+      "bun .claude/tools/aidlc-worktree.ts create --slug u1 --base main",
+      "bun .claude/tools/aidlc-worktree.ts discard --slug u1",
+      "aidlc engine worktree restore --slug u1",
+      "aidlc engine worktree info --slug u1",
+      "bun .claude/tools/aidlc-audit.ts history",
+      "aidlc engine audit append PRACTICES_SECTION_EMPTY --field Details=x",
+      "aidlc engine plugin select --no-color",
+    ]) {
+      expect(delegatedLifecycleCommand(read), read).toBeNull();
+    }
     expect(
       delegatedLifecycleCommand("bun .claude/tools/aidlc-state.ts get 'Current Stage'"),
     ).toBeNull();
@@ -683,6 +816,8 @@ describe("t242 state-transition ownership guard", () => {
         `export ${name}=1`,
         `env ${name}=1 aidlc engine log answers`,
         `read ${name} <<< 1`,
+        `\\read ${name} <<< 1`,
+        `true && export ${name}`,
         `printf -v ${name} 1`,
         `declare -x ${name}`,
         `: \${${name}:=1}`,
@@ -732,6 +867,10 @@ describe("t242 state-transition ownership guard", () => {
       "Get-ChildItem env:",
       "printenv AIDLC_UNATTENDED",
       "MY_AIDLC_UNATTENDED=1 echo ok",
+      // A flag or a path segment that spells a builtin is not the builtin.
+      "aidlc config flags --local --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
+      "aidlc config flags --local --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "& 'C:\\Users\\me\\AppData\\Local\\aidlc\\versions\\1.0.0\\aidlc.exe' config flags --clear-bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --yes",
     ]) {
       expect(refused(command), command).toBe(false);
     }
@@ -1922,7 +2061,10 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(main.status).toBe(2);
     expect(main.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(main.stderr).toContain("config set guard.state-transition off");
+    // The agent offers the switch and, when the person says so, runs the setter itself.
+    expect(main.stderr).toContain("offer to turn the state-transition check off for this piece of work");
+    expect(main.stderr).toContain("config-change --guard.state-transition off` yourself");
+    expect(main.stderr).not.toContain("/aidlc config set");
     const delegated = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
       encoding: "utf-8",
@@ -1930,7 +2072,7 @@ describe("t242 state-transition ownership guard", () => {
     });
     expect(delegated.status).toBe(2);
     expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
-    expect(delegated.stderr).not.toContain("config set guard.state-transition off");
+    expect(delegated.stderr).not.toContain("guard.state-transition off");
     expect(delegated.stderr).not.toContain("cannot be turned off from chat");
   });
 
@@ -2059,7 +2201,7 @@ describe("t242 state-transition ownership guard", () => {
     );
   });
 
-  test("production reports require approval input and rejection feedback", () => {
+  test("production reports require a reply from the person, and rejection feedback", () => {
     for (const result of ["approved", "rejected"] as const) {
       const project = createTestProject();
       projects.push(project);
@@ -2083,8 +2225,9 @@ describe("t242 state-transition ownership guard", () => {
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
       expect(r.stdout, result).toContain('"kind":"error"');
-      expect(r.stdout, result).toContain("did not match an offered choice");
-      expect(r.stdout, result).toContain("original held gate with every offered choice");
+      expect(r.stdout, result).toContain(
+        result === "approved" ? "names no choice" : "Request Changes requires nonblank revision feedback",
+      );
       expect(readFileSync(seededStateFile(project), "utf-8"), result).toContain(
         "- [-] feasibility",
       );

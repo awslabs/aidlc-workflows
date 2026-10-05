@@ -132,7 +132,9 @@ function remainingCleanupMs(): number {
 
 // The shared state fixture only says "Todo app bug fix". Supply the actual
 // defect and acceptance input: a menu-only answer loop cannot follow a choice
-// such as "I'll describe it" with the missing free-text reproduction.
+// such as "I'll describe it" with the missing free-text reproduction. The
+// request leaves how to answer the questions to the person, so the agent asks
+// it and the driver picks, as a person does.
 // TodoList already guards the form; useTodos.addTodo accepts raw titles.
 const PROJECT_DESCRIPTION = [
   "Fix title validation in the React/TypeScript Todo app's useTodos hook.",
@@ -142,7 +144,6 @@ const PROJECT_DESCRIPTION = [
   "Calling addTodo('  Buy milk  ') must append exactly one incomplete todo titled 'Buy milk' with a unique id.",
   "Add a targeted automated regression test for these hook calls and preserve valid adds, toggling, and deletion.",
   "Limit the fix to hook title validation; persistence, new features, and UI redesign are out of scope.",
-  "Guide me through the remaining scope and regression-test choices.",
 ].join(" ");
 
 interface Run {
@@ -438,6 +439,21 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         );
         expect(learningsAnswerAt).toBeGreaterThan(learningsDecisionAt);
         expect(gateOpenedAt).toBeGreaterThan(learningsAnswerAt);
+
+        // --- the answer-mode question was the person's ------------------------
+        // The request leaves how to answer the questions open, so the stage must
+        // record the Guide me / I'll edit the file / Chat question and then the
+        // pick, before the gate. (The live person-turn check, where it runs,
+        // also requires that pick to follow a turn from the driver.)
+        const modeDecisionAt = auditMd.search(
+          /\*\*Event\*\*: DECISION_RECORDED\n(?:\*\*[^\n]+\n)*?\*\*Options\*\*: [^\n]*Guide me[^\n]*I'll edit the file[^\n]*Chat/,
+        );
+        expect(modeDecisionAt, "the answer-mode question was recorded").toBeGreaterThan(-1);
+        const modeAnswerAt = auditMd.indexOf("**Event**: QUESTION_ANSWERED", modeDecisionAt);
+        expect(modeAnswerAt, "the answer-mode pick was recorded").toBeGreaterThan(modeDecisionAt);
+        const modeAnswer = auditMd.slice(modeAnswerAt).split("\n---")[0];
+        expect(modeAnswer).toMatch(/\*\*Details\*\*: (?:Guide me|I'll edit the file|Chat)/);
+        expect(gateOpenedAt).toBeGreaterThan(modeAnswerAt);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a waiting AskUserQuestion menu (the `❯` caret +

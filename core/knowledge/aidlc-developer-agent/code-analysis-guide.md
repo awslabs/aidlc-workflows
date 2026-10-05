@@ -45,9 +45,18 @@ skip generated and installed content that nothing ignores:
 - **IDE and tool caches**: `.vs/`, `.idea/`, `.gradle/`, `__pycache__/`,
   `.pytest_cache/`, `.next/`
 
-A folder with one of these names that holds hand-written code is source: Node's
+Decide from the files beside a folder, not by opening it. A `bin/`, `obj/` or
+`out/` next to a `.csproj`, `.fsproj` or `.vbproj` is build output, and a
+`packages/` next to a `.sln` is NuGet's: skip them without listing or reading
+anything inside. The same names hold hand-written code elsewhere: Node's
 `bin/www`, Rails' `bin/` scripts, a hexagonal `adapter/out/` package, or a
-JavaScript monorepo's `packages/`. Open a file in it to tell which.
+JavaScript monorepo's `packages/` named in its `package.json` `workspaces` or
+`pnpm-workspace.yaml`. Open one file in a folder only when nothing beside it
+tells which. A folder the brief names to scan, or one listed in
+`.aidlc-source-paths.json`, is source whatever sits beside it.
+
+List the folders you skip under **Left out** in the scan's coverage, not under
+**Skimmed only**.
 
 ## Source File Classification
 

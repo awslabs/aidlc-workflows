@@ -17,6 +17,8 @@
 - **Depth**: Minimal
 - **Test Strategy**: Minimal
 - **Change Control**: strict (from scope bugfix)
+- **Learnings**: on (from scope bugfix)
+- **Summary Confirmation**: on (from scope bugfix)
 
 ## Workspace State
 - **Project Root**: /tmp/aidlc-test

@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { CODEX_FILE, coordinatorReportPath } from "../lib/e2e-deferred-cleanup.ts";
 import { FILE_CLEANUP_RESERVE_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 
 export interface CodexExecution {
   rc: number;
@@ -51,8 +53,27 @@ export function codexExecDiagnostic(result: CodexExecution): string {
     limit(result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`);
 }
 
-export function recordCodexExec(label: string, cwd: string, argv: string[], result: CodexExecution): void {
-  const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n`;
+/** Begin a codex turn just before its exec: the prompt is the person's turn. */
+export function codexPersonTurn(proj: string, prompt: string): PersonTurnLedger {
+  const turn = new PersonTurnLedger(proj);
+  turn.sent(prompt);
+  return turn;
+}
+
+// Every live exec passes its turn (codexPersonTurn, before the spawn), so no
+// journey can record a decision the check never sees.
+export function recordCodexExec(
+  label: string,
+  cwd: string,
+  argv: string[],
+  result: CodexExecution,
+  turn: PersonTurnLedger,
+): void {
+  const unbacked = turn.unbacked();
+  const decisions = unbacked.length > 0
+    ? `Unbacked decisions (no turn from the person after the gate or question opened):\n${unbacked.map((line) => `  ${line}`).join("\n")}\n`
+    : "";
+  const header = `Command: ${JSON.stringify(argv)}\nCwd: ${cwd}\n${decisions}`;
   const summary = header + codexExecDiagnostic(result);
   const context = diagnostics.getStore();
   if (context) context.last = limit(summary);
@@ -62,6 +83,7 @@ export function recordCodexExec(label: string, cwd: string, argv: string[], resu
       `${header}Exit code: ${result.rc}\nSignal: ${result.signal ?? "none"}\nSpawn error: ${result.error ?? "none"}\n\n` +
       (result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`));
   }
+  if (unbacked.length > 0) throw unbackedFailure(`The codex exec "${label}"`, unbacked);
 }
 
 const samePath = (a: string, b: string): boolean => {
@@ -100,7 +122,7 @@ async function deferredWindowsCleanup(root: string): Promise<{ defer(): void; cl
   const verifyDirectories = [temp, root, artifacts].map(pinDirectory);
   // The coordinator's live report binds this exact worker to its cleanup TEMP.
   // Ordinary/direct test invocations have no such handoff and clean up eagerly.
-  const reportPath = join(dirname(dirname(artifacts)), "e2e-results.json");
+  const reportPath = coordinatorReportPath(artifacts);
   const verifyReport = () => {
     const report = JSON.parse(readFileSync(reportPath, "utf8"));
     const rows = Array.isArray(report.files) ? report.files.filter((row: Record<string, unknown>) =>
@@ -122,7 +144,7 @@ async function deferredWindowsCleanup(root: string): Promise<{ defer(): void; cl
     !Array.isArray(config.command) || config.command[1] !== "test" ||
     typeof config.command[0] !== "string" || !samePath(realpathSync(config.command[0]), realpathSync(process.execPath)) ||
     typeof config.command[2] !== "string" ||
-    !/^t-exec-codex-(?:status|memory-include|compose-front|compose-inflight|journey-workspace)\.serial\.test\.ts$/.test(basename(config.command[2])) ||
+    !CODEX_FILE.test(basename(config.command[2])) ||
     basename(config.command[2]) !== env.AIDLC_TEST_NAME ||
     typeof config.cwd !== "string" || !samePath(config.cwd, process.cwd()) ||
     !samePath(config.command[2], join(config.cwd, "tests", "e2e", env.AIDLC_TEST_NAME)) ||

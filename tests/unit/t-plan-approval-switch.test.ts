@@ -14,7 +14,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -30,7 +30,7 @@ import {
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { acquireAuditLock, getField, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { acquireAuditLock, getField, hooksHealthDir, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   firstFrontQuestionSince,
   latestFrontQuestionId,
@@ -138,6 +138,21 @@ function reply(proj: string, prompt: string): string {
     // Plain text output.
   }
   return out;
+}
+
+// What the agent runs after the person asks to look at the plan.
+function askToReview(proj: string): string {
+  const result = spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--details", "Review the plan", "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return result.stdout ?? "";
 }
 
 function utility(proj: string, args: string[]): { status: number; stdout: string; stderr: string } {
@@ -404,11 +419,12 @@ describe("plan approval off builds the plan as written", () => {
     const proj = project();
     writePlan(proj);
     expect(next(proj).plan_approval.skipped).toBe(true);
-    expect(reply(proj, "review the plan first")).toContain("asked to review the plan");
+    reply(proj, "review the plan first");
+    expect(askToReview(proj)).toContain("wants to review the plan");
     const ask = next(proj);
     expect(ask.kind).toBe("ask");
     expect(ask.ask_type).toBe("plan-approval");
-    reply(proj, "approve");
+    reply(proj, "1");
     const build = next(proj);
     expect(build.kind).toBe("run-stage");
     expect(build.plan_approval).toEqual({ status: "approved" });
@@ -421,6 +437,7 @@ describe("plan approval off builds the plan as written", () => {
     writePlan(proj);
     expect(next(proj).plan_approval.skipped).toBe(true);
     reply(proj, "review the plan first");
+    askToReview(proj);
     // At the plan's own gate, the plan rides on the gate as a notice.
     const gate = withBuiltPlanReviews(proj, {
       kind: "present-gate", stage: "code-generation", phase: "construction", memory_path: "memory.md",
@@ -444,6 +461,7 @@ describe("plan approval off builds the plan as written", () => {
     writePlan(proj);
     expect(next(proj).plan_approval.skipped).toBe(true);
     reply(proj, "review the plan first");
+    askToReview(proj);
     const dir = dirname(planApprovalRuntimeFile(proj, "probe"));
     const kept = readdirSync(dir).filter((name) => /^review-request-[0-9a-f]{24}\.json$/.test(name));
     expect(kept).toHaveLength(1);
@@ -464,6 +482,19 @@ describe("only the person turns plan approval off", () => {
     expect(next(proj).kind).toBe("ask");
     reply(proj, "why is plan approval on?");
     expect(planApprovalLine(proj)).toBe("on (set by you)");
+    // The same words asked as a question stay a question.
+    const policy = () => getField(readFileSync(seededStateFile(proj), "utf-8"), "Guard Policy");
+    const policyBefore = policy();
+    for (const question of ["skip plan approval?", "plan approval off?", "no plan approval?", "guard policy off?"]) {
+      reply(proj, question);
+      expect(planApprovalLine(proj)).toBe("on (set by you)");
+      expect(policy()).toBe(policyBefore);
+    }
+    expect(auditText(proj)).not.toContain("**Event**: CEREMONY_SET");
+    // Nor is a question taken as the answer to the waiting plan: nothing is
+    // recorded and the same question is still open for the agent to answer.
+    expect(auditText(proj)).not.toContain("**Event**: QUESTION_ANSWERED");
+    expect(next(proj).kind).toBe("ask");
     const context = reply(proj, "skip plan approval for this work");
     expect(context).toContain("Plan Approval changed: on (set by you) to off (set by you)");
     expect(planApprovalLine(proj)).toBe("off (set by you)");
@@ -489,7 +520,7 @@ describe("only the person turns plan approval off", () => {
     setPolicy(proj, "strict");
     writePlan(proj);
     expect(next(proj).kind).toBe("ask");
-    reply(proj, "approve");
+    reply(proj, "1");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
     const plan = join(stageDir(proj), "code-generation-plan.md");
     writeFileSync(plan, readFileSync(plan, "utf-8").replace("write slugify", "write slugify and kebab"), "utf-8");
@@ -580,7 +611,7 @@ describe("asked before the piece of work exists", () => {
     const line = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "feature", "--request", asked.id], {
       env: { ...process.env, ...CLEAR },
     });
-    expect(String((line.directive as { message?: unknown } | null)?.message)).toContain("; no plan approval)");
+    expect(String((line.directive as { message?: unknown } | null)?.message)).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -592,7 +623,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     reply(proj, "skip plan approval for this work");
     const asked = requestOf(proj, "build the export");
-    expect(asked.message).toContain("; no plan approval)");
+    expect(asked.message).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -623,7 +654,7 @@ describe("asked before the piece of work exists", () => {
       expect(planApprovalCreationGranted(proj, SESSION, older.id)).toBe(false);
       const asked = approveComposed(proj, composition, "fix the null checks the scan found");
       expect(asked.id).not.toBe(composition);
-      expect(asked.message).toContain("; no plan approval)");
+      expect(asked.message).toContain("; no plan approval; lead agent only)");
       const made = utility(proj, ["intent-create", "--request", asked.id]);
       expect(made.status, made.stderr).toBe(0);
       expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -651,7 +682,7 @@ describe("asked before the piece of work exists", () => {
     reply(proj, "skip plan approval for this work");
     const composition = composeOf(proj, ["compose", "--report", "sonar.json"]);
     const asked = approveComposed(proj, composition, "fix the null checks the scan found");
-    expect(asked.message).toContain("; no plan approval)");
+    expect(asked.message).toContain("; no plan approval; lead agent only)");
     const made = utility(proj, ["intent-create", "--request", asked.id]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -696,12 +727,49 @@ describe("asked before the piece of work exists", () => {
       // Another session starts work meanwhile.
       const other = utility(proj, ["intent-create", "--scope", "bugfix", "--arguments", "a hotfix", "--label", "hotfix"]);
       expect(other.status, other.stderr).toBe(0);
+      // That session runs AI-DLC's hooks, which left a heartbeat in its record.
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
       const approved = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", scope, "--request", composition, "--", "fix the scan findings"], {
         env: { ...process.env, ...CLEAR },
       });
       const message = String((approved.directive as { message?: unknown } | null)?.message);
       expect(message, approved.out).toContain("to start the new intent");
       expect(message).not.toContain("scope change");
+    }
+  });
+
+  test("in a fresh clone, a skip said at the compose gate reaches the work started from the routing question", () => {
+    for (const taskless of [false, true]) {
+      const proj = emptyProject();
+      // Teammates' work is committed; this clone's cursor and sessions are not.
+      for (const scope of ["poc", "feature"]) expect(utility(proj, ["intent-create", "--scope", scope]).status).toBe(0);
+      rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+      rmSync(join(proj, "aidlc", ".aidlc-sessions"), { recursive: true, force: true });
+      const dispatch = runOrchestrateNext(ORCHESTRATE, proj, taskless ? ["compose"] : ["compose", "fix the date parser"], {
+        env: { ...process.env, ...CLEAR },
+      });
+      const composition = /--request ([0-9a-f]{8})/.exec(String((dispatch.directive as { message?: unknown } | null)?.message))?.[1];
+      if (composition === undefined) throw new Error(`no request in ${dispatch.out}`);
+      expect(reply(proj, "skip plan approval for this work")).toContain("Plan approval will be off for the piece of work you start now (set by you)");
+      const approval = runOrchestrateNext(ORCHESTRATE, proj, [
+        "--scope", "feature", "--request", composition, "--sensors", "off", ...(taskless ? ["--", "fix the date parser"] : []),
+      ], { env: { ...process.env, ...CLEAR } });
+      const ask = approval.directive as { ask_type?: string; new_intent_command?: string } | null;
+      expect(ask?.ask_type, approval.out).toBe("new-work-routing");
+      const command = String(ask?.new_intent_command);
+      const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+        env: { ...process.env, ...CLEAR },
+      });
+      const message = String((routed.directive as { message?: unknown } | null)?.message);
+      expect(message, routed.out).toContain("; no sensors or plan approval; lead agent only)");
+      expect(message).toContain("--sensors off");
+      const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+      if (id === undefined) throw new Error(`no request in ${routed.out}`);
+      const made = utility(proj, ["intent-create", "--request", id, "--sensors", "off"]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("off (set by you)");
     }
   });
 
@@ -775,7 +843,7 @@ describe("asked before the piece of work exists", () => {
     const memory = join(proj, "aidlc", "spaces", "default", "memory", "project.md");
     const asked = requestOf(proj, "build the export");
     const context = reply(proj, "skip plan approval for this work");
-    expect(context).toContain(`Guard Policy is set to strict in ${memory}, so plan approval stays on for everyone on this repo`);
+    expect(context).toContain(`Your team set Guard Policy to strict in ${memory}, so plan approval stays on for everyone on this repo`);
     expect(planApprovalCreationGranted(proj, SESSION, asked.id)).toBe(false);
     const refused = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(refused.status).toBe(1);
@@ -787,7 +855,7 @@ describe("asked before the piece of work exists", () => {
     } catch {
       // Plain text refusal.
     }
-    expect(refusal).toContain(`Guard Policy is set to strict in ${memory}`);
+    expect(refusal).toContain(`Your team set Guard Policy to strict in ${memory}`);
   });
 });
 

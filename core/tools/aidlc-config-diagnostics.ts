@@ -18,6 +18,11 @@ import {
   isSafeOnboardingPath,
   jsoncRootMembers,
   jsoncSettingValue,
+  managedBlockIsSafe,
+  managedBlockMarkers,
+  mergeBlock,
+  type RootIntegration,
+  rootBlockPath,
   sha256Bytes,
 } from "./aidlc-distribution.ts";
 import {
@@ -26,7 +31,11 @@ import {
   kiroTreeLayout,
 } from "./aidlc-runtime-paths.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
-import type { ModelHarness } from "./aidlc-model-policy.ts";
+import {
+  HARNESS_PRODUCT_NAMES,
+  sessionSetsAgentModels,
+  type ModelHarness,
+} from "./aidlc-model-policy.ts";
 import {
   LOCAL_SETTINGS_FILE,
   localSettingsPath,
@@ -64,6 +73,17 @@ export function harnessOwnsModelAccess(
   harness: ModelHarness,
 ): harness is Exclude<ModelHarness, BedrockOrientedHarness> {
   return HARNESS_OWNED_MODEL_ACCESS.has(harness);
+}
+
+// On hosts where the session sets every agent's model (Copilot, Cursor), no
+// provider answer means the session's own model access, as the Models row
+// says: not a gap for setup, doctor or `--check`. Bedrock stays a choice there.
+export function providerAnswerIsTheSession(harness: ModelHarness): boolean {
+  return !harnessOwnsModelAccess(harness) && sessionSetsAgentModels(harness);
+}
+
+export function sessionModelAccessFact(harness: ModelHarness): string {
+  return `model access comes with your ${HARNESS_PRODUCT_NAMES[harness]} session`;
 }
 
 export function ownedModelAccessFact(product: string): string {
@@ -505,6 +525,20 @@ function defaultRun(
   command: string,
   args: readonly string[],
 ): { status: number; stdout: string } {
+  // Windows runs a .cmd or .bat (what npm installs, for example copilot.cmd)
+  // only through cmd.exe. The path is quoted whole; one that cmd.exe would
+  // expand (% or !) or cannot quote (") is not run.
+  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
+    if (/[%!"]/.test(command) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) {
+      return { status: -1, stdout: "" };
+    }
+    const result = spawnSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", `""${command}" ${args.join(" ")}"`],
+      { encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, windowsVerbatimArguments: true },
+    );
+    return { status: result.status ?? -1, stdout: result.stdout ?? "" };
+  }
   const result = spawnSync(command, [...args], {
     encoding: "utf-8",
     timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
@@ -521,7 +555,9 @@ function pathEntries(value: string, platform: NodeJS.Platform): string[] {
 
 function executableCandidates(command: string, platform: NodeJS.Platform): string[] {
   if (platform !== "win32" || extname(command)) return [command];
-  return [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`];
+  // Windows runs only a file with an executable extension; npm puts an
+  // extensionless shell script beside its copilot.cmd, so it comes last.
+  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command];
 }
 
 export function resolveExecutableOnPath(
@@ -813,6 +849,8 @@ const HARNESS_CLI: Record<
     required: boolean;
     minimumVersion?: string;
     install: string;
+    // A PATH folder whose `command` is a stand-in that must never be run.
+    standIn?: (directory: string) => boolean;
   }
 > = {
   claude: {
@@ -831,23 +869,31 @@ const HARNESS_CLI: Record<
     required: false,
     minimumVersion: "1.0.74",
     install: "Install @github/copilot 1.0.74 or later for CLI use; VS Code-only installs may omit it.",
+    standIn: isVsCodeCopilotStandInFolder,
   },
   cursor: {
     command: "cursor",
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
   },
+  // The 2.x line is where the hooks, skills and workspace default agent this
+  // distribution relies on shipped; the guide asks for 2.6 or later.
   kiro: {
     command: "kiro-cli",
     required: true,
-    install: "Install Kiro CLI and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.6.0",
+    install: "Install or upgrade Kiro CLI to 2.6.0 or later.",
   },
-  // Probed so a machine with only Kiro CLI detects this row next to the kiro
-  // row: first-run setup then asks instead of silently choosing the legacy one.
+  // Probed so a machine with only a supported Kiro CLI detects this row next to
+  // the kiro row: first-run setup then asks instead of silently choosing the
+  // legacy one. 2.24.1 is the oldest Kiro CLI this row has been checked on (its
+  // v3 engine runs the hooks, and `/aidlc --doctor` reports no problem); an
+  // older one counts only for the kiro row, and doctor warns about it here.
   "kiro-ide": {
     command: "kiro-cli",
     required: false,
-    install: "Kiro CLI is optional here: install it only to run AI-DLC from a terminal, and ensure `kiro-cli --version` works.",
+    minimumVersion: "2.24.1",
+    install: "Kiro CLI is optional here: to run AI-DLC from a terminal, install or upgrade Kiro CLI to 2.24.1 or later; Kiro IDE-only installs may omit it.",
   },
   opencode: {
     command: "opencode",
@@ -855,6 +901,18 @@ const HARNESS_CLI: Record<
     install: "Install opencode and ensure `opencode --version` works.",
   },
 };
+
+// VS Code's Copilot Chat writes a stand-in `copilot` to
+// <user data>/User/globalStorage/github.copilot-chat/copilotCli and puts that
+// folder on its terminals' PATH. With no real CLI the stand-in asks "Install
+// GitHub Copilot CLI? (y/N)" on the console, past any pipe, and with an old
+// one it offers an update. So the probe never runs it: like the stand-in
+// itself, it looks past that folder for the real CLI.
+function isVsCodeCopilotStandInFolder(directory: string): boolean {
+  const parts = directory.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1)?.toLowerCase() === "copilotcli" &&
+    parts.at(-2)?.toLowerCase() === "github.copilot-chat";
+}
 
 function versionTuple(value: string): [number, number, number] | null {
   const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -892,7 +950,16 @@ export function probeHarnessCli(
   const interactivePath = options.interactivePath ?? env.PATH ?? "";
   const which = options.which ?? ((command: string, pathValue: string) =>
     resolveExecutableOnPath(command, pathValue, platform));
-  const path = which(spec.command, interactivePath);
+  const standIn = spec.standIn;
+  const searchPath = standIn
+    ? pathEntries(interactivePath, platform)
+      .filter((directory) => !standIn(directory))
+      .join(platform === "win32" ? ";" : delimiter)
+    : interactivePath;
+  const resolved = which(spec.command, searchPath);
+  const path = resolved && standIn?.(resolved.replace(/[\\/][^\\/]*$/, ""))
+    ? null
+    : resolved;
   if (!path) {
     return {
       harness,
@@ -1187,18 +1254,31 @@ function writeClaudeProvider(
   const mcpPath = join(projectionRoot, ".mcp.json");
   if (!existsSync(mcpPath)) return;
   const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
+  if (applyMcpRegion(mcp, record.region as string)) writeJson(mcpPath, mcp);
+}
+
+// The shipped aws-mcp server's region arguments, set to `region`. False when
+// the list has no such server.
+function applyMcpRegion(mcp: Record<string, unknown>, region: string): boolean {
   const servers = isRecord(mcp.mcpServers) ? mcp.mcpServers : {};
   const aws = isRecord(servers["aws-mcp"]) ? servers["aws-mcp"] : null;
-  if (!aws || !Array.isArray(aws.args)) return;
+  if (!aws || !Array.isArray(aws.args)) return false;
   aws.args = aws.args.map((arg) => {
     if (typeof arg !== "string") return arg;
     if (/^https:\/\/aws-mcp\.[^.]+\.api\.aws\/mcp$/.test(arg)) {
-      return `https://aws-mcp.${record.region}.api.aws/mcp`;
+      return `https://aws-mcp.${region}.api.aws/mcp`;
     }
-    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${record.region}`;
+    if (/^AWS_REGION=/.test(arg)) return `AWS_REGION=${region}`;
     return arg;
   });
-  writeJson(mcpPath, mcp);
+  return true;
+}
+
+// The shipped server list a copy keeps in its harness folder carries no
+// provider choice; the one recorded now is applied when its servers are added.
+export function withRecordedMcpRegion(mcp: Record<string, unknown>, record: ProvidersRecord | null): void {
+  if (!record?.region || record.provider === "current" || record.provider === "other") return;
+  applyMcpRegion(mcp, record.region);
 }
 
 const CLAUDE_BEDROCK_MODEL_KEYS = [
@@ -1786,18 +1866,25 @@ function collectPluginNames(value: unknown, names: Set<string>): void {
   for (const child of Object.values(value)) collectPluginNames(child, names);
 }
 
+export function composedPluginNames(dataDir: string): string[] {
+  if (!existsSync(dataDir)) return [];
+  const names: string[] = [];
+  for (const file of readdirSync(dataDir).sort()) {
+    const match = /^(?:plugin-contrib|plugin-owned|plugin-compose)-([a-z][a-z0-9-]*)\.json$/
+      .exec(file);
+    if (match) names.push(match[1]);
+  }
+  return names;
+}
+
 export function discoverInstalledPluginNames(
   projectDir: string,
   harnessDir: string,
 ): string[] {
   const names = new Set<string>(["aidlc"]);
   const dataDir = join(projectDir, harnessDir, "tools", "data");
+  for (const name of composedPluginNames(dataDir)) names.add(name);
   if (existsSync(dataDir)) {
-    for (const file of readdirSync(dataDir).sort()) {
-      const match = /^(?:plugin-contrib|plugin-owned|plugin-compose)-([a-z][a-z0-9-]*)\.json$/
-        .exec(file);
-      if (match) names.add(match[1]);
-    }
     const graphPath = join(dataDir, "stage-graph.json");
     if (existsSync(graphPath)) {
       try {
@@ -2201,6 +2288,127 @@ export function providerIssues(
   return issues;
 }
 
+// The Copilot CLI keeps folder trust in config.json under COPILOT_HOME, else
+// <home>/.copilot, and finds home the way Node does: USERPROFILE on Windows,
+// HOME elsewhere. A Windows desktop process usually has no HOME at all, and a
+// HOME that is set (a network drive, say) is not where the CLI looks.
+export function copilotConfigPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): string {
+  const home = (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir();
+  return join(env.COPILOT_HOME || join(home, ".copilot"), "config.json");
+}
+
+// True when a trustedFolders entry covers the project the way the CLI judges
+// it: the folder itself or any folder above it, after resolving links and
+// dropping trailing separators. On Windows the CLI also ignores case and
+// separator style, so `c:/work` covers `C:\work\app` there.
+export function copilotFolderTrusted(
+  projectDir: string,
+  trustedFolders: readonly unknown[],
+  platform: NodeJS.Platform = hostPlatform(),
+): boolean {
+  const windows = platform === "win32";
+  const separator = windows ? "\\" : "/";
+  const norm = (path: string): string => {
+    let out = path;
+    try {
+      out = realpathSync(path);
+    } catch {
+      // keep the recorded form; a recorded-but-deleted path never matches
+    }
+    if (windows) out = out.replaceAll("/", "\\").toLowerCase();
+    return out.replace(/[/\\]+$/, "");
+  };
+  const project = norm(projectDir);
+  return trustedFolders.some((entry) => {
+    if (typeof entry !== "string" || entry === "") return false;
+    const folder = norm(entry);
+    return project === folder || project.startsWith(`${folder}${separator}`);
+  });
+}
+
+// The list the CLI reads: trustedFolders, or the older trusted_folders it
+// still honours. With both present the later one in the file wins.
+export function copilotTrustedFolderKey(
+  config: Record<string, unknown>,
+): "trustedFolders" | "trusted_folders" {
+  const last = Object.keys(config).findLast((key) =>
+    key === "trustedFolders" || key === "trusted_folders"
+  );
+  return last === "trusted_folders" ? "trusted_folders" : "trustedFolders";
+}
+
+export type CopilotCliTrust =
+  | { state: "absent" | "unreadable"; configPath: string }
+  | {
+      state: "trusted" | "untrusted";
+      configPath: string;
+      raw: string;
+      config: Record<string, unknown>;
+    };
+
+// What the Copilot CLI's config says about this folder. Absent means no CLI
+// config at all (a VS Code-only install; the CLI asks on its first run).
+// Unreadable covers bad JSON and a trusted-folders value that is not a list,
+// which the CLI ignores.
+export function copilotCliTrust(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
+): CopilotCliTrust {
+  const configPath = copilotConfigPath(env, platform);
+  if (!existsSync(configPath)) return { state: "absent", configPath };
+  let raw: string;
+  let config: unknown;
+  try {
+    raw = readFileSync(configPath, "utf-8");
+    config = Bun.JSONC.parse(raw);
+  } catch {
+    return { state: "unreadable", configPath };
+  }
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return { state: "unreadable", configPath };
+  }
+  const record = config as Record<string, unknown>;
+  const list = record[copilotTrustedFolderKey(record)];
+  if (list !== undefined && !Array.isArray(list)) return { state: "unreadable", configPath };
+  return {
+    state: copilotFolderTrusted(projectDir, Array.isArray(list) ? list : [], platform)
+      ? "trusted"
+      : "untrusted",
+    configPath,
+    raw,
+    config: record,
+  };
+}
+
+// The setup check's view of Copilot CLI folder trust. Untrusted is a warning
+// for the same reason as in doctor: VS Code never reads this list and the
+// interactive CLI asks first; only headless `copilot -p` runs skip silently.
+export function copilotTrustIssues(
+  projectDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiagnosticIssue[] {
+  const trust = copilotCliTrust(projectDir, env);
+  if (trust.state === "unreadable") {
+    return [{
+      id: "copilot-cli-config-unreadable",
+      message: `${trust.configPath} is not a Copilot CLI config AI-DLC can read, so the CLI's folder trust is unknown`,
+      remediation: `Repair ${trust.configPath}: valid JSON (comments are allowed) with trustedFolders as a list, then rerun the setup check.`,
+    }];
+  }
+  if (trust.state !== "untrusted") return [];
+  return [{
+    id: "copilot-folder-untrusted",
+    message: "Copilot CLI has not trusted this folder",
+    remediation:
+      `Run copilot in this folder once and choose "Yes, and remember this folder for future sessions", or add ${JSON.stringify(resolve(projectDir))} to trustedFolders in ${trust.configPath} yourself.`,
+    severity: "warn",
+  }];
+}
+
 function codexTrustEntries(seedText: string, projectDir: string): Array<{
   table: string;
   hash: string;
@@ -2358,7 +2566,9 @@ export function trustFilesForHarness(
       join(projectDir, harnessDir, "cli.json"),
     );
   }
-  if (harness === "copilot") files.push(join(projectDir, ".github", "hooks", "aidlc.json"));
+  if (harness === "copilot") {
+    files.push(join(projectDir, ".github", "hooks", "aidlc.json"), copilotConfigPath());
+  }
   if (harness === "opencode") files.push(join(projectDir, "opencode.json"));
   return [...new Set(files)];
 }
@@ -2411,6 +2621,9 @@ export function trustStatus(
   if (harness === "codex") {
     issues.push(...codexTrustIssues(projectDir, harnessDir, env));
   }
+  if (harness === "copilot") {
+    issues.push(...copilotTrustIssues(projectDir, env));
+  }
   return {
     files: trustFilesForHarness(projectDir, harnessDir, harness),
     issues,
@@ -2425,6 +2638,20 @@ export type ConfigOutstandingAction = {
   message: string;
   command: string;
 };
+
+// The runtimes this shell finds that the system-wide PATH does not. A harness
+// started from this terminal hands them to its hooks, so setup lists no step
+// for them and says where to start the harness instead.
+export function shellOnlyRuntimes(
+  projectDir: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  options: RuntimeProbeOptions = {},
+): string[] {
+  return probeRuntime(projectDir, harnessDir, harness, { ...options, includeHarnessCli: false }).binaries
+    .filter((binary) => binary.status === "interactive-only")
+    .map((binary) => binary.name);
+}
 
 export function postApplyOutstandingActions(
   projectDir: string,
@@ -2444,7 +2671,13 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    actions.push(...runtimeIssues(diagnostics).map((issue) => ({
+    // A runtime found on this shell's PATH needs nothing from a harness started
+    // from a terminal; the doctor says what to do if its hooks never run.
+    const needed = {
+      ...diagnostics,
+      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+    };
+    actions.push(...runtimeIssues(needed).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
@@ -2487,20 +2720,7 @@ export function postApplyOutstandingActions(
   return actions;
 }
 
-export function managedBlockMarkers(
-  path: string,
-  identity: string,
-): { begin: string; end: string } {
-  return path.endsWith(".md")
-    ? {
-        begin: `<!-- BEGIN AI-DLC:${identity} -->`,
-        end: `<!-- END AI-DLC:${identity} -->`,
-      }
-    : {
-        begin: `# BEGIN AI-DLC:${identity}`,
-        end: `# END AI-DLC:${identity}`,
-      };
-}
+export { managedBlockMarkers };
 
 type RecordedInstructionContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -2517,12 +2737,49 @@ type InstructionState = {
   state: "intact" | "missing" | "conflict";
 };
 
+// AGENTS.md in a copy config never ran in: AI-DLC's part is the marked block
+// the engine adds at session start, by the same rule config uses. A file that
+// rule cannot take (unmarked AI-DLC text the team changed, broken markers) is
+// a conflict, so the person hears what to fix instead of nothing.
+function copiedAgentsState(
+  projectDir: string,
+  harnessDir: string,
+  integration: RootIntegration,
+): InstructionState {
+  const path = "AGENTS.md";
+  let shipped: string;
+  let current: string;
+  try {
+    assertProjectionPathHasNoSymlinks(projectDir, `${harnessDir}/tools/data/root-blocks/${integration.marker}`);
+    shipped = readFileSync(rootBlockPath(join(projectDir, harnessDir), integration), "utf-8");
+    current = readFileSync(join(projectDir, path), "utf-8");
+  } catch {
+    return { path, kind: "whole-file", state: "intact" };
+  }
+  // The Cursor installer keeps AI-DLC's part under its own markers.
+  if (/^<!-- BEGIN AIDLC [A-Z]+ -->/m.test(current)) return { path, kind: "managed-block", state: "intact" };
+  const merged = mergeBlock(
+    path,
+    current,
+    shipped,
+    integration.marker ?? "agents",
+    integration.legacySignatures?.wholeFileHashes ?? [],
+  );
+  if (merged.error) return { path, kind: "managed-block", state: "conflict" };
+  return {
+    path,
+    kind: "managed-block",
+    state: merged.currentHash !== undefined || merged.adoptedLegacy ? "intact" : "missing",
+  };
+}
+
 function instructionStates(
   projectDir: string,
   harnessDir: string,
   harness: ModelHarness,
 ): InstructionState[] {
   let onboardingPath = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  let agentsBlock: RootIntegration | undefined;
   try {
     const descriptor: unknown = JSON.parse(readFileSync(
       join(projectDir, harnessDir, "tools", "data", "aidlc-projection.json"),
@@ -2533,6 +2790,11 @@ function instructionStates(
       isSafeOnboardingPath(descriptor.onboarding, harnessDir)
     ) {
       onboardingPath = descriptor.onboarding;
+    }
+    if (isRecord(descriptor) && Array.isArray(descriptor.rootIntegrations)) {
+      agentsBlock = (descriptor.rootIntegrations as RootIntegration[]).find((integration) =>
+        isRecord(integration) && integration.path === "AGENTS.md" && managedBlockIsSafe(integration)
+      );
     }
   } catch {
     // Legacy installations may not have a readable onboarding descriptor.
@@ -2562,13 +2824,12 @@ function instructionStates(
         return { path, kind: "whole-file", state: "conflict" };
       }
       const target = join(projectDir, path);
-      return {
-        path,
-        kind: "whole-file",
-        state: existsSync(target) && lstatSync(target).isFile()
-          ? "intact"
-          : "missing",
-      };
+      if (!existsSync(target) || !lstatSync(target).isFile()) {
+        return { path, kind: "whole-file", state: "missing" };
+      }
+      return path === "AGENTS.md" && agentsBlock
+        ? copiedAgentsState(projectDir, harnessDir, agentsBlock)
+        : { path, kind: "whole-file", state: "intact" };
     });
   }
   const baseline = JSON.parse(
@@ -2983,6 +3244,8 @@ export function providerDoctorCheck(
         // gap only where AI-DLC configures the provider.
         label: record
           ? "Providers: recorded answers have no unmet actions"
+          : providerAnswerIsTheSession(selected.harness)
+          ? `Providers: ${sessionModelAccessFact(selected.harness)}; no answer needed`
           : "Providers: using shipped fallback; no recorded answers",
       };
     }
@@ -3015,6 +3278,9 @@ export function providerDoctorCheck(
 export function flagsDoctorCheck(
   projectDir: string,
   harnessDirHint?: string,
+  // The lines naming each check a recorded switch has turned off (doctor
+  // builds them; this module stays free of the engine library).
+  switchesOff: readonly string[] = [],
 ): DiagnosticDoctorCheck {
   const selected = selectedHarness(projectDir, harnessDirHint);
   if (!selected) {
@@ -3028,6 +3294,16 @@ export function flagsDoctorCheck(
       selected.harness,
       record,
     );
+    // A check switched off stays visible: a warning, never a failure.
+    const off = switchesOff;
+    if (off.length > 0) {
+      return {
+        pass: false,
+        severity: "warn",
+        label: `Flags: ${off.length} check${off.length === 1 ? "" : "s"} switched off`,
+        fix: [...off, ...issues.map((issue) => issue.message)].join(" "),
+      };
+    }
     return issues.length === 0
       ? {
           pass: true,

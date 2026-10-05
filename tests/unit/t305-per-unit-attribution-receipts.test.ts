@@ -45,6 +45,7 @@ import {
   readUnitSourceManifest,
   readUnitSourceSnapshot,
   recordDir,
+  recordedSourceListingUnderCurrentBoundary,
   reviewRecordDigest,
   type ReviewRecord,
   sourceClaimCovers,
@@ -1427,6 +1428,18 @@ describe("t305 real receipt and guard flows", () => {
     const state=readFileSync(join(fail.record,"aidlc-state.md"),"utf-8"); const receipts=freshReviewReceipts(fail.project,state,{slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]}); expect([...receipts.unitStale].sort()).toEqual(["alpha","beta"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
+  test("4b a shared path holding exactly a newer review's bytes is that Unit's own reviewed build", () => {
+    const stage = {slug:"code-generation",phase:"construction",for_each:"unit-of-work",reviewer:REVIEWER,review_artifact:"code-generation-plan",reviewer_max_iterations:2,workspace_requires:true,produces:["code-generation-plan","unit-test-instructions","code-summary","traceability"]};
+    const { project, record } = runtimeFixture(); writeFileSync(join(project, "shared.ts"), "export const s=1\n");
+    review(project, record, "alpha", [{ path: "shared.ts" }]); writeFileSync(join(project, "shared.ts"), "export const s=2\n"); review(project, record, "beta", [{ path: "shared.ts" }]);
+    const state = readFileSync(join(record, "aidlc-state.md"), "utf-8");
+    // alpha's shared path moved only to what beta's review recorded; beta's own bytes never moved.
+    expect([...freshReviewReceipts(project, state, stage).unitSourceAttributed]).toEqual(["alpha"]);
+    // An edit after beta's review matches no review, so nothing is attributed.
+    writeFileSync(join(project, "shared.ts"), "export const s=3\n");
+    expect([...freshReviewReceipts(project, state, stage).unitSourceAttributed]).toEqual([]);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
   test("5 unclaimed add refuses; claim+recovery and revert both clear", () => {
     const claimed = runtimeFixture(); review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }]); review(claimed.project, claimed.record, "beta", []);
     writeFileSync(join(claimed.project, "extra.ts"), "export const x=1\n"); review(claimed.project, claimed.record, "beta", []);
@@ -1434,6 +1447,34 @@ describe("t305 real receipt and guard flows", () => {
     review(claimed.project, claimed.record, "alpha", [{ path: "app.ts" }, { path: "extra.ts" }]); expect(approve(claimed.project).rc).toBe(0);
     const reverted = runtimeFixture(); review(reverted.project, reverted.record, "alpha", [{ path: "app.ts" }]); review(reverted.project, reverted.record, "beta", []);
     writeFileSync(join(reverted.project, "extra.ts"), "export const x=1\n"); review(reverted.project, reverted.record, "beta", []); expect(approve(reverted.project).rc).toBe(1); rmSync(join(reverted.project, "extra.ts")); expect(approve(reverted.project).rc).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("a setting recorded during the stage is not unclaimed source", () => {
+    const { project, record } = runtimeFixture();
+    review(project, record, "alpha", [{ path: "app.ts" }]); review(project, record, "beta", []);
+    const before = workspaceSourceState(project)?.fingerprint;
+    // A person records a kill switch mid-stage, locally and for the team: AI-DLC's
+    // own settings at the workspace root, like the aidlc/ shell beside them.
+    writeFileSync(join(project, "aidlc.settings.local.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, bypasses: ["AIDLC_DISABLE_SENSORS"] } })}\n`);
+    writeFileSync(join(project, "aidlc.settings.json"), `${JSON.stringify({ schemaVersion: 1, flags: { schemaVersion: 1, swarm: true } })}\n`);
+    expect(workspaceSourceState(project)?.fingerprint).toBe(before);
+    const current = workspaceSourceListing(project);
+    expect(current?.has("\0aidlc.settings.json")).toBe(false);
+    // Evidence recorded before they left the boundary still compares.
+    const appEntry = current?.get("\0app.ts");
+    expect(appEntry).toBeDefined();
+    const recorded = new Map(current ?? []);
+    recorded.set("\0aidlc.settings.json", appEntry as string);
+    recorded.set("\0aidlc.settings.local.json", appEntry as string);
+    expect([...recordedSourceListingUnderCurrentBoundary(recorded, current ?? new Map()).keys()].sort())
+      .toEqual([...(current?.keys() ?? [])].sort());
+    expect(approve(project).rc).toBe(0);
+    // The same name anywhere else is the team's file.
+    const nested = runtimeFixture();
+    const nestedBefore = workspaceSourceState(nested.project)?.fingerprint;
+    mkdirSync(join(nested.project, "pkg"), { recursive: true });
+    writeFileSync(join(nested.project, "pkg", "aidlc.settings.json"), "{}\n");
+    expect(workspaceSourceState(nested.project)?.fingerprint).not.toBe(nestedBefore);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   test("rejection never launders an unclaimed path into the next attempt baseline", () => {

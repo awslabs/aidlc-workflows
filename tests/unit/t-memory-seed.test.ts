@@ -10,7 +10,7 @@
 // copy the packager bundled INSIDE the engine at tools/data/memory-seed/
 // (resolved by frameworkMemorySeedDir, mirroring frameworkTemplatesDir/DATA_DIR).
 //
-// Three contracts land here:
+// Five contracts land here:
 //   (a) THE BUNDLE: the packager emitted the method seed INSIDE the shipped
 //       engine dir, and frameworkMemorySeedDir() resolves to it (in-process, the
 //       `none` floor — a pure relative-to-DATA_DIR path).
@@ -19,6 +19,11 @@
 //   (c) IDEMPOTENCY: a project whose default memory tree ALREADY exists (a normal
 //       install that copied aidlc/) is left byte-unchanged — the existsSync guard
 //       skips the seed, so a committed tree never churns.
+//   (d) THE COPY RUNTIME: its memory folder ships without team.md and
+//       project.md, so creation adds each one that is missing and keeps one
+//       that exists.
+//   (e) THE ROOT FILES: starting work in a copy config never ran in adds
+//       AI-DLC's part of .gitignore after the team's own lines.
 //
 // MECHANISM. (a) imports frameworkMemorySeedDir in-process from the shipped dist
 // tree (the `none` floor for an exported lib fn). (b)/(c) SPAWN the real engine
@@ -35,6 +40,7 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -140,5 +146,48 @@ describe("t-memory-seed engine-only-install self-heal", () => {
     // The existsSync guard skipped the seed — the sentinel survives byte-for-byte,
     // so a committed/hand-edited default tree never churns.
     expect(readFileSync(orgMd, "utf-8")).toBe(sentinel);
+  });
+
+  // === (d) A COPY-CHANNEL RUNTIME ===========================================
+  // The copy runtime ships the memory folder without the team's own files, so a
+  // copy never replaces them. A fresh copy gets each one at its first creation,
+  // and one the team already has is never replaced.
+  test("d: a missing team.md or project.md is created from the seed; an existing one is kept", () => {
+    const fresh = mkTemp("copy-fresh");
+    const freshMemory = join(fresh, DEFAULT_MEMORY_REL);
+    mkdirSync(freshMemory, { recursive: true });
+    writeFileSync(join(freshMemory, "org.md"), readFileSync(join(BUNDLED_SEED, "org.md")));
+    const created = runIntentCreate(fresh);
+    expect(created.status, `intent-create failed: ${created.stdout}\n${created.stderr}`).toBe(0);
+    for (const name of ["team.md", "project.md"]) {
+      expect(readFileSync(join(freshMemory, name), "utf-8"), name)
+        .toBe(readFileSync(join(BUNDLED_SEED, name), "utf-8"));
+    }
+
+    const kept = mkTemp("copy-kept");
+    const keptMemory = join(kept, DEFAULT_MEMORY_REL);
+    mkdirSync(keptMemory, { recursive: true });
+    writeFileSync(join(keptMemory, "org.md"), readFileSync(join(BUNDLED_SEED, "org.md")));
+    const team = "# Team practices\n\n- Affirmed: trunk-based development\n";
+    writeFileSync(join(keptMemory, "team.md"), team, "utf-8");
+    const res = runIntentCreate(kept);
+    expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
+    expect(readFileSync(join(keptMemory, "team.md"), "utf-8")).toBe(team);
+    expect(readFileSync(join(keptMemory, "project.md"), "utf-8"))
+      .toBe(readFileSync(join(BUNDLED_SEED, "project.md"), "utf-8"));
+  });
+  // === (e) AI-DLC'S PART OF THE TEAM'S ROOT FILES ===========================
+  // A copy runtime leaves the team's .gitignore out; starting work in a copy
+  // that config never ran in adds AI-DLC's part after the team's lines.
+  test("e: starting work in an unconfigured copy adds AI-DLC's part to the team's .gitignore", () => {
+    const proj = mkTemp("copy-root");
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(proj, ".claude"), { recursive: true });
+    writeFileSync(join(proj, ".gitignore"), "node_modules\n.env.local\n", "utf-8");
+    const res = runIntentCreate(proj);
+    expect(res.status, `intent-create failed: ${res.stdout}\n${res.stderr}`).toBe(0);
+    const block = readFileSync(join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", "root-blocks", "gitignore"), "utf-8");
+    expect(readFileSync(join(proj, ".gitignore"), "utf-8")).toBe(
+      `node_modules\n.env.local\n\n# BEGIN AI-DLC:gitignore\n${block.trim()}\n# END AI-DLC:gitignore\n`,
+    );
   });
 });

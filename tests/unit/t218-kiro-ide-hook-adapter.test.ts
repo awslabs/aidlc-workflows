@@ -38,10 +38,12 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isGuardedWriteTool, isKiroShellTool } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   createIntent,
   readAllAuditShards,
   readIntentRegistry,
+  relayAsTextBlock,
   setActiveIntentCursor,
   writeSessionBinding,
   writePlanApprovalLegacyOffer,
@@ -365,8 +367,8 @@ function runIdeStdin(
 }
 
 const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
-const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off, update Kiro IDE and type `/aidlc config set summary-confirmation off` yourself. Once every piece of work in this project is complete, you can instead run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal to turn it off for all work in this project (run it again with `--clear-bypass` in place of `--bypass` to turn it back on).";
-const KIRO_PLAN_APPROVAL_WAY_OUT = "To build code plans without being asked, update Kiro IDE and type `/aidlc config set plan-approval off` yourself.";
+const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off now, run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal: it turns it off for all work in this project, including the work running now (run it again with `--clear-bypass` in place of `--bypass` to turn it back on). After you update Kiro IDE, you can instead type `/aidlc config set summary-confirmation off` yourself.";
+const KIRO_PLAN_APPROVAL_WAY_OUT = "To build code plans without being asked now, run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes` in a terminal: it turns plan approval off for all work in this project, including the work running now (run it again with `--clear-bypass` in place of `--bypass` to turn it back on). After you update Kiro IDE, you can instead type `/aidlc config set plan-approval off` yourself.";
 const KIRO_PLAN_APPROVAL_SWITCH_REFUSAL = `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_PLAN_APPROVAL_WAY_OUT}`;
 const KIRO_SUMMARY_SWITCH_REFUSAL = `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_SUMMARY_WAY_OUT}`;
 const KIRO_PROMPT_CAPABILITY_NOTE = `Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. ${KIRO_SUMMARY_WAY_OUT} ${KIRO_PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.`;
@@ -1080,6 +1082,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(forged).not.toContain(id);
       const head = r.stdout.slice(0, r.stdout.indexOf(`--- OUTPUT ${id}`));
       expect(head.match(/SYSTEM \(/g)).toHaveLength(1);
+      // Kiro renders the reply as Markdown; a fenced text block keeps the lines.
+      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then STOP.`);
       expect(r.stdout.trimEnd().endsWith(`--- END OUTPUT ${id} ---`)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1119,6 +1123,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(first.stdout).toBe("");
       expect(first.stderr).toContain("Unicode: ─ ✓ █▒ ⇄");
       expect(first.stderr).toMatch(/--- OUTPUT [0-9A-F]{16} \(exit 7\) ---/);
+      expect(first.stderr).toContain(`Relay the output below to the user ${relayAsTextBlock("")}, then stop.`);
       expect(first.stderr).not.toContain("\u001b");
       expect(first.stderr).not.toContain("Cwd=C:\\shell\\noise");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
@@ -1250,12 +1255,10 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("8d1b: the terminal command the summary refusal names waits for complete work, then turns the check off and back on", () => {
+  test("8d1b: the terminal command the summary refusal names turns the check off and back on while the work runs", () => {
     const dir = scratchProject(true);
     const statePath = seededStateFile(dir);
-    const running = readFileSync(statePath, "utf-8");
-    const setStatus = (status: string) =>
-      writeFileSync(statePath, running.replace("- **Status**: Running", `- **Status**: ${status}`));
+    expect(readFileSync(statePath, "utf-8")).toContain("- **Status**: Running");
     const machine = mkdtempSync(join(tmpdir(), "t218-machine-"));
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -1275,21 +1278,50 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     try {
       const named = /run `([^`]+)` in a terminal/.exec(KIRO_SUMMARY_WAY_OUT)?.[1] ?? "";
       expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
-      // While the work runs, config refuses, which is why the message waits
-      // for complete work.
-      const early = run(named.split(" "));
-      expect(early.status).not.toBe(0);
-      expect(early.stdout + early.stderr).toContain("refusing to refresh while 1 workflow(s) are active");
-      setStatus("Completed");
+      // Recording the switch refreshes no project files, so the running work
+      // does not hold it back and picks it up at once.
       const bypass = run(named.split(" "));
       expect(bypass.status, bypass.stdout + bypass.stderr).toBe(0);
-      setStatus("Running");
       expect(summaryLine()).toBe("Summary Confirmation: off (from env AIDLC_DISABLE_SUMMARY_CONFIRMATION)");
-      setStatus("Completed");
       const cleared = run(named.replace("--bypass", "--clear-bypass").split(" "));
       expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
-      setStatus("Running");
       expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
+      expect(readdirSync(machine)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(machine, { recursive: true, force: true });
+    }
+  });
+
+  test("8d1c: the terminal command the plan approval refusal names turns it off and back on while the work runs", () => {
+    const dir = scratchProject(true);
+    seededStateFile(dir);
+    const machine = mkdtempSync(join(tmpdir(), "t218-machine-"));
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: dir,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_DISABLE_PLAN_APPROVAL_GUARD: undefined,
+    };
+    const run = (args: string[]) => spawnSync(args[0], args.slice(1), {
+      cwd: dir, encoding: "utf-8", env, timeout: 30_000,
+    });
+    const planLine = () => {
+      const status = run(["bun", ".kiro/tools/aidlc-utility.ts", "status"]);
+      expect(status.status, status.stderr).toBe(0);
+      return status.stdout.split("\n").find((line) => line.startsWith("Plan Approval:"));
+    };
+    try {
+      const named = /run `([^`]+)` in a terminal/.exec(KIRO_PLAN_APPROVAL_WAY_OUT)?.[1] ?? "";
+      const before = planLine();
+      expect(before).toMatch(/^Plan Approval: on/);
+      const bypass = run(named.split(" "));
+      expect(bypass.status, bypass.stdout + bypass.stderr).toBe(0);
+      expect(planLine()).toBe("Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)");
+      const cleared = run(named.replace("--bypass", "--clear-bypass").split(" "));
+      expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+      expect(planLine()).toBe(before);
       expect(readdirSync(machine)).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -2004,6 +2036,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         ["plugin list --json", "engine plugin list --json"],
         ["plugin validate", "engine plugin validate"],
         ["knowledge list --json", "engine knowledge list --json"],
+        ["knowledge help", "engine knowledge help"],
         ["--doctor --export", "doctor --export"],
         ["--version", "version"],
         ["help", "engine orchestrate help"],
@@ -2442,16 +2475,13 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   });
 
   // Both registrations carry a matcher so Kiro starts them only for the tools
-  // the adapter forwards; a name added to one side but not the other fails here.
+  // the adapter forwards (the tool-name table's guarded writes and shells; t245
+  // pins each matcher to the table), and each forwarded name reaches the guard.
   test("the guard matcher selects exactly the tools the adapter forwards", () => {
-    const adapterSource = readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", "aidlc-kiro-adapter.ts"), "utf-8");
-    const body = (fn: string) => adapterSource.match(new RegExp(`function ${fn}\\([^)]*\\)[^{]*\\{([\\s\\S]*?)\\n\\}`))?.[1] ?? "";
-    const writeSet = adapterSource.match(/const GUARD_WRITE_TOOLS = new Set\(\[([^\]]*)\]\)/)?.[1] ?? "";
     const forwardedNames = [
-      ...[...writeSet.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]),
-      ...[...body("isKiroShellTool").matchAll(/=== "([a-z_]+)"/g)].map((m) => m[1]),
-    ].sort();
-    expect(forwardedNames).toHaveLength(8);
+      "write", "fs_write", "str_replace", "fs_append", "delete_file", "execute_bash", "execute_pwsh", "shell",
+    ];
+    for (const name of forwardedNames) expect(isGuardedWriteTool(name) || isKiroShellTool(name), name).toBe(true);
     for (const file of ["aidlc-review-freeze.json", "aidlc-state-transition-guard.json"]) {
       const hook = (JSON.parse(readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", file), "utf-8")) as {
         hooks: Array<{ matcher?: string }>;
@@ -2464,7 +2494,10 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         "invoke_sub_agent", "orchestrate_subagent", "subagent_response", "report_progress", "fs_read", "control_bash_process",
         // Mapped write names with no captured payload: a patch carries its paths in its text.
         "apply_patch", "edit_file", "create_file",
-      ]) expect(matcher.test(name), `${file} ${name}`).toBe(false);
+      ]) {
+        expect(matcher.test(name), `${file} ${name}`).toBe(false);
+        expect(isGuardedWriteTool(name) || isKiroShellTool(name), name).toBe(false);
+      }
     }
     const dir = scratchProject(true);
     try {
@@ -5605,14 +5638,57 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
         AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
       });
       expect(r.code, r.stderr).toBe(2);
-      expect(r.stderr).toContain("no human has acted since it opened");
-      expect(r.stderr).toContain("If you already replied, Kiro may not be running AIDLC hooks in this window");
+      expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
       expect(r.stderr).toContain(
-        "trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+        "If they already answered, tell them to trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
       );
       expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
-      expect(r.stderr).toContain("choose the aidlc agent in the chat panel's agent picker, then reply again.");
-      expect(r.stderr).toContain("In Kiro CLI, exit and start `kiro-cli` again in this folder, then reply again.");
+      expect(r.stderr).toContain(
+        "choose the aidlc agent in the chat panel's agent picker, so their next message is recorded; `/aidlc --doctor` shows anything else to fix.",
+      );
+      expect(r.stderr).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
+      // It says what to do, never how the hooks work, and never asks for the answer again.
+      expect(r.stderr).not.toContain("hooks");
+      expect(r.stderr).not.toContain("reply again");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("t218 enforce-approval-gate lets only the engine-issued chosen setter through", () => {
+  test("the Construction setting the person chose runs at an open gate; an altered form waits", () => {
+    const dir = scratchProject(true);
+    try {
+      const statePath = seededStateFile(dir);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
+      );
+      const shard = join(seededAuditDir(dir), pinnedShardName());
+      writeFileSync(
+        shard,
+        readFileSync(shard, "utf-8") +
+        "\n## WORKFLOW_STARTED\n**Timestamp**: 2025-12-31T00:00:00Z\n**Event**: WORKFLOW_STARTED\n**Scope**: feature\n\n---\n" +
+        "\n## STAGE_STARTED\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n" +
+        "\n## HUMAN_TURN\n**Timestamp**: 2026-01-01T00:00:01Z\n**Event**: HUMAN_TURN\n**Session**: kiro-ide-person\n\n---\n" +
+          "\n## CONSTRUCTION_POLICY_RECORDED\n**Timestamp**: 2026-01-01T00:00:02Z\n**Event**: CONSTRUCTION_POLICY_RECORDED\n" +
+          "**Stage**: requirements-analysis\n**Checkpoint**: Construction Policy\n**Field**: Construction Iteration\n" +
+          "**Value**: unit-major\n**Session**: kiro-ide-person\n**User Input**: Approve\n\n---\n",
+        "utf-8",
+      );
+      const gate = (command: string) =>
+        runIdeStdin(dir, "enforce-approval-gate", JSON.stringify({
+          hook_event_name: "PreToolUse", cwd: dir, tool_name: "execute_bash", tool_input: { command },
+        }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+      const setter = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
+      const applied = gate(setter);
+      expect(applied.code, applied.stderr).toBe(0);
+      for (const altered of [`PATH=./bin ${setter}`, `env FOO=1 ${setter}`, `./bin/${setter}`]) {
+        expect(gate(altered).code, altered).toBe(2);
+      }
+      expect(gate("bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved").code)
+        .toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -5716,7 +5792,7 @@ describe("t218 terminal-command-guard runs nothing while an approval gate awaits
         }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
       const gated = gate("sess_gated_chat");
       expect(gated.code, gated.stderr).toBe(2);
-      expect(gated.stderr).toContain("no human has acted since it opened");
+      expect(gated.stderr).toContain("An approval is waiting for the person's answer");
       const free = gate("sess_free_chat");
       expect(free.code, free.stderr).toBe(0);
     } finally {
@@ -6038,6 +6114,56 @@ describe("t218 execute_pwsh aidlc values that cmd.exe would split", () => {
         expect(r.code, label).toBe(2);
         expect(r.stdout, label).toBe("");
         expect(r.stderr, label).toBe(UNCHECKED);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Every Kiro IDE agent runs AI-DLC's own commands without a card, and a
+  // permission glob cannot tell a bare grouping from a quoted label, so an
+  // argument PowerShell builds by running code is refused on both channels.
+  // The refusal goes to the agent; the same value written literally runs.
+  const codeRefusal = (subject: string): string =>
+    `AIDLC stopped this command before it ran. ${subject} is PowerShell code, which PowerShell would run ` +
+    "before the command starts. Write the value itself in single quotes, then run the command again.\n";
+
+  test("refuses PowerShell code in an AI-DLC command's arguments, on both channels", () => {
+    const copy = "bun .kiro/tools/aidlc.ts engine";
+    const refused: Array<[label: string, command: string, subject: string]> = [
+      ["a grouping", `${copy} log decision --stage s --decision (Get-Content x)`, "The --decision value"],
+      ["a subexpression", `${copy} log decision --stage s --decision $(Get-Content x)`, "The --decision value"],
+      ["a subexpression in double quotes", `${copy} log decision --stage s --decision "a $(Get-Content x)"`, "The --decision value"],
+      ["a --flag=value grouping", `${copy} log decision --stage s --decision=(Get-Content x)`, "The --decision value"],
+      ["an array", `${copy} orchestrate continue @(Get-Content x)`, "A value"],
+      ["a hashtable", `${copy} orchestrate continue @{a=(Get-Content x)}`, "A value"],
+      ["the request after next", `${copy} orchestrate next (Get-Content x)`, "The request after next"],
+      ["an aidlc-* tool", "bun .kiro/tools/aidlc-utility.ts codekb-path --repo (Get-Content x)", "The --repo value"],
+      ["through bun run", "bun run .kiro/tools/aidlc.ts engine log decision --stage s --decision (Get-Content x)", "The --decision value"],
+      ["inside a grouping", `$r = (${copy} log decision --stage s --decision (Get-Content x))`, "The --decision value"],
+      ["a native engine token", "aidlc engine orchestrate continue (Get-Content x)", "A value"],
+    ];
+    const passes: Array<[label: string, command: string]> = [
+      ["a single-quoted label", `${copy} orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'`],
+      ["a double-quoted label", `${copy} orchestrate report --stage requirements-analysis --result approved --user-input "Approve (Recommended)"`],
+      ["quoted text and options", `${copy} log decision --stage s --decision 'Pick a layout (grid or list)?' --options 'Grid (fast),List'`],
+      ["the refused value written literally", `${copy} log decision --stage s --decision 'Get-Content x'`],
+      ["a native single-quoted label", "aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'"],
+      ["a grouping in another program", "Write-Output (Get-Date)"],
+      ["a POSIX shell", `${copy} log decision --stage s --decision (x)`],
+    ];
+    const dir = scratchProject(false);
+    try {
+      for (const [label, command, subject] of refused) {
+        const r = pwshCommand(dir, command);
+        expect(r.code, label).toBe(2);
+        expect(r.stdout, label).toBe("");
+        expect(r.stderr, label).toBe(codeRefusal(subject));
+      }
+      for (const [label, command] of passes) {
+        const r = pwshCommand(dir, command, label === "a POSIX shell" ? "execute_bash" : "execute_pwsh");
+        expect(r.code, label).toBe(0);
+        expect(r.stderr, label).toBe("");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

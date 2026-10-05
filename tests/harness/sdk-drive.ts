@@ -29,6 +29,18 @@
 //   - the terminal event is msg.type === 'result', subtype 'success' or one
 //     of the error subtypes; is_error + permission_denials live there.
 //     (sdk.d.ts:3477 SDKResultMessage = SDKResultSuccess | SDKResultError)
+//   - the prompt is sent as a user-message stream that stays open until the
+//     run is done. A plain string prompt is a single-turn query: the SDK
+//     closes the CLI's stdin at the first result, and every later permission
+//     request (an AskUserQuestion included) then fails with "Stream closed".
+//     A turn can end while subagents still run, and the session goes on when
+//     they report, so the stream closes only at a result with no task pending
+//     (task_started without its task_notification), or when the drive ends:
+//     a stop, an abort, or its own timeout. A task that finished while the
+//     turn still ran (task_updated "completed") is reported to the lead inside
+//     that turn and gets no notification, so once every pending task has
+//     finished, a result waits SETTLED_TASK_REPORT_WAIT_MS for one and then
+//     counts as the end of the turn.
 //   - on Windows the CLI is spawned through Options.spawnClaudeCodeProcess
 //     into a kill-on-close Job Object (sdk-process-containment.ts) and the
 //     whole tree is ended after every drive, because the SDK's abort kills
@@ -50,7 +62,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   createSdkProcessContainment,
   describeSdkContainment,
@@ -63,6 +75,7 @@ import {
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -161,6 +174,12 @@ export interface DriveResult {
   stoppedAfterAskUserQuestion: boolean;
   /** True when an intentional matching tool_result boundary aborted the stream. */
   stoppedAfterToolResult: boolean;
+  /** True when stopWhen ended the drive. */
+  stoppedWhen?: boolean;
+  /** Each finished turn, in order (the last turn is absent when a stop aborted it). */
+  turns?: DriveTurnEnd[];
+  /** Stop hook verdicts, when captureStopHooks was set. */
+  stopHooks?: CapturedStopHook[];
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +199,9 @@ export type AnswerSpec =
   /** Pick the first option whose label CONTAINS this substring. */
   | { labelContains: string }
   /** Multi-select: each entry resolves like a single spec; results combine. */
-  | { multi: Array<{ optionIndex: number } | { label: string } | { labelContains: string }> };
+  | { multi: Array<{ optionIndex: number } | { label: string } | { labelContains: string }> }
+  /** The person's own words typed into the picker's free-text field. */
+  | { text: string };
 
 /**
  * A declarative answer policy:
@@ -219,6 +240,7 @@ function resolveSpec(item: AskUserQuestionItem, spec: AnswerSpec): string | stri
   if ("optionIndex" in spec) return pickIndex(spec.optionIndex);
   if ("label" in spec) return pickLabel(spec.label);
   if ("labelContains" in spec) return pickContains(spec.labelContains);
+  if ("text" in spec) return spec.text;
   if ("multi" in spec) {
     return spec.multi.map((s) => {
       if ("optionIndex" in s) return pickIndex(s.optionIndex);
@@ -254,6 +276,103 @@ function buildAnswers(
     answers[q.question] = resolveSpec(q, spec);
   }
   return answers;
+}
+
+// ---------------------------------------------------------------------------
+// Drive input: the prompt as a user-message stream held open until close().
+// ---------------------------------------------------------------------------
+
+export interface DriveInput {
+  readonly messages: AsyncIterable<SDKUserMessage>;
+  /** The person's next message in the same session; ignored once closed. */
+  send(text: string): void;
+  close(reason: string): void;
+  readonly closedReason: string | undefined;
+}
+
+export function driveInput(prompt: string): DriveInput {
+  const queued = [prompt];
+  let wake: (() => void) | undefined;
+  let closedReason: string | undefined;
+  const release = (): void => {
+    const resume = wake;
+    wake = undefined;
+    resume?.();
+  };
+  async function* messages(): AsyncGenerator<SDKUserMessage> {
+    for (;;) {
+      while (queued.length > 0) {
+        yield {
+          type: "user",
+          message: { role: "user", content: queued.shift()! },
+          parent_tool_use_id: null,
+        } as SDKUserMessage;
+      }
+      if (closedReason !== undefined) return;
+      await new Promise<void>((resolve) => { wake = resolve; });
+    }
+  }
+  return {
+    messages: messages(),
+    send(text: string) {
+      if (closedReason !== undefined) return;
+      queued.push(text);
+      release();
+    },
+    close(reason: string) {
+      if (closedReason !== undefined) return;
+      closedReason = reason;
+      release();
+    },
+    get closedReason() { return closedReason; },
+  };
+}
+
+/** Claude Code's own result when the person picks a picker's "Chat about
+ *  this" instead of an option (bundled CLI 2.1.158): no answer, and the agent
+ *  is told to ask what they want to clarify. */
+export function chatAboutThisResult(questions: AskUserQuestionItem[]): string {
+  return `The user wants to clarify these questions.
+    This means they may have additional information, context or questions for you.
+    Take their response into account and then reformulate the questions if appropriate.
+    Start by asking them what they would like to clarify.
+
+    Questions asked:
+${questions.map((q) => `- "${q.question}"\n  (No answer provided)`).join("\n")}`;
+}
+
+/** How long a result waits for the report of a task the CLI already marked
+ *  finished. A report that resumes the session follows the result within a
+ *  second; one that never comes was handed to the lead inside the turn. */
+export const SETTLED_TASK_REPORT_WAIT_MS = 30_000;
+
+const FINISHED_TASK_STATUSES = new Set(["completed", "failed", "killed"]);
+
+/** The status a task_updated message sets, if it sets one. */
+export function taskUpdateStatus(message: Record<string, unknown>): string | undefined {
+  const patch = message.patch as { status?: unknown } | undefined;
+  return typeof patch?.status === "string" ? patch.status : undefined;
+}
+
+/** Tasks the CLI has started and not yet reported, read from its
+ *  task_started and task_notification messages. Only the notification counts:
+ *  a task_updated "completed" can arrive before the result while the
+ *  notification that resumes the session arrives after it. A task_updated
+ *  that finishes a task also puts it in `settled`: a background task that
+ *  finishes while the turn is still running has its report handed to the lead
+ *  inside that turn, and no notification ever follows. */
+export function trackDriveTask(
+  pending: Set<string>,
+  message: Record<string, unknown>,
+  settled?: Set<string>,
+): void {
+  const taskId = typeof message.task_id === "string" ? message.task_id : undefined;
+  if (taskId === undefined) return;
+  if (message.subtype === "task_started") pending.add(taskId);
+  if (message.subtype === "task_notification") pending.delete(taskId);
+  if (message.subtype === "task_updated" && FINISHED_TASK_STATUSES.has(taskUpdateStatus(message) ?? "")) {
+    settled?.add(taskId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +464,54 @@ export interface DriveOptions {
     resultIncludes: string;
     inputExcludes?: string;
   };
+  /**
+   * The person picks the picker's "Chat about this" instead of an option for a
+   * menu this selects: the question stays unanswered (empty `answers`) and the
+   * agent gets Claude Code's own clarify result, so the turn can end with the
+   * question open, as it does for a person who answers in their own message.
+   */
+  chatAboutQuestionWhen?: (menu: CapturedAskUserQuestion) => boolean;
+  /**
+   * The person's next message in the same session. Called when a turn ends (a
+   * result with no task pending) with what that turn did; return the message to
+   * send, or undefined to end the drive. Without it the drive ends at the first
+   * such result, as before.
+   */
+  nextMessage?: (turn: DriveTurnEnd) => string | undefined;
+  /**
+   * After a result, how long to wait for the report of a task the CLI already
+   * marked finished before the turn counts as ended. Default
+   * SETTLED_TASK_REPORT_WAIT_MS; calibration tests shorten it.
+   */
+  settledTaskReportWaitMs?: number;
+  /** Capture every Stop hook verdict into DriveResult.stopHooks. */
+  captureStopHooks?: boolean;
+  /**
+   * End the drive, as a person closing the session would, as soon as this
+   * returns true. Checked after every tool result with the results so far, so
+   * a stop can need several of them (for example a line that may arrive before
+   * or after the step that creates the work).
+   */
+  stopWhen?: (toolResults: readonly CapturedToolResult[]) => boolean;
+}
+
+/** What one turn of a drive left behind, counted from the start of the drive. */
+export interface DriveTurnEnd {
+  /** One-based turn number: 1 is the drive's prompt. */
+  turn: number;
+  askedQuestions: number;
+  toolResults: number;
+  stopHooks: number;
+}
+
+/** One Stop hook run, from the SDK's hook_response event. */
+export interface CapturedStopHook {
+  /** The turn it ended or re-fed (one-based). */
+  turn: number;
+  /** True when its output blocked the stop; `reason` is what the agent got. */
+  blocked: boolean;
+  reason?: string;
+  outcome: string;
 }
 
 interface ClaudeSettings {
@@ -537,6 +704,8 @@ export async function driveAidlc(
 
   const toolResults: CapturedToolResult[] = [];
   const askedQuestions: CapturedAskUserQuestion[] = [];
+  const turns: DriveTurnEnd[] = [];
+  const stopHooks: CapturedStopHook[] = [];
   // toolUseID -> { toolName, input } so we can join tool_use to its later
   // synthetic-user tool_result block.
   const pendingTools = new Map<
@@ -547,8 +716,12 @@ export async function driveAidlc(
   let assistantText = "";
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
+  let turn = 1;
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
+  // The person's turns: the opening prompt now, each menu answer as it is given.
+  const personTurns = new PersonTurnLedger(projectDir);
+  personTurns.sent(prompt);
   let stopAfterAskUserQuestionToolUseId: string | undefined;
   writeSdkTrace(tracePath, "start", {
     prompt,
@@ -567,9 +740,63 @@ export async function driveAidlc(
   let timedOut = false;
   let stoppedAfterAskUserQuestion = false;
   let stoppedAfterToolResult = false;
+  let stoppedWhen = false;
   let exhaustedParentBudget: unknown;
   let containmentFailure: unknown;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const input = driveInput(prompt);
+  const pendingTasks = new Set<string>();
+  const settledTasks = new Set<string>();
+  const closeInput = (reason: string): void => {
+    if (input.closedReason !== undefined) return;
+    writeSdkTrace(tracePath, "input_closed", { reason, pendingTasks: [...pendingTasks] });
+    input.close(reason);
+  };
+  // A turn ended: send the person's next message, or close the input.
+  const endTurn = (closeReason: string): void => {
+    const ended: DriveTurnEnd = {
+      turn,
+      askedQuestions: askedQuestions.length,
+      toolResults: toolResults.length,
+      stopHooks: stopHooks.length,
+    };
+    turns.push(ended);
+    const next = resultEvent?.is_error ? undefined : opts.nextMessage?.(ended);
+    if (next === undefined) {
+      closeInput(closeReason);
+    } else {
+      turn++;
+      writeSdkTrace(tracePath, "next_message", { turn, message: next });
+      personTurns.sent(next);
+      input.send(next);
+    }
+  };
+  // A result with tasks still unreported keeps the stream open, as the session
+  // resumes when they report. When every one of them has already finished, its
+  // report either follows the result at once or was handed to the lead inside
+  // the turn and never comes; after a short wait the turn counts as ended.
+  const settledWaitMs = opts.settledTaskReportWaitMs ?? SETTLED_TASK_REPORT_WAIT_MS;
+  let awaitingReports = false;
+  let settledTimer: ReturnType<typeof setTimeout> | undefined;
+  const watchSettledReports = (): void => {
+    const waiting = awaitingReports && input.closedReason === undefined && pendingTasks.size > 0 &&
+      [...pendingTasks].every((taskId) => settledTasks.has(taskId));
+    if (!waiting) {
+      if (settledTimer) clearTimeout(settledTimer);
+      settledTimer = undefined;
+      return;
+    }
+    settledTimer ??= setTimeout(() => {
+      settledTimer = undefined;
+      writeSdkTrace(tracePath, "settled_tasks_unreported", {
+        pendingTasks: [...pendingTasks],
+        waitedMs: settledWaitMs,
+      });
+      pendingTasks.clear();
+      awaitingReports = false;
+      endTurn("result with finished tasks reported inside the turn");
+    }, settledWaitMs);
+  };
 
   try {
     const fileAllowance = remainingOperationTimeoutMs(requestedTimeoutMs, { phase: "SDK query" });
@@ -590,7 +817,7 @@ export async function driveAidlc(
       }, timeoutMs);
     }
     const run = query({
-      prompt,
+      prompt: input.messages,
       options: {
         cwd: projectDir,
         permissionMode,
@@ -599,6 +826,7 @@ export async function driveAidlc(
         // Each drive has its own config directory. Natural-completion tests
         // need the transcript that Stop hooks inspect before accepting a stop.
         persistSession: opts.persistSession ?? false,
+        ...(opts.captureStopHooks ? { includeHookEvents: true } : {}),
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         ...(containment
@@ -612,10 +840,22 @@ export async function driveAidlc(
           if (toolName === "AskUserQuestion") {
             const questions =
               (input as { questions?: AskUserQuestionItem[] }).questions ?? [];
-            const answers = buildAnswers(questions, answerScript, askMenuIndex);
+            const chat = opts.chatAboutQuestionWhen?.({ questions, answers: {} }) === true;
+            const answers = chat ? {} : buildAnswers(questions, answerScript, askMenuIndex);
             askMenuIndex++;
+            // "Chat about this" answers nothing: the person's reply comes in
+            // their next message.
+            if (!chat) personTurns.sent(JSON.stringify(answers));
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
+            if (chat) {
+              writeSdkTrace(tracePath, "ask_user_question_chat", {
+                turn,
+                questions: questions.map((q) => q.question),
+              });
+              opts.onAskUserQuestion?.(captured);
+              return { behavior: "deny", message: chatAboutThisResult(questions) };
+            }
             const predicateSelected = opts.stopAfterAskUserQuestionWhen?.(captured) === true;
             if (predicateSelected && stopAfterAskUserQuestionToolUseId === undefined) {
               if (!permissionOptions.toolUseID) {
@@ -662,7 +902,28 @@ export async function driveAidlc(
 
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
-      if (msg.type === "assistant") {
+      // The lead's own messages mean the session resumed; a subagent's do not.
+      if ((msg.type === "assistant" || msg.type === "user") &&
+        !(msg as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
+        awaitingReports = false;
+      }
+      if (msg.type === "system") {
+        const m = msg as Record<string, unknown>;
+        trackDriveTask(pendingTasks, m, settledTasks);
+        if (m.subtype === "hook_response" && m.hook_event === "Stop") {
+          const stop = capturedStopHook(m, turn);
+          stopHooks.push(stop);
+          writeSdkTrace(tracePath, "stop_hook", { ...stop });
+        }
+        if (typeof m.subtype === "string" && m.subtype.startsWith("task_")) {
+          writeSdkTrace(tracePath, "system", {
+            subtype: m.subtype,
+            taskId: typeof m.task_id === "string" ? m.task_id : undefined,
+            status: typeof m.status === "string" ? m.status : taskUpdateStatus(m),
+            pendingTasks: pendingTasks.size,
+          });
+        }
+      } else if (msg.type === "assistant") {
         // Capture assistant text AND register any tool_use blocks so we can
         // join them to their tool_result by toolUseID.
         const content = (msg as { message?: { content?: unknown } }).message
@@ -774,6 +1035,11 @@ export async function driveAidlc(
                 });
                 abortController.abort();
               }
+              if (!stoppedWhen && opts.stopWhen?.(toolResults) === true) {
+                stoppedWhen = true;
+                writeSdkTrace(tracePath, "stop_when", { toolUseId, toolName: pending?.toolName ?? "" });
+                abortController.abort();
+              }
             }
           }
         }
@@ -796,8 +1062,18 @@ export async function driveAidlc(
           is_error: resultEvent.is_error,
           num_turns: resultEvent.num_turns,
           permissionDenialsCount: resultEvent.permissionDenialsCount,
+          pendingTasks: pendingTasks.size,
         });
+        // With a task still unreported the session resumes when it reports,
+        // so the stream stays open; the drive's own timeout bounds the wait,
+        // except for tasks that already finished (watchSettledReports).
+        if (resultEvent.is_error || pendingTasks.size === 0) {
+          endTurn(resultEvent.is_error ? "error result" : "result with no task pending");
+        } else {
+          awaitingReports = true;
+        }
       }
+      watchSettledReports();
     }
   } catch (err) {
     // An abort (timeout) surfaces as a thrown error from the generator. Swallow
@@ -807,7 +1083,7 @@ export async function driveAidlc(
       writeSdkTrace(tracePath, "error", { message: err.message });
     } else if (
       !(
-        (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult) &&
+        (timedOut || stoppedAfterAskUserQuestion || stoppedAfterToolResult || stoppedWhen) &&
         abortController.signal.aborted
       )
     ) {
@@ -819,6 +1095,8 @@ export async function driveAidlc(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    if (settledTimer) clearTimeout(settledTimer);
+    closeInput(abortController.signal.aborted ? "drive stopped" : "drive ended");
     if (containment) {
       // End the CLI's whole tree before touching anything it may hold open.
       // An aborted drive gets no grace: the CLI is mid-turn and would only
@@ -848,6 +1126,7 @@ export async function driveAidlc(
       timedOut,
       stoppedAfterAskUserQuestion,
       stoppedAfterToolResult,
+      stoppedWhen,
       toolResultCount: toolResults.length,
       askedQuestionCount: askedQuestions.length,
       hasResultEvent: resultEvent !== undefined,
@@ -861,6 +1140,12 @@ export async function driveAidlc(
   // A drive that leaves descendants behind is a failure even when its own
   // assertions could pass: the next fixture removal would hit them as EBUSY.
   if (containmentFailure) throw containmentFailure;
+  // So is a decision recorded as the person's that no turn they sent backs.
+  const unbacked = personTurns.unbacked();
+  if (unbacked.length > 0) {
+    writeSdkTrace(tracePath, "unbacked_decision", { decisions: unbacked });
+    throw unbackedFailure("The SDK drive", unbacked);
+  }
 
   const result: DriveResult = {
     toolResults,
@@ -870,6 +1155,9 @@ export async function driveAidlc(
     timedOut,
     stoppedAfterAskUserQuestion,
     stoppedAfterToolResult,
+    stoppedWhen,
+    turns,
+    stopHooks,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the
@@ -880,6 +1168,20 @@ export async function driveAidlc(
   if (audit !== undefined) result.auditEvents = audit;
 
   return result;
+}
+
+/** A Stop hook's verdict: a block rides its stdout as {"decision":"block"}. */
+export function capturedStopHook(message: Record<string, unknown>, turn: number): CapturedStopHook {
+  const stdout = typeof message.stdout === "string" ? message.stdout.trim() : "";
+  let verdict: { decision?: unknown; reason?: unknown } = {};
+  try { if (stdout) verdict = JSON.parse(stdout) as typeof verdict; } catch { /* not a block */ }
+  const blocked = verdict.decision === "block";
+  return {
+    turn,
+    blocked,
+    ...(blocked && typeof verdict.reason === "string" ? { reason: verdict.reason } : {}),
+    outcome: typeof message.outcome === "string" ? message.outcome : "",
+  };
 }
 
 // ---------------------------------------------------------------------------

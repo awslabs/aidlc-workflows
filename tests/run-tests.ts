@@ -45,7 +45,11 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
+import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
+  type OrderWeights,
+  orderLongestFirst,
+  parseOrderWeights,
   selectShard,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
@@ -62,6 +66,7 @@ const DEFAULT_CASE_TIMEOUT_MS = deterministicCaseTimeoutMs();
 const PACKAGE_READY_ENV = "AIDLC_TEST_PACKAGE_READY";
 const PACKAGE_LOCK = join(REPO_ROOT, ".aidlc", "test-package.lock");
 const UNIT_SHARD_CONFIG = join(SCRIPT_DIR, "unit-shard-weights.json");
+const INTEGRATION_ORDER_WEIGHTS = join(SCRIPT_DIR, "integration-weights.json");
 const REQUIRE_COMPILED_COVERAGE_ENV = "AIDLC_REQUIRE_COMPILED_COVERAGE";
 
 // Platform null device, used for the system config after the protected
@@ -162,7 +167,10 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
                   Remaining work is bounded before each dispatch; cleanup is reserved.
   --isolated-e2e  Dispatch e2e files across -P isolated checkout workers.
   --isolated-files  Dispatch integration/e2e files with fresh checkouts and homes.
-  --file-retries N  Retry a short failed file once (0 or 1; --isolated-files only).
+  --file-retries N  Retry a short assertion-failed file once (0 or 1): in a fresh
+                  isolated worker with --isolated-files, otherwise in a fresh
+                  process for smoke/unit/integration (the merge queue). A
+                  timeout, crash or cleanup failure is never retried.
                   Known serial driver families may overlap; assertions are unchanged.
   --e2e-plan      Print the isolated file inventory/resource plan; run no tests or builds.
                   Requires --e2e or --isolated-files; implies --isolated-e2e.
@@ -839,6 +847,15 @@ async function runSpawnCapture(
         };
         transport = { worker: { id: 0, root: cwd, socket }, env };
       }
+      // Keep each file's machine install beside its temporary project fixtures.
+      // Debug logs live inside the source checkout; putting the machine root
+      // there makes project-required routes correctly reject that checkout as
+      // overlapping an installation. The existing fixture cleanup owns this
+      // directory in both ordinary and isolated E2E runs.
+      const machineRoot = join(env.TMPDIR!, "machine");
+      mkdirSync(machineRoot, { recursive: true });
+      env.AIDLC_INSTALL_ROOT = machineRoot;
+      env.AIDLC_BIN_DIR = join(machineRoot, "bin");
       const supervisorPath = join(cwd, "tests", "lib", "e2e-process.ts");
       // Both the coordinator-side helper and its child entry point must use
       // the snapshot, even if authored source changes while a file is queued.
@@ -1231,21 +1248,93 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
   return files;
 }
 
+function remainingRunMs(): number {
+  return RUN_WORK_DEADLINE_MS ? RUN_WORK_DEADLINE_MS - Date.now() : Number.POSITIVE_INFINITY;
+}
+
+interface OrdinaryRetry {
+  file: string;
+  name: string;
+  passedOnRetry: boolean;
+  firstAttempt: { failedCases: number; wallTimeMs: number; log: string | null };
+  secondAttempt: { status: Status; failedCases: number; wallTimeMs: number };
+}
+const ordinaryRetries: OrdinaryRetry[] = [];
+
+/**
+ * Ordinary smoke/unit/integration files get one fresh second run (the merge
+ * queue passes --file-retries 1) when the first attempt failed assertions
+ * under the shared retry rule. A second failure stays a failure; a pass is
+ * recorded as passed on retry, never as a plain pass.
+ */
+async function runFileWithRetry(file: string, parallelMode: boolean): Promise<FileExecution | undefined> {
+  const first = await runBunTestFile(file, parallelMode);
+  if (!first || !args.fileRetries || !retryEligible(first, ORDINARY_RETRY_MAX_MS, remainingRunMs())) return first;
+  const name = resultName(file);
+  const say = async (line: string): Promise<void> => {
+    if (parallelMode) await withStdoutLock(() => process.stdout.write(line));
+    else process.stdout.write(line);
+  };
+  // Without verbose logs there is no evidence to keep; with them, a retry that
+  // would overwrite the first attempt's evidence never starts.
+  const kept = args.verbose ? preserveFirstAttempt(logDir, name) : { ok: true, log: null };
+  if (!kept.ok) {
+    await say(`=== NO RETRY ${basename(file)} (its first attempt's evidence could not be kept aside) ===\n`);
+    return first;
+  }
+  const log = kept.log;
+  await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}) ===\n`);
+  let second = await runBunTestFile(file, parallelMode);
+  if (!second) return first;
+  const passedOnRetry = retryPassed(first, second);
+  const secondAttempt = { status: second.status, failedCases: second.cases.failed, wallTimeMs: second.wallTimeMs };
+  const metaPath = join(resultsDir, `${name}.meta`);
+  if (!passedOnRetry && second.status !== "FAIL") {
+    // Only a pass of every case the first attempt ran replaces its failure: a
+    // retry that skipped one of them, or executed none, leaves the file failed.
+    const meta: ResultRow = existsSync(metaPath)
+      ? parseMeta(metaPath)
+      : { name, status: "FAIL", tests: 0, skipped: 0, failed: 0, duration: "0" };
+    writeMeta(name, {
+      ...meta, status: "FAIL", failed: Math.max(1, meta.failed, first.cases.failed),
+      reason: `failed on its first attempt (${first.cases.failed} case(s)); its retry did not pass every case the first attempt ran`,
+    });
+    second = { ...second, status: "FAIL" };
+    fileExecutions.set(name, second);
+  }
+  ordinaryRetries.push({
+    file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
+    name,
+    passedOnRetry,
+    firstAttempt: { failedCases: first.cases.failed, wallTimeMs: first.wallTimeMs, log },
+    secondAttempt,
+  });
+  if (passedOnRetry) {
+    if (existsSync(metaPath)) {
+      writeMeta(name, {
+        ...parseMeta(metaPath),
+        reason: `passed on retry: the first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}`,
+      });
+    }
+  }
+  return second;
+}
+
 async function runFileBand(
   effectiveParallel: number,
   serialFiles: string[],
   parallelFiles: string[],
 ): Promise<void> {
-  for (const file of serialFiles) await runBunTestFile(file, false);
+  for (const file of serialFiles) await runFileWithRetry(file, false);
   if (effectiveParallel <= 1) {
-    for (const file of parallelFiles) await runBunTestFile(file, false);
+    for (const file of parallelFiles) await runFileWithRetry(file, false);
     return;
   }
 
   const executing = new Set<Promise<FileExecution | undefined>>();
   try {
     for (const file of parallelFiles) {
-      const p = runBunTestFile(file, true).finally(() => {
+      const p = runFileWithRetry(file, true).finally(() => {
         executing.delete(p);
       });
       executing.add(p);
@@ -1285,8 +1374,25 @@ async function runFilesPartitioned(
     }
   }
 
-  await runFileBand(effectiveParallel, serialFiles, parallelFiles);
-  await runFileBand(effectiveParallel, liveSerialFiles, liveParallelFiles);
+  const order = level === "integration" && effectiveParallel > 1 ? integrationOrderWeights() : undefined;
+  const admit = (files: string[]): string[] => order ? orderLongestFirst(files, legacyResultName, order) : files;
+  await runFileBand(effectiveParallel, serialFiles, admit(parallelFiles));
+  await runFileBand(effectiveParallel, liveSerialFiles, admit(liveParallelFiles));
+}
+
+/** Prior CI durations; without a readable file, files start in name order. */
+function integrationOrderWeights(): OrderWeights | undefined {
+  if (!existsSync(INTEGRATION_ORDER_WEIGHTS)) return undefined;
+  let weights: OrderWeights | undefined;
+  try {
+    weights = parseOrderWeights(readFileSync(INTEGRATION_ORDER_WEIGHTS, "utf8"));
+  } catch {
+    // An unreadable hint (a directory, a permission error) only costs the order.
+  }
+  if (!weights) {
+    process.stdout.write(`NOTE: ${relative(REPO_ROOT, INTEGRATION_ORDER_WEIGHTS)} is unreadable; integration files start in name order\n`);
+  }
+  return weights;
 }
 
 async function runTier(level: Level, label: string): Promise<void> {
@@ -1555,10 +1661,7 @@ async function runIsolatedE2e(): Promise<void> {
         const first = await execute(task.file, worker);
         // Retry only a short assertion failure after confirmed retirement. A
         // timeout, missing evidence or cleanup failure never earns another run.
-        if (args.fileRetries && first.status === "FAIL" && first.cases.failed > 0 &&
-            first.evidenceComplete && !first.cleanupError && !first.timedOut &&
-            first.wallTimeMs <= 25 * 60_000 &&
-            (!RUN_WORK_DEADLINE_MS || RUN_WORK_DEADLINE_MS - Date.now() > 5 * 60_000)) {
+        if (args.fileRetries && retryEligible(first, ISOLATED_RETRY_MAX_MS, remainingRunMs())) {
           const second = await execute(task.file, worker, 2);
           if (second.status === "PASS") {
             records.get(task.file)!.passedOnRetry = true;
@@ -1635,6 +1738,8 @@ function printSummary(): void {
   process.stdout.write(`Executed test cases: ${resultRows.reduce((n, row) => n + row.tests - row.skipped, 0)}\n`);
   process.stdout.write(`Skipped test cases: ${resultRows.reduce((n, row) => n + row.skipped, 0)}\n`);
   process.stdout.write(`Skipped files: ${resultRows.filter((row) => row.status === "SKIP").length}\n`);
+  const flaky = ordinaryRetries.filter((retry) => retry.passedOnRetry).map((retry) => retry.name);
+  if (flaky.length > 0) process.stdout.write(`Passed on retry (flaky): ${flaky.join(", ")}\n`);
   for (const error of selectionErrors) process.stdout.write(`error: ${error}\n`);
   if (args.verbose && logDir) {
     process.stdout.write(`Log directory: ${displayLogDirPath(logDir)}\n`);
@@ -1673,6 +1778,16 @@ function writeVerboseSummary(): void {
     );
     if (row.reason) lines.push(`    ${row.reason}`);
   }
+  // Rows keep the PASS/FAIL column the timing and report parsers read; a retry
+  // is named here and in retries.json instead.
+  for (const [heading, passed] of [["Passed on retry (flaky: fix these)", true], ["Still failed after a retry", false]] as const) {
+    const retries = ordinaryRetries.filter((retry) => retry.passedOnRetry === passed);
+    if (retries.length === 0) continue;
+    lines.push("", `${heading}:`);
+    for (const retry of retries) {
+      lines.push(`  ${retry.name}: first attempt failed ${retry.firstAttempt.failedCases} case(s)${retry.firstAttempt.log ? `, log ${retry.firstAttempt.log}` : ""}`);
+    }
+  }
   lines.push(
     "",
     "Totals:",
@@ -1688,6 +1803,15 @@ function writeVerboseSummary(): void {
     `  Result: ${runFailed() ? "FAIL" : "PASS"}`,
   );
   writeFileSync(join(logDir, "summary.txt"), `${lines.join("\n")}\n`, "utf8");
+  if (args.fileRetries && !args.isolatedFiles) {
+    // Machine-readable for flake triage; present (possibly empty) whenever the
+    // run allowed retries, so "no retries" is distinguishable from "not enabled".
+    writeFileSync(join(logDir, "retries.json"), `${JSON.stringify({
+      maxFirstAttemptSeconds: ORDINARY_RETRY_MAX_MS / 1000,
+      platform: process.platform,
+      retries: ordinaryRetries,
+    }, null, 2)}\n`);
+  }
 
   const failures: string[] = selectionErrors.map((error) => `error: ${error}`);
   if (args.requireCoverage && !coverage.complete) {

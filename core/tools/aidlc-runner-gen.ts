@@ -61,12 +61,15 @@ import { dirname, join } from "node:path";
 import {
   errorMessage,
   frontmatterBlock,
+  hasRunnerGenMarker,
   isPluginEnabled,
+  isScopeName,
   loadScopeMetadataAll,
   loadStageGraphAll,
   pluginsEnabled,
   runnerFrontmatterAdditions,
   scopeGridPath,
+  SCOPE_NAME_RULE,
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
@@ -74,8 +77,10 @@ import {
   aidlcToolInvocation,
   entrySkillInvocation,
   runtimeHarnessDir as harnessDir,
+  refuseLinkOnTheWay,
   resolveHarnessPath,
   resolveSkillsPath,
+  runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 
 // Resolve the skills/ dir off THIS module's location (tools/ → ../skills/) so the
@@ -358,18 +363,12 @@ function handleWrite(): string[] {
   const slugs = stageSlugs();
   const compiledSet = new Set(slugs);
   for (const node of runnableStages()) {
-    const dir = join(skillsDir, runnerDirName(node));
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), renderStageRunner(node), "utf-8");
+    writeRunner(join(skillsDir, runnerDirName(node), "SKILL.md"), renderStageRunner(node));
   }
   // Emit the init-phase wrapper.
-  const initDir = join(skillsDir, INIT_RUNNER_DIR);
-  if (!existsSync(initDir)) mkdirSync(initDir, { recursive: true });
-  writeFileSync(join(initDir, "SKILL.md"), renderInitRunner(), "utf-8");
+  writeRunner(join(skillsDir, INIT_RUNNER_DIR, "SKILL.md"), renderInitRunner());
   // Emit the composer shortcut.
-  const composeDir = join(skillsDir, COMPOSE_RUNNER_DIR);
-  if (!existsSync(composeDir)) mkdirSync(composeDir, { recursive: true });
-  writeFileSync(join(composeDir, "SKILL.md"), renderComposeRunner(), "utf-8");
+  writeRunner(join(skillsDir, COMPOSE_RUNNER_DIR, "SKILL.md"), renderComposeRunner());
   // Prune stale stage-runner dirs: old per-init runners and runners for stages
   // now absent from the filtered graph because their plugin is disabled.
   const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
@@ -387,20 +386,7 @@ function handleWrite(): string[] {
   return slugs;
 }
 
-const RUNNER_GEN_MARKER_KEY = "generated-by";
-const RUNNER_GEN_MARKER_VALUE = "aidlc-runner-gen";
-
 type RunnerSlugParser = (body: string) => string | null;
-
-function leadingFrontmatter(body: string): string | null {
-  return frontmatterBlock(body);
-}
-
-function hasRunnerGenMarker(body: string): boolean {
-  const frontmatter = leadingFrontmatter(body);
-  if (!frontmatter) return false;
-  return new RegExp(`^${RUNNER_GEN_MARKER_KEY}:\\s*${RUNNER_GEN_MARKER_VALUE}\\s*$`, "m").test(frontmatter);
-}
 
 function isLegacyGeneratedRunnerDirName(
   dirName: string,
@@ -532,6 +518,14 @@ function defaultSkillsDir(mutable = false): string {
   return resolveSkillsPath([], { mutable });
 }
 
+// A runner folder (or its SKILL.md) that is a link is left alone, like the
+// skills folder itself.
+function writeRunner(path: string, body: string): void {
+  refuseLinkOnTheWay(runtimeProjectDir(), path);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, body, "utf-8");
+}
+
 function scopeNamesInWrittenGrid(): ReadonlySet<string> {
   try {
     const parsed = JSON.parse(readFileSync(scopeGridPath(), "utf-8"));
@@ -566,6 +560,11 @@ function readScopeFront(path: string): ScopeFront {
   if (fm === null) throw new Error(`Scope file missing frontmatter: ${path}`);
   const name = scalarField(fm, "name");
   if (!name) throw new Error(`Scope file ${path} missing required frontmatter: name`);
+  if (!isScopeName(name)) {
+    throw new Error(
+      `Scope file ${path} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`,
+    );
+  }
   const plugin = scalarField(fm, "plugin");
   const runnerRaw = scalarField(fm, "runner");
   let runner: boolean | undefined;
@@ -760,8 +759,8 @@ preserving any \`--request\` id rather than rebuilding the request.
   \`${scope}\` (the new work is likely the same flavour that made the user reach for
   this command), but if the new work clearly fits a DIFFERENT scope, propose that
   instead, and name it so the human can correct it. **Lead the affirmative option
-  with "Yes"** (e.g. "Yes, start a second intent"). Starting a workflow is a
-  mutation gated on a human yes.
+  with "Yes"** (e.g. "Yes, start a second intent"). Never create it without
+  their explicit yes.
 - **On CONFIRM**, re-run \`next\` with \`--new-intent\`, the confirmed scope, and the
   new-work text:
 
@@ -857,8 +856,7 @@ function handleScopes(rest: string[]): void {
 
   for (const scope of batch) {
     const path = scopeRunnerPath(skillsDir, scope);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, renderRunner(scope, discovered[scope].description), "utf-8");
+    writeRunner(path, renderRunner(scope, discovered[scope].description));
     console.log(`wrote ${path}`);
   }
   pruneScopeRunners(skillsDir, new Set(batch));

@@ -25,6 +25,13 @@ const GITIGNORE_BEGIN = "# BEGIN AIDLC CURSOR";
 const GITIGNORE_END = "# END AIDLC CURSOR";
 const RECEIPT_REL = ".cursor/aidlc-install.json";
 
+// The copy runtime leaves the root .gitignore and AGENTS.md out (a copy would
+// replace the team's own); their shipped text is in the harness folder.
+function shippedRootFile(name: string, marker: string): string {
+  const root = join(DIST_ROOT, name);
+  return existsSync(root) ? root : join(DIST_ROOT, ".cursor", "tools", "data", "root-blocks", marker);
+}
+
 type JsonObject = Record<string, unknown>;
 type WriteAction =
   | { kind: "copy"; source: string; target: string }
@@ -105,11 +112,14 @@ function readReceipt(path: string): InstallReceipt | null {
   return { schemaVersion: 1, managedFiles };
 }
 
-function activeSpaceFor(targetRoot: string): string {
+// The same active space the engine reads, by the rule it ships with.
+async function activeSpaceFor(targetRoot: string): Promise<string> {
   const pointer = join(targetRoot, "aidlc", "active-space");
   if (!existsSync(pointer)) return "default";
-  const space = readFileSync(pointer, "utf-8").trim();
-  return /^[a-z0-9][a-z0-9._-]*$/.test(space) ? space : "default";
+  const module = await import(pathToFileURL(join(DIST_ROOT, ".cursor", "tools", "aidlc-runtime-paths.ts")).href) as {
+    knownActiveSpace: (workspaceRootDir: string, cursorText: string) => string;
+  };
+  return module.knownActiveSpace(join(targetRoot, "aidlc"), readFileSync(pointer, "utf-8"));
 }
 
 function parseBufferObject(content: Buffer, label: string): JsonObject {
@@ -941,6 +951,8 @@ function mergeHooks(sourcePath: string, targetPath: string): string {
   return `${JSON.stringify(merged, null, 2)}\n`;
 }
 
+const RETIRED_SHIPPED_ALLOW = new Set(["Shell(bun)"]);
+
 function mergeCli(sourcePath: string, targetPath: string): string {
   const source = parseObject(sourcePath);
   const existing = existsSync(targetPath) ? parseObject(targetPath) : {};
@@ -953,7 +965,10 @@ function mergeCli(sourcePath: string, targetPath: string): string {
 
   const shippedAllow = stringArray(sourcePermissions.allow, `${sourcePath}: permissions.allow`);
   const shippedDeny = stringArray(sourcePermissions.deny, `${sourcePath}: permissions.deny`);
-  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`);
+  // The allow entry earlier releases shipped, which covered every bun command;
+  // the narrower shipped entries replace it on refresh.
+  const projectAllow = stringArray(existingPermissions?.allow, `${targetPath}: permissions.allow`)
+    .filter((entry) => !RETIRED_SHIPPED_ALLOW.has(entry));
   const projectDeny = stringArray(existingPermissions?.deny, `${targetPath}: permissions.deny`);
   const conflicts = [
     ...shippedAllow.filter((entry) => projectDeny.includes(entry)),
@@ -1048,7 +1063,7 @@ export async function install(targetDir: string): Promise<void> {
   const sharedJson = new Set([".cursor/hooks.json", ".cursor/cli.json"]);
   const receiptTarget = join(targetRoot, RECEIPT_REL);
   const priorReceipt = readReceipt(receiptTarget);
-  const activeSpace = activeSpaceFor(targetRoot);
+  const activeSpace = await activeSpaceFor(targetRoot);
   const selectedPlugins = activePluginSelection(targetRoot);
   const pluginRuntime = pluginRuntimeState(targetRoot);
   const managedFiles: Record<string, string> = {};
@@ -1154,7 +1169,7 @@ export async function install(targetDir: string): Promise<void> {
   actions.push({ kind: "write", target: hooksTarget, content: hooks });
   actions.push({ kind: "write", target: cliTarget, content: cli });
 
-  const agentsSource = readFileSync(join(DIST_ROOT, "AGENTS.md"), "utf-8");
+  const agentsSource = readFileSync(shippedRootFile("AGENTS.md", "agents"), "utf-8");
   const agentsTarget = join(targetRoot, "AGENTS.md");
   const agentsExisting = existsSync(agentsTarget) ? readFileSync(agentsTarget, "utf-8") : "";
   if (agentsExisting.includes("<!-- BEGIN AI-DLC:agents -->")) {
@@ -1173,7 +1188,7 @@ export async function install(targetDir: string): Promise<void> {
     ),
   });
 
-  const gitignoreSource = readFileSync(join(DIST_ROOT, ".gitignore"), "utf-8");
+  const gitignoreSource = readFileSync(shippedRootFile(".gitignore", "gitignore"), "utf-8");
   const aidlcBlockStart = gitignoreSource.indexOf("# AI-DLC");
   if (aidlcBlockStart === -1) throw new Error("shipped .gitignore has no AI-DLC section");
   const gitignoreTarget = join(targetRoot, ".gitignore");

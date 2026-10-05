@@ -118,6 +118,15 @@ describe("t160 selectors — space + intent resolution", () => {
     expect(activeSpace(proj)).toBe("team-b");
   });
 
+  test("a cursor that does not name one of the project's spaces reads as 'default'", () => {
+    seedShell(proj, "team-b");
+    const cursor = join(proj, "aidlc", "active-space");
+    for (const value of ["team-c", "Team-B", "../team-b", "team-b/intents", ""]) {
+      writeFileSync(cursor, `${value}\n`, "utf-8");
+      expect(activeSpace(proj), JSON.stringify(value)).toBe("default");
+    }
+  });
+
   test("ensureActiveSpaceCursor creates the fallback only when the cursor is absent", () => {
     const cursor = join(proj, "aidlc", "active-space");
     rmSync(cursor, { force: true });

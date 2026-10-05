@@ -15,7 +15,6 @@
 // in .codex/skills/ (Codex discovers skills at <project>/.agents/skills/), so
 // the manifest sets skipRunnerGen and emit composes the runners here.
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, win32 } from "node:path";
 import { stringify } from "smol-toml";
@@ -24,6 +23,7 @@ import {
   absorbReviewerKnowledge,
   injectDelegatedKnowledgePreflight,
 } from "../../scripts/agent-knowledge.ts";
+import { codexHookTrustHash } from "../../core/tools/aidlc-command.ts";
 import type { Tier } from "../../core/tools/aidlc-tiers.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
 import {
@@ -131,6 +131,15 @@ tool_output_token_limit = 20000
 # .git path (linked worktrees resolve into <main>/.git/worktrees/*).
 sandbox_mode = "workspace-write"
 
+# Gates use Codex's structured question picker (request_user_input), which
+# Codex still marks as under development; [features] below turns it on. Codex
+# then warns at every start and points at ~/.codex/config.toml, so this turns
+# that warning off. It also hides the warning for any other under-development
+# feature while you work in this project. For numbered prose gates in one
+# session, start Codex with -c features.default_mode_request_user_input=false
+# (editing [features] here reads as a local change on the next aidlc config).
+suppress_unstable_features_warning = true
+
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
 # lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness
@@ -155,7 +164,8 @@ max_depth = 1
 
 # Gates (D-3 both-track): prose gates are the floor; these flags enable the
 # structured request_user_input tool (verified working at 0.137.0+; the
-# default-mode flag is under development and prints a warning banner).
+# default-mode flag is still under development at 0.160.0, and its start-up
+# warning is turned off above).
 [tools]
 experimental_request_user_input = { enabled = true }
 
@@ -197,29 +207,6 @@ prefix_rule(pattern = ["git", "add"], decision = "allow")
 `;
 }
 
-// S9a trust-hash recipe. Identity = {event_name: <snake>, hooks: [{async:false,
-// command, timeout:<emitted seconds>, type:"command"}]} → canonical JSON
-// (sorted keys, compact) → sha256.
-function trustHash(eventSnake: string, command: string, timeout: number): string {
-  const identity = {
-    event_name: eventSnake,
-    hooks: [{ async: false, command, timeout, type: "command" }],
-  };
-  const sortKeys = (o: unknown): unknown => {
-    if (Array.isArray(o)) return o.map(sortKeys);
-    if (o !== null && typeof o === "object") {
-      return Object.fromEntries(
-        Object.keys(o as Record<string, unknown>)
-          .sort()
-          .map((k) => [k, sortKeys((o as Record<string, unknown>)[k])]),
-      );
-    }
-    return o;
-  };
-  const blob = JSON.stringify(sortKeys(identity));
-  return "sha256:" + createHash("sha256").update(blob, "utf-8").digest("hex");
-}
-
 const SNAKE: Record<string, string> = {
   SessionStart: "session_start",
   UserPromptSubmit: "user_prompt_submit",
@@ -256,13 +243,13 @@ export function trustEntries(
   const path = hooksJsonPath ?? projectPath.join(projectDir, harnessDir, "hooks.json");
   const counters: Record<string, number> = {};
   const state: Record<string, { trusted_hash: string }> = {};
-  for (const { event, target } of HOOK_WIRING) {
+  for (const { event, matcher, target } of HOOK_WIRING) {
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
     const command = adapterCmd(harnessName, target, trustedNamespace)
       .replace("{{INVOKE}}", invoke);
-    const hash = trustHash(snake, command, hookTimeoutSeconds(target));
+    const hash = codexHookTrustHash(snake, command, hookTimeoutSeconds(target), matcher);
     state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
   return stringify({ hooks: { state } });
@@ -285,7 +272,7 @@ export function emitTrustSeed(
     `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
     `# If entries for that hooks.json path already exist, replace the full set;\n` +
     `# appending a second set creates invalid TOML. The hash covers the\n` +
-    `# normalized hook identity (event + command + defaults), NOT the path —\n` +
+    `# normalized hook identity (event + matcher + command + defaults), NOT the path;\n` +
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
@@ -510,12 +497,23 @@ export default function emit(ctx: EmitContext): void {
   // Codex alone does NOT enumerate core/skills/, so this list is the only thing
   // that ships them here: a skill missing from it silently reaches every OTHER
   // harness and not this one.
+  // A Codex user invokes a skill with `$`, so the slash commands these skills
+  // name (`/aidlc`, `/aidlc-replay`) are written the Codex way; a path such as
+  // `<record>/aidlc-state.md` or `.codex/tools/aidlc.ts` is left as it is.
+  const codexInvocations = (s: string): string =>
+    s.replace(/(^|[\s(`"])\/(aidlc(?:-[a-z][a-z0-9-]*)?)(?![a-z0-9-]*\.[a-z])/gm, "$1$$$2");
   for (const skill of ["aidlc-session-cost", "aidlc-replay", "aidlc-outcomes-pack", "aidlc-knowledge"]) {
     const srcDir = join(coreRoot, "skills", skill);
     if (!existsSync(srcDir)) continue;
     for (const file of walk(srcDir)) {
       const rel = relative(srcDir, file);
-      emissions.push({ path: join(SKILLS_DST, skill, rel), content: () => rewriteProse(readFileSync(file, "utf-8")) });
+      emissions.push({
+        path: join(SKILLS_DST, skill, rel),
+        content: () => {
+          const prose = rewriteProse(readFileSync(file, "utf-8"));
+          return rel.endsWith(".md") ? codexInvocations(prose) : prose;
+        },
+      });
     }
     emissions.push({ path: join(SKILLS_DST, skill, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }

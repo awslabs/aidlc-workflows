@@ -920,14 +920,17 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook reads the reply in the person's own words, from any chat
-   on this piece of work, takes the fingerprint of the files as they are then,
-   and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. The
+   The human-turn hook keeps the person's reply, from any chat on this piece of
+   work; the conductor reads it and records their choice with `answer
+   --checkpoint plan-approval`, which takes the fingerprint of the files as they
+   are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
+   row with the person's words. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
-   files or writes their answer in the questions file and says done; the guard
-   refuses the conductor's writes to those files meanwhile. A plan that is not
+   files or writes their answer in the questions file and says done, and the
+   conductor reads what they wrote and records their choice; the guard refuses
+   the conductor's writes to those files meanwhile. A plan that is not
    ready is never asked about: `next` names the repair instead.
 
    A postapproval plan, instruction, or Testing Contract edit for the same
@@ -985,6 +988,9 @@ This stage has a **two-part structure**: planning followed by generation.
 4. **Generate Code** -- Before delegating, display to the user:
    "Generating code for [N] plan steps. This may take several minutes
    depending on project complexity. I'll show a summary when complete."
+   When the directive's `narration` says where an interrupted build picks up
+   (for example "Picking up unit-2's code at step 5 of 9 (1-4 done)."), say
+   that line instead.
 
    Delegate to Task tool with the aidlc-developer-agent subagent
    (subagent_type="aidlc-developer-agent").
@@ -1011,10 +1017,23 @@ This stage has a **two-part structure**: planning followed by generation.
      excludes the appendix, so it is not work to execute; with its fence on,
      the dispatch guard refuses a handoff that quotes it. After permitted
      postapproval edits, use the current brief without calling the edits approved
+   - When a build of the same approved plan was interrupted, that output also
+     carries a `## Progress before the interruption` section after its marker
+     lines: the steps the plan file ticks, any ticked step to redo because a
+     file it names in a code span is missing, and the first unticked step to
+     continue at. It appears only when the build already started under the
+     approval that is current now (the receipt for this target, stage attempt,
+     and approved content is at `generation`); a Redo, a rejected gate, a new
+     approval, or an edited plan starts the steps fresh. When a build starts
+     under a new approval, the engine sets the plan file's task markers back to
+     `[ ]` (nothing else in the file changes, and the fingerprint is the same),
+     so ticks from before never count. A swarm batch keeps its own
+     continuation rule. The section is a hint, never evidence for a gate,
+     review, or receipt, and ticks stay outside the fingerprint
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
-     as completed
+     as completed, starting where that progress section says when present
    - The Testing Contract in the current brief is authoritative. The subagent
      does not independently re-resolve memory; it executes that contract's TDD, BDD, ATDD,
      test-after, or custom/mixed profile exactly.

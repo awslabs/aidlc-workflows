@@ -120,7 +120,7 @@ describe("Claude hook project-root anchoring", () => {
       expect(blocked.error).toBeUndefined();
       expect(blocked.status, blocked.stderr).toBe(2);
       expect(blocked.stderr).toContain("the engine asks the person to approve it");
-      expect(blocked.stderr).toContain(join(cwd, "source.ts"));
+      expect(blocked.stderr).toContain("Code generation cannot modify workspace paths");
       expect(blocked.stdout.trim()).toBe(cwd);
       expect(readFileSync(join(cwd, "source.ts"), "utf-8")).toBe("export const value = 1;\n");
       // The hook also loads for a cd-to-root recovery attempt. Preserve the

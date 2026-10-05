@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED
+// covers: function:unitLifecycleRunFloorForProject, subcommand:aidlc-state:unit, function:unitCompletedReceipts, function:unitLifecycleReceiptsInUse, function:activeUnitCheckpoint, function:latestMainWorkflowStageRunFloor, function:latestMainWorkflowStageRunFloorForProject, function:readAuditShardEvents, function:isRegularFile, audit:UNIT_STARTED, audit:UNIT_PAUSED, audit:UNIT_RESUMED, audit:UNIT_COMPLETED, audit:CONSTRUCTION_POLICY_SET
 //
 // t260 — unit lifecycle receipts on inline per-unit Construction stages
 // (issue 681, claims 1/2/9). The contract under test:
@@ -34,7 +34,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -53,11 +53,14 @@ import {
   artifactFilename,
   consumeSharedDirectiveAsk,
   currentUnitLifecycleMode,
+  latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
   parseBoltDag,
   readAllAuditShards,
   readAuditShardEvents,
   stateDigest,
+  swarmConvergedUnits,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
   writeActiveDirectiveMarker,
@@ -855,5 +858,459 @@ describe("t260 receipts bind to an exact stage attempt", () => {
     expect(completed.out).not.toContain("no unit is active");
     expect(completed.rc).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+});
+
+// A person can change Construction Iteration or Construction Checkpoints in
+// the middle of a per-unit stage (with their approval during Construction).
+// The change decides how later boundaries are read; it must never take away a
+// Unit's finished work, so the engine never hands that Unit out again.
+describe("t260 finished Units keep their receipts across a Construction policy change", () => {
+  const block = (event: string, ts: string, fields: string) =>
+    `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
+
+  // functional-design is the only per-unit stage left, so either iteration
+  // order routes the next Unit of this stage. Its STAGE_STARTED predates the
+  // Units' work, as it does in a real stage-by-stage walk.
+  function policyProject(
+    iteration: "unit-major" | "stage-major",
+    checkpoints?: "enabled" | "disabled",
+  ): string {
+    proj = createOrchestrationTestProject();
+    let state = CONSTRUCTION_STATE.replace(
+      "- **Construction Iteration**: unit-major",
+      `- **Construction Iteration**: ${iteration}`,
+    ).replaceAll("- [ ]", "- [S]");
+    if (checkpoints) {
+      state = state.replace(
+        "- **Revision Count**: 0",
+        `- **Revision Count**: 0\n- **Construction Checkpoints**: ${checkpoints}`,
+      );
+    }
+    writeFileSync(seededStateFile(proj), state, "utf-8");
+    seedBoltDag(proj, ["unit-a", "unit-b"]);
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n") +
+        block("STAGE_STARTED", "2026-01-02T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    return proj;
+  }
+
+  // A stage-major Unit finished one at a time, as Code Generation runs there,
+  // carries the stage-major floor: this stage's STAGE_STARTED.
+  function seedStageMajorReceipt(unit: string): void {
+    writeUnitArtifacts(proj, unit);
+    const floor = latestMainWorkflowStageRunFloorForProject(proj, SLUG);
+    expect(floor).toBe("STAGE_STARTED:2026-01-02T00:00:00Z#1");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: ${unit}\n**Run floor**: ${floor}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has(unit)).toBe(true);
+  }
+
+  function setPolicy(command: string, value: string): string {
+    const result = run(STATE, [command, value], proj);
+    expect(result.rc, result.out).toBe(0);
+    return result.out;
+  }
+
+  test("switching to unit-major keeps a finished Unit and routes the next one", () => {
+    policyProject("stage-major");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-iteration", "unit-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
+  test("turning Construction Checkpoints on keeps a finished Unit", () => {
+    policyProject("stage-major", "disabled");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-checkpoints", "enabled");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    expect(runNext(proj).out).not.toMatch(/"kind":"run-stage"[^\n]*"unit":"unit-a"/);
+  });
+
+  // A Unit finished under unit-major flooring, through the real lifecycle verbs,
+  // carries the floor that ignored this stage's STAGE_STARTED.
+  function finishUnderUnitFlooring(unit: string): void {
+    const started = unitVerb(proj, "start", unit);
+    expect(started.rc, started.out).toBe(0);
+    writeUnitArtifacts(proj, unit);
+    const completed = unitVerb(proj, "complete", unit);
+    expect(completed.rc, completed.out).toBe(0);
+    expect(unitCompletedReceipts(proj, SLUG).has(unit)).toBe(true);
+  }
+
+  test("switching back to stage-major keeps a finished Unit and routes the next one", () => {
+    policyProject("unit-major");
+    finishUnderUnitFlooring("unit-a");
+    setPolicy("set-construction-iteration", "stage-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
+  test("turning Construction Checkpoints off while stage-major keeps a finished Unit", () => {
+    policyProject("stage-major", "enabled");
+    // Checkpoints on run this stage as a wave; its receipt carries the floor
+    // that ignored the stage's STAGE_STARTED.
+    writeUnitArtifacts(proj, "unit-a");
+    const floor = latestMainWorkflowStageRunFloorForProject(proj, SLUG, true, "unit-a");
+    expect(floor).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${floor}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    setPolicy("set-construction-checkpoints", "disabled");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    expect(runNext(proj).out).not.toMatch(/"kind":"run-stage"[^\n]*"unit":"unit-a"/);
+  });
+
+  test("after switching back, a new stage start still starts the Units' work again", () => {
+    policyProject("unit-major");
+    finishUnderUnitFlooring("unit-a");
+    setPolicy("set-construction-iteration", "stage-major");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("STAGE_STARTED", "2099-01-01T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+  });
+
+  const switchBack = (ts: string) =>
+    block("CONSTRUCTION_POLICY_SET", ts, "**Field**: Construction Iteration\n**Value**: stage-major\n**Previous Value**: unit-major\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: unset\n");
+
+  test("a stage start recorded under unit-major flooring stays out of the receipts' floor only", () => {
+    policyProject("unit-major");
+    appendFileSync(seededAuditShard(proj), switchBack("2026-01-03T00:00:00Z"));
+    // A Unit's receipt floor leaves the start out; the stage's other attempt
+    // floors (swarm convergence, source merges, batch checkpoints) still count it.
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, false)).toBe("STAGE_STARTED:2026-01-02T00:00:00Z#1");
+  });
+
+  test("a later stage started after its Units finished keeps them after the switch back", () => {
+    // A unit-major walk runs a later stage before that stage's own STAGE_STARTED.
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`) +
+        block("STAGE_STARTED", "2026-01-04T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    setPolicy("set-construction-iteration", "stage-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  // A Unit reopened under unit-major flooring (a per-Unit jump back, Redo, or a
+  // checkpoint's Request Changes) carries a rejection tagged with that Unit.
+  const reopen = (unit: string, ts: string) =>
+    block("GATE_REJECTED", ts, `**Stage**: ${SLUG}\n**Unit**: ${unit}\n**Feedback**: redo\n`);
+
+  test("a Unit reopened before the switch back still owes its redo", () => {
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    appendFileSync(seededAuditShard(proj), reopen("unit-a", "2026-01-04T00:00:00Z"));
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+    setPolicy("set-construction-iteration", "stage-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+    expect(runNext(proj).out).toContain('"unit":"unit-a"');
+  });
+
+  test("a Unit redone before the switch back keeps its redo", () => {
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`) +
+        reopen("unit-a", "2026-01-04T00:00:00Z"),
+    );
+    const redoFloor = unitLifecycleRunFloorForProject(proj, SLUG, true, "unit-a");
+    expect(redoFloor).toStartWith("GATE_REJECTED:2026-01-04T00:00:00Z");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${redoFloor}\n`),
+    );
+    setPolicy("set-construction-iteration", "stage-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    // The other Unit's floor is not moved by unit-a's reopen.
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false, "unit-b")).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
+  test("a Unit redone after its checkpoint's Request Changes keeps its redo when checkpoints go off", () => {
+    policyProject("stage-major", "enabled");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(seededAuditShard(proj), reopen("unit-a", "2026-01-03T00:00:00Z"));
+    const redoFloor = unitLifecycleRunFloorForProject(proj, SLUG, true, "unit-a");
+    expect(redoFloor).toStartWith("GATE_REJECTED:2026-01-03T00:00:00Z");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-04T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: ${redoFloor}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    setPolicy("set-construction-checkpoints", "disabled");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    expect(runNext(proj).out).not.toMatch(/"kind":"run-stage"[^\n]*"unit":"unit-a"/);
+  });
+
+  // A unit-major walk finishes a later stage's Units before its first
+  // STAGE_STARTED; the late gate cascade can record that start after a switch.
+  test("a later stage's first start recorded after the switch back keeps its finished Units", () => {
+    policyProject("stage-major");
+    writeUnitArtifacts(proj, "unit-a");
+    writeFileSync(
+      seededAuditShard(proj),
+      "# AI-DLC Audit Log\n" +
+        block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n") +
+        block("UNIT_COMPLETED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`) +
+        switchBack("2026-01-04T00:00:00Z") +
+        block("STAGE_STARTED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    // A second start is a real restart and starts the Units' work again.
+    appendFileSync(seededAuditShard(proj), block("STAGE_STARTED", "2026-01-06T00:00:00Z", `**Stage**: ${SLUG}\n`));
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+  });
+
+  test("a switch and a stage start in the same second in different shards count as a restart", () => {
+    policyProject("unit-major");
+    appendFileSync(seededAuditShard(proj), switchBack("2026-01-05T00:00:00Z"));
+    // The start may have come after the switch, so it is a boundary.
+    writeFileSync(
+      join(seededAuditDir(proj), "zzzz-other-session.md"),
+      "# AI-DLC Audit Log\n" + block("STAGE_STARTED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n`),
+      "utf-8",
+    );
+    expect(unitLifecycleRunFloorForProject(proj, SLUG, false)).toMatch(/^(STAGE_STARTED:2026-01-05T00:00:00Z|AMBIGUOUS:)/);
+  });
+
+  test("the change is recorded with the policy it leaves in force", () => {
+    policyProject("stage-major");
+    setPolicy("set-construction-iteration", "unit-major");
+    const rows = readAuditShardEvents(proj).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].block).toContain("**Field**: Construction Iteration");
+    expect(rows[0].block).toContain("**Value**: unit-major");
+    expect(rows[0].block).toContain("**Previous Value**: stage-major");
+    expect(rows[0].block).toContain("**Construction Iteration**: unit-major");
+    expect(rows[0].block).toContain("**Construction Checkpoints**: unset");
+    // Setting the value it already has changes nothing and records nothing.
+    setPolicy("set-construction-iteration", "unit-major");
+    expect(readAuditShardEvents(proj).filter((row) => row.event === "CONSTRUCTION_POLICY_SET")).toHaveLength(1);
+  });
+
+  test("a later stage start does not take the finished Unit's work away", () => {
+    policyProject("stage-major");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-iteration", "unit-major");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("STAGE_STARTED", "2099-01-01T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  test("a rejection after the change still starts the Unit's work again", () => {
+    policyProject("stage-major");
+    seedStageMajorReceipt("unit-a");
+    setPolicy("set-construction-iteration", "unit-major");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    appendFileSync(
+      seededAuditShard(proj),
+      block("GATE_REJECTED", "2099-01-01T00:00:00Z", `**Stage**: ${SLUG}\n**Feedback**: redo\n`),
+    );
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(false);
+  });
+
+  test("a stage start after the last recorded change follows the current policy", () => {
+    // The state says unit-major although the last recorded change left
+    // stage-major in force (an edit outside the typed setters).
+    const audit = [
+      block("WORKFLOW_STARTED", "2026-01-01T00:00:00Z", "**Stage**: intent-capture\n"),
+      block("CONSTRUCTION_POLICY_SET", "2026-01-02T00:00:00Z", "**Field**: Construction Iteration\n**Value**: stage-major\n**Previous Value**: unit-major\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: unset\n"),
+      block("STAGE_STARTED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n`),
+    ].join("");
+    expect(latestMainWorkflowStageRunFloor(audit, SLUG, true)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(latestMainWorkflowStageRunFloor(audit, SLUG, false)).toBe("STAGE_STARTED:2026-01-03T00:00:00Z#1");
+  });
+
+  // A change whose state write failed leaves its row behind; the start and the
+  // Unit finished while the old policy still held keep counting after the retry.
+  test("a change that never reached the state does not take away work done before the retry", () => {
+    policyProject("unit-major");
+    const change = (ts: string) =>
+      block("CONSTRUCTION_POLICY_SET", ts, "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n");
+    appendFileSync(
+      seededAuditShard(proj),
+      change("2026-01-03T00:00:00Z") +
+        block("STAGE_STARTED", "2026-01-04T00:00:00Z", `**Stage**: ${SLUG}\n`) +
+        block("UNIT_COMPLETED", "2026-01-05T00:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:2026-01-04T00:00:00Z#2\n`) +
+        change("2026-01-06T00:00:00Z"),
+    );
+    writeUnitArtifacts(proj, "unit-a");
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true)).toBe("STAGE_STARTED:2026-01-04T00:00:00Z#2");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+  });
+
+  // Two clones can record a change and a stage start in the same second. Their
+  // order is unknowable, so the start counts whichever shard sorts first.
+  test("a stage start in the same second as a change in another shard does not depend on shard names", () => {
+    const floors: string[] = [];
+    for (const [changeShard, startShard] of [["aaaa-one.md", "zzzz-two.md"], ["zzzz-one.md", "aaaa-two.md"]]) {
+      policyProject("unit-major");
+      writeFileSync(
+        join(seededAuditDir(proj), changeShard),
+        "# AI-DLC Audit Log\n" +
+          block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n"),
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), startShard),
+        `# AI-DLC Audit Log\n${block("STAGE_STARTED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n`)}`,
+      );
+      floors.push(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true));
+      cleanupTestProject(proj);
+      proj = "";
+    }
+    expect(floors).toEqual(["STAGE_STARTED:2026-01-03T00:00:00Z#2", "STAGE_STARTED:2026-01-03T00:00:00Z#2"]);
+  });
+
+  // With checkpoints on, stage starts were never boundaries before or after an
+  // iteration change, so a same-second start in another shard stays ignored in
+  // either order and the Unit finished before it keeps its receipt.
+  test("a same-second stage start stays ignored when checkpoints were already on", () => {
+    for (const [changeShard, startShard] of [["aaaa-one.md", "zzzz-two.md"], ["zzzz-one.md", "aaaa-two.md"]]) {
+      policyProject("unit-major", "enabled");
+      writeUnitArtifacts(proj, "unit-a");
+      appendFileSync(
+        seededAuditShard(proj),
+        block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`),
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), changeShard),
+        `# AI-DLC Audit Log\n${block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: enabled\n")}`,
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), startShard),
+        `# AI-DLC Audit Log\n${block("STAGE_STARTED", "2026-01-03T00:00:00Z", `**Stage**: ${SLUG}\n`)}`,
+      );
+      expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true, "unit-a"), changeShard).toBe(
+        "WORKFLOW_STARTED:2026-01-01T00:00:00Z#1",
+      );
+      expect(unitCompletedReceipts(proj, SLUG).has("unit-a"), changeShard).toBe(true);
+      cleanupTestProject(proj);
+      proj = "";
+    }
+  });
+
+  // Two clones can each record a change in the same second after a start. Either
+  // may be the first change after it, so the start counts if either found
+  // stage-major flooring, whichever shard sorts first.
+  test("two same-second changes in different shards after a start do not depend on shard names", () => {
+    const results: Array<[string, boolean]> = [];
+    for (const [stageShard, unitShard] of [["aaaa-one.md", "zzzz-two.md"], ["zzzz-one.md", "aaaa-two.md"]]) {
+      policyProject("unit-major");
+      writeUnitArtifacts(proj, "unit-a");
+      appendFileSync(
+        seededAuditShard(proj),
+        block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:2026-01-02T00:00:00Z#1\n`),
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), stageShard),
+        `# AI-DLC Audit Log\n${block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n")}`,
+      );
+      writeFileSync(
+        join(seededAuditDir(proj), unitShard),
+        `# AI-DLC Audit Log\n${block("CONSTRUCTION_POLICY_SET", "2026-01-03T00:00:00Z", "**Field**: Construction Checkpoints\n**Value**: disabled\n**Previous Value**: enabled\n**Construction Iteration**: stage-major\n**Construction Checkpoints**: disabled\n")}`,
+      );
+      results.push([
+        latestMainWorkflowStageRunFloorForProject(proj, SLUG, true),
+        unitCompletedReceipts(proj, SLUG).has("unit-a"),
+      ]);
+      cleanupTestProject(proj);
+      proj = "";
+    }
+    expect(results).toEqual([
+      ["STAGE_STARTED:2026-01-02T00:00:00Z#1", true],
+      ["STAGE_STARTED:2026-01-02T00:00:00Z#1", true],
+    ]);
+  });
+
+  // A clock stepped back: the change is appended after the start in the same
+  // shard but carries an earlier time. Append order wins, as everywhere else.
+  test("a change appended after a start keeps it even when the clock stepped back", () => {
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: STAGE_STARTED:2026-01-02T00:00:00Z#1\n`) +
+        block("CONSTRUCTION_POLICY_SET", "2026-01-01T23:00:00Z", "**Field**: Construction Iteration\n**Value**: unit-major\n**Previous Value**: stage-major\n**Construction Iteration**: unit-major\n**Construction Checkpoints**: unset\n"),
+    );
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true)).toBe("STAGE_STARTED:2026-01-02T00:00:00Z#1");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
+  // An append cut short leaves a policy row with only its heading, time and
+  // event. It says nothing about the policy, so it never moves the floor.
+  test("a policy row cut short does not take a finished Unit's work away", () => {
+    policyProject("unit-major");
+    writeUnitArtifacts(proj, "unit-a");
+    appendFileSync(
+      seededAuditShard(proj),
+      block("UNIT_COMPLETED", "2026-01-02T12:00:00Z", `**Stage**: ${SLUG}\n**Unit**: unit-a\n**Run floor**: WORKFLOW_STARTED:2026-01-01T00:00:00Z#1\n`) +
+        "\n## Construction Policy Set\n**Timestamp**: 2026-01-03T00:00:00Z\n**Event**: CONSTRUCTION_POLICY_SET\n",
+    );
+    expect(latestMainWorkflowStageRunFloorForProject(proj, SLUG, true)).toBe("WORKFLOW_STARTED:2026-01-01T00:00:00Z#1");
+    expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
+    const next = runNext(proj);
+    expect(next.out).not.toContain('"unit":"unit-a"');
+    expect(next.out).toContain('"unit":"unit-b"');
+  });
+
+  // Swarm convergence and the Plan Approval batch context floor every stage
+  // start (they pass unitMajor false), whatever the policy. A recorded change
+  // must not change what they read, even for a stage start recorded while Unit
+  // receipts ignore stage starts.
+  test("readers that count every stage start keep counting them after a change", () => {
+    policyProject("stage-major", "disabled");
+    setPolicy("set-construction-checkpoints", "enabled");
+    const stage = "code-generation";
+    appendFileSync(seededAuditShard(proj), block("STAGE_STARTED", "2099-01-01T00:00:00Z", `**Stage**: ${stage}\n`));
+    const stageFloor = latestMainWorkflowStageRunFloorForProject(proj, stage, false);
+    expect(stageFloor).toBe("STAGE_STARTED:2099-01-01T00:00:00Z#1");
+    expect(latestMainWorkflowStageRunFloor(readAllAuditShards(proj), stage)).toBe(stageFloor);
+    // Unit receipts under the new policy do not take the later stage start.
+    expect(latestMainWorkflowStageRunFloorForProject(proj, stage, true)).toBe(
+      "WORKFLOW_STARTED:2026-01-01T00:00:00Z#1",
+    );
+    appendFileSync(
+      seededAuditShard(proj),
+      block("SWARM_UNIT_CONVERGED", "2099-01-01T00:00:01Z", `**Stage**: ${stage}\n**Unit name**: unit-a\n**Run floor**: ${stageFloor}\n`),
+    );
+    expect(swarmConvergedUnits(proj, stage).has("unit-a")).toBe(true);
   });
 });

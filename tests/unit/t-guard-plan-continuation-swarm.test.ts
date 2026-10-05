@@ -502,7 +502,7 @@ describe("swarm consumes lowered plan-approval allowance", () => {
       stdout: "pipe", stderr: "pipe",
     });
     expect(guarded.exitCode, guarded.stderr.toString()).toBe(2);
-    expect(guarded.stderr.toString()).toContain("CODE_GENERATION_EXECUTION_INELIGIBLE");
+    expect(guarded.stderr.toString()).toContain(" The plan-approval setting is unchanged.");
     for (const original of originals) {
       expect(readPlanApprovalReceipt(pd, original.key)).toEqual(original.receipt);
     }

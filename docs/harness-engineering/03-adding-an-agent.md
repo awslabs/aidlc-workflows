@@ -106,8 +106,10 @@ session model and applies medium reasoning effort. `judgment` and `templated`
 inherit session model and effort. The wizard-default
 `balanced` preset is separate from the reviewer tier: it explicitly sets medium
 effort for Deciding, Reviewing, and Writing up without changing their models.
-Kiro CLI/IDE, Cursor, and Copilot inherit the session and report group effort
-dials as unexpressed. When
+Kiro IDE, Cursor, and Copilot inherit the session, so the wizard records no
+preset there, and a recorded preset reports its group effort dials as
+unexpressed; Kiro CLI agents inherit the session model and the
+preset's one session effort. When
 in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
 can always step cost down later, but a persona authored too low silently
 under-reasons. See [Agent System](../reference/05-agent-system.md) for the
@@ -131,8 +133,9 @@ This is the one thing to internalize. Dropping the file makes the agent
 you get an agent that exists and never runs.
 
 - **Discovery makes it visible.** `loadAgents()` in
-  `.claude/tools/aidlc-lib.ts` reads every `.md` file in
-  `.claude/agents/` on the next invocation and derives the metadata map. No code
+  `.claude/tools/aidlc-lib.ts` reads every persona `.md` file in
+  `.claude/agents/` (one named `aidlc-*` or carrying `display_name`, `examples`,
+  `tier`, or `plugin`) on the next invocation and derives the metadata map. No code
   edit, no registration step — the file's presence is the registration. From
   this point the statusline can render its display name, and the team can add
   standards under its space-level `aidlc/knowledge/<slug>-agent/` directory.
@@ -198,10 +201,13 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
 
 ### What validates automatically
 
-- `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next
-  invocation — no code edit, no registration.
-- The parser throws if `name` or `display_name` is missing, naming the file and
-  the missing field.
+- `loadAgents()` discovers any new persona `.md` file in `.claude/agents/` on
+  next invocation — no code edit, no registration. A persona is a file named
+  `aidlc-*` or one whose frontmatter carries `display_name`, `examples`, `tier`,
+  or `plugin`; any other file there is the host's own agent and is left alone.
+- The parser throws if a persona's `name` or `display_name` is missing, naming
+  the file, the missing field, and (for a file not named `aidlc-*`) the key that
+  made it a persona.
 - Agents are returned alphabetically sorted by slug, so discovery order is
   identical on every platform.
 - Intent creation creates the empty space-level `aidlc/knowledge/` directory; it

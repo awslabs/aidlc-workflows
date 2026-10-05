@@ -25,12 +25,15 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
   auditBlockField,
+  auditMark,
+  type AuditMark,
   changeControlSourceLabel,
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   errorMessage,
   getField,
-  guardRecoveryReplyReading,
+  isReplyTurn,
+  personRepliedAfter,
   latestMainWorkflowStageRunFloorForProject,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
@@ -61,7 +64,6 @@ import {
   codeGenerationRecordDir,
   codeGenerationTargetId,
   evaluateCodeGenerationApproval,
-  interpretPlanApprovalReply,
   PlanApprovalUnbindableError,
   readTestingContract,
   resolveCodeGenerationAuthority,
@@ -71,8 +73,8 @@ import {
   type CodeGenerationIssuance,
   type PlanApprovalPickerQuestion,
 } from "./aidlc-testing-posture.ts";
-import { readStopForNow } from "./aidlc-reply-reader.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { exactOptionPick, isNonAnswer, pickerOffersChoices } from "./aidlc-reply-reader.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { type PlanApprovalSetting, resolvePlanApprovalSetting } from "./aidlc-guard-switch.ts";
 import type {
   CodeGenerationPlanApprovalState,
@@ -88,7 +90,7 @@ import type {
 //
 // The question lives in the same protected runtime directory as the receipts,
 // so no model tool can write it. The active-directive marker only carries the
-// question to the conductor; the hook reads the reply against THIS record. One
+// question to the conductor; the hook keeps the reply on THIS record. One
 // open question per intent: a new one replaces the old.
 
 export interface PlanApprovalAskTarget {
@@ -107,6 +109,15 @@ export interface PlanApprovalAskResult {
   feedback?: string;
   /** What the conductor must repair before asking again. */
   note?: string;
+  /** Recorded from the conductor's reading of the reply, not an exact pick. */
+  read?: true;
+  /** How many human turns were on record when it was recorded; a newer turn lets it change. */
+  turns?: number;
+}
+
+export interface PlanApprovalAskReply {
+  session: string;
+  text: string;
 }
 
 export interface PlanApprovalAskRecord {
@@ -122,8 +133,16 @@ export interface PlanApprovalAskRecord {
   /** True until the first reply after the question is shown: only then does a bare yes answer it. */
   bound: boolean;
   issuedAt: string;
-  /** What the hook made of the latest reply that recorded nothing. */
+  /** What the engine has to tell the conductor about the last answer (a repair, say). */
   lastNotice?: string;
+  /**
+   * The person's messages since the question was shown, kept verbatim by the
+   * human-turn hook from whichever chat they arrive in. The conductor reads
+   * them and records the choice the person made.
+   */
+  replies?: PlanApprovalAskReply[];
+  /** Where the audit trail stood when the question was shown: an answer needs a reply after it. */
+  repliesFrom?: AuditMark;
   /** A grouped change request that named no Unit, waiting for "which one". */
   pendingChange?: string;
   results?: PlanApprovalAskResult[];
@@ -145,6 +164,18 @@ export function readPlanApprovalAsk(projectDir: string, intentId: string): PlanA
     typeof value.question === "string" && Array.isArray(value.choices) &&
     (value.mode === "ask" || value.mode === "editing")
     ? value : null;
+}
+
+/**
+ * Where the person stands on the recorded Plan Approval question: not answered
+ * yet, editing the files themselves, or answered (a choice is recorded and the
+ * next `next` carries it out). Null when no question is recorded.
+ */
+export function planApprovalAskState(projectDir: string): "unanswered" | "editing" | "answered" | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (record === null) return null;
+  if (record.mode === "editing") return "editing";
+  return (record.results?.length ?? 0) > 0 ? "answered" : "unanswered";
 }
 
 function writePlanApprovalAsk(projectDir: string, record: PlanApprovalAskRecord): void {
@@ -327,7 +358,7 @@ export function codeGenerationPlanReadiness(projectDir: string, unit: string | n
   }
   const read = readTestingContract(plan);
   if ("defect" in read) {
-    return { ready: false, note: testingContractDefectMessage(read.defect, read.detail, "run next") };
+    return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
   const current = resolveTestingPosture(projectDir);
   if (read.contract.contract_sha256 !== current.contract_sha256) {
@@ -461,18 +492,6 @@ function promptSha256(questions: string): string {
     .digest("hex");
 }
 
-// What the person wrote after `[Answer]:`. They may type on the line the
-// engine left blank, or add their own `[Answer]:` line elsewhere (under a
-// subheading, say) and leave the blank one in place: the last line they
-// filled in is their answer, never a blank one after it. Only what renders
-// counts: an example inside a code block or an HTML comment is not an answer.
-function answerLine(questions: string): string | null {
-  const written = visibleMarkdownLines(questions)
-    .map((line) => /^\[Answer\]:[ \t]*(.*)$/.exec(line)?.[1]?.trim() ?? "")
-    .filter((answer) => answer.length > 0);
-  return written.length > 0 ? written[written.length - 1] : null;
-}
-
 // --- Routing: plan, ask, or build --------------------------------------------
 
 type TargetState =
@@ -498,6 +517,7 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
     return directive.stage === STAGE &&
       directive.swarm_settled !== true &&
       directive.gate_only !== true &&
+      directive.build_settled !== true &&
       directive.construction_checkpoint === undefined &&
       directive.swarm_checkpoint === undefined &&
       directive.construction_policy?.completion_only !== true &&
@@ -769,6 +789,7 @@ export function publishPlanApprovalAsk(projectDir: string, directive: PlanApprov
           mode: "ask",
           bound: true,
           issuedAt: new Date().toISOString(),
+          repliesFrom: auditMark(projectDir),
         };
     writePlanApprovalAsk(projectDir, record);
     directive.plan_approval.targets.forEach((view, index) => {
@@ -914,112 +935,14 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
   collectStalePlanApprovalReceipts(projectDir, authority.intentId, authority.targetId, authority.runFloor);
 }
 
-// --- Reading the person's reply ------------------------------------------------
-
-type AskReading =
-  | { kind: "approve"; stopForNow?: true }
-  | { kind: "request-changes"; units: Array<string | null>; feedback?: string }
-  | { kind: "which"; feedback: string }
-  | { kind: "edit" }
-  | { kind: "none"; notice: string };
-
-function normalized(text: string): string {
-  return text
-    .normalize("NFKC")
-    .trim()
-    .replace(/^[`*_"'\s]+|[`*_"'\s]+$/g, "")
-    .replace(/[\s.!]+$/g, "")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-const EDIT_RE = /^(?:(?:option |choice )?(?:3|c|three)|(?:the )?third(?: one| option)?|i'?ll edit(?: (?:it|them|the files?|the plan))?(?: myself)?|i will edit(?: (?:it|them|the files?|the plan))?(?: myself)?|let me edit(?: (?:it|them|the files?|the plan))?(?: myself)?|edit(?: (?:it|them|the files?|the plan))?(?: myself)?)$/;
-const DONE_RE = /^(?:done|ready|finished|all done|i'?m done|i am done|ok,? done|done editing|finished editing|i'?ve finished|i have finished|edits? (?:are )?done|go ahead|build it)$/;
-const ALL_RE = /^(?:all|all of them|every one|everyone|each|every plan|all plans|all of the plans)$/;
-const GROUPED_APPROVE_RE = /^(?:(?:option )?1|a|approve(?: them)? all|approve all(?: plans| of them)?|all approved|approve (?:them|the plans|everything|all three|all plans))$/;
-const BARE_CHANGES_RE = /^(?:(?:option )?2|b|two|request changes|changes|change|no|nope)$/;
-
-function namedUnits(text: string, units: Array<string | null>): string[] {
-  return units.filter((unit): unit is string => {
-    if (unit === null) return false;
-    const escaped = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(^|[^A-Za-z0-9_-])${escaped}($|[^A-Za-z0-9_-])`, "i").test(text);
-  });
-}
-
-const CONFIRM_NOTICE =
-  "AIDLC Plan Approval: the person said yes, but not right after the plan question, so it could be answering " +
-  'something else and nothing was recorded. Ask them to confirm in one reply ("1" to approve the plan, "2" to ' +
-  "change something) and end the turn.";
-const QUESTION_NOTICE =
-  "AIDLC Plan Approval: the person asked a question, so nothing was recorded. Answer it, then run next to show " +
-  "the plan question again.";
-const MIXED_NOTICE =
-  "AIDLC Plan Approval: the person approved the plan and asked for a change in the same reply, so nothing was " +
-  'recorded. Ask once: "Approve the plan as it is (1), or make the change first (2)?", and end the turn.';
-const UNCLEAR_NOTICE =
-  "AIDLC Plan Approval: the reply did not clearly approve the plan or ask for changes, so nothing was recorded. " +
-  'Ask one short follow-up, such as "Approve the plan as is (1), or change something (2)?", and end the turn.';
-
-// "Approve the plan, but let's stop there for today": the approval, and a stop
-// the human-turn hook carries out by parking the workflow (#1411). An approval
-// and a change said with the stop still asks once which they meant; anything
-// else in the reply reads as it always has.
-function readAskReply(text: string, record: PlanApprovalAskRecord, bound: boolean): AskReading {
-  const stop = readStopForNow(text);
-  if (stop.stops) {
-    const rest = readAskReplyWords(stop.rest, record, bound);
-    if (rest.kind === "approve") return { kind: "approve", stopForNow: true };
-    if (rest.kind === "none" && rest.notice === MIXED_NOTICE) return rest;
-  }
-  return readAskReplyWords(text, record, bound);
-}
-
-function readAskReplyWords(text: string, record: PlanApprovalAskRecord, bound: boolean): AskReading {
-  const units = record.targets.map((target) => target.unit);
-  const grouped = units.length > 1;
-  const reply = normalized(text);
-  if (!reply) return { kind: "none", notice: UNCLEAR_NOTICE };
-  if (EDIT_RE.test(reply)) return { kind: "edit" };
-  if (record.mode === "editing" && DONE_RE.test(reply)) return { kind: "approve" };
-  if (grouped && record.pendingChange !== undefined) {
-    const named = namedUnits(text, units);
-    if (ALL_RE.test(reply)) {
-      return { kind: "request-changes", units, ...(record.pendingChange ? { feedback: record.pendingChange } : {}) };
-    }
-    if (named.length > 0) {
-      return { kind: "request-changes", units: named, ...(record.pendingChange ? { feedback: record.pendingChange } : {}) };
-    }
-  }
-  if (grouped && GROUPED_APPROVE_RE.test(reply)) return { kind: "approve" };
-  const reading = interpretPlanApprovalReply(text, [record.choices[0], record.choices[1]], bound);
-  switch (reading) {
-    case "approve":
-      return { kind: "approve" };
-    case "request-changes": {
-      const bare = BARE_CHANGES_RE.test(reply) || reply === record.choices[1].toLowerCase();
-      if (!grouped) {
-        return { kind: "request-changes", units, ...(bare ? {} : { feedback: text.trim() }) };
-      }
-      const named = namedUnits(text, units);
-      if (named.length > 0) return { kind: "request-changes", units: named, ...(bare ? {} : { feedback: text.trim() }) };
-      return { kind: "which", feedback: bare ? "" : text.trim() };
-    }
-    case "confirm":
-      return { kind: "none", notice: CONFIRM_NOTICE };
-    case "question":
-      return { kind: "none", notice: QUESTION_NOTICE };
-    case "mixed":
-      return { kind: "none", notice: MIXED_NOTICE };
-    default:
-      return { kind: "none", notice: UNCLEAR_NOTICE };
-  }
-}
-
 // --- Recording an answer -------------------------------------------------------
 
+// The engine's open Plan Approval question. `answered`: also while some (or,
+// with "all", every) target already has an answer, for keeping replies to a
+// grouped question and for the agent's record of a choice already recorded.
 function currentPlanApprovalAsk(
   projectDir: string,
+  answered: "none" | "some" | "all" = "none",
 ): { marker: ActiveDirectiveMarker; record: PlanApprovalAskRecord } | null {
   let state: string;
   try {
@@ -1030,7 +953,11 @@ function currentPlanApprovalAsk(
   const marker = readActiveDirectiveMarker(projectDir, state);
   if (marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== PLAN_APPROVAL_ASK_TYPE) return null;
   const record = readPlanApprovalAsk(projectDir, marker.intent_uuid ?? "bare-space");
-  if (record === null || record.results !== undefined) return null;
+  if (record === null) return null;
+  if (record.results !== undefined) {
+    const all = record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
+    if (answered === "none" || (all && answered !== "all")) return null;
+  }
   const markerUnits: Array<string | null> = marker.unit !== undefined
     ? [marker.unit]
     : marker.units?.length ? marker.units : [null];
@@ -1051,6 +978,7 @@ function approveTarget(
   record: PlanApprovalAskRecord,
   unit: string | null,
   session: string,
+  words?: string,
 ): TargetApproval {
   const dir = codeGenerationRecordDir(projectDir, unit);
   const planPath = join(dir, PLAN_FILE);
@@ -1129,6 +1057,7 @@ function approveTarget(
     "Prompt SHA-256": receipt.promptSha256,
     Session: session,
     "Asked By": "engine",
+    ...(words ? { "Person Reply": words } : {}),
     ...(unit !== null ? { Unit: unit, ...claimAttemptFields(projectDir, unit) } : {}),
   }, projectDir);
   clearPlanApprovalReviewRequest(projectDir, authority.targetId, authority.intentId);
@@ -1146,6 +1075,7 @@ function requestChangesFor(
   unit: string | null,
   session: string,
   feedback: string | undefined,
+  words?: string,
 ): PlanApprovalAskResult {
   const approval = evaluateCodeGenerationApproval(projectDir, { unit });
   const dir = codeGenerationRecordDir(projectDir, unit);
@@ -1178,6 +1108,7 @@ function requestChangesFor(
     Session: session,
     "Asked By": "engine",
     ...(feedback ? { "User Input": feedback } : {}),
+    ...(words && words !== feedback ? { "Person Reply": words } : {}),
     ...(unit !== null ? { Unit: unit } : {}),
   }, projectDir);
   return {
@@ -1188,138 +1119,373 @@ function requestChangesFor(
   };
 }
 
-export interface PlanApprovalAskReplyResult {
-  notice: string;
-  recorded: boolean;
-  // Every plan was approved and the person asked to stop the workflow there
-  // for now: the caller parks it once the audit lock is released.
-  stopForNow?: true;
+// --- The person's reply, and the conductor's record of it -----------------------
+//
+// While the question is open, the human-turn hook keeps every message the
+// person types, verbatim, from whichever chat it arrives in. The conductor reads
+// those words and records the choice the person made with `answer --checkpoint
+// plan-approval`. The engine requires a reply since the question was shown,
+// records the choice, keeps the person's words with it, and never reads meaning
+// into them.
+
+const ASK_REPLIES_MAX = 8;
+const ASK_REPLY_MAX_CHARS = 8000;
+
+// A picker answers this question when it offers the question's own choices
+// (pickerOffersChoices), however the agent worded the question; several
+// picks, or a picker offering anything else, answer some other question. A picker that names no options is matched by its question.
+function pickerAsksThisQuestion(picker: PlanApprovalPickerQuestion, record: PlanApprovalAskRecord): boolean {
+  if (picker.severalPicks) return false;
+  if (!picker.options?.length) return picker.question?.trim() === record.question;
+  return pickerOffersChoices(picker.options, record.choices);
 }
 
 /**
- * The human-turn hook's reading of a reply while the engine's Plan Approval
- * question is open. Returns null when no such question is open (or a picker
- * answered some other question), so the caller's other readers run.
+ * The human-turn hook's part while the engine's Plan Approval question is
+ * open: keep the person's message. True when the question owns the reply; false
+ * when no question is open or a picker answered some other question.
  */
-export function recordPlanApprovalAskReply(
+export function notePlanApprovalAskReply(
   projectDir: string,
   session: string,
   text: string,
   picker?: PlanApprovalPickerQuestion,
-): PlanApprovalAskReplyResult | null {
+): boolean {
   return withAuditLock(projectDir, () => {
-    const open = currentPlanApprovalAsk(projectDir);
-    if (open === null) return null;
+    const open = currentPlanApprovalAsk(projectDir, "all");
+    if (open === null) return false;
     const { record } = open;
-    if (picker && (picker.severalPicks || picker.question?.trim() !== record.question)) {
-      // Another question's picker: the plan question is no longer the last thing asked.
-      writePlanApprovalAsk(projectDir, { ...record, bound: false });
-      return null;
+    // Once every plan is answered, the question keeps the person's replies
+    // only while a Request Changes is on record (until next closes it): a
+    // correction they make is recorded with their words.
+    const answeredAll = record.mode === "ask" &&
+      record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
+    if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
+    if (picker && !pickerAsksThisQuestion(picker, record)) return false;
+    const reply = text.trim();
+    if (!reply || isNonAnswer(reply)) return true;
+    const replies = [
+      ...(record.replies ?? []),
+      { session: session || "unidentified-session", text: reply.slice(0, ASK_REPLY_MAX_CHARS) },
+    ].slice(-ASK_REPLIES_MAX);
+    writePlanApprovalAsk(projectDir, { ...record, replies });
+    // An exact pick ("1", "Approve Plan", "3") is syntax: record it now, so
+    // the conductor only runs next. A grouped change request still needs to
+    // know which plan, so the conductor reads that one.
+    const pick = exactOptionPick(reply, record.choices);
+    const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
+      : pick === 1 && record.targets.length === 1 ? "request-changes"
+      : pick === 2 ? "edit"
+      : null;
+    if (choice !== null && record.mode !== "editing") {
+      try {
+        recordPlanApprovalAnswer(projectDir, session, { choice, exactPick: true });
+      } catch {
+        // The conductor reads the reply and records it.
+      }
     }
-    const bound = picker !== undefined || record.bound;
-    const reading = readAskReply(text, record, bound);
-    const who = session || "unidentified-session";
+    return true;
+  });
+}
+
+export type PlanApprovalAnswerChoice = "approve" | "request-changes" | "edit";
+
+export interface PlanApprovalAnswer {
+  choice: PlanApprovalAnswerChoice;
+  /** The Units the choice is for; every Unit the question asks about when absent. */
+  units?: string[];
+  /** What to change, when the conductor states it; the person's words otherwise. */
+  feedback?: string;
+  /** The person's reply was the option itself, so their words say nothing about what to change. */
+  exactPick?: true;
+}
+
+const ANSWER_LABELS: Record<PlanApprovalAnswerChoice, string> = {
+  approve: "Approve Plan",
+  "request-changes": "Request Changes",
+  edit: "I'll edit the files",
+};
+
+export interface PlanApprovalAnswerResult {
+  /** One line for the conductor: what was recorded and what runs next. */
+  message: string;
+  /** Every Unit the question asked about now has an answer. */
+  complete: boolean;
+}
+
+/**
+ * The conductor records the choice the person made at the engine's open Plan
+ * Approval question. Throws when no question is open, when the person has not
+ * replied since it was shown, or when a named Unit is not one it asks about.
+ */
+function humanTurnCount(projectDir: string): number {
+  // A turn that was only a command to AIDLC is no reply that could change a pick.
+  return readAuditShardEvents(projectDir).filter(isReplyTurn).length;
+}
+
+// A Request Changes on record stands until the person replies after it,
+// whether they picked it exactly or the conductor read it: their newer reply
+// decides, as the conductor reads it. Throws when it still stands. A record
+// with no turn count (written before counts were kept) stands.
+function assertRequestChangesCanChange(earlier: PlanApprovalAskResult[], turns: number): void {
+  const standing = earlier.filter((result) => result.turns === undefined || result.turns >= turns);
+  if (standing.some((result) => !result.read)) {
+    throw new Error(
+      'The person picked "Request Changes" for this plan and has not replied since. Run next to revise it; ' +
+        "when they reply that they meant something else, record the choice they made then.",
+    );
+  }
+  if (standing.length > 0) {
+    throw new Error(
+      "The person has not replied since Request Changes was recorded. End the turn, wait for their reply, then " +
+        "record the choice they made.",
+    );
+  }
+}
+
+// The person's newer reply says a recorded Request Changes is not what they
+// want now (the conductor's misreading, or a pick they changed): once they have
+// replied since it was recorded, their approval is recorded straight away from
+// the plan as it stands. Null when there is nothing to correct. Caller holds
+// the audit lock.
+function correctReadRequestChanges(
+  projectDir: string,
+  session: string,
+  units: Array<string | null> | undefined,
+): PlanApprovalAnswerResult | null {
+  const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+  if (!record?.results || record.mode === "editing") return null;
+  const targets: Array<string | null> = units?.length ? units : record.targets.map((target) => target.unit);
+  const earlier = record.results.filter((result) => targets.includes(result.unit) && result.choice === "request-changes");
+  if (earlier.length === 0 || earlier.length !== targets.length) return null;
+  const turns = humanTurnCount(projectDir);
+  assertRequestChangesCanChange(earlier, turns);
+  // The replies kept since the Request Changes are the correction's words.
+  const words = record.replies?.map((reply) => reply.text).join("\n") || undefined;
+  const results = record.results.filter((result) => !targets.includes(result.unit));
+  for (const unit of targets) {
+    const outcome = approveTarget(projectDir, record, unit, session, words);
+    if (!outcome.ok) throw new Error(outcome.notice);
+    results.push({ ...outcome.result, read: true, turns });
+  }
+  const next: PlanApprovalAskRecord = { ...record, results };
+  delete next.replies;
+  writePlanApprovalAsk(projectDir, next);
+  return {
+    complete: true,
+    message: `Recorded "Approve Plan" for ${labels(targets)}, correcting the Request Changes recorded before, with ` +
+      "the plan as it stands now. Run next.",
+  };
+}
+
+/**
+ * The files the conductor may change while the engine's Plan Approval question
+ * is open: each plan still waiting for an answer, its plan and its test
+ * instructions, and only once the person has replied since the question was
+ * shown. An instruction given with an approval ("approve, but add a test")
+ * goes into the plan, and the approval then covers the plan as it stands.
+ * Never the questions file, another plan's files, or code; empty before a
+ * reply, while the person edits the files themselves, and in a question about
+ * several plans while their latest reply is only a pick.
+ */
+export function planApprovalReplyEditableFiles(projectDir: string): string[] {
+  try {
+    const open = currentPlanApprovalAsk(projectDir, "some");
+    const replies = open?.record.replies ?? [];
+    if (open === null || open.record.mode !== "ask" || replies.length === 0) return [];
+    // Kept words can be a question about the switch ("skip plan approval?"),
+    // which is no reply: the files open only after a reply to the question.
+    if (open.record.repliesFrom && !personRepliedAfter(projectDir, open.record.repliesFrom)) return [];
+    // In a question about several plans a bare pick ("2") does not say which
+    // plan: nothing opens until the person says more in their own words.
+    if (open.record.targets.length > 1 && exactOptionPick(replies[replies.length - 1].text, open.record.choices) !== null) {
+      return [];
+    }
+    const answered = new Set((open.record.results ?? []).map((result) => result.unit));
+    return open.record.targets.filter((target) => !answered.has(target.unit)).flatMap((target) => {
+      const dir = codeGenerationRecordDir(projectDir, target.unit);
+      return [join(dir, PLAN_FILE), join(dir, INSTRUCTIONS_FILE)];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether a Request Changes is on record for a plan in this piece of work, so an
+ * approval the conductor records goes to the engine's question, which corrects
+ * a misread or says the person picked it.
+ */
+export function planApprovalCorrectionPending(projectDir: string): boolean {
+  try {
+    const record = readPlanApprovalAsk(projectDir, intentIdFor(projectDir));
+    return record?.results?.some((result) => result.choice === "request-changes") ?? false;
+  } catch {
+    return false;
+  }
+}
+
+export function recordPlanApprovalAnswer(
+  projectDir: string,
+  session: string,
+  answer: PlanApprovalAnswer,
+): PlanApprovalAnswerResult {
+  return withAuditLock(projectDir, () => {
+    const open = currentPlanApprovalAsk(projectDir, "all");
+    if (open === null) {
+      const corrected = answer.choice === "approve" ? correctReadRequestChanges(projectDir, session, answer.units) : null;
+      if (corrected) return corrected;
+      throw new Error("No Plan Approval question is open. Run next.");
+    }
+    const { record } = open;
+    const replies = record.replies ?? [];
+    const answeredBefore = record.mode === "ask" &&
+      record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
+    // Replies kept after every plan was answered are for a correction.
+    if (replies.length === 0 || answeredBefore) {
+      // Their exact pick may already be recorded: the same choice is done; a
+      // different one would overrule what they picked.
+      const units = record.targets.map((target) => target.unit);
+      const recorded = record.results ?? [];
+      const answeredAll = record.mode === "editing" || units.every((unit) => recorded.some((result) => result.unit === unit));
+      if (answeredAll && recorded.length + (record.mode === "editing" ? 1 : 0) > 0) {
+        // What is recorded for the plans this answer names (every plan when it
+        // names none): approving the one plan in Request Changes is a change.
+        const picked = recorded.filter((result) => result.unit !== null && answer.units?.includes(result.unit));
+        const named = picked.length > 0 ? picked : recorded;
+        const recordedAs = (result: PlanApprovalAskResult): PlanApprovalAnswerChoice =>
+          result.choice === "request-changes" ? "request-changes" : "approve";
+        const differs = named.find((result) => recordedAs(result) !== answer.choice);
+        const theirs: PlanApprovalAnswerChoice = record.mode === "editing" ? "edit"
+          : differs ? recordedAs(differs) : answer.choice;
+        if (theirs === answer.choice) {
+          return { complete: true, message: `The person's choice, "${ANSWER_LABELS[theirs]}", is already recorded. Run next.` };
+        }
+        const corrected = answer.choice === "approve"
+          ? correctReadRequestChanges(projectDir, session, named
+            .filter((result) => result.choice === "request-changes").map((result) => result.unit))
+          : null;
+        if (corrected) return corrected;
+        throw new Error(
+          `The person picked "${ANSWER_LABELS[theirs]}" for this plan question, and that is recorded. Run next; if ` +
+            'they meant something else, record "Review the plan" and the question comes back.',
+        );
+      }
+      throw new Error(
+        "The person has not replied to the plan question since it was shown. End the turn, wait for their " +
+          "reply, then record the choice they made.",
+      );
+    }
+    // Words kept since the question can be a question or a command to AIDLC
+    // ("skip plan approval?"), which answers nothing: a choice needs a reply.
+    if (record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
+      throw new Error(
+        "The person has not answered the plan question since it was shown: their message since then was a " +
+          "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +
+          `off for this work, run \`${aidlcDispatcherInvocation("config set guard.plan-approval off")}\` and say ` +
+          "so in one line. Then record the choice they make.",
+      );
+    }
+    // A reply that is exactly Request Changes is the person's pick for these
+    // plans: it binds until a later reply says otherwise.
+    if (answer.choice !== "request-changes" && exactOptionPick(replies[replies.length - 1].text, record.choices) === 1) {
+      throw new Error(
+        `The person picked "Request Changes" for ${labels(record.targets.map((target) => target.unit))}. Record ` +
+          "that for the plan(s) they meant (ask which, when they did not say), or ask them if you read their words " +
+          "differently.",
+      );
+    }
+    const words = replies.map((reply) => reply.text).join("\n");
+    // What to change: their messages, leaving out a message that is only an option pick.
+    const said = replies.filter((reply) => exactOptionPick(reply.text, record.choices) === null)
+      .map((reply) => reply.text).join("\n");
+    const who = session || replies[replies.length - 1].session;
+    const units = record.targets.map((target) => target.unit);
+    const answered = new Set((record.results ?? []).map((result) => result.unit));
+    let chosen: Array<string | null>;
+    if (answer.units && answer.units.length > 0) {
+      const unknown = answer.units.filter((unit) => !units.includes(unit));
+      if (unknown.length > 0) {
+        throw new Error(
+          `The plan question asks about ${labels(units)}, not ${unknown.map((unit) => `unit "${unit}"`).join(", ")}.`,
+        );
+      }
+      chosen = answer.units;
+    } else {
+      chosen = units.filter((unit) => !answered.has(unit));
+    }
+    if (answer.choice === "approve") {
+      const standing = (record.results ?? []).filter((result) =>
+        chosen.includes(result.unit) && result.choice === "request-changes");
+      if (standing.length > 0) assertRequestChangesCanChange(standing, humanTurnCount(projectDir));
+    }
     const next: PlanApprovalAskRecord = { ...record, bound: false };
     delete next.lastNotice;
-    const units = record.targets.map((target) => target.unit);
-    let notice: string;
-    let recorded = false;
-    let stopForNow = false;
-    switch (reading.kind) {
-      case "none":
-        next.lastNotice = reading.notice;
-        notice = reading.notice;
-        break;
-      case "edit": {
-        next.mode = "editing";
-        const files = record.targets.flatMap((target) => {
-          const view = targetView(projectDir, target.unit);
-          return [view.plan_path, view.instructions_path];
-        });
-        notice = "AIDLC Plan Approval: the person will edit the files themselves. Run next, tell them they can " +
-          `change ${files.join(", ")} and write their answer after [Answer]: in the questions file, then end ` +
-          "the turn and wait for them to say done. Do not change those files yourself.";
-        break;
+    if (answer.choice === "edit") {
+      next.mode = "editing";
+      delete next.replies;
+      delete next.results;
+      // Their "done" comes in a later reply.
+      next.repliesFrom = auditMark(projectDir);
+      writePlanApprovalAsk(projectDir, next);
+      const files = record.targets.flatMap((target) => {
+        const view = targetView(projectDir, target.unit);
+        return [view.plan_path, view.instructions_path];
+      });
+      return {
+        complete: false,
+        message: `Recorded that the person will edit ${files.join(", ")} themselves. Tell them where the files ` +
+          "are, end the turn, and wait for them to say done; then read what they changed and record their choice.",
+      };
+    }
+    const results: PlanApprovalAskResult[] = (record.results ?? []).filter((result) => !chosen.includes(result.unit));
+    const approved: Array<string | null> = [];
+    const edited: Array<string | null> = [];
+    const repairs: string[] = [];
+    const failures: string[] = [];
+    for (const unit of chosen) {
+      if (answer.choice === "request-changes") {
+        results.push(requestChangesFor(
+          projectDir, record, unit, who, answer.feedback?.trim() || (answer.exactPick ? undefined : said || undefined), words,
+        ));
+        continue;
       }
-      case "which": {
-        next.pendingChange = reading.feedback;
-        notice = "AIDLC Plan Approval: the person asked for a change without naming a plan, so nothing was " +
-          `recorded. Ask once: "Which plan should change: ${units.map(targetLabel).join(", ")}, or all?" and ` +
-          "end the turn.";
-        next.lastNotice = notice;
-        break;
-      }
-      case "approve":
-      case "request-changes": {
-        // In edit mode, "done" decides from the files: an answer the person
-        // wrote in a questions file is their answer for that plan.
-        const changeUnits = new Map<string | null, string | undefined>();
-        if (reading.kind === "request-changes") {
-          for (const unit of reading.units) changeUnits.set(unit, reading.feedback);
-        } else if (record.mode === "editing") {
-          for (const unit of units) {
-            const written = answerLine(readText(join(codeGenerationRecordDir(projectDir, unit), QUESTIONS_FILE)));
-            if (!written) continue;
-            const said = interpretPlanApprovalReply(written, [record.choices[0], record.choices[1]], true);
-            if (said === "request-changes") {
-              changeUnits.set(unit, BARE_CHANGES_RE.test(normalized(written)) ? undefined : written);
-            }
-          }
-        }
-        const results: PlanApprovalAskResult[] = [];
-        const approved: Array<string | null> = [];
-        const changed: Array<string | null> = [];
-        const repairs: string[] = [];
-        const failures: string[] = [];
-        for (const unit of units) {
-          if (changeUnits.has(unit)) {
-            results.push(requestChangesFor(projectDir, record, unit, who, changeUnits.get(unit)));
-            continue;
-          }
-          const outcome = approveTarget(projectDir, record, unit, who);
-          if (outcome.ok) {
-            results.push(outcome.result);
-            approved.push(unit);
-            if (outcome.changed) changed.push(unit);
-          } else if (outcome.result) {
-            results.push(outcome.result);
-            repairs.push(outcome.notice);
-          } else {
-            failures.push(outcome.notice);
-          }
-        }
-        if (failures.length > 0 && results.length === 0) {
-          next.lastNotice = failures[0];
-          notice = failures[0];
-          break;
-        }
-        next.results = results;
-        delete next.pendingChange;
-        next.mode = "ask";
-        recorded = true;
-        const parts: string[] = [];
-        if (approved.length > 0) {
-          parts.push(`recorded "Approve Plan" for ${labels(approved)}` +
-            (changed.length > 0 ? ` with the files as the person left them (${labels(changed)} changed)` : ""));
-        }
-        if (changeUnits.size > 0) {
-          const withWords = [...changeUnits.entries()].find(([, words]) => words);
-          parts.push(`recorded "Request Changes" for ${labels([...changeUnits.keys()])}` +
-            (withWords ? `: "${withWords[1]}"` : ""));
-        }
-        // The person's stop holds whatever each plan needs next: a plan the
-        // engine must repair first is repaired when they resume.
-        stopForNow = reading.kind === "approve" && reading.stopForNow === true;
-        notice = `AIDLC Plan Approval: ${parts.join(", and ")}. Run next.` +
-          (changeUnits.size > 0 && ![...changeUnits.values()].some(Boolean)
-            ? " Ask them what should change before revising."
-            : "") +
-          (repairs.length > 0 ? ` ${repairs.join(" ")}` : "");
-        break;
+      const outcome = approveTarget(projectDir, record, unit, who, words);
+      if (outcome.ok) {
+        results.push(outcome.result);
+        approved.push(unit);
+        if (outcome.changed) edited.push(unit);
+      } else if (outcome.result) {
+        results.push(outcome.result);
+        repairs.push(outcome.notice);
+      } else {
+        failures.push(outcome.notice);
       }
     }
+    if (failures.length > 0 && approved.length === 0 && repairs.length === 0) {
+      throw new Error(failures[0]);
+    }
+    // Any answer can change once the person replies again: the turn count says
+    // when it was recorded, and `read` marks the conductor's reading.
+    const turns = humanTurnCount(projectDir);
+    for (const result of results) {
+      if (chosen.includes(result.unit)) Object.assign(result, answer.exactPick ? { turns } : { read: true, turns });
+    }
+    next.results = results;
+    next.mode = "ask";
+    delete next.pendingChange;
+    const complete = units.every((unit) => results.some((result) => result.unit === unit));
+    if (complete) delete next.replies;
     writePlanApprovalAsk(projectDir, next);
-    return { notice, recorded, ...(stopForNow ? { stopForNow: true as const } : {}) };
+    const recorded = answer.choice === "approve"
+      ? (approved.length > 0
+        ? `Recorded "Approve Plan" for ${labels(approved)}` +
+          (edited.length > 0 ? `, with the plan as it stands now (${labels(edited)} changed since it was shown)` : "")
+        : "Nothing was approved")
+      : `Recorded "Request Changes" for ${labels(chosen)}, with the person's words as what to change`;
+    const rest = complete ? " Run next." : ` Record the person's choice for ${labels(units.filter((unit) =>
+      !results.some((result) => result.unit === unit)))} too, then run next.`;
+    return { complete, message: `${recorded}.${rest}${repairs.length > 0 ? ` ${repairs.join(" ")}` : ""}` };
   });
 }
 
@@ -1403,8 +1569,12 @@ export function settleBuiltPlanReviews(projectDir: string, directive: Directive)
 }
 
 // --- "Review the plan" ---------------------------------------------------------
+//
+// The person asks to look at a plan before it is built, in their own words; the
+// conductor reads that and records it (`answer --checkpoint plan-approval
+// --details "Review the plan"`). The engine keeps the request and honors it:
+// the next `next` asks for approval before that plan is built.
 
-const REVIEW_REQUEST_RE =
   /\b(?:review|re-?review|re-?approve|look (?:at|over)|see|show me|check|reopen)\b[^.?!]{0,40}\b(?:the |my |this |that )?(?:code )?plan\b/i;
 
 /**
@@ -1413,8 +1583,8 @@ const REVIEW_REQUEST_RE =
  * (`p` says the step has one; `u` names it); the marker's own top-level Unit is
  * not covered by the receipt, so it never decides the target. `built` names
  * the targets when the part delivers a step after the build (the completion
- * gate, a Unit or swarm checkpoint, the settled swarm), and is null for a plan
- * or build step. Null when the payload is missing or edited.
+ * gate, every Unit built, a Unit or swarm checkpoint, the settled swarm), and
+ * is null for a plan or build step. Null when the payload is missing or edited.
  */
 function signedPartRoute(
   projectDir: string,
@@ -1427,7 +1597,7 @@ function signedPartRoute(
   if (typeof receipt !== "string" || !steeringPayloadAuthenticAt(keyPath, payload, receipt)) return null;
   const unit = payload.p === true && typeof payload.u === "string" ? payload.u : null;
   const batch = payload.y as { units?: unknown } | undefined;
-  if (payload.o !== true && payload.z !== true && payload.j === undefined && batch === undefined) {
+  if (payload.o !== true && payload.z !== true && payload.t !== true && payload.j === undefined && batch === undefined) {
     return { unit, built: null };
   }
   const units = Array.isArray(batch?.units) ? batch.units : [];
@@ -1464,17 +1634,11 @@ function atCompletionGate(projectDir: string, unit: string | null): boolean {
 
 /**
  * The person asked to review the plan while code generation may keep
- * building (an approved plan, or a lowered fence). The next `next` asks for
- * approval again before anything else runs. Returns the notice, or null.
+ * building (an approved plan, or plan approval off). The next `next` asks for
+ * approval again before anything else runs. Returns what to tell the person,
+ * or null when no Code Generation plan step is in play.
  */
-export function recordPlanApprovalReviewRequest(projectDir: string, text: string): string | null {
-  const reply = text.trim();
-  if (!reply || reply.length > 160 || !REVIEW_REQUEST_RE.test(reply)) return null;
-  // A reply that picks one of the open guard-recovery question's choices is
-  // that answer. Otherwise the review is the request, and the hook gives the
-  // reply to nothing else.
-  const guardQuestion = guardRecoveryReplyReading(projectDir, reply);
-  if (guardQuestion === "answers") return null;
+export function requestPlanApprovalReviewNow(projectDir: string): string | null {
   return withAuditLock(projectDir, () => {
     let state: string;
     try {
@@ -1508,9 +1672,8 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
     if (built !== null) {
       const plans = built.map((unit) =>
         toPosix(relative(projectDir, join(codeGenerationRecordDir(projectDir, unit), PLAN_FILE))));
-      return `AIDLC Plan Approval: the person asked to review the plan for ${labels(built)}. Its code is ` +
-        `already built from it, so show them the plan now (${plans.join(", ")}), then carry on with ` +
-        (signed?.built ? "the step that is arriving." : "this gate.");
+      return `The code for ${labels(built)} is already built from its plan, so show them the plan now ` +
+        `(${plans.join(", ")}), then carry on with ` + (signed?.built ? "the step that is arriving." : "this gate.");
     }
     const intentId = current ? current.intent_uuid ?? "bare-space" : intentIdFor(projectDir);
     try {
@@ -1520,13 +1683,27 @@ export function recordPlanApprovalReviewRequest(projectDir: string, text: string
         intentId,
       );
     } catch (error) {
-      return `AIDLC Plan Approval: the person asked to review the plan, but the request could not be recorded ` +
-        `(${errorMessage(error)}), so nothing changed. Tell them, and ask them to say it again.`;
+      return `The request to review the plan could not be recorded (${errorMessage(error)}), so nothing ` +
+        "changed. Tell the person, then record it again.";
     }
-    return `AIDLC Plan Approval: the person asked to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
-      "Run next: the plan is shown for approval again before anything else is built." +
-      (guardQuestion === "other"
-        ? " This reply was not taken as the answer to the open guard-recovery question."
-        : "");
+    // The person looks again: an answer recorded for these plans before (a
+    // misread, or one they changed their mind about) no longer decides them,
+    // and the question shown again is a fresh one, answered only by a reply
+    // after it.
+    const asked = readPlanApprovalAsk(projectDir, intentId);
+    // A request that names no plan is about the question on record, if any.
+    const looked: Array<string | null> = units.length > 0 ? units : (asked?.targets.map((target) => target.unit) ?? []);
+    if (asked && (asked.results?.some((result) => looked.includes(result.unit)) ||
+      asked.targets.some((target) => looked.includes(target.unit)))) {
+      const results = (asked.results ?? []).filter((result) => !looked.includes(result.unit));
+      const reopened: PlanApprovalAskRecord = {
+        ...asked, askId: randomBytes(16).toString("hex"), repliesFrom: auditMark(projectDir), bound: true,
+      };
+      delete reopened.replies;
+      if (results.length > 0) reopened.results = results; else delete reopened.results;
+      writePlanApprovalAsk(projectDir, reopened);
+    }
+    return `Recorded that the person wants to review the plan${units.length > 0 ? ` for ${labels(units)}` : ""}. ` +
+      "Run next: the plan is shown for approval before anything else is built.";
   });
 }

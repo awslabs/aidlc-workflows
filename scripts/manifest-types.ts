@@ -139,19 +139,57 @@ export type HarnessManifest = {
   editorTerminalApp?: string;
   /**
    * For a host that runs no project hooks until the person acts (for example
-   * trusts the folder and reloads the window): what to tell them.
+   * trusts the folder and reloads the window, or starts the engine that reads
+   * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
-    /** Doctor's fix when the hooks are not running. */
+    /**
+     * Doctor's fix when the hooks are not running: only the person's own
+     * step, in the tool's words. `<entry>` and `<folder>` are filled in.
+     */
     recovery: string;
-    /** Sentence added to the engine's "no new human reply" refusals. */
-    missedReply: string;
+    /**
+     * Sentence added to the engine's attended "no new human reply" refusals,
+     * for a harness without `agentStep` (which gives that sentence instead).
+     */
+    missedReply?: string;
+    /**
+     * Set when a session can run without this tree's hooks after they ran in
+     * an earlier one, so a reply can go unrecorded even with a heartbeat on
+     * record. A host with `missedReply` is one already.
+     */
+    missesReplies?: true;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
      * harness's hooks leave a heartbeat on the first chat message; doctor then
      * warns with this text instead of passing.
      */
     notRunYet?: string;
+    /**
+     * Sentence the engine adds to every directive's change_notices while this
+     * workflow has started a stage but no hook heartbeat exists. Set only when
+     * a hook on the agent's own shell command leaves a heartbeat in the record
+     * before the engine runs, so an install whose hooks run never sees it.
+     */
+    notRunInWorkflow?: string;
+    /**
+     * What the agent does itself, then the one line it shows the person, when
+     * this harness's hooks are not running (the person's lines quoted
+     * exactly). `next` stops with it before any work, and the refusal for a
+     * reply that was not recorded carries it. Set only when a hook on the
+     * agent's own shell command leaves a heartbeat in the record before the
+     * engine runs, even with its own check switched off, so a record with
+     * stage progress and no heartbeat at all proves the hooks did not run.
+     * `<entry>`, `<folder>` and `<next>` are filled in.
+     */
+    agentStep?: string;
+    /**
+     * The project file `agentStep` has the agent change, relative to the
+     * project. When it, or a folder on the way to it, is a link, or it is
+     * not one plain file, the agent changes nothing and shows the person
+     * `recovery` instead.
+     */
+    agentStepEdits?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
@@ -199,6 +237,16 @@ export type HarnessManifest = {
    * agent-v1 JSON - without the injected line a delegate runs toolless.
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
+  /**
+   * Exact text the native release swaps in before its generic invocation
+   * rewrite, for projected content whose copy-channel spelling has no
+   * mechanical native form. Each `from` must occur in the native projection;
+   * the `to` text is skipped by the projected-invocation check, so it must be
+   * generated from the route table rather than written as prose.
+   * Example: kiro-ide's persona shell deny, whose copy-channel rule is keyed on
+   * `bun .kiro/tools/…` and whose native rule on the `aidlc engine` routes.
+   */
+  nativeReplacements?: Array<{ from: string; to: string }>;
   /**
    * Harness-native YAML fields appended to every generated stage/scope runner
    * skill. The packager persists these in tools/data/harness.json so runner

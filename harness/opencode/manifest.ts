@@ -33,6 +33,18 @@ const manifest: HarnessManifest = {
   name: "opencode",
   productName: "opencode",
   configNextStep: "run `opencode`, then `/aidlc --doctor`",
+  // Its tool.execute.before hooks for bash beat in the record before each
+  // engine command, review-freeze and plan-approval-guard before their own off
+  // switches. Measured live: the plugin does not load under `--pure` or from a
+  // start in a subfolder, and a plain `opencode` in the project folder loads it.
+  hookActivation: {
+    recovery:
+      "Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on.",
+    agentStep:
+      "AI-DLC's opencode plugin is not loaded in this session. Do not retry and do not ask the " +
+      "person to answer again. Show the person this line and end your turn: " +
+      '"Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on."',
+  },
   harnessDir: ".aidlc",
   orchestratorSkillPath: ".aidlc/skills/aidlc/SKILL.md",
   tierFlavor: "opencode",
@@ -46,6 +58,12 @@ const manifest: HarnessManifest = {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:d2569b56aef154c3c04766ed3263947a2d8026c99546a3006775526641951db9",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:ced6459be00ce352fe298e1ff07759933fa2ebf07a9151ef2f1af995579f7afd",
+          // The variant shipped with a generic template above the AI-DLC lines.
+          "sha256:007b95fb94d4a2569f4254088f0d70f4f345ff99db34e2784b6d9bc5c169f853",
+          // The variant shipped with notes above each group of lines.
+          "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
         ],
       },
     },

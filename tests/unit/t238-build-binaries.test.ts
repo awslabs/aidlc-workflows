@@ -465,6 +465,41 @@ describe("t238 build-binaries release builder", () => {
       /Cannot find module|\/\$bunfs\/|uv_spawn ['"]bun['"]/,
     );
 
+    const pluginDoctorProject = createTestProject();
+    tempDirs.push(pluginDoctorProject);
+    cpSync(
+      join(dirname(native.artifact), "runtime", "claude", ".claude"),
+      join(pluginDoctorProject, ".claude"),
+      { recursive: true },
+    );
+    writeFileSync(
+      join(pluginDoctorProject, ".claude", "scopes", "doctor-probe-scope.md"),
+      [
+        "---",
+        "name: doctor-probe-scope",
+        "plugin: doctor-probe",
+        "depth: Standard",
+        "description: Doctor probe plugin scope",
+        "keywords:",
+        "  - doctor-probe-scope",
+        "---",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(pluginDoctorProject, ".claude", "tools", "doctor-probe-doctor.ts"),
+      'process.stdout.write(JSON.stringify({checks:[{pass:true,label:"native plugin check ran"}]}));\n',
+    );
+    const pluginDoctor = spawnSync(native.artifact, ["doctor", "--verbose", "--project-dir", pluginDoctorProject], {
+      cwd: pluginDoctorProject,
+      encoding: "utf-8",
+      env: { ...process.env, PATH: "", AIDLC_INSTALL_ROOT: join(root, "plugin-doctor-install") },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const pluginDoctorOutput = `${pluginDoctor.stdout ?? ""}${pluginDoctor.stderr ?? ""}`;
+    expect(pluginDoctorOutput).toContain("ok    Plugin check (doctor-probe): native plugin check ran");
+    expect(pluginDoctorOutput).not.toContain("returned exit code 2");
+
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tempDirectory("rerun"),
       encoding: "utf-8",
@@ -571,6 +606,92 @@ describe("t238 build-binaries release builder", () => {
       // VS Code setting from the native runtime instead.
       expect(existsSync(join(copyRoot, "runtime", "copilot", ".vscode"))).toBe(false);
       expect(existsSync(join(nativeRoot, "runtime", "copilot", ".vscode", "settings.json"))).toBe(true);
+      // Nor the team's memory files or the person's chosen space, so a copy
+      // upgrade keeps the practices the team affirmed and the space they chose.
+      // The native runtime still ships them: config creates them only when absent.
+      const kept = [
+        join("aidlc", "spaces", "default", "memory", "team.md"),
+        join("aidlc", "spaces", "default", "memory", "project.md"),
+        join("aidlc", "active-space"),
+      ];
+      // A copy starts with no MCP servers; the shipped list rides in the
+      // harness folder. The native runtime ships the file for config.
+      expect(existsSync(join(copyRoot, "runtime", "claude", ".mcp.json"))).toBe(false);
+      expect(existsSync(join(copyRoot, "runtime", "claude", ".claude", "tools", "data", "root-blocks", ".mcp.json"))).toBe(true);
+      expect(existsSync(join(nativeRoot, "runtime", "claude", ".mcp.json"))).toBe(true);
+      for (const distribution of ["claude", "copilot"]) {
+        for (const path of kept) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+          expect(existsSync(join(nativeRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(true);
+        }
+        expect(existsSync(join(copyRoot, "runtime", distribution, "aidlc", "spaces", "default", "memory", "org.md"))).toBe(true);
+      }
+      // Nor the team's .gitignore or AGENTS.md: AI-DLC's part of each ships in
+      // the harness folder, and config or the engine adds it to the team's file.
+      for (const [distribution, harnessDir, markers] of [
+        ["claude", ".claude", ["gitignore"]],
+        ["copilot", ".aidlc", ["gitignore", "agents"]],
+      ] as const) {
+        for (const path of [".gitignore", "AGENTS.md"]) {
+          expect(existsSync(join(copyRoot, "runtime", distribution, path)), `${distribution}/${path}`).toBe(false);
+        }
+        for (const marker of markers) {
+          const block = join("tools", "data", "root-blocks", marker);
+          expect(existsSync(join(copyRoot, "runtime", distribution, harnessDir, block)), `${distribution}/${block}`).toBe(true);
+        }
+        expect(existsSync(join(nativeRoot, "runtime", distribution, ".gitignore"))).toBe(true);
+      }
+      const upgraded = join(runtimeChannels, "upgraded-project");
+      const teamFiles = new Map([
+        [kept[0], "# Team practices\n\n- Affirmed: trunk-based development\n"],
+        [kept[1], "# Project rules\n\n- Learned: run the linter before review\n"],
+        [kept[2], "payments\n"],
+        [".gitignore", "node_modules\n.env\nsecrets/\n"],
+        ["AGENTS.md", "# Shop\n\nOur own notes for agents.\n"],
+        [".mcp.json", '{\n  "mcpServers": {\n    "ours": { "command": "our-server" }\n  }\n}\n'],
+      ]);
+      for (const [path, body] of teamFiles) {
+        mkdirSync(dirname(join(upgraded, path)), { recursive: true });
+        writeFileSync(join(upgraded, path), body);
+      }
+      cpSync(join(copyRoot, "runtime", "claude"), upgraded, { recursive: true });
+      cpSync(join(copyRoot, "runtime", "copilot"), upgraded, { recursive: true });
+      for (const [path, body] of teamFiles) {
+        expect(readFileSync(join(upgraded, path), "utf-8"), path).toBe(body);
+      }
+      // The team's secrets file stays ignored, so `git add -A` never picks it up.
+      writeFileSync(join(upgraded, ".env"), "API_KEY=team-secret\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: upgraded }).status).toBe(0);
+      expect(spawnSync("git", ["check-ignore", "-q", ".env"], { cwd: upgraded }).status).toBe(0);
+
+      // A Kiro project that later takes the Claude copy keeps Kiro's per-machine
+      // files ignored: the copy leaves .gitignore alone, and the next session
+      // start adds Claude's lines beside Kiro's.
+      const kiroThenClaude = join(runtimeChannels, "kiro-then-claude");
+      mkdirSync(kiroThenClaude);
+      writeFileSync(join(kiroThenClaude, ".gitignore"), "node_modules\n");
+      const sessionStart = (harnessDir: string): void => {
+        const started = spawnSync(BUN, [join(kiroThenClaude, harnessDir, "hooks", "aidlc-session-start.ts")], {
+          cwd: kiroThenClaude,
+          input: "{}",
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: kiroThenClaude },
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+        expect(started.status, `${harnessDir}: ${started.stdout}${started.stderr}`).toBe(0);
+      };
+      cpSync(join(copyRoot, "runtime", "kiro"), kiroThenClaude, { recursive: true });
+      sessionStart(".kiro");
+      const kiroIgnore = readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8");
+      expect(kiroIgnore).toContain("aidlc/.aidlc-turn-counter");
+      cpSync(join(copyRoot, "runtime", "claude"), kiroThenClaude, { recursive: true });
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toBe(kiroIgnore);
+      sessionStart(".claude");
+      expect(readFileSync(join(kiroThenClaude, ".gitignore"), "utf-8")).toStartWith("node_modules\n");
+      expect(spawnSync("git", ["init", "-q"], { cwd: kiroThenClaude }).status).toBe(0);
+      for (const path of ["aidlc/.aidlc-turn-counter", "aidlc/.aidlc-readonly-latch", ".claude/settings.local.json"]) {
+        expect(spawnSync("git", ["check-ignore", "-q", path], { cwd: kiroThenClaude }).status, path).toBe(0);
+      }
 
       const manualProject = join(runtimeChannels, "manual-project");
       cpSync(join(copyRoot, "runtime", "claude"), manualProject, { recursive: true });

@@ -500,6 +500,213 @@ describe("t264 (a) judgeFreeze decision table", () => {
     ).toEqual([]);
     expect(bashTargets("cat /a/b.md")).toEqual([]);
   });
+
+  test("writeTargets: content cmdlets bind their path, never a value passed by name (#1639)", () => {
+    const read = (shell: "posix" | "powershell") => (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p", shell)
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    const powerShell = read("powershell");
+    const posix = read("posix");
+    for (const command of [
+      "Set-Content -Path notes.md -Value x",
+      "Set-Content -Value x notes.md",
+      "Set-Content -Path:notes.md -Value:x",
+      "Set-Content -Path: notes.md -Value x",
+      "Set-Content -Pat notes.md -Val x",
+      "'x' | Add-Content -Encoding utf8 notes.md",
+      "'x' | Out-File notes.md -Encoding utf8",
+      "'x' | Tee-Object notes.md",
+      "'x' | Tee-Object -FilePath notes.md",
+    ]) {
+      expect(powerShell(command), command).toEqual(["/p/notes.md"]);
+      // The POSIX reading has lost the quotes that tell a value from a
+      // parameter, so it counts every value as well as the path.
+      expect(posix(command), command).toContain("/p/notes.md");
+    }
+    expect(posix("Set-Content -Path notes.md -Value x")).toEqual(["/p/notes.md", "/p/x"]);
+    // Tee-Object -Variable writes no file; with a path named it would fail.
+    for (const command of [
+      "Tee-Object -InputObject aidlc/a.md -Variable snapshot",
+      "Get-Content aidlc/a.md | Tee-Object -Variable snapshot",
+    ]) {
+      expect(posix(command), command).toEqual([]);
+      expect(powerShell(command), command).toEqual([]);
+    }
+    // Dequoted, '-Variable' reads as -Variable; PowerShell would take it as
+    // the path and refuse the extra value, so nothing is written.
+    expect(posix("'x' | Tee-Object '-Variable' aidlc/a.md")).toEqual([]);
+    expect(posix("'x' | Tee-Object -Variable '-FilePath' aidlc/a.md")).toContain("/p/aidlc/a.md");
+    // A dequoted '-Variable' that was another parameter's value hides nothing.
+    for (const command of [
+      "'x' | Tee-Object -InputObject '-Variable' aidlc/a.md",
+      "Tee-Object aidlc/a.md -InputObject '-Variable'",
+      "'x' | Tee-Object -OutVariable '-Variable' aidlc/a.md",
+      "'x' | Tee-Object -Append: '-Variable' aidlc/a.md",
+    ]) {
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+      expect(powerShell(command), command).toContain("/p/aidlc/a.md");
+    }
+    expect(posix("'x' | Tee-Object -OutVariable -- -Variable:aidlc/a.md")).toContain("/p/aidlc/a.md");
+    // Dequoted, '-Variable:x' may be a quoted path on a drive named -Variable.
+    expect(posix("'x' | Tee-Object '-Variable:aidlc/a.md'")).toContain("/p/aidlc/a.md");
+    // A parameter-looking word left without a value may be a quoted path.
+    expect(posix("'x' | Tee-Object '-Variable'")).toContain("/p/-Variable");
+    // With the quotes known, a bound -Variable writes no file.
+    expect(powerShell("'x' | Tee-Object -Variable v aidlc/a.md")).toEqual([]);
+    expect(powerShell("New-Item -Path aidlc -Name a.md -ItemType File")).toEqual(["/p/aidlc/a.md"]);
+    expect(posix("New-Item -Path: aidlc -Name a.md")).toContain("/p/aidlc/a.md");
+    // After --, a word that looks like a parameter is a value as written.
+    expect(posix("Set-Content -- -Value:notes.md")).toContain("/p/-Value:notes.md");
+    expect(powerShell("Set-Content -- -Value:notes.md")).toContain("/p/-Value:notes.md");
+    // A -- the reading gave to a parameter as its value still ends them.
+    expect(posix("'x' | Set-Content -ErrorAction -- -Value:notes.md")).toContain("/p/-Value:notes.md");
+    // Every positional value counts: a word read apart from how PowerShell
+    // binds it must not move a path into the Value slot.
+    for (const command of [
+      "Set-Content x aidlc/a.md",
+      "Set-Content a, aidlc/a.md x",
+      "Set-Content a ,aidlc/a.md x",
+      "'x' | Set-Content notes.md, aidlc/a.md",
+      "'x' | Add-Content -Path notes.md, aidlc/a.md",
+      "'x' | Set-Content -- aidlc/a.md",
+      "'x' | Out-File -- aidlc/a.md",
+      "Set-Content -- -Value aidlc/a.md",
+      "'x' | Set-Content –Path aidlc/a.md",
+      "'x' | Out-File —FilePath aidlc/a.md",
+      "Set-Content -Value '-Value' aidlc/a.md",
+      "Set-Content '-Value' -Path:aidlc/a.md",
+      "Set-Content -Value:'' aidlc/a.md",
+      "\"x\" | Out-File -OutBuffer:\"\" aidlc/a.md",
+      // A parameter name ends at ( { . or [.
+      "Set-Content -Path(\"aidlc/a.md\") x",
+      "Set-Content -Path./aidlc/a.md x",
+    ]) {
+      expect(powerShell(command), command).toContain("/p/aidlc/a.md");
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+    }
+    // A string in a group is that string.
+    expect(powerShell("Set-Content -Path ('aidlc\\a.md') x")).toContain("/p/aidlc/a.md");
+    // PowerShell runs neither as a write; the POSIX reading still counts them.
+    for (const command of ["Set-Content -Path=aidlc/a.md x", "Out-File --FilePath:aidlc/a.md"]) {
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+    }
+    // A parameter the reader does not know may be a switch: every value counts.
+    expect(powerShell("Set-Content -Bogus q notes.md x")).toEqual(
+      expect.arrayContaining(["/p/notes.md", "/p/q", "/p/x"]),
+    );
+    // -Pa could be -Path or -PassThru.
+    expect(powerShell("Set-Content -Pa notes.md x")).toEqual(
+      expect.arrayContaining(["/p/notes.md", "/p/x"]),
+    );
+  });
+
+  test("writeTargets: a PowerShell command is read as PowerShell (#1639)", () => {
+    const targets = (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p", "powershell")
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    // Backslashes are separators, not escapes, quoted or not.
+    for (const command of [
+      "Set-Content aidlc\\docs\\a.md x",
+      "Set-Content 'aidlc\\docs\\a.md' x",
+      "Set-Content \"aidlc\\docs\\a.md\" x",
+      "echo x > aidlc\\docs\\a.md",
+      "echo x>aidlc\\docs\\a.md",
+      "'x' | Tee-Object aidlc\\docs\\a.md",
+      "'x' | Out-File -FilePath aidlc\\docs\\a.md -Append",
+      "Set-Content ‘aidlc\\docs\\a.md’ x",
+      "Set-Content –Path aidlc\\docs\\a.md –Value x",
+      "Set-Content `\n  aidlc\\docs\\a.md x",
+      "Set-Content `\r\n  aidlc\\docs\\a.md x",
+      "sc aidlc\\docs\\a.md x",
+      "rm -r -fo aidlc\\docs\\a.md",
+      "cp -Path scratch.md -Destination aidlc\\docs\\a.md",
+      "git status; Set-Content aidlc\\docs\\a.md x",
+      "Write-Output (Set-Content aidlc\\docs\\a.md x)",
+      "\"$(Set-Content aidlc\\docs\\a.md x)\"",
+      "Get-ChildItem | ForEach-Object { Remove-Item aidlc\\docs\\a.md }",
+    ]) {
+      expect(targets(command), command).toContain("/p/aidlc/docs/a.md");
+    }
+    expect(targets("Set-Content aidlc\\a.md,aidlc\\b.md -Value x")).toEqual([
+      "/p/aidlc/a.md",
+      "/p/aidlc/b.md",
+    ]);
+    expect(targets("Set-Content 'a,b.md' -Value x")).toEqual(["/p/a,b.md"]);
+    expect(targets("Remove-Item -Path:aidlc\\a.md,aidlc\\b.md")).toEqual([
+      "/p/aidlc/a.md",
+      "/p/aidlc/b.md",
+    ]);
+    expect(targets("Set-Content 'it''s.md' -Value x")).toEqual(["/p/it's.md"]);
+    for (const command of [
+      "Set-Content a, aidlc\\a.md x",
+      "'x' | Set-Content -- aidlc\\a.md",
+      "'x' | Out-File -- aidlc\\a.md",
+    ]) {
+      expect(targets(command), command).toContain("/p/aidlc/a.md");
+    }
+    // A cmdlet that takes its path from the pipeline may write anywhere.
+    expect(targets("Get-ChildItem aidlc | Remove-Item -Recurse")).toEqual(["/p"]);
+    for (const command of [
+      // An escaped dash is a value, not a parameter.
+      "Set-Content -Value `-Encoding aidlc\\a.md",
+      "Set-Content -Value -`Encoding aidlc\\a.md",
+      // An escaped --% does not stop parsing.
+      "Write-Output `--% ; Remove-Item aidlc\\a.md",
+      // The command on the right of an assignment runs.
+      "$null = New-Item -ItemType File aidlc\\a.md",
+      "$r = Remove-Item aidlc\\a.md",
+      "$x.y=Remove-Item aidlc\\a.md",
+      "$" + "{x}=Remove-Item aidlc\\a.md",
+      "$a[0] =Remove-Item aidlc\\a.md",
+      "$a = $b = Remove-Item aidlc\\a.md",
+      "$x ??= Remove-Item aidlc\\a.md",
+      "$a=$b=Remove-Item aidlc\\a.md",
+      "[string]$x=Remove-Item aidlc\\a.md",
+      // A [ that does not close a type name is an ordinary character.
+      "echo [; Set-Content aidlc\\a.md x",
+      // $pwd is $PWD.
+      "Set-Content $pwd\\aidlc\\a.md x",
+    ]) {
+      expect(targets(command), command).toContain("/p/aidlc/a.md");
+    }
+    // An array continues past the blanks around its commas.
+    for (const command of [
+      "New-Item -Path scratch, aidlc -Name a.md -ItemType File",
+      "New-Item -Path scratch ,aidlc -Name a.md -ItemType File",
+      "New-Item -Path scratch,`\n  aidlc -Name a.md -ItemType File",
+      "New-Item -Path scratch,\n  aidlc -Name a.md -ItemType File",
+    ]) {
+      expect(targets(command), command).toEqual(["/p/scratch/a.md", "/p/aidlc/a.md"]);
+    }
+    // A pipeline path is replaced only by a path named in full.
+    expect(targets("Get-Item aidlc\\a.md | Remove-Item -ErrorAction Stop")).toContain("/p");
+    expect(targets("Get-ChildItem aidlc | Move-Item -Destination elsewhere")).toContain("/p");
+    // Copy-Item reads what is piped to it; only its destination is written.
+    expect(targets("Get-ChildItem aidlc | Copy-Item -Destination elsewhere")).toEqual(["/p/elsewhere"]);
+    // A destination it cannot read leaves the pipeline's working directory.
+    expect(targets("Get-ChildItem aidlc | Copy-Item -Destination $d")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc | Copy-Item -Dest:elsewhere")).toContain("/p");
+    // A redirect target is a file name, whatever it looks like.
+    expect(targets("echo hi > -notes.md")).toEqual(["/p/-notes.md"]);
+    expect(targets("Write-Output a, b")).toEqual([]);
+    expect(targets("$a = 1")).toEqual([]);
+    // A newline after | continues the pipeline; a ; ends it.
+    expect(targets("Get-ChildItem aidlc |\n  Remove-Item -Recurse")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc |\r\n  Remove-Item -Recurse")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc |\n  # all of it\n  Remove-Item -Recurse")).toEqual(["/p"]);
+    expect(targets("Get-ChildItem aidlc |; Remove-Item -Recurse")).toEqual([]);
+    expect(targets("Get-Item aidlc\\a.md | Set-Content -Value x")).toEqual(["/p"]);
+    // Discarded output, merged streams, comments and values write nothing.
+    expect(targets("'x' > $null")).toEqual([]);
+    expect(targets("Write-Output x 2>&1")).toEqual([]);
+    expect(targets("Write-Output x # > aidlc\\docs\\a.md")).toEqual([]);
+    expect(targets("& 'C:\\tools\\aidlc.cmd' engine next")).toEqual([]);
+    expect(targets("Get-Content aidlc\\docs\\a.md | Select-String x")).toEqual([]);
+    // The POSIX reading of the same commands drops the backslashes.
+    expect(writeTargets("Bash", { command: "Set-Content aidlc\\docs\\a.md x" }, "/p")
+      .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, "")))
+      .toEqual(["/p/aidlcdocsa.md", "/p/x"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -652,7 +859,7 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
       "If this is a reviewer suggestion, quote it at the gate",
     );
     expect(blocked.stderr).toContain(
-      'Ask "What should change?" for stage "requirements-analysis"',
+      'When the person already said what should change for stage "requirements-analysis"',
     );
     expect(blocked.stderr).toContain("their exact text unchanged");
     expect(readAllAuditShards(p)).toContain("**Event**: REVIEW_FREEZE_BLOCKED");

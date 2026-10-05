@@ -52,6 +52,7 @@ import {
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents,
+  writeSessionPidEntry,
   readUnitSourceManifest,
   reviewArtifactFingerprint,
   setField,
@@ -826,7 +827,8 @@ describe("t341 verification command consent", () => {
     expect(mismatch.out).toContain("Command SHA-256");
     const absent = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
     expect(absent.code).not.toBe(0);
-    expect(absent.out).toContain("hook-recorded response");
+    // The question is open and the reply came before it: none is on record yet.
+    expect(absent.out).toContain("none is on record yet");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
     submitCommandChoice(dir, "t341-command", "Approve", env);
     const approved = cli(dir, "log", ["answer", ...identity, "--command", "exit 0", "--details", "Approve"], env);
@@ -851,21 +853,24 @@ describe("t341 verification command consent", () => {
     submitCommandChoice(dir, "t341-command", "Request Changes", env);
     const refused = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
     expect(refused.code).not.toBe(0);
-    expect(refused.out).toContain("actual offered choice");
+    expect(refused.out).toContain('The person picked \\"Request Changes\\" for this question');
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("unrelated prompts and the presence bypass cannot substitute for the offered response", () => {
+  test("the presence bypass cannot substitute for a reply, and a question is kept as the person's words", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
-    submitCommandChoice(dir, "t341-command", "What does this command do?", env);
     const answer = ["answer", ...identity, "--details", "Approve"];
     expect(cli(dir, "log", answer, env).code).not.toBe(0);
     expect(cli(dir, "log", answer, { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }).code).not.toBe(0);
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
+    // Their question is kept verbatim, with no choice read into it: the agent answers it.
+    submitCommandChoice(dir, "t341-command", "What does this command do?", env);
+    expect(readProtectedResponse(dir, "t341-command")?.words).toBe("What does this command do?");
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("one session's answer cannot satisfy another session's pending challenge", () => {
@@ -1078,18 +1083,21 @@ describe("t341 verification command consent", () => {
 });
 
 describe("t341 human authority, attempt boundaries, and scoped approval", () => {
-  test("skeleton always needs an approving reply and a fresh human, including under autonomy", () => {
+  test("skeleton always needs the person's reply and a fresh human, including under autonomy", () => {
     const dir = project(true);
     expect(pass(dir, "skeleton").human_required).toBe(true);
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("needs a reply that approves");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("requires the person's reply to this question");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow();
     expect(approvals(dir)).toEqual([]);
-    human(dir, "skeleton");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "hmm", "t341-checkpoint")).toThrow("needs a reply that approves");
-    // The person's own words name the choice the hook recorded.
-    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "approve", "t341-checkpoint");
+    // An exact pick is the person's: the conductor cannot record the other choice.
+    human(dir, "skeleton", "Request Changes");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow('picked "Request Changes"');
+    // The conductor read their approval; the receipt carries their own words.
+    human(dir, "skeleton", "looks right, ship it");
+    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
     expect(approved.approved).toBe(true);
     const gate = approvals(dir).at(-1)!;
+    expect(auditBlockField(gate.block, "Person Reply")).toBe("looks right, ship it");
     for (const [key, value] of Object.entries({
       Unit: "alpha", Stage: "code-generation", Stages: STAGES.join(", "),
       "Gate Scope": "unit-end", Checkpoint: "walking-skeleton",
@@ -1098,6 +1106,29 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     pass(dir, "skeleton");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow("--action ask");
     expect(approvals(dir)).toHaveLength(1);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person's reply to this question is their presence: a decision the
+  // agent recorded after it never makes them answer the question again.
+  test("a reply on record for the question records the agent's reading without a second reply", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    human(dir, "skeleton", "looks right, ship it");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: "code-generation", Details: "an unrelated answer" }, dir);
+    const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
+    expect(approved.approved).toBe(true);
+    expect(auditBlockField(approvals(dir).at(-1)!.block, "Person Reply")).toBe("looks right, ship it");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a question with no reply yet waits for one, and none open names the ask", () => {
+    const dir = project();
+    pass(dir, "skeleton");
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
+      .toThrow("no such question is open");
+    const asked = cli(dir, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "skeleton", "--session", "t341-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint"))
+      .toThrow("none is on record yet");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("ordinary checkpoints autoapprove only under a recorded autonomous grant", () => {
@@ -1109,7 +1140,7 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     pass(gated);
     writeFileSync(seededStateFile(gated), setField(readFileSync(seededStateFile(gated), "utf-8"),
       "Construction Autonomy Mode", "autonomous"));
-    expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("needs a reply that approves");
+    expect(() => approveConstructionCheckpoint(gated, "alpha", "unit")).toThrow("requires the person's reply to this question");
     human(gated);
     expect(approveConstructionCheckpoint(gated, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1163,8 +1194,9 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     approveConstructionCheckpoint(dir, "beta", "unit");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow();
     expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_REJECTED")).toEqual([]);
+    human(dir, "unit", "Approve");
+    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow('picked "Approve"');
     human(dir, "unit", "Request Changes");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "approve", "Fix alpha", "t341-checkpoint")).toThrow("needs a reply that asks for changes");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", " ", "t341-checkpoint")).toThrow("reason");
     const priorFloor = latestMainWorkflowStageRunFloorForProject(dir, STAGES[0], true, "beta");
     const rejected = rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint");
@@ -1200,6 +1232,68 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
 });
 
 describe("t341 review evidence is independent of project check success", () => {
+  // Two Units that both add code to one shared file, each reviewed on its own
+  // build, as a Unit-by-Unit walk over a small change does.
+  function shareFile(dir: string): void {
+    writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 1;\n");
+    for (const unit of ["alpha", "beta"]) {
+      for (const slug of STAGES) {
+        if (!findStageBySlug(slug)!.workspace_requires) continue;
+        writeFileSync(join(seededRecordDir(dir), "construction", unit, slug, "source-manifest.json"), JSON.stringify({
+          stage: slug, unit, version: 1, writes: [{ path: `src/${unit}.ts` }, { path: "src/shared.ts" }],
+        }));
+      }
+    }
+  }
+
+  function reviewUnit(dir: string, unit: string): void {
+    for (const slug of STAGES) {
+      const definition = findStageBySlug(slug)!;
+      if (!definition.reviewer) continue;
+      const fields: Record<string, string> = {
+        Stage: slug, Unit: unit, Reviewer: definition.reviewer, Iteration: "1",
+        "Artifact Fingerprint": reviewArtifactFingerprint(dir, definition, unit)!,
+      };
+      if (definition.workspace_requires) {
+        const listing = workspaceSourceListing(dir)!;
+        const manifest = readUnitSourceManifest(dir, slug, unit);
+        if (!manifest.ok) throw new Error(manifest.reason);
+        fields["Source Fingerprint"] = workspaceSourceFingerprint(dir)!;
+        fields["Unit Source Fingerprint"] = writeUnitSourceSnapshot(dir, slug, unit,
+          listing, manifest, manifest.rawBytesSha256);
+      }
+      appendAuditEntry("REVIEW_REQUESTED", fields, dir);
+      appendAuditEntry("REVIEW_COMPLETED", {
+        ...fields, Verdict: "READY",
+        ...(fields["Source Fingerprint"] ? { "Request Source Fingerprint": fields["Source Fingerprint"] } : {}),
+      }, dir);
+    }
+  }
+
+  for (const changeControl of ["strict", "relaxed"]) {
+    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit asks again (${changeControl})`, () => {
+      const dir = project();
+      writeFileSync(seededStateFile(dir), setField(setField(state(), "Review Override", "advisory"),
+        "Change Control", changeControl));
+      shareFile(dir);
+      reviewUnit(dir, "alpha");
+      expect(pass(dir).ready).toBe(true);
+      human(dir);
+      const approved = approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
+      expect(approved.approved).toBe(true);
+      // beta's own build adds to the shared file, and beta's review records it.
+      writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 1;\nexport const beta = 2;\n");
+      reviewUnit(dir, "beta");
+      const current = resolveConstructionCheckpoint(dir, "alpha", "unit");
+      expect(current.errors).toEqual([]);
+      expect(current.fingerprint).toBe(approved.fingerprint);
+      expect(current.approved).toBe(true);
+      // An edit after that matches no review, so alpha's approval no longer holds.
+      writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 3;\n");
+      expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   test("requires current paired reviews and claimed source even under relaxed Change Control", () => {
     const dir = project();
     writeFileSync(seededStateFile(dir), setField(state(), "Review Override", "advisory"));
@@ -1303,7 +1397,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test.each(["unit", "skeleton"])("%s refuses unrelated prompts, cross-session choices, and consumed responses", (kind) => {
+  test.each(["unit", "skeleton"])("%s refuses a prompt from before the question, cross-session choices, and consumed responses", (kind) => {
     const pd = project();
     pass(pd, kind as "unit" | "skeleton");
     submitCommandChoice(pd, session, "hello", env);
@@ -1312,7 +1406,6 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(approvals(pd)).toEqual([]);
     const asked = cli(pd, "bolt", [...route(kind), "--action", "ask"], env);
     expect(asked.code, asked.out).toBe(0);
-    submitCommandChoice(pd, session, "hello", env);
     expect(decide().code).not.toBe(0);
     submitCommandChoice(pd, "other-session", "Approve", env);
     expect(decide().code).not.toBe(0);
@@ -1516,17 +1609,66 @@ describe("t341 protected question interleaving", () => {
     expect(receipts(pd)).toHaveLength(3);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // From a live Claude Code run: the agent recorded the question, then asked it
+  // in the picker with the command added. The person's Approve there was not
+  // kept, so the checkpoint asked again, refused that picker too, and they had
+  // to type it: three answers to one question.
+  test("a picker approval answers the question however the agent worded it; several picks or other options do not", () => {
+    const pd = project();
+    const shown = `${prompt} \`bun test\``;
+    const pick = (labels: string[], picked: string | string[], multiSelect = false, question = shown) => {
+      const result = childProcess.spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
+        input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "AskUserQuestion", session_id: session,
+          tool_input: { questions: [{ question, multiSelect, options: labels.map((label) => ({ label })) }] },
+          tool_response: { answers: { [question]: picked } } }),
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    };
+    ask(pd);
+    pick(["Approve", "Request Changes"], "Approve", true);
+    pick(["Yes", "No"], "Yes");
+    // A picker sharing one label with the question is some other question,
+    // whichever option the person picked there.
+    pick(["Approve", "Rename it"], "Rename it");
+    pick(["Approve", "Rename it"], "Approve");
+    // Nor is a picker offering only one of its choices, or one twice.
+    pick(["Approve"], "Approve");
+    pick(["Approve", "Approve", "Request Changes"], "Approve");
+    // Under the exact recorded question too, a picker offering another option
+    // is some other question.
+    pick(["Approve", "Rename it"], "Rename it", false, prompt);
+    // Several picks are no one choice, even under the exact recorded question.
+    pick(["Approve", "Request Changes"], "Approve", true, prompt);
+    pick(["Approve", "Request Changes"], ["Approve", "Request Changes"], false, prompt);
+    expect(readProtectedResponse(pd, session)).toBeNull();
+    expect(answer(pd).code).not.toBe(0);
+    expect(receipts(pd)).toEqual([]);
+    pick(["Approve (Recommended)", "Request Changes"], "Approve");
+    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    const accepted = answer(pd);
+    expect(accepted.code, accepted.out).toBe(0);
+    expect(receipts(pd)).toHaveLength(1);
+    // Recorded once, the command is the one every later checkpoint runs, so no checkpoint asks for it again.
+    const setter = cli(pd, "state", ["set-construction-verification-command", "bun test"], env);
+    expect(setter.code, setter.out).toBe(0);
+    expect(authorizedVerificationCommand(pd, readFileSync(seededStateFile(pd), "utf-8"))?.command).toBe("bun test");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Codex retains rendered question text when forwarding a structured selection", () => {
     const pd = project();
     const adapter = join(AIDLC_SRC, "../../codex/.codex/hooks/aidlc-codex-adapter.ts");
     ask(pd);
-    for (const question of ["An unrelated question?", prompt]) {
+    // A picker offering none of the question's choices pairs by its text, so
+    // the unrelated one is refused only when the adapter forwards that text.
+    for (const [question, labels] of [["An unrelated question?", ["Yes", "No"]], [prompt, ["Approve", "Request Changes"]]] as const) {
       const submitted = childProcess.spawnSync(process.execPath, [adapter, "record-human-turn"], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
         cwd: pd, encoding: "utf-8", env: { ...env, AIDLC_PROJECT_DIR: pd, CLAUDE_PROJECT_DIR: pd },
         input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "request_user_input", session_id: session,
-          tool_input: { questions: [{ id: "choice", question, options: [{ label: "Approve" }, { label: "Request Changes" }] }] },
-          tool_response: JSON.stringify({ answers: { choice: { answers: ["Approve"] } } }) }),
+          tool_input: { questions: [{ id: "choice", question, options: labels.map((label) => ({ label })) }] },
+          tool_response: JSON.stringify({ answers: { choice: { answers: [labels[0]] } } }) }),
       });
       expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
       if (question !== prompt) {
@@ -1587,5 +1729,57 @@ describe("t341 protected question interleaving", () => {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(changed), choice: "Approve",
       })).toThrow("--action ask");
     }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+describe("t341 a checkpoint finds the session it runs in", () => {
+  const own = "t341-own-session";
+  const inSession = { ...process.env, AIDLC_SESSION_OVERRIDE: own, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+  const route = (action: string, ...extra: string[]) =>
+    ["checkpoint", "--action", action, "--unit", "alpha", "--kind", "unit", ...extra];
+
+  test("asking and approving need no --session", () => {
+    const pd = project();
+    pass(pd);
+    const asked = cli(pd, "bolt", route("ask"), inSession);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, own)).not.toBeNull();
+    submitCommandChoice(pd, own, "Approve");
+    const approved = cli(pd, "bolt", route("approve", "--user-input", "Approve"), inSession);
+    expect(approved.code, approved.out).toBe(0);
+    expect(approvals(pd).map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a blank --session is the same as none", () => {
+    const pd = project();
+    pass(pd);
+    const asked = cli(pd, "bolt", route("ask", "--session", " "), inSession);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, own)).not.toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a session that cannot be found is named in one line, and nothing is asked", () => {
+    const pd = project();
+    pass(pd);
+    const { AIDLC_SESSION_OVERRIDE: _session, AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...outside } = process.env;
+    const asked = cli(pd, "bolt", route("ask"), outside);
+    expect(asked.code).not.toBe(0);
+    expect(asked.out).toContain("Could not tell which session this is.");
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval")).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("two sessions claiming the process get the resolver's own way out, and nothing is asked", () => {
+    const pd = project();
+    pass(pd);
+    writeSessionPidEntry(pd, process.pid, "t341-owner");
+    const { AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...rest } = process.env;
+    const asked = cli(pd, "bolt", route("ask"), { ...rest, AIDLC_SESSION_OVERRIDE: "t341-other" });
+    expect(asked.code).not.toBe(0);
+    expect(asked.out).toContain("conflicts with the owning conversation");
+    expect(asked.out).toContain("t341-owner");
+    expect(asked.out).not.toContain("Could not tell which session this is.");
+    expect(readProtectedQuestion(pd, "t341-other")).toBeNull();
+    expect(readProtectedQuestion(pd, "t341-owner")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

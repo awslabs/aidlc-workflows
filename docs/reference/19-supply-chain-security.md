@@ -146,7 +146,8 @@ discovery; its sidecar and release provenance authenticate it independently.
 ## Provenance
 
 The `publish` job receives `id-token: write` and `attestations: write` only
-after the build and lifecycle jobs and the Full Suite gate pass. GitHub generates build provenance for
+after the build, lifecycle and update-from-the-last-release jobs and the Full Suite gate pass
+(a preview's `publish` does not wait for the update job, which only reports there). GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
 
@@ -191,8 +192,8 @@ without failing Preview Release. Only the preview's Full Suite dispatch job adds
 `actions: read` to download its evidence and list its jobs. Preview does not repeat the
 PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
-with different matrices: Linux smoke/eight unit shards/integration for PRs, and
-Linux/macOS/Windows smoke/eight unit shards/integration/E2E for nightly coverage.
+with different matrices: Linux smoke/twelve unit shards/integration for PRs, and
+Linux/macOS/Windows smoke/twelve unit shards/integration/E2E for nightly coverage.
 Integration and isolated E2E run in separate jobs with fresh runner processes. Each call
 tests a fresh checkout of the supplied commit and retains sanitized evidence;
 no previous test result is substituted for a run.

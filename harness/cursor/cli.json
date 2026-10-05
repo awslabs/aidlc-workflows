@@ -1,6 +1,9 @@
 {
   "permissions": {
-    "allow": ["Shell(bun)"],
+    "allow": [
+      "Shell(bun:.cursor/tools/aidlc.ts engine *)",
+      "Shell(bun:.cursor/tools/aidlc-*)"
+    ],
     "deny": []
   }
 }

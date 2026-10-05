@@ -31,7 +31,7 @@ import {
   activeIntent,
   activeIntentUuid,
   activeSpace,
-  activeUnitCheckpoint,
+  unitOpenCheckpoints,
   auditBlockField,
   clearGateWords,
   GATE_WORDS_SPENT_BY,
@@ -85,6 +85,8 @@ import {
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
   personsGateFeedback,
+  personsGateWords,
+  personsLatestGatePick,
   resolveInvokingSessionId,
   type GuardAttemptState,
   type StageEntry,
@@ -94,8 +96,12 @@ import {
   humanAuthorityState,
   hasUnsafeSingleLineCharacter,
   holdsAuditLock,
-  humanActedSinceGate,
+  commandTurnHint,
+  humanRepliedSinceGate,
   humanPresenceGuardDisabled,
+  humanTurnMintAllowed,
+  hookActivation,
+  personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
   guardStoodAsideLine,
@@ -111,11 +117,11 @@ import {
   isAutonomousSwarmStage,
   isTeamUnitOwnership,
   isNonAnswer,
-  isRequestChangesChoice,
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
-  latestMainWorkflowStageRunFloorForProject,
+  unitLifecycleRunFloorForProject,
+  unitScopedLifecycleFloors,
   loadScopeMapping,
   loadStageGraph,
   nextInScopeStage,
@@ -127,6 +133,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
   readApplicableTeamUnitScopeStamp,
@@ -166,8 +173,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
-  readStageGateReply,
-  stageGateReplyBound,
+  stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unitCompletedReceipts,
@@ -193,7 +199,7 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcToolInvocation, compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -203,6 +209,7 @@ import {
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
 import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -277,6 +284,34 @@ function emitAudit(
 // person's recorded words became the Feedback and the two differ. Declared at
 // module top: the command dispatch below runs before later consts initialise.
 const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
+// The person's exact pick at a gate, or null; reading it never blocks a decision.
+function personsLatestGatePickSafe(
+  pd: string, slug: string, unit?: string, acceptAsIs = false,
+): ReturnType<typeof personsLatestGatePick> {
+  try {
+    return personsLatestGatePick(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) }, acceptAsIs);
+  } catch {
+    return null;
+  }
+}
+
+function revisionCountOf(content: string): number {
+  const parsed = parseInt(getField(content, "Revision Count") ?? "0", 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// The person's own words at a gate they answered: every message they typed
+// since it was shown, kept verbatim by the human-turn hook. The conductor read
+// them and reported the choice; the receipt carries both.
+const PERSONS_WORDS_FIELD = "Person Reply";
+function personsWordsFields(pd: string, slug: string, unit?: string): Record<string, string> {
+  try {
+    const words = personsGateWords(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) });
+    return words ? { [PERSONS_WORDS_FIELD]: words } : {};
+  } catch {
+    return {};
+  }
+}
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
 // Wraps aidlc-usage's ledger-read helper (a ledger read only: NO transcript
@@ -710,7 +745,7 @@ function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
     `Workflow is Archived, so ${operation} is refused. Bring it back first with ` +
-      "`/aidlc intent unarchive <name>`.",
+      `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
   );
 }
 
@@ -759,6 +794,11 @@ export function main(argv: string[]): void {
     !(
       subcommand === "fold-unit-merge" &&
       process.env.AIDLC_STATE_TRANSITION_OWNER === `unit-merge:${process.ppid}`
+    ) &&
+    // A forward jump that moves one Unit on skips that Unit's steps (#1411).
+    !(
+      subcommand === "skip" && args.includes("--unit") &&
+      process.env.AIDLC_STATE_TRANSITION_OWNER === `jump:${process.ppid}`
     ) &&
     process.env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS !== "1"
   ) {
@@ -1078,9 +1118,28 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
-    if (updated !== content) requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+    if (updated !== content) {
+      requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+      emitConstructionPolicySet(pd, content, updated, field, args[0]);
+    }
     writeStateFile(pd, updated);
     console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+  });
+}
+
+// Every applied Construction policy change is in the audit with the value it
+// found and the iteration and checkpoint values it leaves in force. The attempt
+// floor reads them so switching to unit-major iteration or turning checkpoints
+// on keeps the Units already finished: a stage start recorded while stage
+// starts were attempt boundaries stays the boundary it was.
+function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
+  const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
+  emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
+    Field: field,
+    Value: value,
+    "Previous Value": current(before, field),
+    "Construction Iteration": current(after, "Construction Iteration"),
+    "Construction Checkpoints": current(after, "Construction Checkpoints"),
   });
 }
 
@@ -1140,11 +1199,11 @@ function handleSetSkeletonStance(args: string[]): void {
 // `Construction Iteration` is runtime metadata
 // (like Skeleton Stance): it is NOT in the base state template, so we use
 // setOrInsertField to update-if-present / insert-under-`## Runtime State`-if-absent.
-// No audit row: the field is metadata the next `aidlc-orchestrate next` reads to
-// pick the (stage, unit) walk order, not a state-machine transition; it rides no
-// event, exactly like `set` and `set-skeleton-stance`. The classify round-trip is
-// initiated by the delivery-planning stage prose (or set directly by a human); the
-// engine writes nothing itself.
+// The field is metadata the next `aidlc-orchestrate next` reads to pick the
+// (stage, unit) walk order, not a state-machine transition; a change is recorded
+// as CONSTRUCTION_POLICY_SET so finished Units keep their receipts across it.
+// The classify round-trip is initiated by the delivery-planning stage prose (or
+// set directly by a human); the engine writes nothing itself.
 function handleSetConstructionIteration(args: string[]): void {
   // Declared inside the handler for the same TDZ reason as skeleton stance:
   // main() runs at module load before a module-level const would initialise.
@@ -1183,7 +1242,10 @@ function handleSetConstructionIteration(args: string[]): void {
     "Construction Iteration",
     value,
   );
-  if (updated !== content) requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+  if (updated !== content) {
+    requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value);
+  }
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });
@@ -1977,11 +2039,10 @@ function handleSyncUnitScopeStage(args: string[]): void {
 // hook-side only; park's `aidlc-state.ts park` is directly invocable, so the
 // tool refusal closes a path #365 did not have.)
 //
-// `attended` is the one exception: the reply AIDLC just read asked to stop
-// there ("Approve, but let's stop for today"), so a person is present and their
-// stop wins over the autonomous grant (#1411). Only in-process callers that read
-// that reply pass it: the human-turn hook after Plan Approval and the engine's
-// `report` after a gate a person answered. The CLI never does.
+// `attended` is the one exception: a person asked to stop, so their stop wins
+// over the autonomous grant (#1411). It is set when a person has typed since the
+// last gate resolution (the conductor read their reply and ran park, or
+// reported their approval with --park after a gate they answered).
 export interface ParkResult {
   parked: true;
   stage?: string;
@@ -1990,20 +2051,48 @@ export interface ParkResult {
   checkout_local?: true;
 }
 
+// A park the person asked for, in their own words, is theirs: when a person
+// has typed since the last gate resolution, the stop wins over the autonomous
+// grant and is recorded as theirs. On a host whose hooks can miss a reply
+// (its hookActivation says so), an attended session's stop under the
+// autonomous grant is theirs too, with a note that no reply was on record. A
+// park no person stands behind still never stops an unattended autonomous run:
+// AIDLC_UNATTENDED is never attended, and a reply means a HUMAN_TURN on record
+// (an empty ledger is not one).
 function handlePark(_args: string[]): void {
-  console.log(JSON.stringify(parkWorkflow(resolveProjectDir(projectDir))));
+  const pd = resolveProjectDir(projectDir);
+  const attendedSession = humanTurnMintAllowed();
+  const replied = attendedSession && personSpokeSinceGate(pd);
+  const activation = hookActivation();
+  const missedReply = attendedSession && !replied &&
+    (activation?.missedReply !== undefined || activation?.missesReplies === true) &&
+    getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
+  const result = parkWorkflow(pd, { attended: replied || missedReply });
+  console.log(JSON.stringify(missedReply
+    ? {
+      ...result,
+      note: "No reply from the person was on record (this host can miss one), so this stop is recorded as theirs. " +
+        "Tell them in one line that the work is parked and resumes when they ask.",
+    }
+    : result));
 }
 
 export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): ParkResult {
   const initialContent = readStateFile(pd);
-  if (
-    opts.attended !== true &&
-    getField(initialContent, "Construction Autonomy Mode")?.trim() ===
-      "autonomous"
-  ) {
+  const autonomous = getField(initialContent, "Construction Autonomy Mode")?.trim() === "autonomous";
+  // One owner for every caller: an unattended run has nobody to resume it, so
+  // it never parks itself under the autonomous grant, whatever the caller says.
+  if (autonomous && !humanTurnMintAllowed()) {
     error(
-      "Refusing to park: Construction Autonomy Mode is autonomous. An unattended " +
-        "autonomous run has no human to resume it and must keep moving - do not park it.",
+      "Refusing to park: AIDLC_UNATTENDED=1 is set and Construction Autonomy Mode is autonomous, so nobody is " +
+        "here to resume the run; it keeps moving.",
+    );
+  }
+  if (opts.attended !== true && autonomous) {
+    error(
+      "Refusing to park: Construction Autonomy Mode is autonomous and no reply from the person is on record " +
+        "since the last decision, so the run keeps moving. When the person asks to stop, park then: their " +
+        "stop wins over the autonomous grant.",
     );
   }
   const scopeStamp = validateLiveUnitScope(pd);
@@ -2032,7 +2121,7 @@ export function parkWorkflow(pd: string, opts: { attended?: boolean } = {}): Par
     if (status === "Archived") {
       error(
         "Workflow is Archived - nothing to park. Bring it back first with " +
-          "`/aidlc intent unarchive <name>`.",
+          `\`${entrySkillInvocation()} intent unarchive <name>\`.`,
       );
     }
     const currentSlug = getField(content, "Current Stage") ?? "";
@@ -2094,7 +2183,7 @@ function handleUnpark(_args: string[]): void {
 }
 
 // unit <start|pause|resume|complete> --stage <slug> --unit <name>
-//        [--reason <text>] [--next-action <text>] [--wave]
+//        [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]
 //
 // Unit-of-work lifecycle receipts for INLINE per-unit Construction stages
 // (for_each: unit-of-work, mode: inline). The engine's coverage walk
@@ -2110,13 +2199,16 @@ function handleUnpark(_args: string[]): void {
 // Single-active-unit invariant: `start` refuses while another unit of the
 // same stage is non-terminal (started/resumed/paused without a later
 // UNIT_COMPLETED), so resume/restart races cannot create two active units.
-// `resume` refuses unless the named unit is the currently-paused one.
+// `resume` refuses unless the named unit is paused and no other unit of the
+// stage is in progress. A pause with `--set-aside-for <unit>` sets the unit
+// aside for that other unit (#1411: the person asked for its work meanwhile),
+// so it does not stop that unit from starting this stage.
 function handleUnit(args: string[]): void {
   const action = args[0];
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
   if (!action || !VALID_UNIT_ACTIONS.has(action)) {
     error(
-      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--wave]`,
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]`,
     );
   }
   const rest = args.slice(1);
@@ -2125,6 +2217,7 @@ function handleUnit(args: string[]): void {
   const rawReason = getFlagValue(rest, "--reason");
   const rawNextAction = getFlagValue(rest, "--next-action");
   const waveMode = rest.includes("--wave");
+  const setAsideFor = getFlagValue(rest, "--set-aside-for")?.trim();
   const reason = rawReason?.trim();
   const nextAction = rawNextAction?.trim();
   if (!slug) error("Missing --stage <slug>");
@@ -2138,12 +2231,20 @@ function handleUnit(args: string[]): void {
   if (stage.for_each !== "unit-of-work") {
     error(`Stage "${slug}" is not per-unit (for_each: unit-of-work); unit receipts do not apply.`);
   }
-  if (action === "pause") {
+  // A unit set aside while already paused keeps its own reason and next action
+  // (carried over below), so they need not be given again.
+  if (action === "pause" && setAsideFor === undefined) {
     if (!reason) error("unit pause requires --reason <text> (why the unit stopped).");
     if (!nextAction) error("unit pause requires --next-action <text> (the exact next step on resume).");
   }
   if (waveMode && action !== "complete") {
     error("unit --wave is supported only with the complete action.");
+  }
+  if (setAsideFor !== undefined) {
+    if (action !== "pause") error("unit --set-aside-for is supported only with the pause action.");
+    const forError = validateUnitName(setAsideFor);
+    if (forError) error(forError);
+    if (setAsideFor === unit) error("unit --set-aside-for must name another unit.");
   }
 
   const pd = resolveProjectDir(projectDir);
@@ -2184,8 +2285,14 @@ function handleUnit(args: string[]): void {
         `Refusing unit ${action} for "${unit}": it is not in the authoritative unit DAG.`,
       );
     }
+    if (setAsideFor !== undefined && !resolution.units.includes(setAsideFor)) {
+      error(`Refusing unit pause for "${unit}": "${setAsideFor}" is not in the authoritative unit DAG.`);
+    }
 
-    const checkpoint = activeUnitCheckpoint(pd, slug);
+    const open = unitOpenCheckpoints(pd, slug);
+    const checkpoint = open[0] ?? null;
+    let pauseReason = reason;
+    let pauseNextAction = nextAction;
 
     // Consult the live route before any serial receipt can change it. A fresh
     // wave has no completion receipt yet, and old wave receipts can remain
@@ -2219,18 +2326,28 @@ function handleUnit(args: string[]): void {
       }
       requireEngineRoutedWaveUnit(pd, slug, unit);
     } else if (action === "start") {
-      if (checkpoint && checkpoint.unit !== unit) {
+      // A unit set aside for this one does not stand in its way.
+      const blocking = open.find((other) =>
+        other.unit !== unit && !(other.state === "paused" && other.setAsideFor === unit)
+      );
+      if (blocking) {
         error(
-          `Refusing to start unit "${unit}" for "${slug}": unit "${checkpoint.unit}" is ${checkpoint.state}` +
-            `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. ` +
-            `${checkpoint.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${checkpoint.unit}) or complete it first.` : "Complete it first."} ` +
+          `Refusing to start unit "${unit}" for "${slug}": unit "${blocking.unit}" is ${blocking.state}` +
+            `${blocking.reason ? ` (reason: ${blocking.reason})` : ""}. ` +
+            `${blocking.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${blocking.unit}) or complete it first.` : "Complete it first."} ` +
             "One active unit at a time.",
         );
       }
-      if (checkpoint && checkpoint.unit === unit) {
+      const own = open.find((entry) => entry.unit === unit);
+      if (own) {
         // Idempotent re-entry on the same unit: a crashed conductor may re-run
-        // start after resume; acknowledge without a duplicate receipt.
-        console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
+        // start after resume; acknowledge without a duplicate receipt. A Unit
+        // started before Unit Stage was recorded gets it here, so a new chat
+        // and the recovery remedies see the Unit's own step (#1411).
+        if (!getField(content, "Unit Stage") && getField(content, "Active Unit")?.trim() === unit) {
+          writeStateFile(pd, setOrInsertField(content, "## Runtime State", "Unit Stage", slug));
+        }
+        console.log(JSON.stringify({ unit, stage: slug, state: own.state, already_active: true }));
         return;
       }
       requireEngineRoutedUnit(routed, slug, unit);
@@ -2249,6 +2366,16 @@ function handleUnit(args: string[]): void {
             `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
         );
       }
+      if (action === "pause" && setAsideFor !== undefined && (!reason || !nextAction)) {
+        if (checkpoint.state !== "paused") {
+          error("unit pause requires --reason <text> and --next-action <text> for a unit in progress.");
+        }
+        pauseReason = reason || checkpoint.reason || undefined;
+        pauseNextAction = nextAction || checkpoint.nextAction || undefined;
+        if (!pauseReason || !pauseNextAction) {
+          error("unit pause requires --reason <text> and --next-action <text>: the paused unit has none to keep.");
+        }
+      }
       if (action === "complete" && checkpoint.state === "paused") {
         error(
           `Refusing to complete unit "${unit}" for "${slug}": it is paused` +
@@ -2257,10 +2384,15 @@ function handleUnit(args: string[]): void {
         );
       }
     } else if (action === "resume") {
-      if (!checkpoint || checkpoint.unit !== unit || checkpoint.state !== "paused") {
+      // The named unit's own pause, and no other unit of the stage in progress:
+      // a unit set aside for another can be picked up again (#1411).
+      const own = open.find((entry) => entry.unit === unit);
+      const active = open.find((entry) => entry.unit !== unit && entry.state === "in-progress");
+      if (own?.state !== "paused" || active) {
+        const shown = active ?? checkpoint;
         error(
           `Refusing to resume unit "${unit}" for "${slug}": it is not the paused unit` +
-            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active)"}.`,
+            `${shown ? ` (active: "${shown.unit}", ${shown.state})` : " (no unit is active)"}.`,
         );
       }
     }
@@ -2303,14 +2435,14 @@ function handleUnit(args: string[]): void {
     const fields: Record<string, string> = {
       Stage: slug,
       Unit: unit,
-      "Run floor": latestMainWorkflowStageRunFloorForProject(
+      "Run floor": unitLifecycleRunFloorForProject(
         pd,
         slug,
         getField(content, "Construction Iteration")?.trim() === "unit-major" ||
           getField(content, "Construction Checkpoints") === "enabled",
-        isTeamUnitOwnership(content) || getField(content, "Construction Checkpoints") === "enabled"
-          ? unit
-          : undefined,
+        unit,
+        undefined,
+        unitScopedLifecycleFloors(content),
       ),
       ...claimAttemptFields(pd, unit),
       ...(waveMode
@@ -2321,8 +2453,9 @@ function handleUnit(args: string[]): void {
           }
         : {}),
     };
-    if (reason) fields.Reason = reason;
-    if (nextAction) fields["Next Action"] = nextAction;
+    if (pauseReason) fields.Reason = pauseReason;
+    if (pauseNextAction) fields["Next Action"] = pauseNextAction;
+    if (setAsideFor) fields["Set Aside For"] = setAsideFor;
 
     try {
       emitAudit(pd, eventType, fields);
@@ -2336,11 +2469,15 @@ function handleUnit(args: string[]): void {
     const timestamp = isoTimestamp();
     if (action === "complete") {
       content = removeField(content, "Active Unit");
+      content = removeField(content, "Unit Stage");
       content = removeField(content, "Unit State");
       content = removeField(content, "Unit Pause Reason");
       content = removeField(content, "Unit Next Action");
     } else {
       content = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+      // Under unit-major the Unit's stage is not Current Stage, which stays on
+      // the first per-unit stage, so a new session reads where the work is here.
+      content = setOrInsertField(content, "## Runtime State", "Unit Stage", slug);
       content = setOrInsertField(
         content,
         "## Runtime State",
@@ -2348,8 +2485,8 @@ function handleUnit(args: string[]): void {
         action === "pause" ? "paused" : "in-progress",
       );
       if (action === "pause") {
-        content = setOrInsertField(content, "## Runtime State", "Unit Pause Reason", reason ?? "");
-        content = setOrInsertField(content, "## Runtime State", "Unit Next Action", nextAction ?? "");
+        content = setOrInsertField(content, "## Runtime State", "Unit Pause Reason", pauseReason ?? "");
+        content = setOrInsertField(content, "## Runtime State", "Unit Next Action", pauseNextAction ?? "");
       } else {
         content = removeField(content, "Unit Pause Reason");
         content = removeField(content, "Unit Next Action");
@@ -4505,12 +4642,14 @@ function reviewerPreconditionError(
       receipts,
     });
   }
+  // A request that can never finish is requested again at its own pass.
+  const ordinal = pending?.state === "outstanding" ? String(pending.iteration) : "<next ordinal>";
   if (action === "present-approval-gate") {
     const message =
       `Cannot present "${slug}" for approval because ${reviewer} has not reviewed the ` +
         `current output. Apply any fixes first, then request the review with ` +
         `\`aidlc-log.ts review --stage ${slug} --reviewer ${reviewer} --iteration ` +
-        `<next ordinal>\` and record its verdict with the same command plus ` +
+        `${ordinal}\` and record its verdict with the same command plus ` +
         `\`--verdict <READY|NOT-READY>\`. After recording the verdict, do not edit ` +
         `this stage's output documents; include suggestions from a READY review in the ` +
         `approval summary instead.`;
@@ -4525,7 +4664,7 @@ function reviewerPreconditionError(
   const message =
     `Cannot complete "${slug}" because ${reviewer} has not reviewed the current output. ` +
       `Apply any fixes first, then request the review with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --iteration <next ordinal>\` and record its verdict ` +
+      `${slug} --reviewer ${reviewer} --iteration ${ordinal}\` and record its verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After recording the ` +
       `verdict, do not edit this stage's output documents; include suggestions from a ` +
       `READY review in the approval summary instead.`;
@@ -5660,32 +5799,45 @@ function verifyApprovalDecision(
     const revisionCount = Number.isFinite(parsedRevisionCount)
       ? parsedRevisionCount
       : 0;
-    // The person's reply in their own words; the receipt records the
-    // approval it names.
-    const reply = readStageGateReply(stage.slug, approvalInput, {
-      acceptAsIs: revisionCount >= 3,
-      bound: stageGateReplyBound(pd, stage.slug),
-      unit,
-    });
-    if (reply.approval === null) {
+    // The conductor read the person's reply and reports the approval it made;
+    // the receipt records that choice, and the person's own words ride on it.
+    // Host cancellation text is no reply, and a latest message that is exactly
+    // Request Changes is their pick.
+    if (approvalInput && isNonAnswer(approvalInput)) {
       error(
-        `Cannot approve "${stage.slug}" because the reply ` +
-          `${formatReceivedReply(approvalInput)} ` +
-          (reply.reading === "unclear" ? "did not match one of the offered choices" : "did not approve it") +
-          `. ${reply.followUp}`,
+        `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
+          "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
+          "choice and wait for the human to choose one.",
       );
     }
-    approvalInput = reply.approval;
+    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
+    if (pick === "Request Changes") {
+      error(
+        `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
+          "their words differently.",
+      );
+    }
+    // Their exact pick names which approval it is.
+    approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
   }
   if (
     !autonomousDecision &&
     !humanPresenceGuardDisabled() &&
-    !humanActedSinceGate(pd)
+    !humanRepliedSinceGate(pd)
   ) {
     error(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
-        `approval.${unattendedHumanPresenceHint()}`,
+        `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+    );
+  }
+  // The conductor reports the choice the person made; a report that names none
+  // records nothing.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
+    error(
+      `Cannot approve "${stage.slug}" because no choice was passed. Re-present the original held gate with ` +
+        "every offered choice, wait for the person's reply, then report the choice they made with " +
+        '--user-input "Approve".',
     );
   }
   return { approvalInput, autonomousDecision };
@@ -5795,11 +5947,11 @@ function handleApprove(args: string[]): void {
     }
     if (
       !humanPresenceGuardDisabled() &&
-      !humanActedSinceGate(pd)
+      !humanRepliedSinceGate(pd)
     ) {
       error(
         `Refusing to approve unit "${teamGate.unit}" for "${slug}": a real human ` +
-          "has not acted at this gate since it opened.",
+          `has not acted at this gate since it opened.${commandTurnHint(pd)}`,
       );
     }
     const timestamp = isoTimestamp();
@@ -5808,6 +5960,7 @@ function handleApprove(args: string[]): void {
       emitAudit(pd, "GATE_APPROVED", {
         ...teamGateFields(stage, teamGate),
         ...(approvalInput ? { "User Input": approvalInput } : {}),
+        ...personsWordsFields(pd, slug, teamGate.unit),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -5960,6 +6113,7 @@ function handleApprove(args: string[]): void {
   try {
     const gateFields: Record<string, string> = { Stage: slug };
     if (approvalInput) gateFields["User Input"] = approvalInput;
+    if (!autonomousDecision) Object.assign(gateFields, personsWordsFields(pd, slug));
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
         reviewFindingDispositions;
@@ -6077,7 +6231,6 @@ function handleReject(args: string[]): void {
     );
   }
   const slug = args[0];
-  const decision = getFlagValue(args.slice(1), "--user-input")?.trim();
   let feedback =
     (getTextFlagValue(args.slice(1), "--feedback") ??
       getTextFlagValue(args.slice(1), "--reason"))?.trim();
@@ -6137,26 +6290,14 @@ function handleReject(args: string[]): void {
     !teamGate &&
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
-  if (
-    !autonomousDecision &&
-    feedbackStatus === "not-applicable" &&
-    !humanPresenceGuardDisabled() &&
-    !isRequestChangesChoice(decision)
-  ) {
-    // The person's reply in their own words: a change request is one, and
-    // what it says to change is the feedback when none was passed.
-    const reply = readStageGateReply(slug, decision, { acceptAsIs: false, bound: true, unit: teamGate?.unit });
-    if (reply.reading !== "request-changes") {
-      error(
-        `Refusing to reject "${slug}": received reply ${formatReceivedReply(decision)} ` +
-          (reply.reading === "approve"
-            ? "approves the stage, so nothing was rejected. Report it as their approval with " +
-              `--result approved and the same --user-input.`
-            : (reply.reading === "unclear" ? "did not match an offered choice at the held gate. " : "") +
-              reply.followUp),
-      );
-    }
-    feedback ||= reply.feedback ?? undefined;
+  const rejectPick = !autonomousDecision && feedbackStatus === "not-applicable"
+    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
+    : null;
+  if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
+    error(
+      `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
+        "read their words differently.",
+    );
   }
   // The person's own words. When this chat's human-turn hook recorded what they
   // typed after the stage's latest presentation, those words are the feedback,
@@ -6168,11 +6309,9 @@ function handleReject(args: string[]): void {
   let personsWords: string | null = null;
   if (!autonomousDecision && feedbackStatus === "not-applicable") {
     try {
-      const revisionCount = parseInt(getField(content, "Revision Count") ?? "", 10);
       personsWords = personsGateFeedback(pd, resolveInvokingSessionId(pd), {
         stage: slug,
         ...(teamGate ? { unit: teamGate.unit } : {}),
-        acceptAsIs: Number.isFinite(revisionCount) && revisionCount >= 3,
       });
     } catch {
       personsWords = null;
@@ -6213,19 +6352,19 @@ function handleReject(args: string[]): void {
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
-    !humanActedSinceGate(pd)
+    !humanRepliedSinceGate(pd)
   ) {
     if (recoveryResetNeedsHuman) {
       error(
         `Cannot request changes for "${slug}" because its recovery review has already ` +
           `been used and only a new human choice can start another review attempt. Present ` +
-          `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint()}`,
+          `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint(pd)}`,
       );
     }
     error(
       `Cannot request changes for "${slug}" because no new human reply has been received ` +
         `for this approval question. Wait for the human to type Request Changes and their ` +
-        `feedback, then retry.${unattendedHumanPresenceHint()}`,
+        `feedback, then retry.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
     );
   }
 
@@ -6535,10 +6674,15 @@ function handleSkip(args: string[]): void {
     }
     const unitNameError = validateUnitName(unit);
     if (unitNameError) error(unitNameError);
-    validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const currentStage = getField(content, "Current Stage") ?? "";
     const graph = loadStageGraph();
     const currentIndex = graph.findIndex((s) => s.slug === currentStage);
+    // A Unit's step reopened behind its stage approval (#1411): the stage
+    // stays approved for every other Unit, so only this Unit's skip is
+    // recorded and the checkbox and Current Stage are left as they are.
+    const approvedBehind = currentIndex > graph.findIndex((s) => s.slug === slug) &&
+      getSlugState(content, slug) === "completed";
+    if (!approvedBehind) validateSlugInState(content, slug, ["pending", "in-progress", "revising"]);
     const perUnitConstruction = (s: { phase: string; for_each?: string } | undefined) =>
       s?.phase === "construction" && s.for_each === "unit-of-work";
     if (
@@ -6546,11 +6690,12 @@ function handleSkip(args: string[]): void {
       isTeamUnitOwnership(content) ||
       !perUnitConstruction(stage) ||
       !perUnitConstruction(graph[currentIndex]) ||
-      currentIndex > graph.findIndex((s) => s.slug === slug)
+      (!approvedBehind && currentIndex > graph.findIndex((s) => s.slug === slug))
     ) {
       error(
         `Cannot skip "${slug}" for unit "${unit}": a one-unit skip needs Construction Iteration: ` +
-          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}".`,
+          `unit-major with solo units, and a per-unit Construction stage at or after Current Stage "${currentStage}", ` +
+          "or one approved before it.",
       );
     }
     const dag = resolveBoltDag(pd);
@@ -6566,22 +6711,31 @@ function handleSkip(args: string[]): void {
     if (!owes(unit)) {
       error(`Cannot skip "${slug}" for unit "${unit}": that unit owes nothing for this stage.`);
     }
-    const checkpoints = getField(content, "Construction Checkpoints") === "enabled";
+    // Floored per Unit wherever its other lifecycle rows are (solo unit-major
+    // too); team-owned Units keep their own rule.
+    const checkpoints = getField(content, "Construction Checkpoints") === "enabled" ||
+      (!isTeamUnitOwnership(content) && getField(content, "Construction Iteration")?.trim() === "unit-major");
     try {
       emitAudit(pd, "UNIT_SKIPPED", {
         Stage: slug,
         Unit: unit,
         Reason: reason,
-        "Run floor": latestMainWorkflowStageRunFloorForProject(
+        "Run floor": unitLifecycleRunFloorForProject(
           pd,
           slug,
           true,
-          checkpoints ? unit : undefined,
+          unit,
+          undefined,
+          checkpoints,
         ),
         ...claimAttemptFields(pd, unit),
       });
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+    if (approvedBehind) {
+      console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
+      return;
     }
     const skipped = unitSkippedUnits(pd, slug, undefined, content);
     const stillOwed = dag.units.filter((name) => owes(name) && !skipped.has(name));
@@ -6637,10 +6791,15 @@ function handleSkip(args: string[]): void {
   if (!reason) {
     error("aidlc-state.ts skip --route requires a nonblank --reason <text>.");
   }
+  // A stage waiting at its approval gate may be skipped only once its plan
+  // row says SKIP: the person decided it no longer applies (they said the
+  // work is a new project), so the gate closes as skipped, not approved.
+  const planSkips = parseStateStageSuffixes(content).get(slug) === "SKIP";
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
     "skipped",
+    ...(planSkips ? ["awaiting-approval" as const] : []),
   ]);
   const currentStage = getField(content, "Current Stage");
   if (currentStage !== slug) {
@@ -7135,8 +7294,12 @@ function handlePracticesPromote(args: string[]): void {
   if (dirname(discoveredRulesPath) !== draftDir) {
     fail("team-practices and discovered-rules drafts must share one stage directory");
   }
+  // Honour the collaborators switch: a lead-only practices-discovery run (the
+  // `collaborators` ceremony off for this scope) has no spokes and therefore no
+  // contribution files to revalidate. Same switch owner the gate and dispatch
+  // read, so promotion can never demand evidence the stage never produced.
   const missingContributions: string[] = [];
-  for (const agent of practicesStage!.support_agents ?? []) {
+  for (const agent of effectiveSupportAgentsForProject(pd, practicesStage!)) {
     const contribution = join(draftDir, "contributions", `${agent}.md`);
     let firstLine = "";
     try {
@@ -7198,11 +7361,23 @@ function handlePracticesPromote(args: string[]): void {
   ];
   let newTeamMd = teamMd;
   for (const heading of TEAM_SECTIONS) {
-    const draftSection = extractMarkdownSection(teamPracticesDraft, heading);
+    let draftSection = extractMarkdownSection(teamPracticesDraft, heading);
     if (draftSection === "") {
       // Section absent from draft → leave the live file's section alone.
       // Useful for partial re-runs that only change one practice area.
       continue;
+    }
+    // team.md gets only a Testing Posture the Code Generation renderer reads:
+    // a Methodology given with its reasons is split into the bare value and a
+    // `Methodology evidence` line; one that cannot be read stops here, before
+    // any write.
+    if (heading === "## Testing Posture") {
+      const promotable = promotableTestingPosture(draftSection);
+      if (promotable.problem !== null) {
+        fail(promotable.problem);
+        return;
+      }
+      draftSection = promotable.section;
     }
     try {
       newTeamMd = replaceSection(newTeamMd, heading, draftSection);
@@ -7348,7 +7523,7 @@ function handleReuseArtifact(args: string[]): void {
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
-  const repo = getFlagValue(rest, "--repo");
+  const repoFlag = getFlagValue(rest, "--repo");
   const singleRun = rest.includes("--single");
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
@@ -7364,6 +7539,12 @@ function handleReuseArtifact(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
 
   const pd = resolveProjectDir(projectDir);
+  // With no registered repo, the project root's store goes by the name
+  // codekb-path prints; that name as --repo is the root.
+  const repo = repoFlag && slug === "reverse-engineering" && intentRepos(pd).length === 0 &&
+      repoFlag === codekbRepoName(pd)
+    ? undefined
+    : repoFlag;
   if (singleRun) {
     if (!singleStageAttemptIsOpen(pd, slug)) {
       error(

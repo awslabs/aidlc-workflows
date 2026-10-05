@@ -62,8 +62,10 @@ const HARNESS_CONTROL_NAME = `(?:${[
 const HARNESS_CONTROL_ASSIGNMENTS = [
   // NAME=1, set NAME=1, $env:NAME = 1, ${env:NAME} += 1, ${NAME:=1}, @{ "NAME" = 1 }
   `\\b${HARNESS_CONTROL_NAME}\\b['"]?[;\\]]?\\s*(?:[-+*/%:]|\\?\\?)?=(?!=)`,
-  // read NAME, printf -v NAME, export NAME, declare NAME, and their kin
-  `\\b(?:read|export|declare|typeset|local|readonly|mapfile|readarray|printf\\s+-v)\\b[^\\n;&|]*\\b${HARNESS_CONTROL_NAME}\\b`,
+  // read NAME, printf -v NAME, export NAME, declare NAME, and their kin,
+  // however the word is reached (${x:-read} runs read too), but not a --local
+  // flag or a path segment such as AppData\Local
+  `(?<!--)(?<![\\w.~:-][\\\\/])\\b(?:read|export|declare|typeset|local|readonly|mapfile|readarray|printf\\s+-v)\\b[^\\n;&|]*\\b${HARNESS_CONTROL_NAME}\\b`,
   // Set-Item env:NAME, New-Item -Name NAME, Rename-Item -NewName NAME
   `(?:^|[^$\\w;])env:[\\\\/]*${HARNESS_CONTROL_NAME}\\b`,
   `-(?:new)?name[\\s:'"]+${HARNESS_CONTROL_NAME}\\b`,

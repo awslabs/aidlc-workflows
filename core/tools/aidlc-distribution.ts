@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { VERSION_ID } from "./aidlc-channel.ts";
 
 export type ProjectionStamp = {
@@ -25,6 +25,32 @@ export type RootIntegration = {
   };
 };
 
+// A 2.10.0 install checks every release it installs against its own policy
+// list and refuses a policy it does not know, so `aidlc update` from 2.10.0
+// would fail. A release writes a policy added since then in `extendedPolicy`,
+// with "whole-file", which 2.10.0 accepts, in `policy`; reading a projection
+// puts the real policy back when this release knows it, and otherwise keeps
+// "whole-file", so this release can install a later one in turn.
+const EXTENDED_POLICIES: readonly string[] = ["jsonc-settings"];
+
+export function writtenRootIntegration<T extends { policy: string }>(
+  integration: T,
+): T | (Omit<T, "policy"> & { policy: "whole-file"; extendedPolicy: string }) {
+  return EXTENDED_POLICIES.includes(integration.policy)
+    ? { ...integration, policy: "whole-file", extendedPolicy: integration.policy }
+    : integration;
+}
+
+export function readRootIntegrations(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item: unknown) => {
+    if (!item || typeof item !== "object" || !("extendedPolicy" in item)) return item;
+    const { extendedPolicy, ...integration } = item as Record<string, unknown>;
+    if (typeof extendedPolicy !== "string" || !EXTENDED_POLICIES.includes(extendedPolicy)) return integration;
+    return { ...integration, policy: extendedPolicy };
+  });
+}
+
 export type ProjectionDescriptor = {
   schemaVersion: 1;
   distribution: string;
@@ -38,6 +64,183 @@ export type ProjectionDescriptor = {
   legacyManagedFileHashes?: Record<string, string[]>;
   rootIntegrations: RootIntegration[];
 };
+
+const QUOTED_OR_BARE_PATH = String.raw`(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s"';&|]+)`;
+const CLAUDE_AIDLC_TS_PATH =
+  String.raw`(?:\$CLAUDE_PROJECT_DIR[\\/])?\.claude[\\/]tools[\\/]aidlc\.ts`;
+const AIDLC_TS_PATH =
+  `(?:"${CLAUDE_AIDLC_TS_PATH}"|'${CLAUDE_AIDLC_TS_PATH}'|${CLAUDE_AIDLC_TS_PATH})`;
+const AIDLC_DISPATCHER = String.raw`(?:aidlc(?:\.exe|\.cmd)?|bun\s+${AIDLC_TS_PATH})`;
+const AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+);
+const AIDLC_HOOK_COMMAND_PREFIX = new RegExp(
+  String.raw`^\s*${AIDLC_DISPATCHER}\s+engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`,
+);
+const LEGACY_AIDLC_HOOK_COMMAND = new RegExp(
+  String.raw`^\s*bun\s+(${QUOTED_OR_BARE_PATH})\s*$`,
+);
+export const LEGACY_AIDLC_HOOK_TARGETS: ReadonlySet<string> = new Set([
+  "audit-logger",
+  "continue-workflow",
+  "deliver-stage-rules",
+  "dispatch-rules",
+  "fold-usage",
+  "log-subagent",
+  "mint-presence",
+  "plan-approval-guard",
+  "rebuild-stage-graph",
+  "record-human-turn",
+  "review-freeze",
+  "reviewer-scope",
+  "run-sensors",
+  "runtime-compile",
+  "sensor-fire",
+  "session-end",
+  "session-start",
+  "state-transition-guard",
+  "statusline",
+  "stop",
+  "sync-statusline",
+  "sync-workflow-state",
+  "validate-state",
+  "write-audit-log",
+]);
+export const AIDLC_HOOK_ENTRY_PREFIX = "hooksAidlc:";
+
+export function aidlcDispatcherTarget(
+  command: string,
+  allowTrailingContent = false,
+  projectDir?: string,
+): string | null {
+  const match = (allowTrailingContent ? AIDLC_HOOK_COMMAND_PREFIX : AIDLC_HOOK_COMMAND)
+    .exec(command);
+  const target = match?.[1] ?? match?.[2];
+  if (target !== undefined) return target;
+  if (projectDir === undefined) return null;
+  const normalized = command.trim().replaceAll("\\", "/");
+  const dispatcherPath = join(projectDir, ".claude", "tools", "aidlc.ts")
+    .replaceAll("\\", "/");
+  const prefixes = [
+    `bun ${dispatcherPath}`,
+    `bun "${dispatcherPath}"`,
+    `bun '${dispatcherPath}'`,
+  ];
+  const prefix = prefixes.find((candidate) =>
+    normalized.startsWith(`${candidate} `)
+  );
+  if (prefix === undefined) return null;
+  const suffix = normalized.slice(prefix.length).trimStart();
+  const suffixMatch = new RegExp(
+    allowTrailingContent
+      ? String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))(?=\s|$)`
+      : String.raw`^engine\s+(?:hook\s+([A-Za-z0-9_-]+)|(statusline))\s*$`,
+  ).exec(suffix);
+  return suffixMatch?.[1] ?? suffixMatch?.[2] ?? null;
+}
+
+export function aidlcHookTarget(command: string, projectDir?: string): string | null {
+  const dispatcher = aidlcDispatcherTarget(command, false, projectDir);
+  if (dispatcher !== null) return dispatcher;
+  return legacyAidlcHookTarget(command);
+}
+
+export function legacyAidlcHookTarget(command: string): string | null {
+  const legacy = LEGACY_AIDLC_HOOK_COMMAND.exec(command);
+  if (!legacy) return null;
+  const path = legacy[1].replace(/^(['"])([\s\S]*)\1$/, "$2").replaceAll("\\", "/");
+  const hook =
+    /^\$CLAUDE_PROJECT_DIR\/\.claude\/hooks\/aidlc-([A-Za-z0-9_-]+)\.ts$/.exec(path);
+  const target = hook?.[1];
+  return target !== undefined && LEGACY_AIDLC_HOOK_TARGETS.has(target) ? target : null;
+}
+
+export function isCustomClaudeStatusLine(
+  value: unknown,
+  projectDir?: string,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const statusLine = value as Record<string, unknown>;
+  return statusLine.type === "command" &&
+    typeof statusLine.command === "string" &&
+    statusLine.command.trim() !== "" &&
+    aidlcHookTarget(statusLine.command, projectDir) !== "statusline";
+}
+
+/** Keep event, matcher, and item metadata while excluding project hook entries. */
+export function aidlcHookRegistrations(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
+): Record<string, unknown[]> {
+  const registrations: Record<string, unknown[]> = {};
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return registrations;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    const owned = groups.flatMap((group: unknown) => {
+      if (!group || typeof group !== "object" || Array.isArray(group)) return [];
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) return [];
+      const items = entry.hooks.filter((item: unknown) =>
+        item !== null && typeof item === "object" && "command" in item &&
+        typeof item.command === "string" &&
+        (() => {
+          const target = aidlcHookTarget(item.command, projectDir);
+          return target !== null && (!ownedTargets || ownedTargets.has(target));
+        })()
+      );
+      return items.length > 0 ? [{ ...entry, hooks: items }] : [];
+    });
+    if (owned.length > 0) registrations[event] = owned;
+  }
+  return registrations;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(object[key])}`
+    ).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Hash each shipped hook target with its exact events, matchers, commands, and metadata. */
+export function aidlcHookRegistrationHashes(
+  hooks: unknown,
+  ownedTargets?: ReadonlySet<string>,
+  projectDir?: string,
+): Record<string, string> {
+  const registrations = new Map<string, unknown[]>();
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return {};
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!group || typeof group !== "object" || Array.isArray(group)) continue;
+      const entry = group as Record<string, unknown>;
+      if (!Array.isArray(entry.hooks)) continue;
+      const groupMetadata = Object.fromEntries(
+        Object.entries(entry).filter(([key]) => key !== "hooks"),
+      );
+      for (const hook of entry.hooks) {
+        if (!hook || typeof hook !== "object" || Array.isArray(hook)) continue;
+        const command = (hook as Record<string, unknown>).command;
+        if (typeof command !== "string") continue;
+        const target = aidlcHookTarget(command, projectDir);
+        if (target === null || (ownedTargets && !ownedTargets.has(target))) continue;
+        const rows = registrations.get(target) ?? [];
+        rows.push({ event, ...groupMetadata, hook });
+        registrations.set(target, rows);
+      }
+    }
+  }
+  return Object.fromEntries(
+    [...registrations.entries()].sort(([left], [right]) => left.localeCompare(right))
+      .map(([target, rows]) => [target, sha256Bytes(canonical(rows))]),
+  );
+}
 
 function parseJson<T>(path: string): T {
   try {
@@ -103,6 +306,20 @@ export function isSafeOnboardingPath(value: unknown, harnessDir: string): value 
   return typeof value === "string" && /^[A-Za-z0-9._\/-]+$/.test(value) &&
     !value.split("/").some((segment) => segment === "" || segment === "." || segment === "..") &&
     value.startsWith(`${harnessDir}/`);
+}
+
+// A managed block names a file inside the project and a marker that is a
+// plain word, so nothing read or written through it (the team's file, its copy
+// in root-blocks) leaves the project. Config's projection check and the
+// engine's root-file fallback both hold a managed block to this.
+export function managedBlockIsSafe(integration: Pick<RootIntegration, "path" | "marker" | "policy">): boolean {
+  try {
+    safeRelativePath(integration.path, "root integration path");
+  } catch {
+    return false;
+  }
+  return integration.policy === "managed-block" && typeof integration.marker === "string" &&
+    /^[a-z0-9-]+$/.test(integration.marker);
 }
 
 export function validateProjectionDescriptor(
@@ -213,7 +430,11 @@ export function validateProjectionDescriptor(
     }
     declare(safe);
     assertProjectionPathHasNoSymlinks(root, safe);
-    const path = join(root, safe);
+    // Checked even when the file and its copy are absent: the marker names the copy.
+    if (integration.policy !== "managed-block" && integration.marker !== undefined) {
+      throw new Error(`${root}: ${safe} has a marker, which only a managed block takes`);
+    }
+    const path = shippedRootIntegrationPath(root, descriptor.harnessDir, integration);
     if (
       !existsSync(path) &&
       (integration.optional || options.allowMissingRootIntegrations)
@@ -229,10 +450,7 @@ export function validateProjectionDescriptor(
     if (integration.policy === "jsonc-settings" && !jsoncRootMembers(readFileSync(path, "utf-8"))?.members.length) {
       throw new Error(`${root}: ${safe} must ship a JSON object with at least one setting`);
     }
-    if (
-      integration.policy === "managed-block" &&
-      (typeof integration.marker !== "string" || !/^[a-z0-9-]+$/.test(integration.marker))
-    ) {
+    if (integration.policy === "managed-block" && !managedBlockIsSafe(integration)) {
       throw new Error(`${root}: ${safe} has an invalid managed-block marker`);
     }
     if (
@@ -280,16 +498,196 @@ export function validateProjectionDescriptor(
   }
 }
 
+// The default space's memory files the team writes: Practices Discovery
+// affirms practices into team.md, and practices and learnings land in
+// project.md. The engine creates them from its bundled memory seed when they
+// are missing (ensureWorkspaceDirs), so a copy runtime need not ship them.
+export const TEAM_MEMORY_FILES = ["team.md", "project.md"] as const;
+
 // The copy channel copies runtime/<harness>/ over the project, with no config
-// step to merge anything, so its archive leaves out each file a team's editor
-// owns (a jsonc-settings integration such as .vscode/settings.json): a copy
-// would replace the team's own file.
+// step to merge anything, so its archive leaves out each file a copy would
+// replace with the shipped one: a file a team's editor owns (a jsonc-settings
+// integration such as .vscode/settings.json), a team file AI-DLC adds its own
+// part to (a managed-block integration such as .gitignore or AGENTS.md; its
+// part ships in root-blocks and is added by config or the engine), the team's
+// memory files, and the person's chosen space (aidlc/active-space; a missing
+// one reads as "default").
 export function copyChannelOmits(
   descriptor: Pick<ProjectionDescriptor, "rootIntegrations">,
 ): Set<string> {
-  return new Set(descriptor.rootIntegrations
-    .filter((integration) => integration.policy === "jsonc-settings")
-    .map((integration) => integration.path));
+  return new Set([
+    ...descriptor.rootIntegrations
+      .filter((integration) =>
+        integration.policy === "jsonc-settings" || integration.policy === "managed-block" ||
+        copyStartsWithout(integration))
+      .map((integration) => integration.path),
+    ...TEAM_MEMORY_FILES.map((name) => `aidlc/spaces/default/memory/${name}`),
+    "aidlc/active-space",
+  ]);
+}
+
+// An optional settings file a copy starts without, as `config` does by
+// default: Claude Code's .mcp.json, whose servers would otherwise all be
+// offered at first start. Its shipped list still travels in root-blocks.
+export function copyStartsWithout(integration: Pick<RootIntegration, "policy" | "optional">): boolean {
+  return integration.policy === "json-map" && integration.optional === true;
+}
+
+// Every managed-block root file a release ships, and every file a copy starts
+// without, is also copied, byte for byte, to
+// <harnessDir>/tools/data/root-blocks/<marker or file name>, inside the
+// harness folder a copy brings along. Only a managed block has a marker.
+export function rootBlockPath(
+  harnessRoot: string,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy">,
+): string {
+  const name = integration.policy === "managed-block" && integration.marker
+    ? integration.marker
+    : basename(integration.path);
+  return join(harnessRoot, "tools", "data", "root-blocks", name);
+}
+
+// Where a projection holds the bytes it ships for a root integration: the root
+// file, or for one the copy runtime leaves out, its root-blocks copy.
+export function shippedRootIntegrationPath(
+  root: string,
+  harnessDir: string,
+  integration: Pick<RootIntegration, "path" | "marker" | "policy" | "optional">,
+): string {
+  const path = join(root, integration.path);
+  if ((integration.policy !== "managed-block" && !copyStartsWithout(integration)) || existsSync(path)) return path;
+  const block = rootBlockPath(join(root, harnessDir), integration);
+  return existsSync(block) ? block : path;
+}
+
+export function managedBlockMarkers(
+  path: string,
+  identity: string,
+): { begin: string; end: string } {
+  return path.endsWith(".md")
+    ? {
+        begin: `<!-- BEGIN AI-DLC:${identity} -->`,
+        end: `<!-- END AI-DLC:${identity} -->`,
+      }
+    : {
+        begin: `# BEGIN AI-DLC:${identity}`,
+        end: `# END AI-DLC:${identity}`,
+      };
+}
+
+// One harness's shipped .gitignore lines combined with each sibling's: the
+// first (by name) is the base, and each other adds only the entries not seen,
+// so the part keeps its one comment line.
+export function unionBlocks(contributors: Array<{ distribution: string; text: string }>): string {
+  contributors.sort((left, right) => left.distribution.localeCompare(right.distribution));
+  let base = contributors[0].text.trim();
+  const seen = new Set<string>();
+  for (const line of base.split(/\r?\n/)) {
+    const entry = line.trim();
+    if (entry && !entry.startsWith("#")) seen.add(entry);
+  }
+  for (let index = 1; index < contributors.length; index++) {
+    const contributor = contributors[index];
+    const extras: string[] = [];
+    for (const line of contributor.text.split(/\r?\n/)) {
+      const entry = line.trim();
+      if (!entry || entry.startsWith("#") || seen.has(entry)) continue;
+      extras.push(entry);
+      seen.add(entry);
+    }
+    if (extras.length > 0) base += `\n${extras.join("\n")}`;
+  }
+  return base;
+}
+
+// The ignore entries of a .gitignore part, without its comments and blank lines.
+function ignoreEntries(text: string): string {
+  return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")).sort().join("\n");
+}
+
+// Earlier releases shipped a generic template above their own "# AI-DLC"
+// section of .gitignore. When that text is replaced, the template lines stay
+// in the file as the project's own, so nothing they ignored is un-ignored.
+function linesAboveOwnSection(text: string, nextBody: string, newline: string): string {
+  const lines = text.split(/\r?\n/);
+  const own = lines.findIndex((line) => line.startsWith("# AI-DLC"));
+  if (own <= 0) return "";
+  const above = lines.slice(0, own).join(newline).trim();
+  return above && !nextBody.includes(above) ? above : "";
+}
+
+// The one rule for AI-DLC's part of a team file: replace the text between its
+// markers, adopt an unmarked file that is exactly a release's, refuse unmarked
+// AI-DLC text it cannot tell from the team's (except in .gitignore), and
+// otherwise add the marked part after the team's content (a missing file gets
+// only that part). Used by config and by the engine for a copy that was never
+// configured.
+export function mergeBlock(
+  path: string,
+  current: string,
+  shipped: string,
+  identity: string,
+  legacyWholeFileHashes: readonly string[] = [],
+): {
+  value?: string;
+  currentHash?: string;
+  nextHash?: string;
+  adoptedLegacy?: boolean;
+  /** The present part holds exactly what a release shipped. */
+  currentBlockShipped?: boolean;
+  /** An earlier release's template lines were kept above AI-DLC's part. */
+  keptOwnLines?: boolean;
+  error?: string;
+} {
+  const { begin, end } = managedBlockMarkers(path, identity);
+  const begins = current.split(begin).length - 1;
+  const ends = current.split(end).length - 1;
+  if (begins > 1 || ends > 1 || (begins === 1) !== (ends === 1)) {
+    return { error: "managed markers are missing, duplicated, or malformed" };
+  }
+  const beginAt = current.indexOf(begin);
+  const endAt = current.indexOf(end);
+  const newline = current.includes("\r\n") ? "\r\n" : "\n";
+  const body = shipped.trim().replace(/\r?\n/g, newline);
+  const block = `${begin}${newline}${body}${newline}${end}`;
+  if (beginAt >= 0) {
+    if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
+    const currentBlock = current.slice(beginAt, endAt + end.length);
+    const currentBody = current.slice(beginAt + begin.length, endAt).trim();
+    const kept = path === ".gitignore" ? linesAboveOwnSection(currentBody, body, newline) : "";
+    return {
+      value: `${current.slice(0, beginAt)}${kept ? `${kept}${newline}${newline}` : ""}${block}${
+        current.slice(endAt + end.length)
+      }`,
+      currentHash: sha256Bytes(currentBlock),
+      nextHash: sha256Bytes(block),
+      // A .gitignore part with exactly the shipped entries is a release's own,
+      // whatever notes an earlier release put between them.
+      currentBlockShipped: currentBody === body ||
+        legacyWholeFileHashes.includes(sha256Bytes(`${currentBody.replace(/\r\n/g, "\n")}\n`)) ||
+        (path === ".gitignore" && ignoreEntries(currentBody) === ignoreEntries(body)),
+      ...(kept ? { keptOwnLines: true } : {}),
+    };
+  }
+  if (current.length > 0 && legacyWholeFileHashes.includes(sha256Bytes(current))) {
+    const kept = path === ".gitignore" ? linesAboveOwnSection(current.trim(), body, newline) : "";
+    return {
+      value: `${kept ? `${kept}${newline}${newline}` : ""}${block}${newline}`,
+      nextHash: sha256Bytes(block),
+      adoptedLegacy: true,
+      ...(kept ? { keptOwnLines: true } : {}),
+    };
+  }
+  // Ignore rules can remain user-owned even when they mention AI-DLC. Append
+  // our marked block without claiming or rewriting that existing prefix.
+  if (path !== ".gitignore" && /\baidlc\b|AI-DLC/i.test(current)) {
+    return { error: "legacy root integration ambiguous; move or delete the unmarked AI-DLC content" };
+  }
+  const prefix = current.length === 0 || current.endsWith(newline) ? current : `${current}${newline}`;
+  return {
+    value: `${prefix}${prefix ? newline : ""}${block}${newline}`,
+    nextHash: sha256Bytes(block),
+  };
 }
 
 export function projectionFiles(root: string): {
@@ -308,6 +706,7 @@ export function projectionFiles(root: string): {
   const data = join(root, harnessDir, "tools", "data");
   const stamp = parseJson<ProjectionStamp>(join(data, "aidlc-stamp.json"));
   const descriptor = parseJson<ProjectionDescriptor>(join(data, "aidlc-projection.json"));
+  descriptor.rootIntegrations = readRootIntegrations(descriptor.rootIntegrations) as RootIntegration[];
   if (
     stamp.schemaVersion !== 1 ||
     descriptor.schemaVersion !== 1 ||
@@ -335,6 +734,28 @@ export function sha256Bytes(value: string | Buffer): string {
 
 export function sha256File(path: string): string {
   return sha256Bytes(readFileSync(path));
+}
+
+// What a host tool installs for itself inside a directory AI-DLC manages:
+// a package manager's dependencies and their records (opencode, for one,
+// installs its plugin dependencies under .opencode/ at first start), and a
+// nested .gitignore it writes for them. No release ships any of these, so
+// config never copies them as release files, never owns them, and never
+// removes them.
+const HOST_TOOL_NAMES = new Set([
+  "node_modules",
+  "package.json",
+  "package-lock.json",
+  "bun.lock",
+  "bun.lockb",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+]);
+
+export function hostToolPath(rel: string): boolean {
+  return rel.split(/[\\/]/).some((segment, index) =>
+    HOST_TOOL_NAMES.has(segment) || (segment === ".gitignore" && index > 0)
+  );
 }
 
 export function walkFiles(root: string): string[] {

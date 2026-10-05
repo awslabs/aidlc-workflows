@@ -1,19 +1,20 @@
 // covers: file:skills/aidlc/SKILL.md, subcommand:aidlc-utility:recompose
 //
 // t196-compose-inflight.sdk.test.ts - the P4 in-flight recompose journey (sdk
-// live). t194 pins the deterministic verb; this proves the CONDUCTOR arc the
-// SKILL.md composer block names, over a real running workflow:
+// live). t194 pins the deterministic verb; this proves the CONDUCTOR arc over a
+// real running workflow when the person types `compose` and names the stages:
 //
 //   seed:      an active mid-ideation feature workflow (the post-creation shape).
 //   drive:     `/aidlc compose "drop market research and team formation"`.
-//   engine:    Branch 4c WITH-STATE dispatch (t198 pins it does not advance).
-//   conductor: dispatches the composer -> proposal (SKIP flips for the two
-//              named pending stages) -> writes the pending marker -> gate
-//              (answerScript approves) -> runs `recompose --skip ...` ->
-//              deletes the marker.
-//   disk:      the two stages' suffixes are SKIP; derived fields rebuilt;
-//              RECOMPOSED audited; the marker is GONE; the cursor and every
-//              checkbox marker byte-unchanged (a plan edit, not an advance).
+//   conductor: the person named both stages, so it may apply them at once
+//              (`next --skip`, no question: SKILL.md "Named stage changes are
+//              done at once") or route through the composer's in-flight
+//              dispatch (Branch 4c; t198 pins it does not advance), whose gate
+//              the answerScript approves. Either way it runs
+//              `recompose --skip ...`; the test does not care which route.
+//   disk:      both named stages' suffixes are SKIP; derived fields rebuilt;
+//              RECOMPOSED audited with both names; the cursor unchanged (a
+//              plan edit, not an advance).
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence.
@@ -47,7 +48,7 @@ const APPROVE_ALL = {
 
 describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk live)", () => {
   test(
-    "mid-flow compose proposes SKIP flips, approve lands them via the recompose verb, cursor untouched",
+    "mid-flow compose naming two stages skips both through the recompose verb, cursor untouched",
     async () => {
       const deadlineMs = Date.now() + TEST_TIMEOUT_MS;
       // A real created workflow (not a fixture): create a feature-scope intent, so
@@ -89,30 +90,31 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
           },
         );
 
-        // The gate fired; the recompose verb ran (its verbatim summary).
-        expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
+        // The recompose verb ran (its verbatim summary). Whether a question
+        // came first is not asserted: the person named the stages, so the
+        // agent may apply them at once or confirm them through the composer's
+        // gate, and both leave the same records below.
         const recomposeCalls = r.toolResults.filter(
           (t) => t.toolName === "Bash" && t.resultText.includes("Recomposed:"),
         );
         expect(recomposeCalls.length).toBeGreaterThanOrEqual(1);
 
-        // Disk: the flips landed as suffix edits, cursor + markers untouched.
-        // JOURNEY-LEVEL tolerance: the live composer exercises judgment over
-        // WHICH of the two named stages to flip (a run was observed keeping
-        // team-formation with a reason) - the deterministic contract is that
-        // at least the unambiguous market-research flip landed AS A SUFFIX
-        // EDIT (marker still pending), the plan shrank, and the cursor never
-        // moved. t194 pins the exact multi-flip mechanics deterministically.
+        // Disk: both stages the person named are skipped, as suffix edits
+        // (markers still pending), and the cursor never moved.
         const after = readStateFile(proj) ?? "";
-        expect(after).toMatch(/- \[ \] market-research — SKIP/);
+        for (const slug of ["market-research", "team-formation"]) {
+          expect(after).toContain(`- [ ] ${slug} \u2014 SKIP`);
+        }
         const cursorAfter = /- \*\*Current Stage\*\*: (.*)/.exec(after)?.[1];
         expect(cursorAfter).toBe(cursorBefore);
-        // Derived fields rebuilt: total dropped by at least the one flip.
+        // Derived fields rebuilt: two fewer stages to run.
         const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
         const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
-        expect(totalAfter).toBeLessThan(totalBefore);
-        // And the rebuilt Stages to Skip names the flipped stage.
-        expect(after).toMatch(/- \*\*Stages to Skip\*\*: .*market-research/);
+        expect(totalAfter).toBe(totalBefore - 2);
+        // And the rebuilt Stages to Skip names both.
+        const toSkip = /- \*\*Stages to Skip\*\*: (.*)/.exec(after)?.[1] ?? "";
+        expect(toSkip).toContain("market-research");
+        expect(toSkip).toContain("team-formation");
 
         // RECOMPOSED audited.
         const space = existsSync(join(proj, "aidlc", "active-space"))
@@ -126,10 +128,15 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
           .map((f) => readFileSync(join(auditDir, f), "utf-8"))
           .join("\n");
         expect(audit).toContain("**Event**: RECOMPOSED");
+        // The audit names both skips (in whatever order the agent passed them).
+        const recomposed = audit.split("\n---\n").find((block) => block.includes("**Event**: RECOMPOSED")) ?? "";
+        const skippedRow = /\*\*Stages skipped\*\*: (.*)/.exec(recomposed)?.[1] ?? "";
+        expect(skippedRow.split(", ").sort()).toEqual(["market-research", "team-formation"]);
 
         // The pending-proposal MARKER discipline (write before the gate,
-        // delete on resolve) is deliberately NOT asserted here: this drive
-        // aborts AT the recompose tool result, and whether the conductor's
+        // delete on resolve) is deliberately NOT asserted here: the direct
+        // route writes no marker, this drive aborts AT the recompose tool
+        // result, and on the composer route whether the conductor's
         // marker-deletion step has run by that instant is a live-timing race
         // (both orders observed across runs). The deterministic halves are
         // pinned elsewhere - t195 proves the Stop hook honours the marker and

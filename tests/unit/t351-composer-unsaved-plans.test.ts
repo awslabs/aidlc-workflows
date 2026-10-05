@@ -22,7 +22,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
 import { customPlanBase, customPlanStart, nearestStockScopes, scopeSettingsOf } from "../../core/tools/aidlc-graph.ts";
@@ -64,7 +65,7 @@ const POLICY_ENV = {
   AIDLC_STAGE_GRAPH: join(AIDLC_SRC, "tools", "data", "stage-graph.json"),
   AIDLC_SCOPES_DIR: join(REPO_ROOT, "core", "scopes"),
 };
-const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", review_cap: "adversarial" } as const;
+const STOCK_ON = { sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "off", review_cap: "adversarial" } as const;
 // bugfix plus a design pass, without shipping: the shape the tests compose.
 const ADD = "functional-design";
 const SKIP = "deployment-pipeline,deployment-execution";
@@ -195,6 +196,49 @@ describe("t351 (2) the validator names the stock scope a custom plan runs on", (
     const def = loadScopeMapping()[scope];
     return def.skeleton !== true && (def.testStrategy === undefined || def.testStrategy.toLowerCase() === depth);
   };
+
+  test("a new project's plan runs on a scope meant for new work when one fits", () => {
+    withEnvAndFreshCaches(POLICY_ENV, () => {
+      const grid = composedGrid();
+      const nearest = [
+        { scope: "security-patch", diff: 1, differs: [] },
+        { scope: "bugfix", diff: 2, differs: [] },
+        { scope: "express", diff: 3, differs: [] },
+      ];
+      // A new kiosk app is not labelled a security patch or a bug fix.
+      expect(customPlanBase(grid, "off", nearest, "minimal", "greenfield")).toEqual({
+        scope: "express",
+        changes: planChangesBetween(stockGrid("express"), grid),
+      });
+      // Existing code, or no type given, keeps the nearest.
+      expect(customPlanBase(grid, "off", nearest, "minimal", "brownfield")).toMatchObject({ scope: "security-patch" });
+      expect(customPlanBase(grid, "off", nearest, "minimal")).toMatchObject({ scope: "security-patch" });
+      // With only scopes for existing code to choose from, the nearest still serves.
+      expect(customPlanBase(grid, "off", nearest.slice(0, 2), "minimal", "greenfield")).toMatchObject({ scope: "security-patch" });
+      // The stock scopes for existing code say so in their own frontmatter.
+      const existing = Object.entries(loadScopeMapping()).filter(([, def]) => def.existingCode === true).map(([name]) => name);
+      expect(existing.sort()).toEqual(["bugfix", "refactor", "security-patch"]);
+    });
+  });
+
+  test("a scope a team adds for existing code is passed over for a new project too", () => {
+    const scopes = mkdtempSync(join(tmpdir(), "aidlc-t351-scopes-"));
+    tempDirs.push(scopes);
+    cpSync(join(REPO_ROOT, "core", "scopes"), scopes, { recursive: true });
+    const bugfix = readFileSync(join(scopes, "aidlc-bugfix.md"), "utf-8");
+    expect(bugfix).toContain("existing_code: true");
+    writeFileSync(join(scopes, "aidlc-hotfix.md"), bugfix.replace("name: bugfix", "name: hotfix"));
+    const grid = composedGrid();
+    withEnvAndFreshCaches({ ...POLICY_ENV, AIDLC_SCOPES_DIR: scopes }, () => {
+      expect(loadScopeMapping().hotfix?.existingCode).toBe(true);
+      const nearest = [
+        { scope: "hotfix", diff: 1, differs: [] },
+        { scope: "express", diff: 3, differs: [] },
+      ];
+      expect(customPlanBase(grid, "off", nearest, "minimal", "greenfield")).toMatchObject({ scope: "express" });
+      expect(customPlanBase(grid, "off", nearest, "minimal", "brownfield")).toMatchObject({ scope: "hotfix" });
+    });
+  });
 
   test("customPlanBase picks the nearest scope whose Guard Policy default is the plan's or lower", () => {
     withEnvAndFreshCaches(POLICY_ENV, () => {
@@ -430,36 +474,63 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(existsSync("/tmp/t351-pwn")).toBe(false);
   });
 
-  test("a running workflow's stages change only through the reshape gate", () => {
-    const proj = createTestProject();
-    tempDirs.push(proj);
-    seedAidlcMemory(proj);
-    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+  test("a running workflow's named stage changes apply at once, with the undo named", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "feature"]).status).toBe(0);
+    // The person named the stage: no compose gate re-asks it.
     const d = nextDirective(proj, ["--skip", "team-formation"]);
-    expect(d.kind).toBe("error");
-    expect(d.message).toContain("--skip and --add shape a new workflow's stages when it is created");
-    expect(d.message).toContain('compose "<the change>"');
+    expect(d.kind).toBe("print");
+    expect(d.message).not.toContain("next compose");
+    const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
+    expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
+    expect(d.message).toContain('"Skipped team-formation. To undo it, type `/aidlc --add team-formation`."');
+    // The one line is all the person hears: recompose's counts stay out of the reply.
+    expect(d.message).toContain("do not show its output");
+    expect(d.message).not.toContain("print its output verbatim");
+    const words = command.split(" ");
+    const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
+    expect(applied.status, applied.out).toBe(0);
+    expect(applied.out).toContain("1 skipped (team-formation)");
+    expect(stateOf(proj)).toContain("- [ ] team-formation \u2014 SKIP");
+    // Asking again changes nothing, so nothing is sent and no undo is named.
+    const again = nextDirective(proj, ["--skip", "team-formation"]);
+    expect(again.kind).toBe("print");
+    expect(again.message).not.toContain("engine recompose");
+    expect(again.message).toContain('"Team-formation is already skipped. The plan is unchanged."');
+
+    // A setting typed with it runs first, so neither request is dropped.
+    const both = nextDirective(proj, ["--add", "team-formation", "--depth", "minimal"]);
+    expect(both.kind).toBe("print");
+    const setting = both.message.indexOf("config set depth minimal");
+    expect(setting, both.message).toBeGreaterThan(-1);
+    expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
+    expect(both.message).toContain("To undo it, type `/aidlc --skip team-formation`.");
+    // The setting's own line is still shown; recompose's counts are not.
+    expect(both.message).toMatch(/config set depth minimal[^`]*` and print its output verbatim, then run `[^`]*engine recompose --add team-formation` to change this workflow's remaining stages as the person asked, and do not show its output/);
+
     const combined = nextDirective(proj, ["compose", "--skip", "team-formation", "trim it"]);
     expect(combined.kind).toBe("error");
     expect(combined.message).toContain("Cannot combine --skip or --add");
+    expect(combined.message).not.toContain("at creation");
   });
 });
 
 describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
   test("the saved scope is the running plan, with its settings, and resolves at once", () => {
     const proj = installedProject();
-    expect(createComposed(proj, ["--learnings", "off", "--review", "none", "--depth", "standard"]).status).toBe(0);
+    // bugfix asks no learnings question; this work turns it on, and the saved scope keeps that.
+    expect(createComposed(proj, ["--learnings", "on", "--review", "none", "--depth", "standard"]).status).toBe(0);
     expect(stateOf(proj)).toContain("- **Depth**: Standard");
     const stateBefore = stateOf(proj);
     const saved = runTool(proj, "aidlc-utility.ts", ["scope-save", "--name", "quick-fix", "--keywords", "parser-fix"]);
     expect(saved.status, saved.out).toBe(0);
     expect(saved.out).toContain("Saved as scope quick-fix (");
-    expect(saved.out).toContain("sensors on, learnings off, summary confirmation on, reviews none).");
+    expect(saved.out).toContain("sensors on, learnings on, summary confirmation off, reviews none).");
     expect(saved.out).toContain('Next time: /aidlc --scope quick-fix "<what to build>"');
     // The running work is left as it is.
     expect(stateOf(proj)).toBe(stateBefore);
     const record = readFileSync(join(proj, "aidlc", "scopes", "quick-fix.md"), "utf-8");
-    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: off", "review_cap: none", "  - parser-fix"]) {
+    for (const line of ["name: quick-fix", "depth: Standard", "guard_policy: off", "learnings: on", "summary_confirmation: off", "review_cap: none", "  - parser-fix"]) {
       expect(record, line).toContain(line);
     }
     expect(scopeFiles(proj)).toContain("aidlc-quick-fix.md");
@@ -664,7 +735,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
   // person gets without composing.
   const CLASSIC = {
     guard_policy: "off",
-    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", review_cap: "advisory" },
+    scope_settings: { sensors: "on", learnings: "on", summary_confirmation: "off", plan_approval: "on", collaborators: "off", review_cap: "advisory" },
   } as const;
   const read = (surface: string) => readFileSync(join(REPO_ROOT, surface), "utf-8").replace(/\s+/g, " ");
 
@@ -719,10 +790,11 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     const validated = validate(proj, plan, ["--custom"]);
     expect(validated.status, validated.out).toBe(0);
     expect(validated.body).toMatchObject({ routing: "custom", base_scope: "bugfix" });
-    expect(validated.body.creation_settings).toEqual({ summary_confirmation: "off" });
+    // bugfix asks no learnings question; classic does, so the plan turns it back on.
+    expect(validated.body.creation_settings).toEqual({ learnings: "on" });
     // What the conductor runs on approval: no --guard-policy for off, one flag per creation setting.
     const changes = validated.body.plan_changes as { skip: string[]; add: string[] };
-    const args = ["intent-create", "--scope", "bugfix", "--summary-confirmation", "off", "--arguments", "x", "--label", "classic-ceremony"];
+    const args = ["intent-create", "--scope", "bugfix", "--learnings", "on", "--arguments", "x", "--label", "classic-ceremony"];
     if (typeof validated.body.creation_depth === "string") args.push("--depth", validated.body.creation_depth);
     if (changes.skip.length > 0) args.push("--skip", changes.skip.join(","));
     if (changes.add.length > 0) args.push("--add", changes.add.join(","));
@@ -732,6 +804,7 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     });
     expect(created.status, created.stdout + created.stderr).toBe(0);
     const state = stateOf(proj);
+    expect(state).toMatch(/^- \*\*Learnings\*\*: on\b/m);
     expect(state).toMatch(/^- \*\*Summary Confirmation\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Guard Policy\*\*: off\b/m);
     expect(state).toMatch(/^- \*\*Plan Approval\*\*: on\b/m);

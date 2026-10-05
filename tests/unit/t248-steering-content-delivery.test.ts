@@ -65,11 +65,12 @@ const CONTINUE_COMMAND_PREFIX =
   "bun .claude/tools/aidlc-orchestrate.ts continue ";
 // The steering payload stored on a marker. `n` (next_stage) and `q` (unit_gate)
 // are dropped by JSON when undefined, so only the rest are always present.
-// `o` carries the open-gate re-entry flag (gate_only) as a boolean. `l` is how
+// `o` carries the open-gate re-entry flag (gate_only) as a boolean, and `t`
+// (present only when true) that every Unit was built (build_settled). `l` is how
 // the rules were cut into parts, so a part is never continued under another cut.
 const STEERING_PAYLOAD_KEYS = [
   "v", "s", "c", "i", "b", "d", "r", "a", "u", "k",
-  "f", "g", "n", "x", "p", "w", "z", "o", "q", "h", "l",
+  "f", "g", "n", "x", "p", "w", "z", "o", "q", "t", "h", "l",
 ] as const;
 const STEERING_PAYLOAD_REQUIRED_KEYS = [
   "v", "s", "c", "i", "b", "d", "r", "a", "u", "k", "f", "g", "x", "p", "w", "z", "o", "h", "l",
@@ -1598,15 +1599,14 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
+    // poc ships collaborators off, so only the lead's context is loaded.
     for (const path of [
       ".claude/agents/aidlc-product-agent.md",
-      ".claude/agents/aidlc-architect-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
       ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
-      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
     ]) {
       expect(paths).toContain(path);
     }
@@ -1762,7 +1762,7 @@ describe("t248 deterministic steering delivery", () => {
       ".claude/knowledge/aidlc-product-agent/market-research-methods.md",
     );
     expect(paths).toContain(
-      ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+      ".claude/knowledge/aidlc-product-agent/prioritization-frameworks.md",
     );
   });
 

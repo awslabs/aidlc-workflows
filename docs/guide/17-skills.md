@@ -24,6 +24,8 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 
+Generated runners are **explicit-only** wherever the host allows it: on Claude Code, Cursor, and GitHub Copilot (VS Code and the CLI) each runner carries `disable-model-invocation: true` (on Codex, `allow_implicit_invocation: false` in its `agents/openai.yaml`), so the agent never starts one on its own and its description stays out of the skill listing the model reads every turn. You start a runner by typing it. A headless `copilot -p "/aidlc-bugfix ..."` still runs the runner: Copilot hands the typed line to the agent as text, and the shipped `AGENTS.md` tells the agent to read that runner's file. Kiro CLI, Kiro IDE, and opencode have no such setting, so there the agent can still start a runner by itself. `/aidlc` is not a runner and stays available to the agent.
+
 ---
 
 ## Scope-runners — a named door per problem class

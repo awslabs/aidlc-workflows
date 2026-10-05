@@ -237,7 +237,11 @@ export function parseRunnerArgs(
   if (out.isolatedFiles && (out.runSmoke || out.runUnit || (!out.runIntegration && !out.runE2e))) {
     throw new RunnerArgsError("--isolated-files requires integration and/or e2e only", 2, true);
   }
-  if (out.fileRetries && !out.isolatedFiles) throw new RunnerArgsError("--file-retries requires --isolated-files", 2, true);
+  // Ordinary smoke/unit/integration files retry in a fresh process (the merge
+  // queue); e2e files retry only in a fresh isolated worker.
+  if (out.fileRetries && !out.isolatedFiles && out.runE2e) {
+    throw new RunnerArgsError("--file-retries requires --isolated-files when e2e is selected", 2, true);
+  }
   if ((out.isolatedE2e && !out.runE2e && !out.isolatedFiles) || (workerOption && !out.isolatedE2e)) {
     throw new RunnerArgsError("isolated e2e options require --e2e --isolated-e2e or --e2e --e2e-plan; --e2e-plan implies --isolated-e2e, not --e2e", 2, true);
   }

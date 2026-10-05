@@ -213,9 +213,12 @@ The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`)
 {
   "permissions": {
     "allow": [
-      "Read", "Edit", "Write",
-      "Bash(bun .claude/tools/*)", "Bash(date -u *)",
-      "Glob", "Grep", "Task", "WebSearch"
+      "Edit(/**)",
+      "Bash(bun .claude/tools/aidlc.ts engine *)",
+      "Bash(bun .claude/tools/aidlc.ts doctor)", "...",
+      "Bash(bun .claude/tools/aidlc-log.ts)", "Bash(bun .claude/tools/aidlc-log.ts *)", "...",
+      "Bash(date -u *)",
+      "Task", "WebSearch"
     ]
   }
 }
@@ -338,7 +341,7 @@ The spike also surfaced a separate frontmatter footgun: `allowedTools` is **not*
 
 The two configuration files answer different questions and do not overlap:
 
-- `.claude/settings.json` `permissions.allow` pre-approves *built-in Claude Code tools* (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so the session does not prompt on first use (see [Settings](#settings) above). It says nothing about MCP servers.
+- `.claude/settings.json` `permissions.allow` pre-approves *built-in Claude Code tools* (file edits inside the project, AI-DLC's own commands, Task, WebSearch) so the session does not prompt on first use (see [Settings](#settings) above). It says nothing about MCP servers.
 - `.mcp.json` declares *which MCP servers exist* and how to launch them. Provisioning and inheritance are governed by Claude Code's MCP layer, not by `settings.json`.
 
 An MCP server appearing in the session is a function of `.mcp.json` plus available credentials, not of any `settings.json` allow-list entry. Per-agent narrowing, when it is wired, lives in the agent's `tools:` frontmatter — not in `settings.json` and not in `.mcp.json`.

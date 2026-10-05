@@ -102,6 +102,8 @@ import {
   isReadOnlyNextArgv,
   normalizeDriveLetter,
   recordCopilotHumanSequence,
+  recordHookDrop,
+  recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
@@ -279,36 +281,14 @@ export async function run(
   // --- Core-hook subprocess plumbing -----------------------------------------
 
   function runCore(hookFile: string, stdin: string): { stdout: string; code: number } {
-    const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
-    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
-    const authorityToken = hook === "record-human-turn" ? randomUUID() : "";
-    const command = executable
-      ? authorityToken
-        ? [executable, "--internal-aidlc-record-human-turn", join(HOOKS_DIR, hookFile)]
-        : [executable, "engine", "hook", hook]
-      : authorityToken
-        ? [
-            process.execPath,
-            join(HOOKS_DIR, "..", "tools", "aidlc.ts"),
-            "--internal-aidlc-record-human-turn",
-            join(HOOKS_DIR, hookFile),
-          ]
-        : [process.execPath, join(HOOKS_DIR, hookFile)];
-    const r = Bun.spawnSync(command, {
-      stdin: Buffer.from(stdin, "utf-8"),
-      stdout: "pipe",
-      stderr: "ignore",
-      cwd: projectDir,
-      env: authorityToken
-        ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
-        : projectEnv,
-    });
-    return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+    const { stdout, code } = runCoreWithStderr(hookFile, stdin);
+    return { stdout, code };
   }
 
-  // Variant capturing stderr — the guard hooks' block channel (exit 2 + the
-  // reason on stderr) must survive the pipe so it can be converted to the
-  // Copilot deny JSON.
+  // Every core hook's stderr is kept: the guard hooks' block channel (exit 2 +
+  // the reason on stderr) must survive the pipe so it can be converted to the
+  // Copilot deny JSON, and a hook that fails any other way still fails open
+  // but leaves its reason where doctor reads it (failedCoreHookDrop).
   function runCoreWithStderr(
     hookFile: string,
     stdin: string,
@@ -337,11 +317,57 @@ export async function run(
         ? { ...projectEnv, AIDLC_INTERNAL_HUMAN_TURN_TOKEN: authorityToken }
         : projectEnv,
     });
+    const stderr = r.stderr?.toString() ?? "";
+    failedCoreHookDrop(hook, r.exitCode, r.signalCode ?? null, stderr, forwardedSessionId(stdin));
     return {
       stdout: r.stdout?.toString() ?? "",
-      stderr: r.stderr?.toString() ?? "",
+      stderr,
       code: r.exitCode ?? 0,
     };
+  }
+
+  // The session a core hook ran for: the forwarded payload's (the prior
+  // session for a reconciled session-end), else this event's.
+  function forwardedSessionId(stdin: string): string {
+    try {
+      const forwarded = (JSON.parse(stdin) as { session_id?: unknown }).session_id;
+      if (typeof forwarded === "string" && forwarded.length > 0) return forwarded;
+    } catch {
+      // Not JSON: this event's session.
+    }
+    return sessionId;
+  }
+
+  // Exit 0 is success and exit 2 is a hook's deny or block. Any other exit or
+  // a signal is a failure the host never shows: record the hook, the exit, and
+  // the error line (Bun's `error:` line, else the last line) for doctor. The
+  // line is the hook's own text, so a severity tag in it is neutralized: only
+  // the hook that writes a drop decides whether doctor fails on it.
+  function failedCoreHookDrop(
+    hook: string,
+    exitCode: number | null,
+    signalCode: string | null,
+    stderr: string,
+    hookSessionId: string,
+  ): void {
+    if (exitCode === 0 || exitCode === 2) return;
+    const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+    const line = (lines.find((entry) => entry.startsWith("error:")) ??
+      lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
+      .replace(/\[(degraded|advisory)\]/gi, "($1)");
+    const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
+    // The record that session works in, not the shared cursor's, so doctor
+    // shows the failure beside the workflow it hit.
+    let intent: string | undefined;
+    let space: string | undefined;
+    try {
+      const selection = resolveWorkflowSelection(projectDir, hookSessionId ? { sessionId: hookSessionId } : {});
+      intent = selection.intent ?? undefined;
+      space = intent ? selection.space : undefined;
+    } catch {
+      // No resolvable record: the default one takes the line.
+    }
+    recordHookDrop(projectDir, hook, `${hook} ${how} under the Copilot adapter: ${line.slice(0, 240)}`, intent, space);
   }
 
   // The one deny dialect both surfaces honor (difference #4). stdout JSON,
@@ -387,13 +413,17 @@ export async function run(
   // The allow also needs a command every shell VS Code may run it in reads the
   // same way: POSIX shells, PowerShell, and cmd, including the %* re-read in
   // AI-DLC's aidlc.cmd. Each word is plain ASCII letters, digits, and
-  // _ . / : = , + -, and may end in one quoted part. Inside quotes, spaces and
-  // "?" are inert in all three shells, and so is an apostrophe inside double
-  // quotes; no quoted part holds a quote that could end it. Any other
-  // character ($, `, %, ^, !, &, |, <, >, ;, #, parentheses, braces, @, \, a
-  // tab or line break, a typographic quote, anything outside plain ASCII)
-  // means no decision, so the host's prompt shows the command to the person.
-  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  // _ . / : = , + -, and may end in one quoted part. Inside quotes, spaces,
+  // "?", parentheses, and ";" are inert in all three shells and on that %*
+  // line, and so is an apostrophe inside double quotes; no quoted part holds a
+  // quote that could end it. Double quotes may also hold | & < >, but only
+  // with a space: PowerShell keeps the quotes on such a value when it hands it
+  // to a .cmd launcher, so cmd never sees them bare. cmd reads no single
+  // quotes, so single-quoted text never holds them. Any other character ($, `,
+  // %, ^, !, #, braces, @, \, a tab or line break, a typographic quote,
+  // anything outside plain ASCII) means no decision, so the host's prompt
+  // shows the command to the person.
+  const PLAIN_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>-]*"|'[A-Za-z0-9_./:=,+ ?();-]*')`;
   const PLAIN_WORD = `(?:[A-Za-z0-9_./:=,+-]+${PLAIN_QUOTED}?|${PLAIN_QUOTED})`;
   const PLAIN_COMMAND = new RegExp(`^ *${PLAIN_WORD}(?: +${PLAIN_WORD})* *$`);
   // The shell the command runs in. A shell the call names wins, so Git Bash
@@ -404,17 +434,35 @@ export async function run(
   const windowsTerminal = terminalShell
     ? /(?:^|[\\/])(?:pwsh|powershell|cmd)(?:\.exe)?$/i.test(terminalShell)
     : /^(?:pwsh|powershell)$/i.test(rawToolName) || (VSCODE_SHELL_TOOLS.has(rawToolName) && platform() === "win32");
+  // PowerShell itself: cmd never splits a command line at `;`.
+  const powerShellTerminal = windowsTerminal && !/(?:^|[\\/])cmd(?:\.exe)?$/i.test(terminalShell);
+  // The plan-approval guard reads a PowerShell command the way PowerShell runs
+  // it. Only the adapter says which shell ran, never the payload.
+  function withShellReading(raw: string): string {
+    try {
+      const { aidlc_shell: _shell, ...parsed } = JSON.parse(raw) as Record<string, unknown>;
+      return JSON.stringify(powerShellTerminal ? { ...parsed, aidlc_shell: "powershell" } : parsed);
+    } catch {
+      return raw;
+    }
+  }
   // In PowerShell and cmd a backslash is a path separator, never an escape,
-  // so a word may also hold one (`C:\work\app`, `.aidlc\tools`). bun splits
-  // the words with the Windows rule, where a backslash counts only right
-  // before a double quote, so that pair keeps the prompt.
-  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'\\\\-]*"|'[A-Za-z0-9_./:=,+ ?-]*')`;
+  // so a word may also hold one (`C:\work\app`, `.aidlc\tools`, or
+  // `'C:\work\app'` as the engine prints a project folder). bun splits the
+  // words with the Windows rule, where a backslash counts only right before a
+  // double quote, so that pair keeps the prompt, and so does one right before
+  // a closing single quote, which PowerShell turns into a double quote when
+  // the value holds a space.
+  const WINDOWS_QUOTED = `(?:"[A-Za-z0-9_./:=,+ ?'();|&<>\\\\-]*"|'[A-Za-z0-9_./:=,+ ?();\\\\-]*')`;
   const WINDOWS_WORD = `(?:[A-Za-z0-9_./:=,+\\\\-]+${WINDOWS_QUOTED}?|${WINDOWS_QUOTED})`;
   const WINDOWS_COMMAND = new RegExp(`^ *${WINDOWS_WORD}(?: +${WINDOWS_WORD})* *$`);
   function plainInEveryShell(command: unknown): boolean {
     if (typeof command !== "string") return false;
     const body = command.replace(/ +2>&1 *$/, "");
-    return windowsTerminal ? WINDOWS_COMMAND.test(body) && !body.includes('\\"') : PLAIN_COMMAND.test(body);
+    const spaced = [...body.matchAll(/"([^"]*)"/g)].every(([, text]) => !/[|&<>]/.test(text) || text.includes(" "));
+    return spaced && (windowsTerminal
+      ? WINDOWS_COMMAND.test(body) && !body.includes('\\"') && !body.includes("\\'")
+      : PLAIN_COMMAND.test(body));
   }
   // A path as the terminal reads it: in a Windows terminal both slashes
   // separate, and the comparison below folds the drive letter.
@@ -436,8 +484,39 @@ export async function run(
       return false;
     }
   }
+  // The person's words in a recorded answer or decision are text, never a
+  // path: on Windows `--options "A: yes,B: no"` would read as drive A:.
+  const FREE_TEXT_FLAGS = new Set(["--options", "--details", "--decision", "--reason"]);
+  function withoutFreeText(args: readonly string[]): string[] {
+    const kept: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--") { kept.push(...args.slice(i)); break; }
+      if (!FREE_TEXT_FLAGS.has(args[i].split("=")[0])) kept.push(args[i]);
+      else if (!args[i].includes("=")) i++;
+    }
+    return kept;
+  }
   function argumentsStayInProject(args: readonly string[]): boolean {
     return args.every((arg) => staysInProject(arg) && (!arg.includes("=") || staysInProject(arg.slice(arg.indexOf("=") + 1))));
+  }
+
+  // In PowerShell an agent often moves to the project first:
+  // `cd C:\work\app; aidlc engine orchestrate next`. A `cd` or `Set-Location`
+  // to the project folder itself, by an absolute path, is set aside with its
+  // `;`, and the command after it is read as if typed alone. PowerShell runs
+  // that command even when the cd fails, so it never runs anywhere its bare
+  // form could not. Any other folder, a subfolder too, keeps the whole
+  // command: the installed engine takes its working folder as the project.
+  const PROJECT_CD = /^ *(?:cd|Set-Location)(?: +-(?:Literal)?Path)? +(?:'([A-Za-z0-9_./:\\ -]+)'|"([A-Za-z0-9_./:\\ -]+)"|([A-Za-z0-9_./:\\-]+)) *; */i;
+  function projectCdLead(command: string): string {
+    const match = powerShellTerminal ? PROJECT_CD.exec(command) : null;
+    if (!match) return "";
+    const target = terminalPath(match[1] ?? match[2] ?? match[3]);
+    try {
+      return isAbsolute(target) && normalizeDriveLetter(realpathSync(target)) === normalizeDriveLetter(realpathSync(projectDir)) ? match[0] : "";
+    } catch {
+      return "";
+    }
   }
 
   // A bare `aidlc` is vouched for only as the installed launcher. cmd runs a
@@ -458,15 +537,17 @@ export async function run(
   }
 
   // "terminal": a simple AI-DLC command that is not claimed as coordination
-  // (a read-only `next` form or another AI-DLC project command).
+  // (a read-only `next` form or another AI-DLC project command). "attempt": a
+  // new call that already carries the attempt flag AI-DLC adds itself.
+  // "unsupported" may carry the refusal that names what was not accepted.
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" }
+    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" | "attempt"; reason?: string }
     | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
 
   // Doctor also checks the machine and may refresh the update cache over the
   // network, so it qualifies only with the flags the engine itself passes.
   function engineNamedDoctor(args: readonly string[]): boolean {
-    if (args[0] !== "doctor") return false;
+    if (args[0] !== "doctor" && args[0] !== "--doctor") return false;
     for (let i = 1; i < args.length; i++) {
       if (["--verbose", "--json", "--quiet", "--export"].includes(args[i])) continue;
       const value = args[i + 1];
@@ -481,7 +562,7 @@ export async function run(
   // no network, served by the named tool script when there is one. Hook,
   // adapter, and statusline routes belong to the host, and `__` routes and
   // `--internal-*` flags are internal, so they never qualify.
-  function ownProjectRoute(argv: readonly string[], toolFile?: string): boolean {
+  function ownProjectRoute(argv: readonly string[], toolFile?: string, personMayLift = true): boolean {
     if (argv.some((arg) => arg.startsWith("--internal")) || (argv[0] === "engine" && argv[1]?.startsWith("__"))) return false;
     const route = routePolicyFor(argv);
     if (
@@ -494,14 +575,16 @@ export async function run(
     ) return false;
     // The verb is read the way the dispatcher routes it, with the global flags
     // dropped, so `unit --json land` is `unit land`. An alias head (`--scope`,
-    // `--claim`) is a shortcut for another command, never vouched for here.
+    // `--claim`) is a shortcut for another command, never vouched for here,
+    // except the read-only `--version`, `--status`, and `--help`.
     const clean = withoutProjectDirFlag(argv);
-    if (clean[0]?.startsWith("-")) return false;
+    if (clean[0]?.startsWith("-") && !["--version", "--status", "--help"].includes(clean[0])) return false;
     const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
     const rest = clean.slice(at + 2);
-    return !keepsPrompt(route.id, clean[at + 1] ?? "", rest) &&
+    const recordsWords = route.id === "log" && (clean[at + 1] === "answer" || clean[at + 1] === "decision");
+    return !keepsPrompt(route.id, clean[at + 1] ?? "", rest, personMayLift) &&
       !clean.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
-      argumentsStayInProject(clean);
+      argumentsStayInProject(recordsWords ? withoutFreeText(clean) : clean);
   }
 
   function personActedSinceGate(): boolean {
@@ -532,8 +615,13 @@ export async function run(
   // code AI-DLC does not ship (project linters, host plugins). Merges of
   // AI-DLC's own state and audit records stay routine. The workflow verbs are
   // vouched for only in the exact form the coordination claim reads.
-  function keepsPrompt(routeId: string, verb: string, rest: readonly string[]): boolean {
-    if (routeId.startsWith("engine-sensor-")) return true;
+  // A spelling the engine never names for a verb (a tool script read by its
+  // verb) never takes the person's word in place of the click.
+  function keepsPrompt(routeId: string, verb: string, rest: readonly string[], personMayLift = true): boolean {
+    const personSpoke = () => personMayLift && personActedSinceGate();
+    // The linter and type checker run the project's own tools; AI-DLC's other
+    // checks read files and start no program.
+    if (routeId === "engine-sensor-linter" || routeId === "engine-sensor-type-check") return true;
     switch (routeId) {
       case "top-orchestrate":
       case "engine-orchestrate": return ["next", "continue", "report", "park"].includes(verb);
@@ -541,9 +629,16 @@ export async function run(
       // A plan reshape runs click-free once the person has typed since the
       // last gate resolved (the in-flight recompose gate they just answered);
       // the agent reshaping on its own keeps the prompt.
-      case "top-recompose": return !personActedSinceGate();
+      case "top-recompose": return !personSpoke();
       case "jump": return verb === "execute";
       case "scope": return verb === "change";
+      // The person's word on new project vs existing code runs click-free once
+      // they have typed since the last gate (they answered the question or
+      // said so); the agent reclassifying on its own keeps the prompt. A
+      // document read that onboards the file it names runs the extractor.
+      case "workspace":
+        return (verb === "reclassify" && !personSpoke()) ||
+          (verb === "document-input" && hasFlag(rest, "--onboard"));
       // Switching the active intent or space redirects the work that follows.
       case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
       case "space": return !["", "list", "create"].includes(verb);
@@ -579,6 +674,15 @@ export async function run(
       (candidate.kind === "noun-passthrough" || candidate.routeOnly === "tool-passthrough"));
     if (!route) return null;
     return route.namespace === "engine" ? ["engine", route.group] : route.namespace === "public" ? [route.group] : null;
+  }
+  // A script that serves several engine nouns is named by its verb, through
+  // the route's own table: `aidlc-utility.ts codekb-snapshot` is
+  // `engine workspace codekb-snapshot`. The verb must name exactly one route.
+  function toolScriptVerbRoute(file: string, verb: string): string[] | null {
+    const named = ROUTES.flatMap((route) => route.tool === file && route.kind === "noun-map" && route.namespace === "engine"
+      ? Object.entries(route.targets ?? {}).filter(([, target]) => target === verb).map(([routeVerb]) => ["engine", route.group, routeVerb])
+      : []);
+    return named.length === 1 ? named[0] : null;
   }
 
   function shellWords(command: string): string[] | null {
@@ -693,7 +797,7 @@ export async function run(
     try {
       const file = basename(resolved);
       if (!/^aidlc-[a-z0-9-]+\.ts$/.test(file) || dirname(resolved) !== realpathSync(join(projectDir, ".aidlc", "tools"))) return null;
-      return toolScriptRoute(file) ? file : null;
+      return toolScriptRoute(file) || ROUTES.some((route) => route.tool === file && route.kind === "noun-map") ? file : null;
     } catch {
       return null;
     }
@@ -709,8 +813,8 @@ export async function run(
     let file: string | null = null;
     try { file = ownToolScript(realpathSync(resolve(projectDir, terminalPath(parsed.words[cursor++] ?? "")))); }
     catch { return { status: "unrelated" }; }
-    const routePrefix = file ? toolScriptRoute(file) : null;
-    if (!file || !routePrefix) return { status: "unrelated" };
+    if (!file) return { status: "unrelated" };
+    const routePrefix = toolScriptRoute(file);
     const args: string[] = [];
     const rest = parsed.words.slice(cursor);
     for (let i = 0; i < rest.length; i++) {
@@ -719,12 +823,45 @@ export async function run(
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(rest[++i] ?? "")))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "unrelated" }; }
       catch { return { status: "unrelated" }; }
     }
-    return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
+    if (routePrefix) return ownProjectRoute([...routePrefix, ...args], file) ? { status: "terminal" } : { status: "unrelated" };
+    const verbRoute = toolScriptVerbRoute(file, args[0] ?? "");
+    return verbRoute && ownProjectRoute([...verbRoute, ...args.slice(1)], file, false) ? { status: "terminal" } : { status: "unrelated" };
   }
 
-  function orchestrationCommand(): ParsedOrchestration {
-    const command = nativeToolInput?.command;
+  // Each refusal says what was not accepted and the form to run instead; the
+  // agent's own words are repeated only when they are plain text.
+  const PROJECT_DIR_EMPTY = "`--project-dir` needs this project's folder after it, so this did not run. Name the folder, or run the command without `--project-dir`.";
+  const PROJECT_DIR_MISSING = "The folder after `--project-dir` does not exist, so this did not run. Name this project's folder, or run the command without `--project-dir`.";
+  function noScript(direct: boolean): string {
+    const script = direct ? ".aidlc/tools/aidlc-orchestrate.ts" : ".aidlc/tools/aidlc.ts";
+    return `This project has no \`${script}\`, so this did not run. Run the same command with \`${direct ? "aidlc engine orchestrate" : "aidlc"}\` in place of \`bun ${script}\`.`;
+  }
+
+  // The same words with the installed `aidlc` in place of a missing copied
+  // script, or null when a word cannot be written back plainly.
+  function installedForm(command: string, direct: boolean): string | null {
+    const parsed = simpleCommand(command);
+    if (!parsed || parsed.expansionActive) return null;
+    let cursor = 1;
+    if (parsed.words[cursor] === "run") cursor++;
+    const words: string[] = [];
+    for (const word of parsed.words.slice(cursor + 1)) {
+      if (/^[A-Za-z0-9_.:=+/@%,-]+$/.test(word)) words.push(word);
+      else if (!/["$`\\]/.test(word)) words.push(`"${word}"`);
+      else return null;
+    }
+    return ["aidlc", ...(direct ? ["engine", "orchestrate"] : []), ...words].join(" ");
+  }
+
+  function orchestrationCommand(command: unknown = nativeToolInput?.command, lead = ""): ParsedOrchestration {
     if (typeof command !== "string" || command.length === 0 || Buffer.byteLength(command) > 64 * 1024) return { status: "unrelated" };
+    // After a cd to the project, only a command claimed or vouched for alone
+    // changes; every other form keeps the answer a cd-led command had.
+    const projectLead = lead ? "" : projectCdLead(command);
+    if (projectLead) {
+      const bare = orchestrationCommand(command.slice(projectLead.length), projectLead);
+      return bare.status === "recognized" || bare.status === "terminal" ? bare : { status: "unrelated" };
+    }
     const prefix = executionPrefix(command);
     let prefixCursor = 0;
     const prefixFirst = prefix[prefixCursor++] ?? "";
@@ -742,8 +879,18 @@ export async function run(
         directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
         toolPrefix = !directPrefix && ownToolScript(resolved) !== null;
       } catch {
-        if (resolve(projectDir, terminalPath(script)) === resolve(directPath) || resolve(projectDir, terminalPath(script)) === resolve(dispatcherPath)) {
-          return { status: "unsupported" };
+        const typed = resolve(projectDir, terminalPath(script));
+        if (typed === resolve(directPath) || typed === resolve(dispatcherPath)) {
+          if (existsSync(typed)) return { status: "unsupported" };
+          const direct = typed === resolve(directPath);
+          // Read the rest as the installed command would, so a refusal of that
+          // too names one command that runs.
+          const installed = installedForm(command, direct);
+          const inner = installed === null ? null : orchestrationCommand(installed);
+          if (inner?.status === "unsupported" && inner.reason) {
+            return { status: "unsupported", reason: `This project has no \`${[".aidlc", "tools", direct ? "aidlc-orchestrate.ts" : "aidlc.ts"].join("/")}\`. ${inner.reason}` };
+          }
+          return { status: "unsupported", reason: noScript(direct) };
         }
       }
     } else if (prefixFirst === "aidlc") {
@@ -788,6 +935,11 @@ export async function run(
     // classification works on the bare verb either way, and the route table
     // reads the orchestrator's other verbs under that prefix.
     const routedOrchestrate = !viaDispatcher || (args[0] === "engine" && args[1] === "orchestrate");
+    // The form a refusal names, started the way the agent started the command.
+    // (Built from parts: a release rewrites literal copy-channel spellings.)
+    const start = !(first === "bun" || first === process.execPath) ? "aidlc"
+      : `bun ${[".aidlc", "tools", viaDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
+    const form = (verb: string) => `${start}${viaDispatcher && routedOrchestrate ? " engine orchestrate" : ""} ${verb}`;
     if (args[0] === "engine" && args[1] === "orchestrate") args = args.slice(2);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     const normalized: string[] = [];
@@ -795,17 +947,18 @@ export async function run(
     for (let i = 0; i < args.length; i++) {
       if (args[i] === ATTEMPT_FLAG) {
         const carried = args[++i];
-        if (target === "guard-tool-call" || !safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
+        if (target === "guard-tool-call") return { status: "attempt" };
+        if (!safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
         attemptId = carried;
         continue;
       }
       if (args[i] !== "--project-dir") { normalized.push(args[i]); continue; }
       const routed = args[++i];
-      if (!routed) return { status: "unsupported" };
+      if (!routed) return { status: "unsupported", reason: PROJECT_DIR_EMPTY };
       // Either drive spelling names this project: VS Code hooks see `c:\`,
       // its terminal `C:\`. Only the comparison folds; projectDir is unchanged.
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
-      catch { return { status: "unsupported" }; }
+      catch { return { status: "unsupported", reason: PROJECT_DIR_MISSING }; }
     }
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) {
@@ -826,7 +979,13 @@ export async function run(
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
-    if ((commandKind === "continue" && subArgs.length > 1) || (commandKind === "park" && subArgs.length !== 0)) return { status: "unsupported" };
+    if (commandKind === "continue" && subArgs.length > 1) {
+      return { status: "unsupported", reason: `\`continue\` takes only the receipt from the last step, so this did not run. Run \`${form("next")}\` to get the current step again.` };
+    }
+    if (commandKind === "park" && subArgs.length !== 0) {
+      const extra = /^[A-Za-z0-9_.:=+-]+$/.test(subArgs[0]) ? `, and this one has \`${subArgs[0]}\`` : "";
+      return { status: "unsupported", reason: `\`park\` takes no options${extra}, so it did not run. Run \`${form("park")}\`.` };
+    }
     const digest = createHash("sha256").update(JSON.stringify([commandKind, ...subArgs])).digest("hex");
     const flagValue = (name: string): string => subArgs[subArgs.lastIndexOf(name) + 1] ?? "";
     const reportResult = flagValue("--result");
@@ -841,7 +1000,7 @@ export async function run(
         (subArgs[0] === "knowledge" && ["onboard", "sync"].includes(subArgs[1] ?? "")) ||
         (subArgs[0] === "plugin" && ["sync", "select", "build"].includes(subArgs[1] ?? "")))) ||
         !argumentsStayInProject(subArgs),
-      rewrite: (selectedAttemptId) => `${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
+      rewrite: (selectedAttemptId) => `${lead}${parsed.body} ${ATTEMPT_FLAG} ${selectedAttemptId}${parsed.redirect ? ` ${parsed.redirect}` : ""}`,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
@@ -1509,6 +1668,9 @@ export async function run(
         ...(sessionId ? { session_id: sessionId } : {}),
       });
       const r = runCore("aidlc-session-start.ts", fwd);
+      // The heartbeat doctor's "have not run in this project yet" warning
+      // waits for (the manifest's notRunYet).
+      recordPreWorkflowHeartbeat(projectDir, "session-start");
       if (r.stdout) {
         try {
           const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
@@ -1706,24 +1868,33 @@ export async function run(
         }
         const planApproval = runCoreWithStderr(
           "aidlc-plan-approval-guard.ts",
-          canonicalInput,
+          withShellReading(canonicalInput),
         );
         if (planApproval.code === 2) {
           process.stdout.write(denyJson(planApproval.stderr));
           return 0;
         }
         if (command.status === "unsupported") {
-          process.stdout.write(denyJson("Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
+          process.stdout.write(denyJson(command.reason ?? "Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
+          return 0;
+        }
+        if (command.status === "attempt") {
+          // An id copied from an earlier command. The text is fixed: the
+          // command is never echoed back or edited here, and the same command
+          // without the flag gets this call's own id.
+          process.stdout.write(denyJson(`AI-DLC adds \`${ATTEMPT_FLAG}\` to its own commands, so a command that already carries it did not run. Run the same command again without \`${ATTEMPT_FLAG}\` and the id after it.`));
           return 0;
         }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
         // for the call: the host's own approval applies. A workflow command is
         // vouched once its coordination claim succeeds or the check stands
         // aside for it, and no call without a host session is vouched for.
+        const typed = typeof nativeToolInput?.command === "string" ? nativeToolInput.command : "";
+        const bare = typed.slice(projectCdLead(typed).length);
         const allow = VSCODE_SHELL_TOOLS.has(rawToolName) && sessionId !== "" &&
             [guard, scope, freeze, planApproval].every((r) => r.code === 0) &&
-            plainInEveryShell(nativeToolInput?.command) &&
-            !(shellWords(String(nativeToolInput?.command))?.[0] === "aidlc" && projectSuppliesLauncher())
+            plainInEveryShell(bare) &&
+            !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
           ? ALLOW_DECISION
           : null;
         if (command.status === "terminal") {

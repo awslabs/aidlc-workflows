@@ -5,8 +5,10 @@ import {
   getField,
   parseCheckboxes,
   readAllAuditShards,
+  staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import {
   resolveArtifactInstances,
   type ArtifactResolutionOptions,
@@ -292,6 +294,16 @@ function projectTypeFrom(
 ): "brownfield" | "greenfield" | null {
   const raw = getField(stateContent, "Project Type")?.toLowerCase();
   return raw === "brownfield" || raw === "greenfield" ? raw : null;
+}
+
+// A project-type change (the person said the work is existing code, or a new
+// project) makes a finished stage stale only when its work follows the type:
+// its inputs change with it (a conditional consume), or it builds (the
+// Construction testing plan and in-place rule follow it). Every other finished
+// stage stays valid, so the advisory names a stage worth redoing.
+function workDependsOnProjectType(stage: StageValidityNode): boolean {
+  return stage.phase === "construction" ||
+    (stage.consumes ?? []).some((consume) => consume.conditional_on !== undefined);
 }
 
 function consumeIsApplicable(
@@ -702,6 +714,35 @@ export function propagateStageInvalidation(
  * tree, then propagate drift through observed stage-level dependencies.
  * The function is read-only with respect to workflow state.
  */
+/**
+ * A stage as the person hears it named: a shipped stage by its own name, and a
+ * plugin's stage by its slug, the name the person types to go there (its
+ * display name is the plugin's own text). A slug of any other shape is not
+ * named. The engine's advisory and status both name stages this way.
+ */
+export function stageLabel(stage: { slug: string; name: string; plugin?: string } | undefined, slug: string): string | null {
+  if (stage !== undefined && stage.plugin === undefined) return stage.name;
+  const typed = stage?.slug ?? slug;
+  return STAGE_SLUG_RE.test(typed) ? typed : null;
+}
+
+/**
+ * What the person hears about a finished stage that is behind, and the one way
+ * to act on it. When the project type changed to existing code after the stage
+ * ran, the code arriving is the reason it gives; otherwise an input changed.
+ * The engine's advisory and status both say it this way.
+ */
+export function staleStageNote(name: string, issue: Pick<StageValidityIssue, "reasons">, stateContent: string): string {
+  return issue.reasons.includes("project-type") && projectTypeFrom(stateContent) === "brownfield"
+    ? codeArrivedStageLine(name)
+    : staleStageLine(name);
+}
+
+// A finished stage that ran before the project's code was there, and the redo.
+export function codeArrivedStageLine(name: string): string {
+  return `${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`;
+}
+
 export function inspectStageValidity(
   projectDir: string,
   stateContent: string,
@@ -743,7 +784,9 @@ export function inspectStageValidity(
       );
       continue;
     }
-    const changes = diffStageValidationBasis(previous, current);
+    const changes = diffStageValidationBasis(previous, current).filter(
+      (change) => change !== "project-type" || workDependsOnProjectType(stage),
+    );
     if (changes.length > 0) directReasons.set(slug, changes);
   }
 

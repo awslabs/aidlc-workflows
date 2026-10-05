@@ -1,7 +1,7 @@
 # Question Rendering — Codex CLI harness annex
 
 This file defines how THIS harness renders the structured questions that
-`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
 The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
@@ -73,6 +73,10 @@ Map the spec fields 1:1:
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).
+- **No answer**: the box runs out after about two minutes and returns no
+  answers. Nothing was answered: ask the same question again in your reply as
+  numbered prose, not in the box, and end the turn; never pick an answer for
+  the person.
 
 ### Track 2 — numbered prose (the floor)
 
@@ -137,8 +141,9 @@ regardless of which track rendered the question, and run the matching
 checkpoint-specific `aidlc-log.ts answer` command. Strip any source letter,
 numbered-prose index, punctuation, and option description before writing:
 `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`,
-`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, ask
-**"What should change?"** and END THE TURN again; do not update any answer
+`[Answer]: 1`, and a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
 until that feedback arrives. Then record the feedback, update the affected
 answers, reset this tag to blank, and present the consolidated summary again.
 Do not generate the artifact until the file contains the human's explicit
@@ -148,8 +153,10 @@ checkpoint with the later reviewer, learnings, or approval steps.
 Rules (both tracks):
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **No emergent options**: render exactly the spec's options (+ the escape).
   The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
@@ -159,9 +166,11 @@ Rules (both tracks):
   to the first source option label, `2` to the second, and so on.
 - **multiSelect: true** → prose track says "Reply with all numbers that apply
   (e.g. 1, 3)."
-- A free-text reply that clearly matches an option counts as that option;
-  anything else is an "Other" answer — treat it per the protocol (discuss,
-  then re-ask for a final pick).
+- A free-text reply that clearly matches an option counts as that option.
+  A reply in their own words that answers the question is their answer:
+  record it as the "Other" answer, in their words. Only a reply that asks
+  about the question or wants to talk it through is discussed first; then
+  take what they settle on.
 - Gate semantics live in the ENGINE either way - the rendering never decides.
   Every engine ask carries `ask_type` and `response_route`. A `"next"` route
   uses the chosen `confirm_command` / `compose_command`, or the

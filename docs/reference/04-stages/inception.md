@@ -31,7 +31,13 @@ off to Construction.
 
 The phase contains three dispatched topologies: the two-link Reverse
 Engineering pipeline at Stage 2.1, the Practices Discovery hub-and-spoke at
-Stage 2.2, and the User Stories mob at Stage 2.4.
+Stage 2.2, and the User Stories mob at Stage 2.4. Their support agents take part
+when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work).
+With collaborators off, the engine hands each stage an empty `support_agents`
+list and the lead runs alone: the developer is the pipeline's only link and
+writes the 9 artifacts itself, Practices Discovery skips the spokes, User Stories
+skips the mob round, and no contribution files are owed. The steps below
+describe the full roster.
 
 **Key characteristics of the Inception phase:**
 
@@ -106,7 +112,7 @@ Stage 2.2, and the User Stories mob at Stage 2.4.
 | Condition        | CONDITIONAL -- brownfield; verified-current stores may be reused        |
 | Lead Agent       | aidlc-developer-agent                                                        |
 | Support Agents   | aidlc-architect-agent                                                        |
-| Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes) |
+| Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes; the developer alone when collaborators are off) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
@@ -119,7 +125,9 @@ structured artifacts and writes them. These artifacts provide the technical
 foundation that all subsequent Inception and Construction stages build upon.
 
 **Rerun guard:** Reverse Engineering checks each repository's recorded scope
-and working-tree fingerprint before scanning. The human may reuse a
+and working-tree fingerprint before scanning. The fingerprint leaves out
+AI-DLC's own install, settings, and the root files it writes into, so an AI-DLC
+update or setting change does not make a store stale. The human may reuse a
 verified-current store whose coverage fits the intent; stale, unverified,
 legacy, or mismatched stores require a full or focused rescan. Full rescans
 replace the store; focused rescans merge newly analyzed areas into it while
@@ -239,7 +247,7 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
 | Condition        | CONDITIONAL -- always rerun for freshness on EXECUTE scopes            |
 | Lead Agent       | aidlc-pipeline-deploy-agent                                                  |
 | Support Agents   | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent                        |
-| Mode             | subagent (lead draft → three mutually blind spokes → human interview → lead integration) |
+| Mode             | subagent (lead draft → three mutually blind spokes → human interview → lead integration; no spokes when collaborators are off) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
@@ -275,13 +283,20 @@ Four lead artifacts plus three spoke contributions are written to
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
   Deployment, Code Style. Testing Posture carries structured
   `Methodology: tdd|bdd|atdd|test-after|custom` and `Ordering: ...` bullets;
-  coverage/tooling/scope notes remain additional prose.
+  coverage/tooling/scope notes remain additional prose. The Methodology value
+  is one of those five and nothing else, with its reasons in a separate
+  `Methodology evidence:` bullet: the gate does not open on a value Code
+  Generation could not read, and `practices-promote` splits a value given with
+  its reasons ("test-after (because ...)") into the bare value and that bullet
+  before it writes `team.md`. Reasons that name a second methodology describe a
+  mix, which is `custom`, so that value is never split.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.
 - `practices-discovery-timestamp.md` -- run timestamp + commit hash.
 - `contributions/aidlc-{quality,developer,devsecops}-agent.md` -- one
-  identity-marked contribution from each mutually blind spoke; these files are
+  identity-marked contribution from each mutually blind spoke (none when
+  collaborators are off); these files are
   engine-checked completion evidence.
 
 On affirmation, content is promoted to:
@@ -331,7 +346,7 @@ On affirmation, content is promoted to:
    receipt. Then call
    `aidlc-orchestrate.ts report --stage practices-discovery --result
    approved --user-input "Approve"`. The engine verifies all three
-   contribution files and the current-attempt receipt before completing and
+   contribution files (none when collaborators are off) and the current-attempt receipt before completing and
    routing.
 
 ### Approval Gate
@@ -339,7 +354,7 @@ On affirmation, content is promoted to:
 Standard 2-option gate: **Approve** / **Request Changes**. Approve is held
 open while promotion runs; only after promotion and the affirmed timestamp
 succeed may the conductor report
-`--result approved --user-input '<their reply>'`. Promotion failure leaves the
+`--result approved --user-input "Approve"`. Promotion failure leaves the
 gate open and the stage incomplete.
 
 ### Notes
@@ -528,7 +543,7 @@ Conditional gate format:
 | Condition        | CONDITIONAL -- execute for user-facing features, multiple personas, complex business logic, or cross-team work |
 | Lead Agent       | aidlc-product-agent                                                          |
 | Support Agents   | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent               |
-| Mode             | mob (the 2.5.0 mob-elaboration showcase)                               |
+| Mode             | mob (the 2.5.0 mob-elaboration showcase; lead only when collaborators are off) |
 | Completion Emoji | :books:                                                                |
 
 ### Purpose
@@ -679,8 +694,9 @@ Changes**.
   The formal MVP boundary is set during Delivery Planning (Stage 2.9).
 - The `user-stories-assessment.md` artifact is always produced, even when the
   stage is skipped, to document the rationale.
-- The three identity-marked contribution files are mandatory ensemble evidence;
-  approval is refused until the lead has integrated all three.
+- With collaborators on, the three identity-marked contribution files are
+  mandatory ensemble evidence; approval is refused until the lead has
+  integrated all three. A lead-only run owes none.
 - Stories produced here are consumed by Refined Mockups (2.5), Domain
   Design (2.6), Units Generation (2.7), and Delivery Planning (2.9).
 - The aidlc-design-agent support is a deliberate addition for UX-informed
@@ -923,8 +939,8 @@ Unit represents an independently implementable piece of the system (a
 service, module, or deployable component). The stage produces the
 `unit-of-work.md` file that Construction uses to determine what to build,
 the dependency DAG (`unit-of-work-dependency.md`) that Stage 2.9 consumes
-for Bolt sequencing, and the story map that ensures every user story is
-assigned to a Unit.
+for Bolt sequencing, and the story map that ensures every user story (or every
+functional requirement, when no stories are produced) is assigned to a Unit.
 
 **Stage 2.7 produces the dependency DAG (topology). Stage 2.9 chooses the
 economic path through it (the Bolt sequence).** 2.7 MUST NOT recommend an
@@ -1003,8 +1019,8 @@ All 4 artifacts written to `<record>/inception/units-generation/`:
 |---------------------------------|-------------------------------------------------------------|
 | `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
 | `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
-| `unit-of-work-story-map.md`     | Each user story mapped to implementing Unit(s), cross-cutting stories spanning multiple Units, story implementation order within each Unit, coverage verification (every story assigned, every Unit has stories) |
-| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every story maps to its declared target Unit; validated by the `traceability` sensor |
+| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
+| `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every enumerated ID maps to its declared target Unit; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
@@ -1036,8 +1052,9 @@ Standard 2-option gate: **Approve** (continue to Construction phase) /
   completion gate.
 - The dependency DAG feeds 2.9's economic Bolt sequencing. 2.9 chooses a
   path through the DAG weighted by risk, value, and learning.
-- The story map provides traceability: every user story must be assigned to at
-  least one Unit, and every Unit must have at least one story.
+- The story map provides traceability: every user story (or every functional
+  requirement, when no stories are produced) must be assigned to at least one
+  Unit, and every Unit must have at least one row.
 - The aidlc-delivery-agent provides feasibility validation and prioritization input,
   ensuring the decomposition is practical from a delivery perspective.
 

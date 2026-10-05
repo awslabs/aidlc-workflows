@@ -54,6 +54,10 @@ stage that does not apply reports
   completing it. Surface ambiguity early rather than carrying an unresolved
   contradiction forward.
 
+## Files and commands
+
+Write and edit files yourself with your file tools, never through the shell (no heredoc, no `echo`, `printf`, or `python3` writing a file, no `sed -i`, no `mkdir`; the file-write tool creates any missing folder). A command the person asks for, or one the plan names (a package install, a build, a scaffolder, a migration, a formatter, a code generator, even a `mkdir`), still runs as written. Read, list, and search (your own knowledge files included) with your file tools where you have them; where the shell is your only way to read, use one plain read command (no `cd` before it, no pipe or second command after it). Run every AI-DLC command exactly as written, as a command of its own (no `cd` before it, no pipe or second command after it): a shell line can stop and ask the person to approve it.
+
 ## Keeping the diary (memory.md)
 
 Only when `directive.protocol_modules` lists `learnings` and `directive.single !== true`, keep an observation diary at the `memory_path` the `run-stage`
@@ -63,9 +67,10 @@ directive carries (`<record>/<phase>/<stage>/memory.md`). Otherwise keep no diar
    `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` when it emits the
    directive. NEVER probe for `memory.md`, or any other maybe-absent file, with a
    read tool: reading an absent path is a failed tool call. In the rare case an
-   append finds the diary missing, bootstrap it with exactly one idempotent POSIX
-   command: `mkdir -p "$(dirname "<memory_path>")" && { [ -f "<memory_path>" ] || cp "{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md" "<memory_path>"; }`.
-   Never overwrite; re-entry or resume must keep accumulated entries.
+   append finds the diary missing, create it with your file-write tool, writing
+   the text of `{{HARNESS_DIR}}/knowledge/aidlc-shared/memory-template.md` to
+   `<memory_path>` (the write tool creates the folder). Never overwrite an
+   existing diary; re-entry or resume must keep accumulated entries.
 2. During the stage, append timestamped bullets under the matching canonical
    heading as observations arise — Interpretation, Deviation, Tradeoff, or Open
    question. This is your diary-keeping (see `stage-protocol-learnings.md` §13); the four
@@ -107,7 +112,7 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
   stage from scratch (discard partial artifacts), then re-run the relevant part
   and re-present the gate. The loop stays within the current stage but reports
   through the engine at each turn: `report --result rejected --user-input
-  "Request Changes" --reason "<feedback>"` records the
+  "Request Changes" --reason '<feedback>'` records the
   feedback, and after the revision (re-running the `stage-protocol-reviewer.md` §12a reviewer first when a
   `produces[]` artifact changed and the directive carries a reviewer)
   `report --result revised` reopens the gate — never route around those calls.
@@ -153,4 +158,6 @@ current one `in_progress` with an `activeForm` that includes the `[slug]`
 suffix (a PostToolUse hook parses it to sync the statusline). A task must be
 `in_progress` for its spinner to show. After compaction, task IDs may be lost —
 recover them via `TaskList`, matching by subject. Task IDs are sidebar-only;
-they are never stored in state.
+they are never stored in state. Use `TaskCreate`/`TaskUpdate`, or the plan or
+todo tool your skill maps them to, only when it is in your tool list; otherwise
+skip the sidebar silently.

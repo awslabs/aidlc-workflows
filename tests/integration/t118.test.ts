@@ -490,10 +490,18 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(directive(r).kind).toBe("done");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("SP7-invalid: an unmatched gate reply is acknowledged, leaves the gate open, and does not consume the retry", () => {
+  // The agent reads the person's reply and reports the choice they made; the
+  // engine requires a reply since the gate was shown and a named choice.
+  function heldGate(revisions = 0): { p: string; guardedEnv: NodeJS.ProcessEnv } {
     const p = projWithState("state-mid-ideation.md");
     const guardedEnv = { ...process.env };
     delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    if (revisions > 0) {
+      writeFileSync(
+        statePath(p),
+        readFileSync(statePath(p), "utf-8").replace("- **Revision Count**: 0", `- **Revision Count**: ${revisions}`),
+      );
+    }
     run(ORCHESTRATE, [
       "report",
       "--stage",
@@ -504,131 +512,52 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     appendAuditEntry("HUMAN_TURN", {}, p);
+    return { p, guardedEnv };
+  }
+  const report = (p: string, env: NodeJS.ProcessEnv, args: string[]) =>
+    directive(run(ORCHESTRATE, ["report", ...args, "--project-dir", p], env));
 
-    const invalid = directive(
-      run(ORCHESTRATE, [
-        "report",
-        "--result",
-        "approved",
-        "--user-input",
-        "maybe later",
-        "--project-dir",
-        p,
-      ], guardedEnv),
-    );
+  test("SP7-invalid: a report that names no choice leaves the gate open; the agent's approval then records", () => {
+    const { p, guardedEnv } = heldGate();
+    const invalid = report(p, guardedEnv, ["--result", "approved"]);
     expect(invalid.kind).toBe("error");
-    expect(invalid.message).toContain('received reply "maybe later"');
-    expect(invalid.message).toContain("did not match an offered choice");
-    expect(invalid.message).toContain("Ask one short follow-up");
-    expect(invalid.message).not.toContain("Valid choices are");
+    expect(invalid.message).toContain("names no choice");
+    // Their reply is on record: the agent reports the choice it read, and the
+    // person is not asked again.
+    expect(invalid.message).toContain("The person has replied since the gate was shown");
+    expect(invalid.message).toContain("without asking them again");
+    expect(invalid.message).not.toContain("show the gate");
     expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
     expect(eventCount(p, "GATE_APPROVED")).toBe(0);
 
-    const accepted = directive(
-      run(ORCHESTRATE, [
-        "report",
-        "--result",
-        "approved",
-        "--user-input",
-        "go ahead",
-        "--project-dir",
-        p,
-      ], guardedEnv),
-    );
-    // The person's own words approve.
+    const accepted = report(p, guardedEnv, ["--result", "approved", "--user-input", "Approve"]);
     expect(accepted.kind).toBe("done");
     expect(eventCount(p, "GATE_APPROVED")).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("SP7-reject: a change request in the person's words rejects; an approval does not", () => {
-    const p = projWithState("state-mid-ideation.md");
-    const guardedEnv = { ...process.env };
-    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    run(ORCHESTRATE, [
-      "report",
-      "--stage",
-      "feasibility",
-      "--result",
-      "awaiting-approval",
-      "--project-dir",
-      p,
-    ]);
-    appendAuditEntry("HUMAN_TURN", {}, p);
-
-    const approving = directive(run(ORCHESTRATE, [
-      "report",
-      "--result",
-      "rejected",
-      "--user-input",
-      "approved",
-      "--reason",
-      "tighten the schema",
-      "--project-dir",
-      p,
-    ], guardedEnv));
-    expect(approving.kind).toBe("error");
+  test("SP7-reject: a change request needs what should change; with it, the gate is sent back", () => {
+    const { p, guardedEnv } = heldGate();
+    const bare = report(p, guardedEnv, ["--result", "rejected", "--user-input", "Request Changes"]);
+    expect(bare.kind).toBe("error");
+    expect(bare.message).toContain("Request Changes requires nonblank revision feedback");
     expect(eventCount(p, "GATE_REJECTED")).toBe(0);
 
-    const accepted = directive(run(ORCHESTRATE, [
-      "report",
-      "--result",
-      "rejected",
-      "--user-input",
-      "Request Changes: tighten the schema",
-      "--reason",
-      "tighten the schema",
-      "--project-dir",
-      p,
-    ], guardedEnv));
+    const accepted = report(p, guardedEnv, [
+      "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten the schema",
+    ]);
     expect(accepted.kind).toBe("print");
     expect(eventCount(p, "GATE_REJECTED")).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("SP7-escape: Accept as-is is accepted only after three revision cycles", () => {
-    const p = projWithState("state-mid-ideation.md");
-    const guardedEnv = { ...process.env };
-    delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    run(ORCHESTRATE, [
-      "report",
-      "--stage",
-      "feasibility",
-      "--result",
-      "awaiting-approval",
-      "--project-dir",
-      p,
-    ]);
-    appendAuditEntry("HUMAN_TURN", {}, p);
+  test("SP7-escape: Accept as-is is recorded only once it is on offer, after three revision cycles", () => {
+    const early = heldGate();
+    expect(report(early.p, early.guardedEnv, ["--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
+    expect(readAudit(early.p)).toContain("**User Input**: Approve\n");
+    expect(readAudit(early.p)).not.toContain("**User Input**: Accept as-is");
 
-    const premature = directive(run(ORCHESTRATE, [
-      "report",
-      "--result",
-      "approved",
-      "--user-input",
-      "Accept as-is",
-      "--project-dir",
-      p,
-    ], guardedEnv));
-    expect(premature.kind).toBe("error");
-    expect(eventCount(p, "GATE_APPROVED")).toBe(0);
-
-    writeFileSync(
-      statePath(p),
-      readFileSync(statePath(p), "utf-8").replace(
-        "- **Revision Count**: 0",
-        "- **Revision Count**: 3",
-      ),
-    );
-    const accepted = directive(run(ORCHESTRATE, [
-      "report",
-      "--result",
-      "approved",
-      "--user-input",
-      "Accept as-is",
-      "--project-dir",
-      p,
-    ], guardedEnv));
-    expect(accepted.kind).toBe("done");
-    expect(eventCount(p, "GATE_APPROVED")).toBe(1);
+    const offered = heldGate(3);
+    expect(report(offered.p, offered.guardedEnv, ["--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
+    expect(readAudit(offered.p)).toContain("**User Input**: Accept as-is\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ============================================================

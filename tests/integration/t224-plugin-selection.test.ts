@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_MEMORY_SRC,
@@ -81,6 +82,7 @@ interface GraphStage {
   enabled?: false;
   produces?: string[];
   sensors?: string[];
+  plugin?: string;
 }
 function graph(project: string): GraphStage[] {
   return JSON.parse(readFileSync(graphPath(project), "utf-8"));
@@ -332,6 +334,40 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(result.stderr).toContain("test-pro");
   });
 
+  test("a composed plugin that owns no stage or scope can be selected, and disabling it strips its sensors (#1590)", () => {
+    const proj = join(tmp, "contribution-only");
+    composePluginFixture({ plugin: PLUGIN, harness: "claude", projectDir: proj, pluginBuilt });
+    const claude = join(proj, ".claude");
+    for (const phase of readdirSync(join(claude, "aidlc-common", "stages"))) {
+      for (const file of readdirSync(join(claude, "aidlc-common", "stages", phase))) {
+        if (file.startsWith(`${PLUGIN}-`)) rmSync(join(claude, "aidlc-common", "stages", phase, file));
+      }
+    }
+    for (const file of readdirSync(join(claude, "scopes"))) {
+      if (file.startsWith(`${PLUGIN}-`)) rmSync(join(claude, "scopes", file));
+    }
+    const compile = spawnSync(BUN, [join(claude, "tools", "aidlc-graph.ts"), "compile"], {
+      cwd: proj,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(compile.status, compile.stderr).toBe(0);
+    const buildSensors = () => graph(proj).find((s) => s.slug === "build-and-test")?.sensors ?? [];
+    expect(graph(proj).some((s) => s.plugin === PLUGIN)).toBe(false);
+    expect(buildSensors()).toContain("coverage-threshold");
+
+    const both = runUtility(proj, ["select-plugins", `aidlc,${PLUGIN}`]);
+    expect(both.status, both.stderr).toBe(0);
+    expect(buildSensors()).toContain("coverage-threshold");
+
+    const core = runUtility(proj, ["select-plugins", "aidlc"]);
+    expect(core.status, core.stderr).toBe(0);
+    expect(core.stdout).toContain(`Stripped merged contributions of disabled plugin(s): ${PLUGIN}`);
+    expect(buildSensors()).not.toContain("coverage-threshold");
+    expect(buildSensors()).not.toContain("requirement-coverage");
+  });
+
   // Disabling a plugin an ACTIVE workflow depends on would strand it: the
   // state file's scope out-ranks --scope, so every later /aidlc hard-errors
   // with no in-band recovery. select-plugins must refuse, and doctor must
@@ -411,6 +447,39 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("pending stage");
     expect(result.stderr).toContain("test-pro-integration");
+  });
+
+  // config project is the person's own choice, so it is done while work is
+  // open; the line says which work stops until the plugin is on again.
+  test("config project turning off a plugin open work needs is done and says which work stops", () => {
+    const proj = join(tmp, "strand-config-project");
+    composePluginFixture({
+      plugin: PLUGIN,
+      harness: "claude",
+      projectDir: proj,
+      pluginBuilt,
+    });
+    const config = (...args: string[]) => spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc.ts"), "config", ...args], {
+      cwd: proj,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    // The composed fixture was copied with no config run, so nothing records
+    // its files yet; one forced refresh from the same release records them, as
+    // an install would.
+    const recorded = config("--from", join(REPO_ROOT, "dist", "claude"), "--force", "--yes");
+    expect(recorded.status, `${recorded.stdout}${recorded.stderr}`).toBe(0);
+    seedActiveWorkflow(proj, "test-pro-validation");
+    const result = config("project", "--plugins", "aidlc", "--yes");
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "default/strand-probe-deadbeef needs the test-pro plugin, which is now off, so it continues once it is on again.",
+    );
+    expect(result.stdout).not.toContain("carries on");
+    // Nothing was recorded before, so --reset (every plugin on) is the undo.
+    expect(result.stdout).toContain("config project --reset --yes");
+    expect(JSON.parse(readFileSync(harnessPath(proj), "utf-8")).plugins).toEqual(["aidlc"]);
   });
 
   test("doctor flags a selection that already strands an active workflow", () => {

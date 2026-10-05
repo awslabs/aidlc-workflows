@@ -81,7 +81,9 @@ Run `{{INVOKE}} engine workspace detect --json`. Returns workspace scan
 + `scopeGridPath`, and `proposalPath`. You read the first two, and
 you never write a scope file. The only file you write is `proposalPath`, the
 project-relative proposal file you hand to `validate-grid` (Step 6; git
-ignores it).
+ignores it). When your task says the person named the project type (new
+project or existing code), that type is the project type for every later
+step, in place of the scan's projectType.
 
 ### Step 2: Estimate the Autonomy Risk Score (ARS)
 
@@ -566,8 +568,9 @@ the grid you last wrote there.
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
-<settings> }` so the validator checks the five scope settings (Step 8) with the
-grid; an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
+<settings> }` so the validator checks the six scope settings (Step 8) with the
+grid (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`,
+`collaborators`, `review_cap`); an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
 a front/report proposal, its final run also names that route, `--matched
 <stock-scope>` or `--custom` (Step 8). Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
@@ -618,7 +621,7 @@ keep it as advisory evidence only. Route solely on
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
 - To confirm depth compatibility and read its settings (`guard_policy`,
-  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `review_cap`), read the `.md`
+  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`, `review_cap`), read the `.md`
   of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
   takes its settings and Guard Policy from the validator's `custom_start`
   instead (Step 8), and reads that file for its settings only when the
@@ -667,7 +670,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
   "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
-  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "review_cap": "adversarial | advisory | none" },
+  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "collaborators": "on | off", "review_cap": "adversarial | advisory | none" },
   "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "creationSettings": { "learnings": "off", "review": "adversarial" },
   "settingsChanges": { "sensors": "off" },
@@ -720,9 +723,10 @@ return the running intent's current value unchanged (read `Guard Policy` from
 `aidlc-state.md`, or the retired `Change Control` line on an intent created
 before the rename); the composer never flips it. Mark that row read-only in
 the rendered proposal: a recompose lands only `changes.skip` / `changes.add`,
-so a policy edit there would be discarded. Name the routes instead: raise or
-lower by typing `/aidlc --guard-policy <value>` (`$aidlc` on Codex), then
-change scope if needed. Changing scope alone never lowers the running policy.
+so a policy edit there would be discarded. Name the route instead: when the
+person asks to raise or lower it, the conductor runs
+`{{INVOKE}} engine config set guard-policy <value>`, before any scope change
+they also asked for. Changing scope alone never lowers the running policy.
 Pass `guardPolicy` to `validate-grid --guard-policy <value>` so the
 validator checks it with the grid. For a front composition the conductor
 renders it as its own gate row so the human can flip it before approving.
@@ -739,7 +743,7 @@ afterwards. A flip above the default keeps `mode: "matched"`: revalidate with
 `--matched`, and creation applies the value through `--guard-policy`.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
-omitted for `mode: "in-flight"`. The grid decides which stages run; these five
+omitted for `mode: "in-flight"`. The grid decides which stages run; these six
 settings decide how much ceremony runs inside them. Each uses the exact word
 its scope file uses: `sensors` (`on | off`: automatic sensor runs and their
 gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
@@ -751,7 +755,9 @@ scope's or a custom plan's `custom_start`: never propose turning it off, since
 only the person does that, and the validator rejects off where the scope the
 plan runs on asks. When the person asks at the gate to skip plan approval, the harness
 records their words and creation turns it off, so the proposal stays as it
-is), and `review_cap` (`adversarial | advisory |
+is), `collaborators` (`on | off`: whether stages bring in their support agents
+or run with the lead agent only; keep the value you start from, and propose
+`on` only when the person asks for the specialists), and `review_cap` (`adversarial | advisory |
 none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
 turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
@@ -766,13 +772,13 @@ ceremony a person gets without composing (when the validator echoes no
 that the human's edit turns custom keeps the Guard Policy and settings the
 gate showed, with their change applied. Either way, move one
 only when the evidence gives a reason, as a SKIP needs one (see "Scope
-settings" in `composing.md`). No value removes a
+settings" in `{{HARNESS_DIR}}/knowledge/aidlc-composer-agent/composing.md`). No value removes a
 gate, Plan Approval, a required question, or the audit trail. A global kill
 switch such as `AIDLC_DISABLE_SENSORS=1` still forces its ceremony off
 whatever the scope says: when the validator's advisories name one forcing an
 `on` value off on this machine, say so beside that value in the settings row.
 
-Once the five values are chosen, run `validate-grid` on the final grid with
+Once the six values are chosen, run `validate-grid` on the final grid with
 them and with its route: `--matched <scopeName>` or `--custom`. Either flag
 makes `scopeSettings` and the Guard Policy required; the validator rejects an
 unknown key, a missing key, or any other word, echoes the accepted values as
@@ -805,21 +811,21 @@ In-flight, a request to turn one of these on or off is not a stage flip and a
 recompose cannot land it, so leave it out of `changes` and return
 `settingsChanges`: typed values the conductor shows the human on the gate and
 applies only on their approval. Return only settings the human's request asks
-for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`, and
-`summary_confirmation` (`on | off`), `plan_approval` (`on` only: the person
+for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`,
+`summary_confirmation`, and `collaborators` (`on | off`), `plan_approval` (`on` only: the person
 turns plan approval off in their own words, never through a proposal), and
 `review` (`adversarial | advisory | none`). A review level set for the piece of work replaces its scope's
 ceiling, so a request for full reviews is `"review": "adversarial"` even on a
 capped scope, and no stage changes; the scope's own level (for example
 `"advisory"` on bugfix) returns it to the scope's normal reviews. Before returning an `on` switch, read the
 effective value with `{{INVOKE}} engine config get
-<sensors|learnings|summary-confirmation>`: when it reports `from env
+<sensors|learnings|summary-confirmation|collaborators>`: when it reports `from env
 AIDLC_DISABLE_<NAME>`, a kill switch set on this machine overrides every
 setting, so return no change for it and say in one line that it has to be
 removed outside the agent. Never look for where it is set: do not open shell
 startup files, environment listings, or harness settings files, which can
 hold credentials; `config get` is the only reading you take.
-Never put command text in either object: only those five keys and their
+Never put command text in either object: only those six keys and their
 listed words.
 A request that is only about settings returns empty `changes.skip` and
 `changes.add`.

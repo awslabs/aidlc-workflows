@@ -16,14 +16,19 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { createInterface } from "node:readline/promises";
 import {
   errorMessage,
   parseArgs,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
+import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
+  aidlcInvocation,
   compiledExecutable,
+  LinkedFolderError,
+  refuseLinkOnTheWay,
+  resolveHarnessPath,
+  resolveSkillsPath,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
 import {
@@ -146,7 +151,9 @@ function regularFiles(root: string): string[] {
 }
 
 function surfaceFiles(root: string): string[] {
-  if (!existsSync(root)) return [];
+  // A surface that is itself a link stays out of the staged copy, so it stays
+  // out of the diff too.
+  if (!existsSync(root) || lstatSync(root).isSymbolicLink()) return [];
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory).sort()) {
@@ -290,7 +297,7 @@ function deduplicateInventory(
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
-    values.push(entry);
+    if (!values.some((value) => value.manifestPath === entry.manifestPath)) values.push(entry);
     byKey.set(entry.key, values);
   }
   const installed: InstalledPlugin[] = [];
@@ -345,7 +352,7 @@ function currentRootInventory(harness: PluginInventory["harness"]): PluginInvent
   };
 }
 
-function claudeInventory(): PluginInventory {
+function claudeInventory(projectDir: string): PluginInventory {
   const registryPath = absolute(
     process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY ??
       join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "plugins", "installed_plugins.json"),
@@ -399,6 +406,24 @@ function claudeInventory(): PluginInventory {
       enabledPlugins = rawEnabled as Record<string, unknown>;
     }
   }
+  // Claude Code loads a project-scope plugin wherever the project's committed
+  // settings enable it, so a second clone or worktree with no record of its
+  // own uses the project-scope records.
+  let projectEnabled: Record<string, unknown> = {};
+  try {
+    const raw = (readJson(join(projectDir, ".claude", "settings.json")) as Record<string, unknown> | null)
+      ?.enabledPlugins;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) projectEnabled = raw as Record<string, unknown>;
+  } catch {
+    // A missing or unreadable project settings file enables nothing here.
+  }
+  const elsewhere = (raw: unknown): boolean => {
+    const entry = raw as Record<string, unknown>;
+    return !!raw && typeof raw === "object" && !Array.isArray(raw) &&
+      (entry.scope === "local" || entry.scope === "project") &&
+      typeof entry.projectPath === "string" && isAbsolute(entry.projectPath) &&
+      !policyPathWithin(entry.projectPath, projectDir);
+  };
   const plugins = registry && typeof registry === "object" &&
       !Array.isArray(registry) &&
       (registry as Record<string, unknown>).version === 2 &&
@@ -419,7 +444,11 @@ function claudeInventory(): PluginInventory {
         invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has no installed records` });
         continue;
       }
-      for (const rawEntry of rawEntries) {
+      const own = rawEntries.filter((raw) => !elsewhere(raw));
+      const records = own.length > 0 || projectEnabled[id] !== true
+        ? own
+        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project");
+      for (const rawEntry of records) {
         if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
           invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has an invalid installed record` });
           continue;
@@ -536,9 +565,12 @@ function codexInventory(): PluginInventory {
   };
 }
 
-export function discoverPluginInventory(harnessDir = runtimeHarnessDir()): PluginInventory {
+export function discoverPluginInventory(
+  harnessDir = runtimeHarnessDir(),
+  projectDir = resolveProjectDir(),
+): PluginInventory {
   const harness = harnessKind(harnessDir);
-  if (harness === "claude") return claudeInventory();
+  if (harness === "claude") return claudeInventory(projectDir);
   if (harness === "codex") return codexInventory();
   return currentRootInventory(harness);
 }
@@ -749,7 +781,7 @@ export function comparePluginState(
       state: provedMissing ? "installed-missing" : "inventory-unavailable",
       action: provedMissing ? "attention" : "current",
       message: provedMissing
-        ? "installed plugin missing; reinstall via host, or sync --prune-missing"
+        ? `installed plugin missing; reinstall it in your host, or run \`${aidlcInvocation()} engine plugin sync --prune-missing\` to remove what it added`
         : "not compared: no host plugin list",
     });
   }
@@ -762,7 +794,7 @@ export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
 ): { inventory: PluginInventory; statuses: PluginStatus[] } {
-  const inventory = discoverPluginInventory(harnessDir);
+  const inventory = discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   return {
@@ -884,15 +916,62 @@ function writeCompositionRecords(
   );
 }
 
+function firstLinkInside(
+  directory: string,
+  own: (name: string) => boolean = () => true,
+): string | null {
+  if (!existsSync(directory)) return null;
+  for (const entry of readdirSync(directory).sort()) {
+    if (!own(entry)) continue;
+    const path = join(directory, entry);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return path;
+    if (stat.isDirectory()) {
+      const nested = firstLinkInside(path);
+      if (nested !== null) return nested;
+    }
+  }
+  return null;
+}
+
+// A staged run reads AI-DLC's own folders and writes them back. A link on the
+// way to one, or anywhere inside one, would take what it reads or writes
+// outside this project, so the command stops before anything changes.
+function refuseLinkedOwnFolders(projectDir: string, harnessDir: string): void {
+  const location = { mutable: true, projectDir, harnessDir };
+  const refuse = (folder: string, own?: (name: string) => boolean): void => {
+    refuseLinkOnTheWay(projectDir, folder);
+    const inside = firstLinkInside(folder, own);
+    if (inside !== null) throw new LinkedFolderError(relative(projectDir, inside));
+  };
+  for (const name of ["tools", "aidlc-common", "scopes", "sensors"]) {
+    refuse(resolveHarnessPath([name], location));
+  }
+  refuse(join(projectDir, "aidlc"));
+  // A person keeps their own agents and skills beside AI-DLC's.
+  const aidlcNamed = (name: string): boolean => name.startsWith("aidlc");
+  refuse(resolveHarnessPath(["agents"], location), aidlcNamed);
+  refuse(resolveSkillsPath([], location), aidlcNamed);
+}
+
 export function copyProjectSurfaces(
   projectDir: string,
   stagedProject: string,
   harnessDir: string,
 ): void {
+  refuseLinkedOwnFolders(projectDir, harnessDir);
   mkdirSync(stagedProject, { recursive: true });
   for (const entry of [harnessDir, ".agents", ".github", ".opencode", "aidlc"]) {
     const source = join(projectDir, entry);
-    if (existsSync(source)) cpSync(source, join(stagedProject, entry), { recursive: true });
+    // No link reaches the staged copy, so nothing a staged step writes can
+    // land outside it. A person's own link (a skill of theirs, say) stays as
+    // it is, and the plan refuses a write that would go through it.
+    if (existsSync(source)) {
+      cpSync(source, join(stagedProject, entry), {
+        recursive: true,
+        filter: (path) => !lstatSync(path).isSymbolicLink(),
+      });
+    }
   }
 }
 
@@ -1051,7 +1130,9 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
   let records: Record<string, {
     produces?: string[];
     sensors?: string[];
-    consumes?: string[];
+    // Compose records consumed artifacts as objects; the shape must match the
+    // compose hook's output or the strip matches nothing. See issue #1247.
+    consumes?: Array<string | { artifact: string; required: boolean; conditional_on?: string }>;
     required_sections?: string[];
     required_sections_created?: boolean;
   }> = {};
@@ -1075,7 +1156,12 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       if (record) {
         if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
         if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
-        if (record.consumes?.length) after = removeConsumes(after, new Set(record.consumes));
+        if (record.consumes?.length) {
+          after = removeConsumes(
+            after,
+            new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
+          );
+        }
         if (record.required_sections?.length) {
           after = removeListValues(
             after,
@@ -1113,8 +1199,9 @@ function pruneOwnedPlugin(
     rmSync(assertOwnedPath(stagedProject, file.path), { force: true });
   }
   const dataDir = harnessDataDir(stagedProject, harnessDir);
-  rmSync(join(dataDir, `plugin-owned-${key}.json`), { force: true });
-  rmSync(join(dataDir, `plugin-compose-${key}.json`), { force: true });
+  for (const name of [`plugin-owned-${key}.json`, `plugin-compose-${key}.json`, `plugin-files-${key}.json`]) {
+    rmSync(join(dataDir, name), { force: true });
+  }
 }
 
 function replaceOwnedPluginPrimitives(
@@ -1257,6 +1344,7 @@ export function projectDiffPlan(
     const stagedBytes = readFileSync(staged);
     if (current && readFileSync(current).equals(stagedBytes) &&
       (lstatSync(current).mode & 0o777) === (lstatSync(staged).mode & 0o777)) continue;
+    refuseLinkOnTheWay(projectDir, join(projectDir, ...path.split("/")));
     operations.push(writeOperation(
       path,
       stagedBytes,
@@ -1288,27 +1376,26 @@ function compositionIsCurrent(
   });
 }
 
-export async function confirmPrune(
+// The person asked for --prune-missing, so at a terminal it says what goes and
+// how to get it back, then prunes. A script or an agent passes --yes.
+// A command used the wrong way, which exits 2 like every other usage refusal.
+class PluginUsageError extends Error {}
+
+export function announcePrune(
   argv: string[],
   keys: string[],
-  input: NodeJS.ReadableStream & { isTTY?: boolean } = process.stdin,
-  output: NodeJS.WritableStream = process.stdout,
-): Promise<void> {
+  input: { isTTY?: boolean } = process.stdin,
+  output: NodeJS.WritableStream = argv.includes("--json") ? process.stderr : process.stdout,
+): void {
   if (keys.length === 0 || argv.includes("--yes")) return;
   if (!input.isTTY) {
-    throw new Error("plugin sync --prune-missing requires --yes in non-interactive mode");
+    throw new PluginUsageError("plugin sync --prune-missing requires --yes in non-interactive mode");
   }
-  const lines = createInterface({ input, output });
-  let response: string;
-  try {
-    response = await lines.question(
-      `Prune composed content for missing plugin(s) ${keys.join(", ")}? [y/N] `,
-    );
-  } finally {
-    lines.close();
-  }
-  response = response.trim().toLowerCase();
-  if (response !== "y" && response !== "yes") throw new Error("plugin prune cancelled");
+  output.write(
+    `Pruning missing plugin(s) ${keys.join(", ")}: removing the files they added to this project ` +
+      "and their additions to stage files. To get them back, reinstall " +
+      `the plugin(s) in your host, then run ${aidlcInvocation()} engine plugin sync.\n`,
+  );
 }
 
 export async function syncPlugins(
@@ -1320,7 +1407,7 @@ export async function syncPlugins(
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
-    : discoverPluginInventory(harnessDir);
+    : discoverPluginInventory(harnessDir, projectDir);
   const evidence = projectEvidence(projectDir, harnessDir);
   const selection = selectedPlugins(projectDir, harnessDir);
   const prune = argv.includes("--prune-missing");
@@ -1356,7 +1443,7 @@ export async function syncPlugins(
     }
   }
   const pruned = prune ? missing : [];
-  await confirmPrune(argv, pruned);
+  announcePrune(argv, pruned);
   if (
     pruned.length === 0 &&
     plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))
@@ -1385,6 +1472,11 @@ export async function syncPlugins(
       await runComposer(plugin, stagedProject, harnessDir);
     }
     for (const key of pruned) {
+      // The staged copy holds no link, so a plugin file behind one is checked
+      // where it really is.
+      for (const file of evidence.ownership.get(key)?.files ?? []) {
+        refuseLinkOnTheWay(projectDir, assertOwnedPath(projectDir, file.path));
+      }
       pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key));
     }
     const claimedPaths = new Set<string>();
@@ -1455,7 +1547,7 @@ function jsonEnvelope(
     schemaVersion: 1,
     ok: code === 0,
     code,
-    status: code === 0 ? "ok" : "failed",
+    status: code === 0 ? "ok" : code === 2 ? "usage" : "failed",
     message,
     data,
   })}\n`;
@@ -1486,9 +1578,10 @@ export async function main(argv: string[]): Promise<void> {
     throw new Error("usage: aidlc engine plugin <list|sync [--prune-missing]>");
   } catch (error) {
     const message = errorMessage(error);
-    if (flags.json === "true") process.stdout.write(jsonEnvelope(1, message, null));
+    const code = error instanceof PluginUsageError ? 2 : 1;
+    if (flags.json === "true") process.stdout.write(jsonEnvelope(code, message, null));
     else process.stderr.write(`aidlc engine plugin: ${message}\n`);
-    process.exitCode = 1;
+    process.exitCode = code;
   }
 }
 

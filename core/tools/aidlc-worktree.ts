@@ -76,12 +76,14 @@ import {
   workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
+  unmergedRootSettingsNotices,
   workspaceSourceState,
   worktreePath,
   worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
   REPO_NAME_REGEX,
+  entrySkillInvocation,
 } from "./aidlc-lib.js";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -2582,6 +2584,23 @@ function handleMerge(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  // An archived workflow's Bolt work stays on disk as it is, and lands nowhere
+  // until the person brings the workflow back.
+  if (selection.intent !== null) {
+    let parentState = "";
+    try {
+      parentState = readStateFile(pd, selection.intent, selection.space);
+    } catch {
+      // No parent state to read: the checks below decide.
+    }
+    if (getField(parentState, "Status") === "Archived") {
+      errorWithSlug(
+        slug,
+        "Cannot merge a Bolt for an Archived workflow. Bring it back first with " +
+          `\`${entrySkillInvocation()} intent unarchive ${selection.intent}\`.`,
+      );
+    }
+  }
   const identity = resolveCommandBoltIdentity(pd, slug, selection);
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
@@ -3016,6 +3035,10 @@ function handleMerge(args: string[]): void {
     }
   }
   assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
+  // A setting changed in the worktree did not land and goes with it: say so
+  // before the checkout is reset.
+  const notices = sourceRecord?.kind === "bound" ? unmergedRootSettingsNotices(wtPath) : [];
+  for (const notice of notices) process.stderr.write(`note: ${notice}\n`);
   // A swarm snapshot does not move the Bolt branch, so reviewed application
   // files may still be modified/untracked in this disposable checkout. Once
   // that immutable source has landed, align the checkout to it before forced
@@ -3156,6 +3179,7 @@ function handleMerge(args: string[]): void {
       strategy,
       commit_sha: commitSha,
       audit_timestamp: auditTs,
+      ...(notices.length > 0 ? { notices } : {}),
     })
   );
 }

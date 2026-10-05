@@ -209,6 +209,20 @@ describe("t302 conditional protocol modules", () => {
       learnings: "on",
       summary_confirmation: "off",
       plan_approval: "on",
+      collaborators: "off",
+    });
+  });
+
+  // bugfix declares learnings and summary confirmation off in its own
+  // frontmatter: no "Anything to add for next time?" ritual and no summary to
+  // confirm, while sensors, the advisory reviewer, and plan approval stay.
+  test("bugfix requirements-analysis keeps the advisory reviewer and sensors, without learnings", () => {
+    const directive = directiveFor("requirements-analysis", "bugfix");
+    expect(moduleList(directive)).toEqual(["reviewer"]);
+    expect(directive.review_class).toBe("advisory");
+    expect(directive.sensors_applicable).toEqual(["required-sections", "upstream-coverage"]);
+    expect(directive.ceremony).toEqual({
+      sensors: "on", learnings: "off", summary_confirmation: "off", plan_approval: "on", collaborators: "off",
     });
   });
 
@@ -222,7 +236,7 @@ describe("t302 conditional protocol modules", () => {
     expect(directive.review_class).toBe("advisory");
     expect(directive.sensors_applicable).toEqual([]);
     expect(directive.ceremony).toEqual({
-      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on",
+      sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on", collaborators: "off",
     });
   });
 
@@ -347,6 +361,7 @@ describe("t302 conditional protocol modules", () => {
       learnings: "on",
       summary_confirmation: "on",
       plan_approval: "on",
+      collaborators: "off",
     });
   });
 

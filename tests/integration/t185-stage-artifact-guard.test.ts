@@ -609,6 +609,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     resetAidlcEnv();
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+    // The fixture scope ships collaborators off, which would collapse the
+    // reverse-engineering pipeline to the developer lead alone and drop the
+    // architect link the codekb-placement cases record. Pin the switch on.
+    const sp = seededStateFile(proj);
+    writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
   });
 
   afterEach(() => cleanupTestProject(proj));
@@ -1370,7 +1375,7 @@ X. Other (please specify)
         'report --stage \\"feasibility\\" --result rejected',
       );
       expect(result.out).toContain(
-        '--user-input \\"Request Changes\\" --reason \\"<requested changes>\\"',
+        "--user-input \\\"Request Changes\\\" --reason '<requested changes>'",
       );
       expect(result.out).toContain("Re-save each generated artifact");
       expect(result.out).toContain("rerun the section-12a reviewer");

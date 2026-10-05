@@ -71,13 +71,30 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`
   is the `TERM_PROGRAM` value the editor's built-in terminal sets; running
   `aidlc config` there makes this harness the wizard's default choice.
-  `hookActivation` is for a host that runs no hooks until the person acts: its
-  `recovery` and `missedReply` text feed doctor and the approval refusals.
-  Set its `notRunYet` only when the harness's hooks leave a heartbeat on the
-  first chat message; doctor then warns with that text while no heartbeat
-  exists. Kiro IDE declares all three. Kiro CLI declares `recovery` and
-  `missedReply` because its two engines read disjoint hook registrations, so a
-  restart on the wrong engine never brings the hooks back.
+  `hookActivation` is for a host that may run no hooks until the person acts.
+  Every text in it names only the person's own step, in the host's own words,
+  never hooks, the engine, or why; `<entry>`, `<folder>` and `<next>` are
+  filled in for the install. `recovery` is doctor's fix. Set `agentStep` only
+  when a hook on the agent's own shell command leaves a heartbeat in the record
+  before the engine runs, even with its own check switched off: it says what
+  the agent does itself and quotes the exact line it then shows the person.
+  `next` then stops with it as a `print` before any work once a stage has
+  started with no heartbeat at all, and in that same state the attended "no
+  new human reply" refusal carries it with "do not ask them to answer again".
+  Otherwise, or for a harness without `agentStep`, that refusal gives
+  `missedReply` instead (an `AIDLC_UNATTENDED=1`
+  run gets its own explanation), worded for a person who may not have replied
+  yet ("If the person already replied, ..."). Set `notRunYet` only when the
+  harness's hooks leave a heartbeat on the first chat message; doctor then
+  warns with that text while no heartbeat exists. Set `notRunInWorkflow` only
+  with `agentStep`: when the person has switched the presence check off, so
+  `next` does not stop, the engine adds that sentence to every directive's
+  `change_notices` instead. Claude Code, Codex CLI, Kiro CLI and opencode
+  declare `recovery` and `agentStep`; Copilot also `notRunYet` and
+  `notRunInWorkflow`; Kiro IDE `recovery`,
+  `missedReply` and `notRunYet`, and keeps its agent's step in its
+  orchestrator skill, since in a folder Kiro has not been allowed to run
+  commands in no AI-DLC command can run.
 - `directiveMaxBytes` (optional) - for a host that keeps less of one shell
   result than the engine's 28 KiB directive cap. The engine keeps every
   directive at or under it: stage rules ride inline only while they fit, and
@@ -136,6 +153,12 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   the IDE reads subagent tool grants from the `.md` frontmatter). Declared as
   manifest data so core stays single-source; the packager errors on a typo'd
   path, a missing frontmatter block, or a key core already declares.
+- `nativeReplacements` (optional) — exact `{ from, to }` text the release
+  channel swaps in before its generic invocation rewrite, for projected content
+  whose copy-channel spelling has no mechanical native form (kiro-ide's persona
+  shell deny). The packager errors when a `from` is absent from the projection,
+  and its projected-invocation check skips the `to` text, which is generated
+  from the route table.
 - `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
   The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
   references AND to the compiled stage-graph rule paths (it sets

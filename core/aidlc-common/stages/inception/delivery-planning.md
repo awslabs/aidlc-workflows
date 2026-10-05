@@ -238,15 +238,11 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-The human-turn hook reads the person's reply in that session to the pending
-command in their own words ("1", "approve" with a typo, "approved", or what
-they want changed). Only a reply that approves authorizes the receipt; an
-unrelated reply, **Request Changes**, or a reply from another session does not.
-Never write `--details "Approve"` unless their reply approves; passing their
-reply unchanged as one single-quoted `--details` argument (a `'` inside becomes
-`'\''` on POSIX shells, `''` on PowerShell) is always correct. Only then record their answer
-using the same session ID, and set the command with the matching
-tool-owned receipt:
+Read the person's reply in that session and record the choice they made. The
+human-turn hook keeps that they replied to this question and their exact words;
+a reply from another session, or to another question, does not count. When they
+approve, record their answer using the same session ID, and set the command with
+the matching tool-owned receipt:
 
 ```bash
 {{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"

@@ -141,7 +141,9 @@ SHA-256 algorithm normalizes CRLF/lone CR to LF, retains sections in file order,
 and trims trailing whitespace once from the resulting content. All visible
 Q<n> and feedback sections remain bound; one post-summary
 `Assumption Confirmation` section is excluded, up to any line spelled as a
-top-level `## Q<n>` or feedback heading. Comments, code, HTML, and a
+top-level `## Q<n>` or feedback heading. A `Q<n>` or
+`Assumption Confirmation` heading counts with or without a leading emoji
+decoration, by the claim-sources sensor's rule. Comments, code, HTML, and a
 leading BOM in retained content still affect the digest. Heading and answer
 recognition now uses the built-in `Bun.markdown` parser through `markdownBlocks`
 and `visibleMarkdownLines`; raw HTML block content is never a heading, answer,
@@ -493,9 +495,10 @@ inside a Bolt the reviewer is the only pre-merge verification, so the declared
 class always applies there. Like the cap, `review_class` requires a `reviewer`
 (schema error `review_class requires a reviewer`).
 
-Scope frontmatter also accepts four ceremony switches, each `on` | `off`
-(absent means on): `sensors`, `learnings`, `summary_confirmation`, and
-`plan_approval`.
+Scope frontmatter also accepts five ceremony switches, each `on` | `off`
+(absent means on, except `collaborators`, which ships on only on `enterprise`):
+`sensors`, `learnings`, `summary_confirmation`, `plan_approval`, and
+`collaborators` (off runs every stage lead-only; the reviewer is unaffected).
 The last is distinct from a stage's `summary_confirmation: required | if-present`:
 the scope/intent policy decides whether that checkpoint applies at all.
 `/aidlc --sensors on|off`, `/aidlc --learnings on|off`,
@@ -504,10 +507,10 @@ override an intent's scope default (only the person turns plan approval off).
 `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
 `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
 force the respective ceremony off. Classic enables sensors, learnings, and plan
-approval and disables summary confirmation; express and poc disable plan
-approval. Apart from plan approval off, which builds each code plan without
-asking, stage approvals, human-turn authority, audit, and team write protection
-remain in force.
+approval and disables summary confirmation; bugfix disables learnings and
+summary confirmation; express and poc disable plan approval. Apart from plan
+approval off, which builds each code plan without asking, stage approvals,
+human-turn authority, audit, and team write protection remain in force.
 
 ---
 

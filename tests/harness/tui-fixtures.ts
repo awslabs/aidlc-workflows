@@ -47,6 +47,7 @@ import {
   stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
+import { unbackedFailure, unbackedTuiDecisions } from "./person-turns.ts";
 import { bunSessionPaths } from "./tui-bun-backend.ts";
 import { TUI_TEST_FIXTURE_MARKER } from "./tui-drive.ts";
 import { windowsFolderHolderVerdict } from "./windows-folder-holders.ts";
@@ -130,11 +131,17 @@ export interface KiroNumberedProseAnswerState {
    *  prompt's distinct "before I ..." tail (one checkpoint per stage that ran
    *  a Q&A, so a multi-stage journey presents several). */
   confirmedSummaries: Set<string>;
+  /** False when the journey's scope turns learnings off: no stage asks
+   *  "Anything to add for next time?", so an approval needs no learning
+   *  response before it. */
+  learningsRequired: boolean;
   learningsAnswered: number;
   approvalsAnswered: number;
 }
 
-export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerState {
+export function createKiroNumberedProseAnswerState(
+  options: { learnings?: boolean } = {},
+): KiroNumberedProseAnswerState {
   return {
     guideModeChosen: false,
     answeredQuestions: new Set(),
@@ -142,6 +149,7 @@ export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerSta
     answeredFollowUps: new Set(),
     answeredClarifications: new Set(),
     confirmedSummaries: new Set(),
+    learningsRequired: options.learnings ?? true,
     learningsAnswered: 0,
     approvalsAnswered: 0,
   };
@@ -294,7 +302,7 @@ export function nextKiroNumberedProseAnswer(
       : "Nothing to add";
   }
   if (approvalPromptIndex > learningPromptIndex) {
-    if (state.learningsAnswered <= state.approvalsAnswered) {
+    if (state.learningsRequired && state.learningsAnswered <= state.approvalsAnswered) {
       throw new Error(
         "Kiro presented approval before the mandatory learning response completed",
       );
@@ -958,12 +966,23 @@ export function removeTuiProjectTreeWithRetry(
 }
 
 export function cleanupTuiProject(proj: string, options: TuiProjectCleanupOptions = {}): void {
+  // Every decision recorded as the person's needs a turn the driver sent. A
+  // record that is gone or short still lets the project be removed first.
+  let unbacked: string[] = [];
+  let record: unknown;
+  try {
+    unbacked = proj ? unbackedTuiDecisions(proj) : [];
+  } catch (error) {
+    record = error;
+  }
   if (process.env.AIDLC_KEEP_TEMP === "1") {
     if (proj) process.stderr.write(`[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved ${proj}\n`);
-    return;
+  } else {
+    if (proj) assertNoPendingTuiSessionsForProject(proj);
+    if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj, options);
   }
-  if (proj) assertNoPendingTuiSessionsForProject(proj);
-  if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj, options);
+  if (record !== undefined) throw record;
+  if (unbacked.length > 0) throw unbackedFailure("The TUI drive", unbacked);
 }
 
 export function assertTuiDriveKill(

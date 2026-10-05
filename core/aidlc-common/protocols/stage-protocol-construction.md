@@ -183,14 +183,10 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-The human-turn hook reads the person's reply in that session to the pending
-command in their own words ("1", "approve" with a typo, "approved", or what
-they want changed). Only a reply that approves authorizes the receipt; an
-unrelated reply, **Request Changes**, or a reply from another session does not.
-Never write `--details "Approve"` unless their reply approves; passing their
-reply unchanged as one single-quoted `--details` argument (a `'` inside becomes
-`'\''` on POSIX shells, `''` on PowerShell) is always correct. Only then record their answer
-using the same session ID, and set the command:
+Read the person's reply in that session and record the choice they made. The
+human-turn hook keeps that they replied to this question and their exact words;
+a reply from another session, or to another question, does not count. When they
+approve, record their answer using the same session ID, and set the command:
 
 ```bash
 {{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
@@ -239,7 +235,8 @@ human approval. An ordinary Unit needs one when `human_required` is true
 the verified ordinary Unit automatically. At a human checkpoint, run the §13
 learnings ritual for the represented stages only when
 `directive.protocol_modules` lists `learnings`. With the module listed,
-consolidate relevant candidates into one Unit learning question and persist only
+consolidate relevant candidates into one Unit learning question (log it and its
+answer with `--stage "<directive.stage>"`) and persist only
 the human's explicit selections through each owning stage's learning tools, then
 open the checkpoint approval with `ask` below as a separate question and turn. During automatic
 execution, retain candidates in the diaries for the next human checkpoint or
@@ -261,11 +258,11 @@ command, never abbreviated, in the approval question: "Verified with
 `<full command>` (exit 0). Approve this completed <unit>?" Use the full
 `verification_command` from the current tool output, with a code-span delimiter
 that preserves any backticks. The human's reply in that session, to this
-checkpoint question, authorizes the matching action whether they pick
-**Approve** / **Request Changes** or say it in their own words; an unrelated
-reply, another session's reply, or a reply to a different question does not.
-Pass their reply unchanged as one single-quoted `--user-input` argument; never
-pass a choice they did not make. The response is
+checkpoint question, authorizes the action you read from it: approve, or
+reject with what they asked to change (their words are kept with the record; add
+`--reason` when you want to say more). A reply from another session, or to a
+different question, does not count. When they approved and asked for a change,
+approve, then make the change and say in one line what you changed. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,
 re-verify, and ask again; a reply captured before re-verification cannot approve
@@ -593,7 +590,7 @@ impact-unestimated give-up option is a protocol violation.
 
 **Engine-driven per-unit iteration.** The orchestration engine now drives the per-Unit loop for the inline per-Unit design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it always has for code-generation: on a `next` that lands on an in-flight per-Unit stage (off the swarm path), the engine emits ONE `run-stage` directive per Unit, in Bolt build order, carrying the resolved Unit name in `directive.unit` and its artifact paths. The engine substitutes the next unsettled Unit on each `next`. For a stage-major or legacy stage gate, the stage's per-Unit gate is **suppressed** (`gate: false`) on every not-yet-settled Unit, and the stage's real gate is presented exactly once, on the re-entry after the LAST Unit settles, so a single stage-level approval covers all Units and cannot be reached until every Unit is built (the same "per-Unit gate suppressed, single gate replaces it" rule, now applied across all five per-Unit stages, and enforced deterministically: `report --result approved` on a not-yet-completed per-Unit stage is refused while any Unit is unsettled). A workflow with no units-generation dependency artifact on disk degrades to one single-iteration directive (unchanged behaviour). When the artifact exists, the engine validates the compiled `bolt_dag` against it and recomputes the unit batches on the spot if the cache is missing or stale, so the per-unit loop never silently shrinks to an outdated unit set; an artifact whose units block does not parse is surfaced as an error instead.
 
-**Unit lifecycle receipts.** On a per-Unit body directive without `directive.wave`, `construction_checkpoint`, or `construction_policy.completion_only`, bracket the Unit's work with the receipt verbs: `{{INVOKE}} engine state unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the route as a read-only engine observation (it publishes no directive and writes no state, receipt, or approval evidence, and a durable write from that path fails loudly rather than silently) and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Receipt validity is decided by the attempt floor and the content bindings on the row, never by the order in which shards or rows were written. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first), and workflows that never call the verbs keep today's artifact-driven coverage unchanged.
+**Unit lifecycle receipts.** On a per-Unit body directive without `directive.wave`, `construction_checkpoint`, or `construction_policy.completion_only`, bracket the Unit's work with the receipt verbs: `{{INVOKE}} engine state unit start --stage <slug> --unit <name>` before the body, and `... unit complete --stage <slug> --unit <name>` after the Unit's artifacts are written (complete verifies that every required artifact is a regular file on disk and refuses directories or missing paths — the receipt is the completion signal, artifacts are the evidence it checks). Pass the exact `directive.stage` + `directive.unit` pair emitted by the engine: `unit start` re-runs the route as a read-only engine observation (it publishes no directive and writes no state, receipt, or approval evidence, and a durable write from that path fails loudly rather than silently) and refuses a DAG member whose dependencies or earlier same-batch Units are not settled. New Unit names use lowercase kebab-case; safe legacy single-segment names (including digit-leading names, uppercase letters, underscores, and dots) remain accepted by existing DAGs and autonomous swarms, which use a deterministic internal Bolt slug without changing the Unit identity. An autonomy grant does not disable these receipts when a backward jump routes an inline per-Unit stage; only a stage currently owned by the autonomous swarm refuses them. If the Unit must stop before completion (blocking question, failed dependency, session ending mid-Unit), record the checkpoint with single-line text: `... unit pause --stage <slug> --unit <name> --reason "<why>" --next-action "<the exact next step>"`. Every lifecycle row carries an exact stage-attempt `Run floor` (`<boundary-event>:<timestamp>#<ordinal>`); when equal second-precision boundaries in different audit shards are causally unordered, the engine uses a deterministic `AMBIGUOUS:<timestamp>#<digest>` floor that invalidates older receipts instead of trusting shard filename order. Receipt validity is decided by the attempt floor and the content bindings on the row, never by the order in which shards or rows were written. Once any receipt exists for a stage, every later attempt stays in receipt mode and requires a current-attempt `UNIT_COMPLETED` receipt per Unit. Artifact files alone no longer settle a Unit, so a stale, paused, reopened, or partially-written Unit can never be mistaken for done. A paused Unit routes FIRST and hard-stops the loop: the engine emits an `ask` naming the Unit, its recorded reason, and next action (`unit_state: paused`), and no other work may start until an explicit `... unit resume --stage <slug> --unit <name>`. `unit start` refuses while another Unit of the stage is open (one active Unit at a time; resume or complete it first), and workflows that never call the verbs keep today's artifact-driven coverage unchanged. The one exception is a Unit the person set aside for another (a pause with `--set-aside-for <unit>`, which a unit-major reopen or pick-up names): follow the engine's route, which takes the Unit it was set aside for first, lets that Unit start even on the paused Unit's stage, and then asks to resume the set-aside Unit.
 
 **Per-unit batch waves (optional, stage-major only).** For functional-design, nfr-requirements, nfr-design, and infrastructure-design on an explicitly selected stage-major walk, the engine may emit `directive.wave` from one healed Bolt-DAG snapshot. Code Generation remains wave-ineligible because it writes the shared workspace and hard-stops for Plan Approval. Each entry carries resolved Unit-local inputs/outputs, `required_produces`, `unit_memory_path`, `build_required`, `completion_required`, and receipt-backed `review_state` / `review_iteration`; kind-vacuous and fully settled Units are omitted, and large batches arrive as deterministic same-batch prefixes. The parent retains `stage_file`, the complete `inline_context_paths`, `context_warnings`, the accumulated steering bundle, effective `review_class`, reviewer settings, sensors, and the stage-level `memory_path`. Never reconstruct siblings from `runtime-graph.json`.
 
@@ -638,8 +635,8 @@ settled; do not regenerate or re-review them. Run the learnings presentation onl
 `--unit "<directive.unit>"` so pending human decisions remain attempt- and
 Unit-scoped. Every report call for this gate adds
 `--unit "<directive.unit>"`: first `awaiting-approval`, then `approved
---user-input '<their reply>'`, or `rejected --user-input '<their reply>'` and
-later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
+--user-input "Approve"` (with `--park` when they also asked to stop), or
+`rejected --user-input "Request Changes"` and later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
 for `unit-end` it floors all stages in that Unit's chain. Re-run `next` after
 each accepted report. When Unit Ownership is absent or `solo`, follow the checkpoint or legacy
 policy above. The team-owned `unit_gate` path keeps its own approval rhythm and
@@ -845,10 +842,15 @@ prepare/fan-out/check/review/finalize loop run.
 When several Units' plans are ready at once, the engine asks about them in one
 question: `plan_approval.targets` carries each Unit's summary and plan path, and
 the choices are **Approve all**, **Request Changes**, and **I'll edit the files**.
-Show every Unit's summary lines under the question, end the turn, and run `next`
-after the reply. The human-turn hook reads it: "approve all" approves every Unit;
-a change that names a Unit ("change billing: use Stripe") sends just that Unit back
-with those words and approves the rest; a change that names no Unit records
-nothing and the hook asks you to ask once which plan should change. Every Unit
-still gets its own approval record, bound to its own plan; grouping only changes
-how the question is shown, and never approves a later batch.
+Show every Unit's summary lines under the question and end the turn. Read the
+person's reply and record the choice they made, as for one plan:
+`{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval
+--details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`),
+with `--units "<unit>,<unit>"` to record a choice for some Units, then the rest;
+then run `next`. "Approve all" approves every Unit. For a change that names a
+Unit ("change billing: use Stripe"), record Request Changes for that Unit and
+Approve Plan for the rest; for a change that names no Unit, ask once which plan
+should change. An exact "Approve all" or "I'll edit the files" is recorded for
+you; a bare Request Changes still needs to know which plan. Every Unit still
+gets its own approval record, bound to its own plan; grouping only changes how
+the question is shown, and never approves a later batch.

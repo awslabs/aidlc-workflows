@@ -3344,12 +3344,14 @@
       "description": "Fix a specific bug",
       "runner": true,
       "skeleton": false,
+      "existingCode": true,
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
-        "learnings": "on",
-        "summary_confirmation": "on",
-        "plan_approval": "on"
+        "learnings": "off",
+        "summary_confirmation": "off",
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "classic": {
@@ -3397,7 +3399,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "off",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "enterprise": {
@@ -3445,7 +3448,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "on"
       }
     },
     "express": {
@@ -3497,7 +3501,8 @@
         "sensors": "off",
         "learnings": "off",
         "summary_confirmation": "off",
-        "plan_approval": "off"
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "feature": {
@@ -3546,7 +3551,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "infra": {
@@ -3598,7 +3604,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "mvp": {
@@ -3650,7 +3657,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "poc": {
@@ -3703,7 +3711,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "off"
+        "plan_approval": "off",
+        "collaborators": "off"
       }
     },
     "refactor": {
@@ -3750,12 +3759,14 @@
       ],
       "description": "Clean up existing code",
       "skeleton": false,
+      "existingCode": true,
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "security-patch": {
@@ -3804,12 +3815,14 @@
       "description": "CVE response",
       "runner": true,
       "skeleton": false,
+      "existingCode": true,
       "guardPolicy": "off",
       "ceremony": {
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     },
     "workshop": {
@@ -3862,7 +3875,8 @@
         "sensors": "on",
         "learnings": "on",
         "summary_confirmation": "on",
-        "plan_approval": "on"
+        "plan_approval": "on",
+        "collaborators": "off"
       }
     }
   },

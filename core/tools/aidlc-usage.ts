@@ -70,27 +70,32 @@ export type PriceRow = {
 // FRAMEWORK-DEFAULT rates, USD / 1e6 tokens. These are PUBLIC Anthropic list
 // prices, shipped as DEFAULTS only, and are the pure dev-checkout fallback used
 // when no shipped `tools/data/model-rates.json` is present (an authored core/
-// tree carries the JSON, so an installed harness always reads that). The cache
-// fields follow the standard multipliers: cacheWrite5m = 1.25x input,
-// cacheWrite1h = 2x input, cacheRead = 0.1x input.
+// tree carries the JSON, so an installed harness always reads that). Every
+// field is the published price, not a derived multiplier: cache writes are
+// 1.25x (5m) / 2x (1h) input on every row, but cache reads are 0.1x input on
+// most rows and 0.05x on opus-5-5, 0.025x on fable-5-1.
 //
-// GENERATION-DISCRETE keys (a row per model GENERATION, NOT one per family):
-// verified real sessions mix generations, and a family-collapse silently
+// VERSION-DISCRETE keys (a row per model VERSION, NOT one per family): a point
+// release such as `opus-5-5` has its own row, never its major's (`opus-5`).
+// Verified real sessions mix versions, and a family-collapse silently
 // misprices them onto whatever the "current" row happens to be. Key off the
-// generation token, not the account/region variant.
+// version token, not the account/region variant.
 //
 // To OVERRIDE: set AIDLC_MODEL_RATES to a rates file (same shape as
 // tools/data/model-rates.json), or edit the shipped model-rates.json in your
 // install. The override layers ON TOP of these defaults - a partial file only
 // changes the models it names; an unknown model stays tokens-with-null-cost.
 export const DEFAULT_RATES: Record<string, PriceRow> = {
+  "opus-5-5": { input: 4.0, output: 20.0, cacheWrite5m: 5.0, cacheWrite1h: 8.0, cacheRead: 0.2 },
   "opus-5": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-8": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-7": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
   "opus-4-6": { input: 5.0, output: 25.0, cacheWrite5m: 6.25, cacheWrite1h: 10.0, cacheRead: 0.5 },
-  "sonnet-5": { input: 3.0, output: 15.0, cacheWrite5m: 3.75, cacheWrite1h: 6.0, cacheRead: 0.3 },
+  "sonnet-5-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.2 },
+  "sonnet-5": { input: 2.0, output: 10.0, cacheWrite5m: 2.5, cacheWrite1h: 4.0, cacheRead: 0.2 },
   "sonnet-4-6": { input: 3.0, output: 15.0, cacheWrite5m: 3.75, cacheWrite1h: 6.0, cacheRead: 0.3 },
   "haiku-4-5": { input: 1.0, output: 5.0, cacheWrite5m: 1.25, cacheWrite1h: 2.0, cacheRead: 0.1 },
+  "fable-5-1": { input: 10.0, output: 50.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0, cacheRead: 0.25 },
   "fable-5": { input: 10.0, output: 50.0, cacheWrite5m: 12.5, cacheWrite1h: 20.0, cacheRead: 1.0 },
 };
 
@@ -190,11 +195,11 @@ export function _resetRatesCacheForTest(): void {
   _rates = null;
 }
 
-// Bare family aliases with NO generation token. Matched only on an EXACT
+// Bare family aliases with NO version token. Matched only on an EXACT
 // residual equality (never as a substring), so `opus` resolves but `opus-6`
-// (a would-be new generation) does NOT match and stays null. These are a
+// (a would-be new version) does NOT match and stays null. These are a
 // defensive convenience for hand-typed / test inputs; the wire form always
-// carries a generation token. `opus`/`sonnet`/`haiku` map to the generation
+// carries a version token. `opus`/`sonnet`/`haiku` map to the version
 // this harness ships as its default model set.
 const BARE_ALIASES: Record<string, string> = {
   opus: "opus-4-8",
@@ -212,14 +217,15 @@ const BARE_ALIASES: Record<string, string> = {
 //   converse/au.anthropic.claude-haiku-4-5-20251001-v1:0
 //   global.anthropic.claude-opus-4-8[1m]    (this harness's settings alias)
 //
-// UNKNOWN-GENERATION POLICY: a Claude model whose GENERATION is not in the rate
-// table (e.g. a future `opus-6`, or an `opus-4-9` we haven't priced) returns
+// UNKNOWN-VERSION POLICY: a Claude model whose VERSION is not in the rate
+// table (e.g. a future `opus-6`, an `opus-4-9` we haven't priced, or an
+// unpriced point release such as `opus-5-7` of a priced `opus-5`) returns
 // `null` => the caller records the tokens but withholds cost. An honest
 // "unknown" (made visible by the audit's `Cost USD: null`) beats a
-// confidently-wrong number from an old generation's rate. `<synthetic>`, empty,
-// malformed provider/model shapes, and non-Claude models => null too. Generation
+// confidently-wrong number from another version's rate. `<synthetic>`, empty,
+// malformed provider/model shapes, and non-Claude models => null too. Version
 // keys come from the EFFECTIVE rate table, so an AIDLC_MODEL_RATES override can
-// add a new generation without a source-code matcher change.
+// add a new version without a source-code matcher change.
 export function normalizeModel(modelId: string): string | null {
   if (!modelId || typeof modelId !== "string") return null;
   let s = modelId.trim().toLowerCase();
@@ -247,14 +253,17 @@ export function normalizeModel(modelId: string): string | null {
   if (!s.startsWith("claude-")) return null;
   s = s.slice("claude-".length);
 
-  // 4. Match a generation key only at a token boundary. Keys are longest-first
-  // so an override containing related keys resolves the most specific one.
-  for (const key of Object.keys(rates).sort((a, b) => b.length - a.length)) {
-    if (s === key || s.startsWith(`${key}-`) || s.startsWith(`${key}[`)) {
-      return key;
-    }
-  }
-  // Unknown generation / non-Claude => null (tokens recorded, cost withheld).
+  // 4. Strip only the suffixes that never change the price: a `[1m]`-style
+  // settings tag, a Bedrock `-v<N>[:<M>]` revision, and an 8-digit snapshot
+  // date. What remains is the model version, and it must equal a rate key
+  // exactly. No prefix matching: a point release such as `opus-5-5` is its own
+  // model with its own price, never `opus-5`.
+  s = s
+    .replace(/\[[^\]]*\]$/, "")
+    .replace(/-v\d+(?::\d+)?$/, "")
+    .replace(/-\d{8}$/, "");
+  if (Object.hasOwn(rates, s)) return s;
+  // Unknown version / non-Claude => null (tokens recorded, cost withheld).
   return null;
 }
 
@@ -1041,6 +1050,18 @@ const WAIT_OBJECT_0 = 0;
 const WAIT_ABANDONED = 0x80;
 const USAGE_MUTEX_WAIT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 
+// Opt-in hook phase trace; aidlc-hook-trace.ts owns the switch and the format.
+// It is loaded only when its variable is set, so a runtime tree without that
+// file folds exactly as before.
+export function usageTrace(phase: string, detail?: Record<string, unknown>): void {
+  if (!process.env.AIDLC_HOOK_TRACE_DIR) return;
+  try {
+    (require("./aidlc-hook-trace.ts") as typeof import("./aidlc-hook-trace.ts")).hookTrace(phase, detail);
+  } catch {
+    // Diagnostics only.
+  }
+}
+
 function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
   if (WIN32_USAGE_MUTEX !== null) {
     const identity = auditLockIdentity(
@@ -1054,10 +1075,13 @@ function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
     if (handle === null) {
       throw new Error("Failed to create the Windows usage-ledger mutex");
     }
+    usageTrace("usage-lock-wait", { lock: "win32-mutex", boundMs: USAGE_MUTEX_WAIT_MS });
+    const waitStarted = Date.now();
     const waitResult = WIN32_USAGE_MUTEX.symbols.WaitForSingleObject(
       handle,
       USAGE_MUTEX_WAIT_MS,
     );
+    usageTrace("usage-lock-wait-end", { result: waitResult, waitedMs: Date.now() - waitStarted });
     if (waitResult !== WAIT_OBJECT_0 && waitResult !== WAIT_ABANDONED) {
       WIN32_USAGE_MUTEX.symbols.CloseHandle(handle);
       throw new Error(
@@ -1069,16 +1093,28 @@ function withUsageLedgerLock(projectDir: string, fn: () => Ledger): Ledger {
     } finally {
       WIN32_USAGE_MUTEX.symbols.ReleaseMutex(handle);
       WIN32_USAGE_MUTEX.symbols.CloseHandle(handle);
+      usageTrace("usage-lock-released");
     }
   }
-  return withAuditLock(
-    projectDir,
-    fn,
-    USAGE_LOCK_INTENT,
-    USAGE_LOCK_SPACE,
-    Math.ceil(USAGE_MUTEX_WAIT_MS / 25),
-    25,
-  );
+  usageTrace("usage-lock-wait", { lock: "audit-lock", boundMs: USAGE_MUTEX_WAIT_MS });
+  const waitStarted = Date.now();
+  let acquired = false;
+  try {
+    return withAuditLock(
+      projectDir,
+      () => {
+        acquired = true;
+        usageTrace("usage-lock-wait-end", { waitedMs: Date.now() - waitStarted });
+        return fn();
+      },
+      USAGE_LOCK_INTENT,
+      USAGE_LOCK_SPACE,
+      Math.ceil(USAGE_MUTEX_WAIT_MS / 25),
+      25,
+    );
+  } finally {
+    usageTrace(acquired ? "usage-lock-released" : "usage-lock-not-acquired");
+  }
 }
 
 // Incrementally fold new rows into the ledger and advance the per-file cursors.

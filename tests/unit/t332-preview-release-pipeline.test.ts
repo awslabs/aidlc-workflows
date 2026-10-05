@@ -492,7 +492,7 @@ describe("t332 preview publication pipeline", () => {
     mkdirSync(join(temp, "preview-test-report"));
     const reportPath = join(temp, "preview-test-report", "preview-test-report.md");
     const warning = "> **Warning:** Full Suite failed for this source. A Full Suite failure report ends these notes.\n\n";
-    const stageNotes = async (fullSuite: string, body: string, report: string): Promise<string> => {
+    const stageNotes = async (fullSuite: string, body: string, report: string, update = "success"): Promise<string> => {
       writeFileSync(reportPath, report);
       const plan = {
         schemaVersion: 1, version: PREVIEW_ID, tag: `v${PREVIEW_ID}`, sourceRepository: "owner/repo",
@@ -500,7 +500,8 @@ describe("t332 preview publication pipeline", () => {
         notes: { name: previewReleaseName(PREVIEW_ID), body },
       };
       const staged = await runWorkflowStep(step("release", "Stage preview notes"), REPO_ROOT, {
-        RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: JSON.stringify(plan),
+        RUNNER_TEMP: temp, FULL_SUITE_RESULT: fullSuite, PREVIEW_PLAN: JSON.stringify(plan), UPDATE_RESULT: update,
+        GITHUB_SERVER_URL: "https://github.com", GITHUB_REPOSITORY: "owner/repo", GITHUB_RUN_ID: "77",
       });
       expect(staged.status, staged.stdout + staged.stderr).toBe(0);
       const notes = readPreviewPlan(join(temp, "aidlc-preview-plan.json")).notes;
@@ -513,6 +514,14 @@ describe("t332 preview publication pipeline", () => {
     // t-ci-preview-test-report covers the near-limit budget; a plan that size
     // cannot pass through one Windows environment variable.
     expect(await stageNotes("failure", body, small)).toBe(`${warning}${body}\n${small}`);
+    // A failed update from the last release warns and reports, but publishes.
+    const updateWarning = "> **Warning:** Updating from the last release to this preview failed in its checks. " +
+      "Stay on your release or wait for the next preview.\n\n";
+    const updateLine = "## Update from the last release\n\n`aidlc update` from the last release to this preview " +
+      "**failed** in [the preview run](https://github.com/owner/repo/actions/runs/77).\n";
+    expect(await stageNotes("success", body, small, "failure")).toBe(`${updateWarning}${body}\n${updateLine}`);
+    expect(await stageNotes("failure", body, small, "failure"))
+      .toBe(`${warning}${updateWarning}${body}\n${updateLine}\n${small}`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("preview tracks the exact dispatched run and tolerates its failure without changing Full Suite", async () => {
@@ -1480,7 +1489,7 @@ describe("t332 preview publication pipeline", () => {
     expect(testStep("Report Full Suite results")?.run).toContain("bun scripts/ci-preview-test-report.ts");
     expect(testStep("Report Full Suite results")?.run).toContain(`>>"$GITHUB_STEP_SUMMARY"`);
     expect(preview.jobs.test.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
-    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "publish"]);
+    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "publish", "update-from-previous"]);
     expect(preview.jobs.release.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
@@ -1511,6 +1520,7 @@ describe("t332 preview publication pipeline", () => {
       "stage-release",
       "windows-lifecycle",
       "unix-lifecycle",
+      "update-from-previous",
       "publish",
       "release",
     ]) {
@@ -1518,15 +1528,17 @@ describe("t332 preview publication pipeline", () => {
     }
     // Implicit success() also covers ancestors, so a failed Full Suite would skip
     // any job below Release tests that lacks an explicit check of its direct needs.
+    // The Full Suite and the update from the last release only report.
+    const reportOnly = ["full_suite", "update-from-previous"];
     for (const [name, job] of Object.entries(preview.jobs)) {
       if (name === "release-result" || !ancestors(name).has("test")) continue;
       expect(job.if, `${name} must not inherit the Full Suite result`).toStartWith("${{ !cancelled() && ");
-      for (const dependency of dependencies(job).filter((entry) => entry !== "full_suite")) {
+      for (const dependency of dependencies(job).filter((entry) => !reportOnly.includes(entry))) {
         expect(job.if, `${name} must require ${dependency}`).toContain(`needs.${dependency}.result == 'success'`);
       }
-      expect(job.if).not.toContain("needs.full_suite");
+      for (const dependency of reportOnly) expect(job.if).not.toContain(`needs.${dependency}.result`);
     }
-    for (const name of ["build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle", "publish", "release"]) {
+    for (const name of ["build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle", "update-from-previous", "publish", "release"]) {
       const required = ancestors(name, stable.jobs);
       for (const dependency of ["validate", "verify", "native-smoke"]) {
         expect(required.has(dependency), `stable ${name} must descend from ${dependency}`).toBe(true);
@@ -1534,7 +1546,12 @@ describe("t332 preview publication pipeline", () => {
       // Builds run alongside the Full Suite; only publication waits for its gate.
       expect(required.has("full_suite_gate"), `stable ${name} and the Full Suite gate`).toBe(name === "publish" || name === "release");
     }
-    expect(stable.jobs.publish.needs).toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "full_suite_gate"]);
+    // By maintainer decision on 2026-10-04, a stable release people on the last
+    // release cannot update to does not publish; a preview reports it.
+    expect(stable.jobs.publish.needs)
+      .toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "update-from-previous", "full_suite_gate"]);
+    expect(stable.jobs.publish.if).toContain("needs.update-from-previous.result == 'success'");
+    expect(preview.jobs.publish.needs).not.toContain("update-from-previous");
     expect(stable.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
 
     for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {

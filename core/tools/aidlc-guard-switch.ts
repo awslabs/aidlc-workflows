@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  latestPersonTurn,
+  personSpokeSinceGate,
   assertChangeControlLedgerWritable,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
@@ -88,6 +90,7 @@ export const CONFIG_KEYS = [
   "learnings",
   "summary-confirmation",
   "plan-approval",
+  "collaborators",
   ...GUARD_FENCE_CONFIG_KEYS,
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
@@ -311,8 +314,8 @@ export function applyIntentSettings(
     if (loweredFence !== undefined) {
       const section = cc.memoryStrict.heading.replace(/^## /, "");
       die(
-        `Guard Policy is set to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
-          `so ${loweredFence.fence} cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+        `Your team set Guard Policy to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
+          `so ${loweredFence.fence} stays on for everyone on this repo. Changing that line there changes it.`,
       );
     }
   }
@@ -368,12 +371,23 @@ export function applyIntentSettings(
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
-  if (lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId)) {
-    die(guardSwitchRefusal(lowering[0], "config"));
+  // Lowering a fence is the person's call. Their typed switch carries it out,
+  // and so does this setter when a person has spoken since the last decision:
+  // the conductor runs what they asked for, in their own words.
+  if (
+    lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
+    !personSpokeSinceGate(projectDir, { requests: true })
+  ) {
+    // A question about the switch ("skip plan approval?") asks for nothing.
+    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
   }
+  // The setter carries out what the person asked: their words go on the record.
+  const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
+  // A default a scope change brings is said only when its value changes.
+  const scopeDefault = (key: ConfigKey): boolean => requested[key]?.source.startsWith("scope ") === true;
   if (depth !== undefined) {
     const previous = getField(content, "Depth");
     const updated = previous === depth ? content : setField(content, "Depth", depth);
@@ -382,7 +396,9 @@ export function applyIntentSettings(
       content = updated;
       audit.push({ eventType: "DEPTH_CHANGED", fields: { "Old Depth": previous || "unknown", "New Depth": depth } });
     }
-    lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
+    if (changed || !scopeDefault("depth")) {
+      lines.push(changed ? `Depth changed: ${previous} -> ${depth}` : `Depth is already ${depth}`);
+    }
   }
   if (strategy !== undefined) {
     const previous = getField(content, "Test Strategy");
@@ -392,7 +408,9 @@ export function applyIntentSettings(
       content = updated;
       audit.push({ eventType: "TEST_STRATEGY_CHANGED", fields: { "Old Strategy": previous || "unknown", "New Strategy": strategy } });
     }
-    lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
+    if (changed || !scopeDefault("test-strategy")) {
+      lines.push(changed ? `Test strategy changed: ${previous} -> ${strategy}` : `Test strategy is already ${strategy}`);
+    }
   }
   if (review !== undefined) {
     const target = reviewScope ?? getField(content, "Scope");
@@ -418,21 +436,27 @@ export function applyIntentSettings(
     const previous = cc.rawStateValue;
     const line = formatGuardPolicy(changeControl, ccRequest.source);
     if (previous === line && cc.stateField === GUARD_POLICY_FIELD && getField(content, CHANGE_CONTROL_FIELD) === null) {
-      lines.push(`Guard Policy is already ${line}`);
+      if (!scopeDefault("guard-policy")) lines.push(`Guard Policy is already ${line}`);
     } else {
       // Every write keeps only the Guard Policy line, even when its stored text is unchanged.
       // Resolving a conflict records one GUARD_POLICY_SET from the prior effective policy, not a name-only rename.
       content = setGuardPolicyLine(content, line);
       if (previous !== line || cc.conflict !== undefined) {
         const oldValue = cc.conflict !== undefined ? cc.value : cc.intent?.value ?? cc.rawStateValue ?? cc.stateValue;
-        audit.push({
-          eventType: "GUARD_POLICY_SET",
-          fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
-        });
+        // A scope's default that keeps the value only renames where it came
+        // from: the scope change's own row records that, not a setting row.
+        if (oldValue !== changeControl || cc.conflict !== undefined || !scopeDefault("guard-policy")) {
+          audit.push({
+            eventType: "GUARD_POLICY_SET",
+            fields: { "Old Value": oldValue, "New Value": changeControl, Source: ccRequest.source },
+          });
+        }
         const oldDisplay = cc.conflict === undefined && cc.intent === null && cc.rawStateValue !== null
           ? cc.rawStateValue : formatGuardPolicy(cc.value, cc.source);
-        lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
-      } else {
+        if (oldValue !== changeControl || !scopeDefault("guard-policy")) {
+          lines.push(`Guard Policy changed: ${oldDisplay} to ${line}`);
+        }
+      } else if (!scopeDefault("guard-policy")) {
         lines.push(`Guard Policy is already ${line}`);
       }
     }
@@ -463,7 +487,10 @@ export function applyIntentSettings(
       // Each event named literally at its own call, not through a ternary on
       // eventType: the emitter drift guard reads these call sites as text, and a
       // computed event name is invisible to it.
-      const fenceFields = { Guard: request.fence, Scope: scopeName, Source: request.source };
+      const fenceFields = {
+        Guard: request.fence, Scope: scopeName, Source: request.source,
+        ...(askedIn && after.value === "off" ? { "Person Reply": askedIn } : {}),
+      };
       audit.push(
         after.value === "off"
           ? { eventType: "GUARD_DISABLED", fields: fenceFields }
@@ -482,19 +509,28 @@ export function applyIntentSettings(
     // Only the person's typed switch is `you`; an explicit setter run from a
     // shell records that a command set it, and never relabels the person's
     // own identical choice.
-    const requestedSource = requested[CEREMONY_FLAGS[key].slice(2) as ConfigKey]!.source;
+    const flag = CEREMONY_FLAGS[key].slice(2) as ConfigKey;
+    const requestedSource = requested[flag]!.source;
     const source = requestedSource === "you" && !typedByPerson ? "command" : requestedSource;
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      lines.push(`${field} is already ${previous}`);
+      if (!scopeDefault(flag)) lines.push(`${field} is already ${previous}`);
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
     content = setCeremonyField(content, key, value, source);
     const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    // Same as Guard Policy: a scope's default that keeps the value writes no row.
+    if (oldValue === value && scopeDefault(flag)) continue;
+    audit.push({
+      eventType: "CEREMONY_SET",
+      fields: {
+        Key: key, Old: oldValue, New: value, Source: source,
+        ...(askedIn && source === "command" && value === "off" ? { "Person Reply": askedIn } : {}),
+      },
+    });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);
@@ -514,6 +550,10 @@ export interface TypedGuardSwitchOutcome {
 
 export function isTypedGuardSwitchPrompt(prompt: string): boolean {
   return parseTypedGuardSwitchRequest(prompt).switches.length > 0;
+}
+
+export function isTypedGuardSwitchQuestion(prompt: string): boolean {
+  return parseTypedGuardSwitchRequest(prompt).asked === true;
 }
 
 export function applyTypedGuardSwitchPrompt(
@@ -677,8 +717,8 @@ export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string 
 }
 
 export function planApprovalMemoryLockRefusal(path: string): string {
-  return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
-    "cannot be turned off from chat. Edit that file to change it.";
+  return `Your team set Guard Policy to strict in ${path}, so plan approval stays on for everyone on this ` +
+    "repo. Changing that line there changes it.";
 }
 
 // --- Plan approval off, asked before the piece of work exists ----------------

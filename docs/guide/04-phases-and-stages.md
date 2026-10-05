@@ -85,8 +85,8 @@ Phases execute sequentially. At each phase boundary (except Initialization → I
 
 - Every stage your scope runs, outside Initialization, ends with an approval gate. Your scope decides which stages run; a stage it skips has no gate. In Construction, the walk above decides whether you approve per Unit or per stage. In team mode, the gate rhythm you choose when claiming (`per-stage` or `unit-end`) sets the review points instead. See [Multi-Team Construction](workshop-mode.md).
 - In Construction, choosing **Continue automatically** waives the ordinary completion checkpoints. You still get Plan Approval (unless plan approval is off for the work), an enabled summary confirmation, the verification command choice, skeleton approval, and every failure.
-- The ceremony switches remove only what they name: sensors, learnings, the summary confirmation, and plan approval. See [Ceremony Switches](13-customization.md#ceremony-switches). Guard Policy changes how hard the guards hold, not which gates you see.
-- A gate that is put to you needs a real message from you to approve it. Nothing in a scope, a setting, or Guard Policy lowers that; only the machine-wide `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does. Checkpoints you chose to let run automatically are recorded without asking you.
+- The ceremony switches remove only what they name: sensors, learnings, the summary confirmation, plan approval, and collaborators (the support agents a stage brings in). See [Ceremony Switches](13-customization.md#ceremony-switches). Guard Policy changes how hard the guards hold, not which gates you see.
+- A gate that is put to you needs a real message from you to approve it. Nothing in a scope, a per-work setting, or Guard Policy lowers that; only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` does, set machine-wide or recorded with `aidlc config flags --bypass`, and AI-DLC tells you while it is off. Checkpoints you chose to let run automatically are recorded without asking you.
 
 **How later stages depend on earlier ones.** Each stage declares the artifacts it reads (`consumes`) and writes (`produces`). The engine hands a stage the paths it needs. When a required input is missing, the stage is told whether that is expected (the stage that makes it is not in your scope) or a real gap (for example a stage you skipped with a jump). An expected gap means the stage works from what exists instead of inventing the file. A real gap is raised with you, so you can run the stage that makes the file or put the file in place yourself. The verification gate at each phase boundary checks that the links between phases hold.
 
@@ -228,6 +228,8 @@ flowchart TD
 ```
 
 <!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs as a two-link pipeline (developer code scan then architect synthesis-and-write). Then 2.2 Practices Discovery runs as a hub-and-spoke on every included scope (lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration) and promotes affirmed work to active-space memory. Next are 2.3 Requirements Analysis (ALWAYS), optional 2.4 User Stories mob, optional 2.5 Refined Mockups, optional 2.6 Domain Design, 2.7 Units Generation (ALWAYS), optional 2.8 Contract Design, and 2.9 Delivery Planning (ALWAYS), followed by Verification Gate 2. -->
+
+Supporting agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work); otherwise each stage runs with its lead agent only.
 
 | # | Stage | Lead | Supporting | Key Artifacts | Condition |
 |---|-------|------|-----------|---------------|-----------|

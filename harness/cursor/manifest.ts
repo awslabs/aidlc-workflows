@@ -52,6 +52,12 @@ const manifest: HarnessManifest = {
         wholeFileHashes: [
           // Keep pre-engine-directory unmarked root files recognizable.
           "sha256:b4bf7694361e76aae9feabc5d985d09afb7863cf8458b0c9aaa73f20a589582f",
+          // The variant shipped before the block listed aidlc.settings.local.json.
+          "sha256:a87496436cb23f303dee533322bd0896e981e14be1a7abd18e76aa5e113be02c",
+          // The variant shipped with a generic template above the AI-DLC lines.
+          "sha256:f9fbe33a3e622010a8a45ef199e104077db6ee7ee27137c08c34e81c1a0c24a4",
+          // The variant shipped with notes above each group of lines.
+          "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
         ],
       },
     },
@@ -121,8 +127,9 @@ const manifest: HarnessManifest = {
     // beside it are packaged byte-identical to the Claude harness).
     { src: "hooks/aidlc-cursor-adapter.ts", dst: "hooks/aidlc-cursor-adapter.ts" },
     { src: "hooks.json", dst: "hooks.json" },
-    // Project-level permissions: pre-approve bun (the engine/tool runner) so
-    // the forwarding loop is not interrupted by a prompt per engine call.
+    // Project-level permissions: pre-approve AI-DLC's own workflow commands
+    // (the dispatcher's engine commands and the aidlc-*.ts tools) so the
+    // forwarding loop is not interrupted by a prompt per engine call.
     // .cursor/cli.json is the ONLY project-level CLI config Cursor reads
     // (permissions only, documented contract).
     { src: "cli.json", dst: "cli.json" },
