@@ -33388,16 +33388,17 @@ function loadScopeGridForMapping(): ScopeGridForMapping {
 }
 
 // A scope name becomes part of file names and of the commands the engine
-// prints, so wherever it is read it holds only what shellArg prints bare,
-// with no folder separator, starting with a letter or digit.
-const SCOPE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:@%+=,-]*$/;
+// prints, so wherever it is read it is one word every shell and file system
+// takes as written: letters, digits, and . _ - + @, starting with a letter
+// or digit.
+const SCOPE_NAME = /^[A-Za-z0-9][A-Za-z0-9._+@-]*$/;
 
 export function isScopeName(name: string): boolean {
   return SCOPE_NAME.test(name);
 }
 
 export const SCOPE_NAME_RULE =
-  "letters, digits, and . _ - + = @ % : , only, starting with a letter or digit";
+  "letters, digits, and . _ - + @ only, starting with a letter or digit";
 
 export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
   if (_scopeMetadataAll !== null) return _scopeMetadataAll;
