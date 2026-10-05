@@ -5489,8 +5489,8 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
   });
 });
 
-describe("t218 enforce-approval-gate refusal names the reload steps", () => {
-  test("an open gate with no human turn blocks and says how to turn the hooks on", () => {
+describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
+  test("an open gate with no human turn blocks and names the step doctor names", () => {
     const dir = scratchProject(true);
     try {
       const statePath = seededStateFile(dir);
@@ -5506,15 +5506,21 @@ describe("t218 enforce-approval-gate refusal names the reload steps", () => {
       expect(r.code, r.stderr).toBe(2);
       expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
       expect(r.stderr).toContain(
-        "If they already answered, tell them to trust the folder if the Restricted Mode banner shows at the top of the window (select Manage, then Trust)",
+        "If they already answered, that answer was not recorded, so do not ask them to answer again: tell them that, and this: ",
       );
-      expect(r.stderr).toContain('run "Developer: Reload Window" from the Command Palette');
-      expect(r.stderr).toContain(
-        "choose the aidlc agent in the chat panel's agent picker, so their next message is recorded; `/aidlc --doctor` shows anything else to fix.",
-      );
-      expect(r.stderr).toContain("In Kiro CLI, starting `kiro-cli` again in this folder does the same.");
-      // It says what to do, never how the hooks work, and never asks for the answer again.
-      expect(r.stderr).not.toContain("hooks");
+      // The same step doctor names, from the same shipped text, so the two
+      // never send the person different ways.
+      const recovery = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
+        hookActivation: { recovery: string };
+      }).hookActivation.recovery;
+      expect(recovery).toContain("choose Trust Folder & Continue when Kiro asks whether you trust this folder");
+      expect(r.stderr).toContain(`${recovery} \`/aidlc --doctor\` shows anything else to fix.`);
+      // No window reload or agent picker: doctor no longer asks for either.
+      expect(r.stderr).not.toContain("Reload Window");
+      expect(r.stderr).not.toContain("agent picker");
+      // Its own words say what to do, never how the hooks work, and never ask
+      // for the answer again.
+      expect(r.stderr.replace(recovery, "")).not.toContain("hooks");
       expect(r.stderr).not.toContain("reply again");
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -110,6 +110,7 @@ import {
   getField,
   hookChildEnv,
   hookDebug,
+  hookExecutionRecoveryText,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isSwitchableGuardFence,
@@ -1803,15 +1804,13 @@ function approvalGateAwaitsHuman(): boolean {
 
 if (target === "enforce-approval-gate") {
   if (approvalGateAwaitsHuman()) {
-    const palette = process.platform === "darwin" ? "Cmd+Shift+P" : "Ctrl+Shift+P";
+    // An answer already given gets the step doctor names for it (the
+    // harness's hook-activation recovery), so the two never differ.
     process.stderr.write(
       "An approval is waiting for the person's answer, so nothing runs until they give it: " +
-        "end the turn. If they already answered, tell them to trust the folder if the " +
-        "Restricted Mode banner shows at the top of the window (select Manage, then Trust), " +
-        `run "Developer: Reload Window" from the Command Palette (${palette}), and choose ` +
-        "the aidlc agent in the chat panel's agent picker, so their next message is " +
-        "recorded; `/aidlc --doctor` shows anything else to fix. In Kiro CLI, starting " +
-        "`kiro-cli` again in this folder does the same.\n",
+        "end the turn. If they already answered, that answer was not recorded, so do not ask " +
+        `them to answer again: tell them that, and this: ${hookExecutionRecoveryText(process.cwd())} ` +
+        "`/aidlc --doctor` shows anything else to fix.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
