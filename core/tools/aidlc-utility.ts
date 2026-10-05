@@ -10265,6 +10265,9 @@ const STARTED_STATES: ReadonlySet<string> = new Set(["in-progress", "awaiting-ap
 // folder holds code AI-DLC wrote, so the scan no longer tells new from
 // existing, and the workflow is not moved back into Inception.
 export function constructionHasStarted(content: string, workRecordDir?: string | null): boolean {
+  // Construction output in the record means this work has built: a jump back
+  // resets its stages, but the code in the folder is still its own.
+  if (workRecordDir && holdsAnyFile(join(workRecordDir, "construction"))) return true;
   const states = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
   const started = loadStageGraph().filter((stage) =>
     (stage.phase === "construction" || stage.phase === "operation") &&

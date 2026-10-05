@@ -514,6 +514,33 @@ describe("t352 code that arrives as Construction starts", () => {
     expect(next(proj).ask_type).not.toBe("project-type");
   });
 
+  // A jump back to Requirements Analysis resets every Construction stage, but
+  // the code in the folder is what this work's own Units built.
+  test("after a jump back past Construction, the work's own code asks nothing about the folder", () => {
+    const proj = project();
+    expect(create(proj, "poc").status).toBe(0);
+    atCodeGeneration(proj);
+    const unitDir = join(recordDir(proj), "construction", "u1-note-store", "code-generation");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(join(unitDir, "code-generation-plan.md"), "# Code Generation Plan\n");
+    addRepo(proj);
+    // The jump back: every Construction stage is pending again and the cursor
+    // is on Requirements Analysis.
+    edit(proj, (s) => {
+      let out = s;
+      for (const stage of loadGraph()) {
+        if ((stage.phase === "construction" || stage.phase === "inception") && stageLine(out, stage.slug)?.endsWith("EXECUTE")) {
+          out = mark(out, stage.slug, " ");
+        }
+      }
+      return mark(out, "requirements-analysis", "-")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: requirements-analysis");
+    });
+    expect(constructionHasStarted(state(proj), recordDir(proj))).toBe(true);
+    expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
+    expect(next(proj).ask_type).not.toBe("project-type");
+  });
+
   // Only the first Construction stage counts as just entered: a jump past
   // Construction straight into an Operation stage is work under way.
   test("a jump from before Construction straight into Operation asks nothing about the folder", () => {
