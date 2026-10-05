@@ -24,7 +24,6 @@ permissions:
         - "*@(*"
         - "*@{*"
         - "*\n*"
-        - "*\r*"
         - "*aidlc-doctor.ts*"
         - "*aidlc-init.ts*"
         - "*aidlc-lifecycle.ts*"

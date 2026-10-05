@@ -111,11 +111,15 @@ export function nativeDelegateShellDeny(agent: string): ShellDeny {
 }
 
 // Shell forms that can run, expand, or redirect more than the one command a
-// rule names, as Kiro rule text: "\\n" and "\\r" are the YAML escapes for a
-// line break. The conductor asks before a command holding one; a delegate is
-// refused one on an AI-DLC command, so the deny holds whichever ask Kiro
-// applies to a delegated call.
-export const RISKY_SHELL_FORMS = ["$", "`", ">", "<", "&", "@(", "@{", "\\n", "\\r"] as const;
+// rule names, as Kiro rule text: "\\n" is the YAML escape for a line break.
+// The conductor asks before a command holding one; a delegate is refused one
+// on an AI-DLC command, so the deny holds whichever ask Kiro applies to a
+// delegated call. A carriage return is not listed: Kiro compiles every rule
+// into one Cedar policy set, Cedar rejects a carriage return in a pattern, and
+// a rejected set leaves Kiro asking about every command. The Kiro IDE
+// adapter's terminal-command-guard refuses a lone carriage return on every
+// agent instead (a carriage return before a line feed is the line break).
+export const RISKY_SHELL_FORMS = ["$", "`", ">", "<", "&", "@(", "@{", "\\n"] as const;
 
 // The deny for those forms after each command prefix a delegate inherits from
 // the conductor's allow.

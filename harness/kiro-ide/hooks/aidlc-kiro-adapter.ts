@@ -1698,6 +1698,17 @@ if (target === "terminal-command-guard") {
   const rawCommand = typeof ide.toolArgs?.command === "string"
     ? ide.toolArgs.command
     : "";
+  // A lone carriage return, on any shell and any agent (a delegated call
+  // carries no agent identity, and this reads none). The agents' rules cannot
+  // name one (delegate-shell-deny.ts RISKY_SHELL_FORMS); a carriage return
+  // before a line feed is a line break, which they ask about.
+  if (/\r(?!\n)/.test(rawCommand)) {
+    process.stderr.write(
+      "AIDLC stopped this command before it ran. It holds a carriage return: " +
+        "put the whole command on one line and run it again.\n",
+    );
+    return 2;
+  }
   // Before anything below runs a command: this call would not reach the
   // engine as written (see cmdMetacharacterHazard).
   const cmdHazard = isKiroPowerShellTool(tool) ? cmdMetacharacterHazard(rawCommand) : null;
