@@ -377,13 +377,20 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     }
     // Still one command only: chaining, substitution and expansion outside or
     // inside double quotes, and $'...', which /bin/sh may read as more than one
-    // word, are refused.
-    for (const [i, command] of [
-      `${START_SINGLE} ; touch /tmp/x`,
-      `${START_SINGLE}\ntouch /tmp/x`,
+    // word, are refused. cmd.exe gives $ and the backtick no meaning, so there
+    // the quoted ones are one plain argument.
+    const posixExpansions = [
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"today's $(touch /tmp/x)\"",
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"today's `touch /tmp/x`\"",
       "bun .aidlc/tools/aidlc.ts engine orchestrate next \"$HOME\"",
+    ];
+    for (const [i, command] of posixExpansions.entries()) {
+      if (posix) await expect(invoke(`expand-${i}`, command)).rejects.toThrow("one direct invocation");
+      else await expect(invoke(`expand-${i}`, command)).resolves.toBeUndefined();
+    }
+    for (const [i, command] of [
+      `${START_SINGLE} ; touch /tmp/x`,
+      `${START_SINGLE}\ntouch /tmp/x`,
       "bun .aidlc/tools/aidlc.ts engine orchestrate next $'today\\'s rooms\\; touch /tmp/x'",
       "aidlc engine orchestrate next today\\' ; touch /tmp/x",
       // A line continuation: the shell joins the lines, the later guards do not.
