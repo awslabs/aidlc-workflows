@@ -116,6 +116,9 @@ bash tests/run-tests.sh --e2e
 # Filter by pattern
 bash tests/run-tests.sh --integration --filter "t25|t26"
 
+# Leave files out by pattern; the rest run as an ordinary tier
+bash tests/run-tests.sh --integration --exclude "^t-scope-run-"
+
 # Run tests concurrently within a level (larger levels benefit most; smoke/unit stay serial)
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
