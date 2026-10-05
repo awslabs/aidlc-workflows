@@ -159,6 +159,9 @@ const manifest: HarnessManifest = {
           // The variant whose Guards section had no checks table and no
           // per-project route for a check the person asks to switch.
           "sha256:1aa11fdd7d49c9d390e9ef99004b76eef31541da5f20d52e311f633120f3579b",
+          // The variant whose Guards section did not say that the guards as a
+          // whole are the Guard Policy.
+          "sha256:038b76450d7264af3092a0121bb60567f31391180f244532a399867ed94ca994",
         ],
       },
     },
