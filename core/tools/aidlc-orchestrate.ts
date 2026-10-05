@@ -9781,8 +9781,8 @@ function unitMajorRedo(
       `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
       OTHER_UNITS_KEPT;
   }
-  const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
-    `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${unit} --via redo --scope ${scopeArg(scope)}`;
+  const reopen = `${aidlcToolInvocation("jump")} reopen --target ${shellArg(redone)} ` +
+    `--stages ${shellArg(blockSlugs.slice(blockSlugs.indexOf(redone)).join(","))} --units ${shellArg(unit)} --via redo --scope ${shellArg(scope)}`;
   // Code Generation is redone plan included, so a new plan is approved again
   // unless plan approval is off.
   const name = walk.block.find((stage) => stage.slug === redone)?.name || redone;
@@ -12097,15 +12097,7 @@ function handleResumeReport(
   const rawChoice = (flags.userInput ?? "").trim().toLowerCase();
   const choice = numericChoices[rawChoice] ?? rawChoice;
   if (choice.includes("redo")) {
-    const scope = getField(stateContent, "Scope")?.trim() ?? "";
-    const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
-    if (unitRedo) {
-      emit(printDirective(unitRedo));
-      return;
-    }
-    emit(printDirective(
-      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scopeArg(scope)}\` to reset the current stage, then re-run \`next\` to start it over.`,
-    ));
+    emit(redoCurrentStage(pd, getField(stateContent, "Scope")?.trim() ?? "", stateContent, slug));
     return;
   }
   if (choice.includes("jump")) {
@@ -12135,6 +12127,19 @@ function handleResumeReport(
   ));
 }
 
+// The redo of the current stage, run only for a stage and a scope AI-DLC knows,
+// with every value quoted, so nothing read from the state file runs as shell.
+function redoCurrentStage(pd: string, scope: string, stateContent: string, slug: string): PrintDirective | ErrorDirective {
+  if (nodeForSlug(slug) === undefined || !validScopes().has(scope)) {
+    return errorDirective(
+      `This workflow's current stage or scope is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
+    );
+  }
+  const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
+  return printDirective(unitRedo ??
+    `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${shellArg(slug)} --direction redo --scope ${shellArg(scope)}\` to reset the current stage, then re-run \`next\` to start it over.`);
+}
+
 // A redo, jump, or start-fresh request on re-entry, typed by the conductor
 // from the person's own words; none of their words travel in the command. Each
 // print names the whole command, or the one thing to ask when the person left
@@ -12145,9 +12150,16 @@ function emitTypedResumeChoice(
   stateContent: string,
   slug: string,
 ): void {
-  const choice = flags.choice?.trim().toLowerCase() ?? "";
+  let choice = flags.choice?.trim().toLowerCase() ?? "";
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
-  if (flags.target !== undefined && choice !== "jump") {
+  let named = flags.target;
+  // "Redo <stage>": the current stage is a plain redo, another stage is the
+  // jump back to it, which works out the direction.
+  if (choice === "redo" && named !== undefined) {
+    if (named.trim() === slug) named = undefined;
+    else choice = "jump";
+  }
+  if (named !== undefined && choice !== "jump") {
     emit(errorDirective("--target goes only with --choice jump: it names the stage to jump to."));
     return;
   }
@@ -12188,13 +12200,11 @@ function emitTypedResumeChoice(
     return;
   }
   if (choice === "redo") {
-    const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
-    emit(printDirective(unitRedo ??
-      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`));
+    emit(redoCurrentStage(pd, scope, stateContent, slug));
     return;
   }
   if (choice === "jump") {
-    const target = flags.target?.trim() ?? "";
+    const target = named?.trim() ?? "";
     if (!target) {
       emit(printDirective(
         "Ask the person which stage they want, then report again with `--choice jump --target <stage>`.",

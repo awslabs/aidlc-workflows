@@ -404,6 +404,24 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4f: a redo never runs text from the state file", () => {
+    const p = projWithState("state-jumped.md");
+    const state = readFileSync(statePath(p), "utf-8");
+    const report = (...extra: string[]) =>
+      directive(run(ORCHESTRATE, ["report", "--result", "resumed", ...extra, "--project-dir", p]));
+    writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: feature; touch pwned"), "utf-8");
+    for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
+      expect(r.kind).toBe("error");
+      expect(r.message).toContain("cannot be redone from here");
+      expect(r.message).not.toContain("touch pwned");
+    }
+    writeFileSync(statePath(p), state.replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation$(touch pwned)"), "utf-8");
+    for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
+      expect(r.kind).toBe("error");
+      expect(r.message).not.toContain("touch pwned");
+    }
+  });
+
   test("SP4e: a typed re-entry request gets a complete command; the person's words are never classified", () => {
     const p = projWithState("state-jumped.md");
     const before = readFileSync(statePath(p), "utf-8");
@@ -446,10 +464,14 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(wrong.kind).toBe("error");
     expect(wrong.message).toContain('Unknown --choice "sideways"');
 
-    // A stage goes only with a jump: a redo never quietly drops the stage it was given.
-    const redoWithTarget = report("--choice", "redo", "--target", "requirements-analysis");
-    expect(redoWithTarget.kind).toBe("error");
-    expect(redoWithTarget.message).toContain("--target goes only with --choice jump");
+    // "Redo <stage>" never drops the stage it names: the current stage is a
+    // plain redo, another stage is the jump back to it.
+    const redoHere = report("--choice", "redo", "--target", "code-generation");
+    expect(redoHere.kind).toBe("print");
+    expect(redoHere.message).toContain("--direction redo");
+    const redoThere = report("--choice", "redo", "--target", "requirements-analysis");
+    expect(redoThere.kind).toBe("print");
+    expect(redoThere.message).toContain("Run `next --stage requirements-analysis`");
     // The choice alone is enough; the person's words are not needed in the command.
     expect(report("--choice", "resume").message).toContain("Re-run `next`");
 
