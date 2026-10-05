@@ -1252,6 +1252,11 @@ function onlyFlags(args: readonly string[], allowed: readonly string[]): boolean
   return true;
 }
 
+// The settings a scope or setting change the person asked for may carry. Guard
+// Policy, plan approval and the person's checks keep their own switch rules.
+const PLAN_WAIT_SETTINGS = ["depth", "test-strategy", "review", "sensors", "learnings"] as const;
+const PLAN_WAIT_SETTING_FLAGS = PLAN_WAIT_SETTINGS.map((setting) => `--${setting}`);
+
 const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
   // The review brief and the stage's own question rows (a checkpoint row keeps
   // its own rule).
@@ -1275,6 +1280,17 @@ const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
   // folder is, and the scan that follows it.
   { noun: "jump", verbs: ["execute", "reopen"], asked: true },
   { noun: "recompose", asked: true, admits: (afterNoun) => onlyFlags(afterNoun, ["--skip", "--add", "--reason"]) },
+  // A scope or setting change, which keeps the plan's question open.
+  {
+    noun: "scope", verbs: ["change"], asked: true,
+    admits: (afterNoun) => onlyFlags(afterNoun.slice(1), ["--scope", ...PLAN_WAIT_SETTING_FLAGS]),
+  },
+  {
+    noun: "config", verbs: ["set"], asked: true,
+    admits: (afterNoun) =>
+      (PLAN_WAIT_SETTINGS as readonly string[]).includes(afterNoun[1] ?? "") && afterNoun[2] !== undefined &&
+      onlyFlags(afterNoun.slice(3), PLAN_WAIT_SETTING_FLAGS),
+  },
   { noun: "intent", verbs: ["create"], asked: true },
   { noun: "workspace", verbs: ["reclassify", "codekb-scope-diff"], asked: true },
   // A review the person asks for: its request and its verdict.

@@ -10938,7 +10938,14 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       } catch (error) {
         throw new Error(`Cannot record the scope change: ${errorMessage(error)}`);
       }
-      writeStateFile(projectDir, setField(content, "Last Updated", isoTimestamp()), intent, space);
+      const written = setField(content, "Last Updated", isoTimestamp());
+      writeStateFile(projectDir, written, intent, space);
+      // Asked for while the code plan's question waits, it stays the open step.
+      try {
+        keepPlanApprovalAskOverStateWrite(projectDir, contentBefore, written);
+      } catch (e) {
+        recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
       // The work list and a restart offer name the scope it runs on now.
       if (intent && oldScope !== newScope) updateIntentScope(projectDir, intent, newScope, space);
     }
@@ -11533,7 +11540,14 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
       // A name-only rename or removal of an agreeing retired line records nothing.
       // Resolving conflicting lines records the prior effective policy instead.
       if (update.audit.length > 0) appendAuditEntries(update.audit, projectDir, intent, space);
-      writeStateFile(projectDir, setField(update.content, "Last Updated", isoTimestamp()), intent, space);
+      const written = setField(update.content, "Last Updated", isoTimestamp());
+      writeStateFile(projectDir, written, intent, space);
+      // Asked for while the code plan's question waits, it stays the open step.
+      try {
+        keepPlanApprovalAskOverStateWrite(projectDir, content, written);
+      } catch (e) {
+        recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
     }
     process.stdout.write(`${update.lines.join("\n")}\n`);
   }, intent, space);

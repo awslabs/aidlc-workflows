@@ -2160,6 +2160,8 @@ describe("what the engine names while a plan waits", () => {
     ["a jump to Reverse Engineering", "/aidlc --stage reverse-engineering", ["--stage", "reverse-engineering"]],
     ["a redo of this stage", "/aidlc --stage code-generation", ["--stage", "code-generation"]],
     ["a skip", "/aidlc --skip build-and-test", ["--skip", "build-and-test"]],
+    ["a scope change", "/aidlc --scope feature", ["--scope", "feature"]],
+    ["a setting change", "/aidlc --depth minimal --review advisory", ["--depth", "minimal", "--review", "advisory"]],
     ["new work beside it", "/aidlc --new-intent add a csv export", ["--new-intent", "--scope", "poc", "add a csv export"]],
     ["the resume menu's redo", "redo this stage from the start", null],
   ] as const)("%s: every command the engine names gets through", (_label, typed, args) => {
@@ -2255,6 +2257,46 @@ describe("what the engine names while a plan waits", () => {
     const said = answer(proj, "Approve Plan", ["--park"]);
     expect(said.code, said.message).toBe(0);
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
+  });
+
+  // A scope or setting change asked for while the plan waits, alone or with a
+  // skip: each step the engine names runs, and the plan question is still the
+  // open step, answered with the person's words. A new scope tests the plan
+  // its own way, so its answer names the plan's Testing Contract to render
+  // again first.
+  test.each([
+    ["a scope change", "/aidlc --scope feature", ["--scope", "feature"], false],
+    ["a depth change", "/aidlc --depth minimal", ["--depth", "minimal"], true],
+    ["a review change", "/aidlc --review advisory", ["--review", "advisory"], true],
+    [
+      "a setting change with a skip",
+      "/aidlc --depth minimal --skip feedback-optimization",
+      ["--depth", "minimal", "--skip", "feedback-optimization"],
+      true,
+    ],
+  ] as const)("%s while the plan waits runs, and the plan question stays open", (_label, typed, args, planCurrent) => {
+    const proj = waitingPlan();
+    // The setters read the plan's scope from the installed tree.
+    cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    reply(proj, typed);
+    const named = next(proj, [...args]);
+    const commands = namedCommands(named);
+    expect(commands.length, JSON.stringify(named)).toBeGreaterThan(0);
+    for (const command of commands) {
+      const verdict = guardBash(proj, command);
+      expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
+      runInstalled(proj, command);
+    }
+    expect(planApprovalAskIsOpen(proj)).toBe(true);
+    reply(proj, "approve the plan, but let's stop there for today");
+    const said = answer(proj, "Approve Plan", ["--park"]);
+    expect(said.code, said.message).toBe(0);
+    expect(said.recorded).toBe("approve");
+    if (planCurrent) {
+      expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
+    } else {
+      expect(said.message).toContain("Testing Contract");
+    }
   });
 
   // Only the skip's own write keeps the plan question open: any other change

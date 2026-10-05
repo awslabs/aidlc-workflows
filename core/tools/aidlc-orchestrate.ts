@@ -7117,8 +7117,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd)) : turnEndingPrint(
-        `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
+      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd)) : keptWhilePlanWaits(
+        turnEndingPrint(`Run \`${command}\` to change scope, then print its output verbatim and stop.`),
+        planApprovalAskIsOpen(pd),
       ));
       return;
     }
@@ -7130,8 +7131,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // same-as-current --scope: no sibling modifier may be silently discarded.
     if (modifiers.length > 0 && !describedWork) {
       const command = configSetCommand(modifiers);
-      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd)) : turnEndingPrint(
-        `Run \`${command}\` to update the configuration, then print its output verbatim and stop.`,
+      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd)) : keptWhilePlanWaits(
+        turnEndingPrint(`Run \`${command}\` to update the configuration, then print its output verbatim and stop.`),
+        planApprovalAskIsOpen(pd),
       ));
       return;
     }
@@ -10625,6 +10627,14 @@ function emitSingleRunStage(
     : directive);
 }
 
+// A change the person asked for while the code plan's question is open: the
+// question stays the published step, so what they say next is kept as their
+// answer to it.
+function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolean): T {
+  if (planWaits) planWaitPrints.add(directive);
+  return directive;
+}
+
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the opposite
@@ -10639,10 +10649,7 @@ function planChangeDirective(
   // person says next is kept as their answer to it.
   planWaits = false,
 ): PrintDirective {
-  const kept = (directive: PrintDirective): PrintDirective => {
-    if (planWaits) planWaitPrints.add(directive);
-    return directive;
-  };
+  const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
