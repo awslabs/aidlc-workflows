@@ -215,7 +215,7 @@ function recordCommand(pd: string, command: string): void {
   expect(applied.code, applied.out).toBe(0);
 }
 
-function prepareNative(pd: string): void {
+function prepareNative(pd: string, beforePrepare?: () => void): ReturnType<typeof tool> {
   writeActiveDirectiveMarker(pd, {
     kind: "invoke-swarm", stage: STAGE, units: BATCH,
     state_sha256: stateDigest(readFileSync(seededStateFile(pd), "utf-8")),
@@ -248,8 +248,10 @@ function prepareNative(pd: string): void {
     const answer = tool(pd, "log", ["answer", ...identity, "--details", "Approve Plan"]);
     expect(answer.code, answer.out).toBe(0);
   }
+  beforePrepare?.();
   const prepared = tool(pd, "swarm", ["prepare", "--batch", "1", "--units", BATCH.join(","), "--base", git(pd, ["branch", "--show-current"])]);
-  expect(prepared.code, prepared.out).toBe(0);
+  if (!beforePrepare) expect(prepared.code, prepared.out).toBe(0);
+  return prepared;
 }
 
 // Protected append factory stands in for the existing review/finalize/merge
@@ -894,6 +896,26 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     choice(pd, "t343-checkpoint", "Request Changes");
     rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint");
     expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+  });
+
+  test("under Guard Policy off, prepare goes on when the parent source moved after Plan Approval", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const pd = fixture();
+      if (policy !== "strict") setPolicy(pd, policy);
+      const prepared = prepareNative(pd, () => {
+        // The person commits a change to the project after approving the plans.
+        writeFileSync(join(pd, "src", "gamma.ts"), "export const gamma = 2;\n");
+        git(pd, ["add", "src/gamma.ts"]);
+        git(pd, ["commit", "-qm", "the person's own change"]);
+      });
+      if (policy === "strict") {
+        expect(prepared.code).not.toBe(0);
+        expect(prepared.out).toContain("Parent source has changed since Plan Approval");
+      } else {
+        expect(prepared.code, prepared.out).toBe(0);
+        expect(prepared.out).toContain("src/gamma.ts");
+      }
+    }
   });
 
   test("under Guard Policy off or relaxed, a later change to an approved batch's files keeps its approval", () => {

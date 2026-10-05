@@ -102,6 +102,9 @@ import {
   findAllEvents,
   getField,
   guardPolicyAcceptsChanges,
+  recordAcceptedChanges,
+  renderChangedPaths,
+  type AcceptedChange,
   isRegularFile,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
@@ -209,6 +212,10 @@ interface ReceiptCheck {
   artifactFingerprint?: string;
   sourceFingerprint?: string;
   unitSourceFingerprint?: string;
+  /** Changes kept under a relaxed or off Guard Policy, recorded once at finalize. */
+  accepted?: AcceptedChange[];
+  /** The Unit's manifest changed after its review and the review was kept. */
+  manifestKept?: boolean;
 }
 
 interface ReviewedRecordSnapshotEntry {
@@ -571,6 +578,8 @@ function reviewerReceiptError(
   }
 
   const definition = resolveStage(stage);
+  const accepted: AcceptedChange[] = [];
+  let manifestKept = false;
   const recordedArtifactFp = auditBlockField(latestTerminal.block, "Artifact Fingerprint");
   const currentArtifactFp = definition
     ? reviewArtifactFingerprint(wt, definition, unit, {
@@ -646,7 +655,20 @@ function reviewerReceiptError(
       worktreeRelative: true,
     });
     const snapshot = readUnitSourceSnapshot(wt, stage, unit, recordedUnitFp);
+    // Under relaxed or off the review stands when the Unit's manifest changed
+    // after it or its review copy is not on this machine; the change is kept.
+    const acceptsChanges = guardPolicyAcceptsChanges(projectDir);
     if (
+      acceptsChanges && manifest.ok &&
+      (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256)
+    ) {
+      manifestKept = true;
+      accepted.push({
+        checkpoint: "review-receipt", stage, unit, changed: null,
+        recorded: snapshot?.manifestSha256 ?? recordedUnitFp, current: manifest.rawBytesSha256,
+        notice: `Unit ${unit}'s list of files changed after its review. Kept the review.`,
+      });
+    } else if (
       !manifest.ok ||
       snapshot === null ||
       snapshot.manifestSha256 !== manifest.rawBytesSha256
@@ -730,7 +752,15 @@ function reviewerReceiptError(
       }
       const outsideClaims = [...outside]
         .filter((path) => !sourceClaimCovers(`\0${path}`, reviewedClaims));
-      if (outsideClaims.length > 0) {
+      if (outsideClaims.length > 0 && acceptsChanges) {
+        // Under relaxed or off the files stay and merge; they are named once.
+        accepted.push({
+          checkpoint: "review-receipt", stage, unit, changed: outsideClaims.sort(),
+          recorded: recordedUnitFp,
+          current: `sha256:${createHash("sha256").update(outsideClaims.join("\n")).digest("hex")}`,
+          notice: `Unit ${unit} also changed ${renderChangedPaths(outsideClaims)} outside its planned files. Kept them.`,
+        });
+      } else if (outsideClaims.length > 0) {
         const rendered = outsideClaims.slice(0, 10).join(", ") +
           (outsideClaims.length > 10 ? ` … and ${outsideClaims.length - 10} more` : "");
         return {
@@ -749,6 +779,8 @@ function reviewerReceiptError(
     artifactFingerprint: recordedArtifactFp,
     sourceFingerprint: recordedSourceFp,
     unitSourceFingerprint,
+    ...(accepted.length > 0 ? { accepted } : {}),
+    ...(manifestKept ? { manifestKept } : {}),
   };
 }
 
@@ -810,10 +842,11 @@ function captureReviewedRecordSnapshot(
       unit,
       receipt.unitSourceFingerprint,
     );
+    // A manifest change kept at the receipt check lands as it is now, beside
+    // the evidence of what was reviewed.
     if (
       !manifest.ok ||
-      snapshot === null ||
-      snapshot.manifestSha256 !== manifest.rawBytesSha256
+      (!receipt.manifestKept && (snapshot === null || snapshot.manifestSha256 !== manifest.rawBytesSha256))
     ) {
       return {
         error:
@@ -889,6 +922,9 @@ function captureReviewedRecordSnapshot(
         // retain these exact, receipt-bound bytes in .aidlc-engine/source-review.
         // Promote them into the transferred snapshot so an in-flight swarm can
         // finish after upgrading without weakening the new provenance record.
+        if (snapshot === null) {
+          return { error: `cannot capture reviewed source evidence for unit "${unit}"` };
+        }
         evidenceBytes = Buffer.from(snapshot.serialized, "utf-8");
       }
     }
@@ -2902,10 +2938,11 @@ function handleFinalize(rest: string[]): void {
             recordSnapshots.set(unit, captured.snapshot);
             genuine.push(unit);
             preparedAttempts.set(unit, preparedAttempt);
-            results.push({
-              unit, status: "converged",
-              ...(verdict.tamperNotice ? { change_notices: [verdict.tamperNotice] } : {}),
-            });
+            const notices = [
+              ...(verdict.tamperNotice ? [verdict.tamperNotice] : []),
+              ...recordAcceptedChanges(projectDir, receipt.accepted ?? []),
+            ];
+            results.push({ unit, status: "converged", ...(notices.length > 0 ? { change_notices: notices } : {}) });
           }
         }
       } else {

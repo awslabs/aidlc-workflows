@@ -30,6 +30,7 @@ import {
   docsRoot,
   errorMessage,
   getField,
+  guardPolicyAcceptsChanges,
   guardStoodAsideLine,
   gitCommitSourceListing,
   isoTimestamp,
@@ -3975,7 +3976,14 @@ function approvedWorktreeSource(
     }
     return { parentSource, expectedBytes: discarded.expectedBytes };
   }
-  if (!parentSource || (!approved.continuing && !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint))) {
+  // Under a relaxed or off Guard Policy, parent source that moved after Plan
+  // Approval is kept, as on the single-agent path: generation start records it
+  // and says it in one line.
+  if (!parentSource || (
+    !approved.continuing &&
+    !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
+    !guardPolicyAcceptsChanges(parent)
+  )) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   const prefix = `${repo.repo ?? ""}\0`;

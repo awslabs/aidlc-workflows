@@ -63,7 +63,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   _legacyWorkspaceSourceFingerprintForTests,
@@ -5628,6 +5628,56 @@ process.stdin.on("end", () => server.stop(true));
       } else {
         expect(r.out).not.toContain("no longer matches the final reviewed swarm merge");
         expect(r.out).toContain("Files in the main checkout changed after the last unit was merged. Kept them.");
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off, files a Unit changed outside its planned files are kept and named once", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const proj = makeFixture();
+      if (policy !== "strict") setPolicy(proj, policy);
+      runSwarm(proj, ["prepare", "--batch", "1", "--units", "extra", "--base", "main"]);
+      const wt = wtPath(proj, "extra");
+      writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+      writeFileSync(join(wt, "extra.ts"), "export const extra = true;\n");
+      recordReview(wt, "code-generation", REVIEWER, "extra", "READY", [{ path: "reviewed.ts" }]);
+      const finalized = runSwarm(proj, [
+        "finalize", "--batch", "1", "--units", "extra", "--claimed", "extra",
+        "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ]);
+      const row = JSON.parse(finalized.out).units.find((unit: { unit: string }) => unit.unit === "extra");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain("outside unit \"extra\"'s source manifest (extra.ts)");
+      } else {
+        expect(finalized.rc, finalized.diagnostic).toBe(0);
+        expect(row?.change_notices).toEqual(["Unit extra also changed extra.ts outside its planned files. Kept them."]);
+        expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED[\s\S]*?\*\*Changed\*\*: extra\.ts/);
+      }
+    }
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  test("with Guard Policy off, a Unit whose list of files changed after its review keeps the review", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const proj = makeFixture();
+      if (policy !== "strict") setPolicy(proj, policy);
+      runSwarm(proj, ["prepare", "--batch", "1", "--units", "listed", "--base", "main"]);
+      const wt = wtPath(proj, "listed");
+      writeFileSync(join(wt, "reviewed.ts"), "export const reviewed = true;\n");
+      recordReview(wt, "code-generation", REVIEWER, "listed", "READY", [{ path: "reviewed.ts" }]);
+      const manifest = join(wt, relative(proj, seededRecordDir(proj)), "construction", "listed", "code-generation", "source-manifest.json");
+      writeFileSync(manifest, `${readFileSync(manifest, "utf-8")}\n`);
+      const finalized = runSwarm(proj, [
+        "finalize", "--batch", "1", "--units", "listed", "--claimed", "listed",
+        "--check-cmd", `"${process.execPath}" -e "require('fs').accessSync('reviewed.ts')"`,
+      ]);
+      const row = JSON.parse(finalized.out).units.find((unit: { unit: string }) => unit.unit === "listed");
+      if (policy === "strict") {
+        expect(finalized.rc).toBe(2);
+        expect(row?.detail).toContain("reviewed source manifest binding is missing, corrupt, or no longer matches its review");
+      } else {
+        expect(finalized.rc, finalized.diagnostic).toBe(0);
+        expect(row?.change_notices).toEqual(["Unit listed's list of files changed after its review. Kept the review."]);
       }
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);

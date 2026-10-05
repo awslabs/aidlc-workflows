@@ -447,7 +447,12 @@ per-unit checks; missing/invalid-manifest receipts explicitly record
 `Unit Source Binding Bypass: true`, so the switch must be present again at
 completion. In a modern Bolt, finalize also verifies the attested base-to-
 worktree footprint is a subset of the reviewed manifest claims before the
-settled-swarm stage-level exemption applies.
+settled-swarm stage-level exemption applies. Under a relaxed or off Guard
+Policy a Unit's manifest that changed after its review, and files the Unit
+changed outside its manifest, keep the review: finalize records each once as
+`CHANGE_ACCEPTED` and returns its line in the Unit's `change_notices`. Swarm
+prepare likewise keeps parent source that moved after Plan Approval (generation
+start records it and says it), as the single-agent build does.
 
 Swarm footprint verification and immutable Source Commit creation apply the
 same boundary. Clean-filter raw-byte replacement is restricted to exact
