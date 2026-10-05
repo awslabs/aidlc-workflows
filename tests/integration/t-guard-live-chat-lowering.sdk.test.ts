@@ -150,20 +150,22 @@ describe.skipIf(
       );
       expect(statusOutput?.resultText).toMatch(/^Checks off:.*\bstate-transition\b/m);
 
-      // Plain words that name one check lower that check, not the whole
-      // policy: the review freeze setter runs and Guard Policy stays relaxed.
+      // "Stop asking me to re-approve when files change" is Guard Policy
+      // relaxed, not one check: already relaxed here, so the setter says so,
+      // and the review freeze check stays on.
       const one = await drive("stop asking me to re-approve when files change", 120_000, {
         toolName: "Bash",
-        resultIncludes: "review-freeze",
+        resultIncludes: "Guard Policy is already relaxed",
       });
-      assertToolResultContains(one, "Bash", "review-freeze");
+      assertToolResultContains(one, "Bash", "Guard Policy is already relaxed");
       expect(stateLines()).toContain(RELAXED_LINE);
+      expect(stateLines()).toContain("- **Guards Off**: state-transition (set by you)");
       expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(1);
 
       // Plain words are the person's request too: the agent runs the setter for
       // them, the change is set by you with their words, and one line says how
       // to put it back. No exact typing. The guards as a whole off is Guard
-      // Policy off, even when the same words also name one check.
+      // Policy off, even beside words that alone would mean relaxed.
       const asked = "please stop asking me to re-approve when files change, turn the guards off";
       const plain = await drive(asked, 150_000, {
         toolName: "Bash",

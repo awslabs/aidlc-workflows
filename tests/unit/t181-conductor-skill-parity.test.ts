@@ -312,6 +312,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     // A live Claude chat followed the onboarding's old "name the exact command
     // for them to type" over the SKILL's rule and refused a plain request.
     const problems: string[] = [];
+    // "Re-approve when files change" is the policy, read one way on every
+    // tool, and the setter's line reaches the person before anything else.
+    const PHRASE_AND_LINE = [
+      "\"Stop asking me to re-approve when files change\" is Guard Policy `relaxed`, not one check; when Guard " +
+        "Policy is already `off`, say in one line that it is already off and change nothing.",
+      "say the line the command prints, word for word, in your reply in that same turn, before any question, " +
+        "picker or next step",
+    ];
     const prose = [
       ...skills,
       "core/templates/onboarding-harness.md",
@@ -323,6 +331,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "**The person's checks, off or on when they ask.**",
         "never refuse, never ask them to type it",
         "Asking for the guards or the checks as a whole to be off (\"turn the guards off\") is Guard Policy `off`",
+        ...PHRASE_AND_LINE,
       ]) {
         if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
       }
@@ -337,6 +346,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const tok of [
       "never refuse, never ask them to type it",
       "Asking for the guards or the checks as a whole to be off (\"turn the guards off\") is Guard Policy `off`",
+      ...PHRASE_AND_LINE,
       "Where it applies is what they say: this piece of work, this project, or this machine.",
       "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
       "`{{INVOKE}} engine config set <key> <on|off>`",

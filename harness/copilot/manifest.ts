@@ -164,6 +164,9 @@ const manifest: HarnessManifest = {
           "sha256:038b76450d7264af3092a0121bb60567f31391180f244532a399867ed94ca994",
           // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
           "sha256:00efc5b85d53364a162f5f0eb604842f96fa94fdcb1e23ee6c286b707b93f336",
+          // The variant whose Guards section did not say that "re-approve when
+          // files change" is Guard Policy relaxed.
+          "sha256:7d1b6554a2de2b97b8e14f96ec99d218722d18c100de166cb1a5831bb2c11bfc",
         ],
       },
     },
