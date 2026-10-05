@@ -96,6 +96,7 @@ import {
   recordAcceptedChanges,
   governedChangeControl,
   readAuditShardEvents,
+  isRequestTurn,
   unitSkippedUnits,
   readActiveAuditShardEvents,
   sortAttemptEvents,
@@ -389,7 +390,28 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 ]);
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
-const ANSWER_OPTIONS: ReadonlySet<string> = new Set([...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park"]);
+// --on-instruction: a stage question the person left to the agent.
+const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
+  ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
+]);
+
+// An answer the agent chose because the person left the choice to it ("up to
+// you", "choose the recommended answers"): the record says who chose and keeps
+// the words that handed it over.
+export const ANSWER_SOURCE_ON_INSTRUCTION = "chosen by the agent as the person asked";
+
+// The person has said something in this piece of work: a turn that can carry a
+// request, or the request that started it. Their handing a choice over can
+// come before the question, so the words are what the record keeps.
+function personSpokeInThisWork(pd: string): boolean {
+  try {
+    return readAuditShardEvents(pd).some((row) =>
+      isRequestTurn(row) ||
+      (row.event === "WORKFLOW_STARTED" && (auditBlockField(row.block, "Request") ?? "").trim() !== ""));
+  } catch {
+    return false;
+  }
+}
 
 function verificationCommandFromFlags(pd: string, flags: Record<string, string>) {
   if ((flags.command !== undefined) === (flags["command-file"] !== undefined)) {
@@ -1087,7 +1109,7 @@ function handleAnswers(args: string[]): void {
 // --- Subcommand: answer ---
 // Usage: aidlc-log answer --stage <slug> --details <text>
 //   [--checkpoint summary-confirmation --questions-file <path>
-//   [--unit <unit>] [--single]]
+//   [--unit <unit>] [--single]] [--on-instruction <the person's words>]
 //
 // Fires AFTER the user answers a question.
 
@@ -1518,6 +1540,22 @@ function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
+  // A stage question the person left to the agent. Checkpoints and approvals
+  // stay the person's own each time, and an unattended run has nobody to hand
+  // anything over.
+  const instruction = flags["on-instruction"]?.replace(/\s+/g, " ").trim();
+  if (instruction !== undefined) {
+    if (instruction === "") {
+      error("--on-instruction needs the person's own words that left the choice to you.");
+    }
+    if (flags.checkpoint !== undefined) {
+      error(`--on-instruction is for a stage question the person left to you; --checkpoint ${flags.checkpoint} ` +
+        "is theirs to answer. Ask them and record their reply.");
+    }
+    if (!humanTurnMintAllowed()) {
+      error("--on-instruction needs a person in the session; AIDLC_UNATTENDED=1 is set.");
+    }
+  }
 
   if (
     flags.checkpoint !== undefined &&
@@ -2072,6 +2110,9 @@ function handleAnswer(args: string[]): void {
     const pendingDecision =
       targetAtApprovalGate && hasPendingDecisionAtGate(pd, flags.stage);
     if (targetAtApprovalGate && !pendingDecision) {
+      if (instruction !== undefined) {
+        error("An approval is the person's own each time, so --on-instruction cannot record it. Ask them.");
+      }
       if (
         !autonomousDecision &&
         !humanPresenceGuardDisabled() &&
@@ -2094,7 +2135,14 @@ function handleAnswer(args: string[]): void {
       return;
     }
 
-    if (autonomousDecision) {
+    if (instruction !== undefined) {
+      if (!personSpokeInThisWork(pd)) {
+        error("Nothing the person said in this piece of work is on record, so no choice was left to you. Ask them." +
+          unattendedHumanPresenceHint());
+      }
+      fields["Answer Source"] = ANSWER_SOURCE_ON_INSTRUCTION;
+      fields.Instruction = instruction;
+    } else if (autonomousDecision) {
       // autonomous Construction: no human presence required
     } else if (humanPresenceGuardDisabled()) {
       // scoped test off-switch

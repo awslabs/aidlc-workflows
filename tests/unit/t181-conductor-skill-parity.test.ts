@@ -1288,6 +1288,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/hooks/aidlc-review-freeze.ts",
       "core/tools/aidlc-lib.ts",
       "docs/reference/17-skill-system.md",
+      "docs/reference/04-stage-protocol.md",
     ];
     for (const rel of files) {
       const text = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
@@ -1302,6 +1303,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "ask what outcome they care about most",
         "When a user defers to AI judgment, reframe",
         'Request Changes needs a separate answer to "What should change?"',
+        // A choice left to the agent was recorded as the person's own answer.
+        "record it as their answer with a note that they left it to you",
+        "records it as their answer with a note that they left it to the agent",
       ]) {
         if (text.includes(old)) stale.push(`${rel}  still says: ${old}`);
       }
@@ -1322,7 +1326,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
       .replace(/\s+/g, " ");
     for (const rule of [
-      'When a user leaves a choice to you ("up to you", "whatever you think is best"), decide',
+      'When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide',
+      '--on-instruction "<their words that left it to you>"',
+      '**SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else."',
+      '**SAY:** "Approvals are still yours: I\'ll stop at each stage for you to approve."',
       "When the person's request already chose",
       "answers in their own words, those words are their answer",
     ]) {

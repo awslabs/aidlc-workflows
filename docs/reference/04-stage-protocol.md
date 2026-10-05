@@ -478,9 +478,15 @@ ask targeted follow-up. Do NOT proceed until resolved.
   previously defined quality target (for example, a test coverage threshold)
   instead of meeting it
 - When the user leaves a choice to the agent ("up to you", "whatever you think
-  is best"), the agent decides: it picks the option that best fits what they
-  have said, records it as their answer with a note that they left it to the
-  agent, and says in one line what it chose, why, and that they can change it.
+  is best", or "choose the recommended answers" for this stage), the agent
+  decides: it picks the option that best fits what they have said and records
+  it with `log answer --on-instruction "<their words>"`, so the record shows
+  the agent chose it as they asked. It then says one line: "You left <the
+  question> to me, so I chose <the choice>. Say if you want something else."
+  (for several questions, "You left <Stage>'s <N> questions to me, so I chose
+  the recommended answers: ... Say if you want any of them changed."), and
+  once per piece of work: "Approvals are still yours: I'll stop at each stage
+  for you to approve." A checkpoint or an approval is never left to the agent.
 
 ### Plan and Question File Location
 

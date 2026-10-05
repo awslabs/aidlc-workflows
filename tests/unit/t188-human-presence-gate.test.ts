@@ -1250,6 +1250,44 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
 
+    // "Choose the recommended answers", said before the questions came: the
+    // agent's choice is recorded as the agent's, with the words that handed it
+    // over, never as the person's own answer.
+    test("an answer the person left to the agent is recorded as the agent's, in their words", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "first answer"]).rc).toBe(0);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q5", "--options", "A,B"]).rc).toBe(0);
+      // Without their words it is still theirs to answer.
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "Q1: A"]).rc).not.toBe(0);
+      const r = guardedLog(proj, [
+        "answer", "--stage", slug, "--details", "Q1: A; Q2: B", "--on-instruction", "choose the  recommended answers",
+      ]);
+      expect(r.rc, r.out).toBe(0);
+      const audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Answer Source**: chosen by the agent as the person asked");
+      expect(audit).toContain("**Instruction**: choose the recommended answers");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
+    });
+
+    test("with nothing the person said, blank words, a checkpoint, or an unattended run, it stays theirs", () => {
+      const slug = field(proj, "Current Stage");
+      const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"]);
+      expect(unsaid.rc).not.toBe(0);
+      expect(unsaid.out).toContain("Nothing the person said in this piece of work is on record");
+      recordHumanTurn(proj);
+      const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "  "]);
+      expect(blank.out).toContain("--on-instruction needs the person's own words");
+      const checkpoint = guardedLog(proj, [
+        "answer", "--stage", slug, "--checkpoint", "summary-confirmation", "--details", "Looks correct",
+        "--on-instruction", "up to you",
+      ]);
+      expect(checkpoint.out).toContain("--checkpoint summary-confirmation is theirs to answer");
+      const unattended = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"], true);
+      expect(unattended.out).toContain("--on-instruction needs a person in the session");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
     test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
