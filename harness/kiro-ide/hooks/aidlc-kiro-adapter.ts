@@ -2352,11 +2352,26 @@ function buildForward(): Forward {
           // denying here is what kept a Windows shell (`execute_pwsh`) from ever
           // running `aidlc-orchestrate.ts next` to start one.
           if (state.active && Object.keys(toolArgs).length > 0 && !isKiroShellTool(toolName)) {
+            // A populated payload with no path the adapter can read goes to the
+            // core guard under its own name, which decides an unlisted tool as
+            // it does on every harness: held before approval, run after it.
+            // A payload with no tool name gives the guard nothing to decide.
+            if (toolName === "") {
+              return {
+                hook: "__legacy_plan_approval_block__",
+                input: {
+                  reason:
+                    "Plan Approval blocked a mutation-capable payload whose target path is missing or unsupported.",
+                },
+              };
+            }
             return {
-              hook: "__legacy_plan_approval_block__",
+              hook: "aidlc-plan-approval-guard.ts",
               input: {
-                reason:
-                  "Plan Approval blocked a mutation-capable payload whose target path is missing or unsupported.",
+                hook_event_name: "PreToolUse",
+                tool_name: toolName,
+                tool_input: toolArgs,
+                cwd: projectDir,
               },
             };
           }

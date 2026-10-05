@@ -3196,6 +3196,21 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         ).code,
         "orchestrate_subagent",
       ).toBe(0);
+      // An unlisted tool with a populated payload and no path the adapter can
+      // read goes to the core guard under its own name: after the approval it
+      // runs, where it used to be refused on every retry.
+      const unlisted = runIdeStdin(
+        dir,
+        "plan-approval-guard",
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          cwd: dir,
+          tool_name: "custom_write_tool",
+          tool_input: { content: "generated" },
+        }),
+      );
+      expect(unlisted.code, unlisted.stderr).toBe(0);
+      expect(unlisted.stderr).not.toContain("target path is missing or unsupported");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
