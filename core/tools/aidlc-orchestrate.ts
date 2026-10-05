@@ -12153,6 +12153,8 @@ function emitTypedResumeChoice(
   let choice = flags.choice?.trim().toLowerCase() ?? "";
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
   let named = flags.target;
+  // The Unit step a "redo <stage>" named, kept so the redo is of that exact step.
+  let unitStep: string | undefined;
   // "Redo <stage>": the current stage is a plain redo, a stage that already
   // ran is the jump back to it, and a stage that has not run yet has nothing
   // to redo.
@@ -12161,7 +12163,11 @@ function emitTypedResumeChoice(
     // Unit-by-Unit Construction keeps Current Stage on the block's first stage
     // while the Unit works through later ones: the step it is on is current too.
     const unitStage = getField(stateContent, "Unit Stage")?.trim();
-    if (wanted === slug || (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined)) named = undefined;
+    if (wanted === slug) named = undefined;
+    else if (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined) {
+      named = undefined;
+      unitStep = unitStage;
+    }
     else if (parseCheckboxes(stateContent).some((box) => box.slug === wanted && box.state === "completed")) choice = "jump";
     else {
       emit(errorDirective(
@@ -12214,6 +12220,16 @@ function emitTypedResumeChoice(
     }
     emit(printDirective(
       `Redo accepted. Run \`next --stage ${shellArg(step)}${units}\`; it reopens that step for the Units named and says plainly if it cannot.`,
+    ));
+    return;
+  }
+  if (choice === "redo" && unitStep !== undefined) {
+    // The step the Unit is on, reopened for that Unit, never the block's
+    // first stage.
+    const active = getField(stateContent, "Active Unit")?.trim() ?? "";
+    const forUnit = active !== "" && validateUnitName(active) === null ? ` --unit ${shellArg(active)}` : "";
+    emit(printDirective(
+      `Redo accepted. Run \`next --stage ${shellArg(unitStep)}${forUnit}\`; it reopens that step${forUnit ? " for the Unit" : ""} and says plainly if it cannot.`,
     ));
     return;
   }

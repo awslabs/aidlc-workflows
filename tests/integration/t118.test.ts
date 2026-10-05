@@ -491,12 +491,22 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
         .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation"),
       "utf-8",
     );
-    const extras: string[][] = [[], ["--unit", "beta"]];
-    for (const extra of extras) {
-      const r = report("--choice", "redo", "--target", "code-generation", ...extra);
-      expect(r.kind).toBe("print");
-      expect(r.message).not.toContain("has not run yet");
-    }
+    const forTheStep = report("--choice", "redo", "--target", "code-generation");
+    expect(forTheStep.kind).toBe("print");
+    expect(forTheStep.message).toContain("Run `next --stage code-generation`;");
+    const forBetaStep = report("--choice", "redo", "--target", "code-generation", "--unit", "beta");
+    expect(forBetaStep.message).toContain("Run `next --stage code-generation --unit beta`");
+    writeFileSync(
+      statePath(p),
+      unitMajor.replace(
+        /^- \*\*Current Stage\*\*: .*$/m,
+        "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation\n- **Active Unit**: alpha",
+      ),
+      "utf-8",
+    );
+    const forActive = report("--choice", "redo", "--target", "code-generation");
+    expect(forActive.message).toContain("Run `next --stage code-generation --unit alpha`");
+    expect(forActive.message).not.toContain("functional-design");
     writeFileSync(statePath(p), unitMajor, "utf-8");
     // The choice alone is enough; the person's words are not needed in the command.
     expect(report("--choice", "resume").message).toContain("Re-run `next`");
