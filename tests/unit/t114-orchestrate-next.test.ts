@@ -1258,11 +1258,27 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     const statePath = seededStateFile(proj);
     writeFileSync(
       statePath,
-      readFileSync(statePath, "utf-8").replace("- [-] feasibility — EXECUTE", "- [?] feasibility — EXECUTE"),
+      readFileSync(statePath, "utf-8").replace("- [-] feasibility — EXECUTE", "- [ ] feasibility — EXECUTE"),
       "utf-8",
     );
     seedAudit(openDecision);
     expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+  });
+
+  test("a stage held at its approval gate [?] reads prose as the gate's answer first", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- [-] feasibility — EXECUTE", "- [?] feasibility — EXECUTE"),
+      "utf-8",
+    );
+    seedAudit(openDecision);
+    const read = directive([ANSWER]);
+    expect(read.kind).toBe("print");
+    expect(read.ask_type).toBeUndefined();
+    expect(String((read as { message?: string }).message)).toContain("report --stage feasibility --result approved");
   });
 
   const numberedLine = (ask: Directive, n: number): string =>

@@ -597,10 +597,19 @@ describe("the engine asks for Plan Approval", () => {
   test("a switch typed before a plan choice applies to this work, and the choice is recorded", () => {
     const proj = project("strict");
     askFor(proj);
-    reply(proj, "/aidlc --guard-policy off Approve Plan");
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: off (set by you)");
+    reply(proj, "/aidlc --guard-policy relaxed Approve Plan");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: relaxed (set by you)");
     expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("Guard Policy off typed before a plan choice lands on this work, which then builds", () => {
+    const proj = project("strict");
+    askFor(proj);
+    reply(proj, "/aidlc --guard-policy off Approve Plan");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: off (set by you)");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
   });
 
   test("a command typed after /aidlc is still no answer to the plan question", () => {
