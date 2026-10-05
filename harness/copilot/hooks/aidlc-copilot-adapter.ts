@@ -1972,12 +1972,12 @@ export async function run(
             // chat owns the step, this call reuses another call's id, or this
             // exact call is already pending.
             const reason = claimed.reason === "resume"
-              ? "A legacy Resume marker is still waiting or selected. Re-run `next --resume` in the owning session to supersede it before continuing; bare `next` remains denied until then."
+              ? "The workflow is waiting for its resume choice. Run `next --resume` to pick it up in this chat; a bare `next` stays refused until then."
               : claimed.reason === "attempt"
                 ? "This call carries the id of another pending AI-DLC call, so it did not run. Run a fresh `next` in this session."
               : claimed.reason === "foreign"
                 ? "This continuation belongs to another Copilot session. Run a fresh `next` in this session to take ownership; do not execute the owner's current token."
-                : "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles; this duplicate did not replace it.";
+                : "An equivalent `continue` is already pending for this cursor. Retry after that invocation settles, or run a fresh `next` in this session; this duplicate did not replace it.";
             process.stdout.write(denyJson(reason));
             return 0;
           }

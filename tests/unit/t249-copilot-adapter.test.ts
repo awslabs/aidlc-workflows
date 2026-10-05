@@ -2251,6 +2251,23 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("21f2: a duplicate continue names a fresh next, and that next is accepted", () => {
+    const dir = orchestrationProject();
+    inflateRules(dir);
+    const session = "host-duplicate-fresh-next";
+    const seeded = runLifecycle(dir, session, "direct", ["next"], "fresh-next-seed");
+    const token = String(seeded.directive.receipt);
+    runAdapter(dir, "guard-tool-call", commandPayload(dir, session, commandSpec(dir, "direct", ["continue", token]).text, "fresh-first"));
+    const duplicate = runAdapter(
+      dir, "guard-tool-call", commandPayload(dir, session, commandSpec(dir, "source", ["continue", token]).text, "fresh-second"),
+    );
+    expect(duplicate.stdout).toContain('"permissionDecision":"deny"');
+    expect(duplicate.stdout).toContain("or run a fresh `next` in this session");
+    const fresh = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, commandSpec(dir, "direct", ["next"]).text, "fresh-next"));
+    expect(fresh.code).toBe(0);
+    expect(fresh.stdout).not.toContain('"permissionDecision":"deny"');
+  });
+
   test("21g: reusable duplicate continue has one engine winner and one deliverable result in both operation orders", () => {
     const scenarios = [
       { pre: ["direct", "source"] as const, engine: "first", post: "winner-first" },
