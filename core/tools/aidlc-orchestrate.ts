@@ -632,7 +632,7 @@ function engineWorkflow(projectDir: string): { intent?: string; space: string } 
 // commands, park, team-board, a claim or release) runs as asked. The step
 // runs the stopped command again, so what it carried goes on.
 function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs: string[]): string | null {
-  if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled()) return null;
+  if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled(projectDir)) return null;
   const flags = parseNextFlags(nextArgs);
   if (
     flags.parseError || !nextEngagesWorkflow(nextArgs, flags) || flags.orchestratorVerb !== undefined ||

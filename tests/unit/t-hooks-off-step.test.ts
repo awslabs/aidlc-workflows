@@ -247,6 +247,28 @@ describe("next stops with the agent's step when the engine knows the hooks never
     expect(isStop(next(proj, COPILOT))).toBe(true);
   });
 
+  test("a presence check the person switched off in the named project holds when next runs from another folder", () => {
+    const target = installed(COPILOT);
+    intentCreate(target, COPILOT);
+    const elsewhere = installed(COPILOT);
+    const fromElsewhere = (): Printed => {
+      const env = attendedEnv();
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      const r = run(elsewhere, [join(elsewhere, COPILOT.dir, "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", target], env);
+      expect(r.code, r.stderr).toBe(0);
+      return JSON.parse(r.stdout) as Printed;
+    };
+    expect(isStop(fromElsewhere())).toBe(true);
+    const env = attendedEnv();
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const recorded = run(target, [
+      join(target, COPILOT.dir, "tools", "aidlc.ts"), "config", "flags", "--project-dir", target,
+      "--bypass", "AIDLC_SKIP_HUMAN_PRESENCE_GUARD", "--local", "--yes",
+    ], env);
+    expect(recorded.code, recorded.stdout + recorded.stderr).toBe(0);
+    expect(isStop(fromElsewhere())).toBe(false);
+  });
+
   test("a conversation that has not joined the workflow is not stopped", () => {
     const proj = installed(COPILOT);
     intentCreate(proj, COPILOT);

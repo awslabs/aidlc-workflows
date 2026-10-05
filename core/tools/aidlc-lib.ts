@@ -27359,8 +27359,8 @@ export function isAutonomousSwarmStage(
 // Its one off-switch is AIDLC_SKIP_HUMAN_PRESENCE_GUARD, set in the environment
 // or recorded with `config flags --bypass` (the engine then says it is off).
 // Persisted per-work settings cannot lower this guard.
-export function humanPresenceGuardDisabled(): boolean {
-  return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD") === "1";
+export function humanPresenceGuardDisabled(projectDir?: string): boolean {
+  return resolveProjectFlag("AIDLC_SKIP_HUMAN_PRESENCE_GUARD", process.env, projectDir) === "1";
 }
 
 // An unattended driver is the only component that knows its prompt-submit
