@@ -287,6 +287,43 @@ function askFor(proj: string): Emitted {
 }
 
 describe("the engine asks for Plan Approval", () => {
+  // From the person's own terminal no reply can be kept. The refusal names the
+  // switch that builds the plan there, except where the team's strict Guard
+  // Policy would refuse that switch: then it names that line, and a chat.
+  test("at their own terminal the plan question names a step that works, and the team's strict line where it holds", () => {
+    const terminal = (proj: string) => {
+      const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" };
+      for (const key of Object.keys(env)) {
+        if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) delete env[key];
+      }
+      env.AIDLC_TEST_CONFIG_TTY = "1";
+      env.TERM_PROGRAM = "";
+      const result = spawnSync(BUN, [
+        join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--details", "Approve Plan", "--project-dir", proj,
+      ], { cwd: proj, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    };
+    const open = project();
+    askFor(open);
+    const switchStep = terminal(open);
+    expect(switchStep).toContain("AI-DLC cannot see a chat in this terminal");
+    expect(switchStep).toContain("config set guard.plan-approval off");
+
+    const locked = project();
+    const memory = join(locked, "aidlc", "spaces", "default", "memory", "project.md");
+    const content = readFileSync(memory, "utf-8");
+    writeFileSync(memory, content.includes("## Guard Policy\n")
+      ? content.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+      : `${content.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`);
+    askFor(locked);
+    const lockStep = terminal(locked);
+    expect(lockStep).toContain("AI-DLC cannot see a chat in this terminal");
+    expect(lockStep).toContain("Your team set Guard Policy to strict in");
+    expect(lockStep).toContain("open this folder in your AI tool and reply to it there");
+    expect(lockStep).not.toContain("guard.plan-approval off");
+  });
+
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {
     const proj = project();
     const planning = next(proj);
