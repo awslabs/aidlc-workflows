@@ -597,12 +597,9 @@ function authorityRemedy(
       return "The person is editing the plan files themselves: leave those files to them. When they say " +
         `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
     }
-    // Some hosts show this refusal to the person as written: one plain sentence
-    // first, then the agent's short instruction.
-    return (
-      "Nothing is built or changed while the plan waits for approval. Show the plan question again and end " +
-      `the turn; when they reply, record the choice they made, then run ${nextOnItsOwn()}.`
-    );
+    // Some hosts show this refusal to the person as written, so it is only their
+    // sentence; the agent's steps for it are in the skill's refusal clause.
+    return "Nothing is built or changed while the plan waits for your approval.";
   }
   const stands = standing === null
     ? ""
