@@ -641,13 +641,17 @@ describe("t264 (a) judgeFreeze decision table", () => {
         expect(targets(command), command).not.toContain(`${other}/r/x`);
       }
       expect(targets("Set-Location; Set-Content -Path x -Value v")).toContain(`${profile}/x`);
-      expect(targets("Set-Content -Path $env:HOME\\r\\x -Value v")).toContain("/ph/r/x");
-      // Any leading $env:NAME is read from the hook's environment.
-      process.env.T264_HOME = "/pe";
-      expect(targets("Set-Content -Path $env:T264_HOME\\r\\x -Value v")).toContain("/pe/r/x");
-      expect(targets("Set-Content -Path $" + "{ENV:USERPROFILE}\\r\\x -Value v")).toContain("/pu/r/x");
-      // An $env: name ignores case on Windows only.
-      expect(targets("Set-Content -Path $env:home\\r\\x -Value v").includes("/ph/r/x")).toBe(process.platform === "win32");
+      // No $env: variable is read from the hook's environment: its value never
+      // enters a target (and so never a refusal), and a command can reassign it.
+      process.env.T264_HOME = "/sentinel-t264";
+      for (const command of [
+        "Set-Content -Path $env:T264_HOME\\r\\x -Value v",
+        "Set-Content -Path $" + "{env:T264_HOME}\\r\\x -Value v",
+        "Set-Content -Path $env:HOME\\r\\x -Value v",
+        "Set-Location $env:T264_HOME; Set-Content -Path x -Value v",
+      ]) {
+        expect(targets(command).some((path) => path.includes("sentinel") || path.startsWith("/ph/")), command).toBe(false);
+      }
     } finally {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];

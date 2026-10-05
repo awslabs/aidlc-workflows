@@ -1158,12 +1158,23 @@ describe("t242 state-transition ownership guard", () => {
     projects.push(project);
     mkdirSync(join(project, ".kiro", "hooks"), { recursive: true });
     symlinkSync(".kiro", join(project, "+1"));
+    // After `--` a word is the directory, for the audit-trail pass too: here
+    // `+1` and `-n` link to an audit directory and the write names it through
+    // a variable.
+    const audit = join(project, "aidlc", "spaces", "s", "intents", "i", "audit");
+    mkdirSync(audit, { recursive: true });
+    mkdirSync(join(project, "a"));
+    symlinkSync(audit, join(project, "a", "+1"));
+    symlinkSync(audit, join(project, "a", "-n"));
     const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
     delete env.AIDLC_RUNTIME_PROJECT_DIR;
     delete env.AIDLC_HARNESS_DIR;
     for (const [command, status] of [
       ["cd +1 && echo x > hooks/y.json", 2],
       ["pushd +1 && echo x > hooks/y.json", 0],
+      ['cd a; pushd -- +1; f=shard.md; echo x >> "$f"', 2],
+      ['cd a; pushd -- -n; f=shard.md; echo x >> "$f"', 2],
+      ['cd a; f=shard.md; echo x >> "$f"', 0],
     ] as Array<[string, number]>) {
       const r = spawnSync(process.execPath, [HOOK], {
         cwd: project,
@@ -1218,7 +1229,6 @@ describe("t242 state-transition ownership guard", () => {
       ["execute_pwsh", { command: `Set-Content $HOME\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
       ["execute_pwsh", { command: "Set-Content $" + `{home}\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
       ["execute_pwsh", { command: `Set-Content ~\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
-      ["execute_pwsh", { command: `Set-Content $env:USERPROFILE\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
     ] as const) {
       const r = runIde(tool_name, tool_input);
       expect(r.status, tool_name).toBe(2);

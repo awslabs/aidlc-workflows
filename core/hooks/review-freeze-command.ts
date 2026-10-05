@@ -1521,32 +1521,20 @@ function shellHomes(powerShell: boolean): string[] {
   return [...new Set(homes.map((home) => resolve(home)))];
 }
 
-// A PowerShell `$env:` variable: names ignore case on Windows only.
-function powerShellEnv(name: string): string | undefined {
-  if (process.platform !== "win32") return process.env[name];
-  const key = Object.keys(process.env).find((candidate) => candidate.toUpperCase() === name.toUpperCase());
-  return key === undefined ? undefined : process.env[key];
-}
-
 // A word's readings with a leading `~`, `$HOME` or `${HOME}` expanded to each
 // of shellHomes, or none. The quoting is gone by the time a word gets here and
 // a quoted `~` is not expanded, so callers keep the literal reading of a `~`
 // word beside these; a `$HOME` word has no literal reading (a word with `$`
-// resolves to none). A PowerShell word also takes `\` as a separator, its
-// variable names in any case, and a leading `$env:NAME` (braced too) from the
-// hook's environment: an assignment to it earlier in the same command, and a
-// word built from two variables, are not read.
+// resolves to none). A PowerShell word also takes `\` as a separator and its
+// variable names in any case. No other variable is read from the hook's
+// environment: an `$env:` word is a computed word, like `$X`.
 function homeReadings(word: string, powerShell = false): string[] {
   const text = powerShell ? word.replaceAll("\\", "/") : word;
-  const named = powerShell ? /^\$(?:\{env:(\w+)\}|env:(\w+))/i.exec(text) : null;
-  const home = named ? null : (powerShell ? /^(?:~|\$HOME|\$\{HOME\})/i : /^(?:~|\$HOME|\$\{HOME\})/).exec(text);
-  const lead = named ?? home;
+  const lead = (powerShell ? /^(?:~|\$HOME|\$\{HOME\})/i : /^(?:~|\$HOME|\$\{HOME\})/).exec(text);
   if (lead === null) return [];
   const rest = text.slice(lead[0].length);
   if (rest !== "" && !rest.startsWith("/")) return [];
-  const value = named ? powerShellEnv(named[1] ?? named[2]) : undefined;
-  const bases = named ? (value ? [value] : []) : shellHomes(powerShell);
-  return bases.map((base) => resolve(join(base, rest)));
+  return shellHomes(powerShell).map((home) => resolve(join(home, rest)));
 }
 
 // A segment with its redirections removed, so `cd 2>/dev/null` is read as a
@@ -1654,25 +1642,35 @@ export function shellDirectoryRoots(
   for (const segment of shellCommandSegments(command)) {
     const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
     if (!invocation || !SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) continue;
-    const { name, args } = invocation;
-    const end = args.indexOf("--");
-    // Only pushd reads +N as a stack entry in bash, whose cd takes it as a
-    // directory (zsh's cd reads its stack: the directory reading then only adds
-    // a candidate), and `pushd -n` adds to the stack without changing directory.
-    const pushd = name.toLowerCase() === "pushd";
-    if (pushd && (end >= 0 ? args.slice(0, end) : args).includes("-n")) continue;
-    const operand = end >= 0
-      ? args[end + 1]
-      : args.find((arg) => !arg.startsWith("-") && !(pushd && /^\+\d*$/.test(arg)));
-    if (operand !== undefined) {
-      change(operand);
-      continue;
-    }
-    // `cd -` and pushd's stack operands name a directory this command cannot see.
-    const previous = args.some((arg) => /^[+-]\d*$/.test(arg));
-    if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) for (const home of homes) add(home, true);
+    const move = directoryChange(invocation.name, invocation.args);
+    if (typeof move === "object") change(move.operand);
+    else if (move === "home") for (const home of homes) add(home, true);
   }
   return roots;
+}
+
+// Where a POSIX directory change (a SHELL_DIRECTORY_CHANGES name) moves the
+// shell: to a literal operand, to $HOME (a bare `cd` or `chdir`), nowhere
+// (`pushd -n`), or to a directory the command cannot see (`cd -`, pushd's
+// stack, a bare `pushd`). A word after `--` is the operand, whatever it looks
+// like. Only pushd reads +N as a stack entry in bash, whose cd takes it as a
+// directory (zsh's cd reads its stack: the directory reading then only adds a
+// candidate). Runtime integrity's audit-trail pass reads directory changes
+// through this too.
+export type DirectoryChange = { operand: string } | "home" | "stay" | "unknown";
+
+export function directoryChange(name: string, args: string[]): DirectoryChange {
+  const command = name.toLowerCase();
+  const end = args.indexOf("--");
+  const options = end >= 0 ? args.slice(0, end) : args;
+  const pushd = command === "pushd";
+  if (pushd && options.includes("-n")) return "stay";
+  const operand = end >= 0
+    ? args[end + 1]
+    : args.find((arg) => !arg.startsWith("-") && !(pushd && /^\+\d*$/.test(arg)));
+  if (operand !== undefined) return { operand };
+  const previous = options.some((arg) => /^[+-]\d*$/.test(arg));
+  return !previous && (command === "cd" || command === "chdir") ? "home" : "unknown";
 }
 
 // How Set-Location and Push-Location bind the directory they move to.
