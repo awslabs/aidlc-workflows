@@ -360,11 +360,11 @@ describe("t344 record parse failures name the file and never degrade silently", 
       withRegion("---\nname: x\\..\\other\n---", '{"stages":{}}'),
       /has a name a scope cannot have/,
     ],
-    [
-      "a name with shell characters",
-      withRegion("---\nname: x;id\n---", '{"stages":{}}'),
-      /has a name a scope cannot have/,
-    ],
+    ...(["x;id", "x$(id)", "x id", "x|y", "x&y", "x`id`", "x'y"].map((name) => [
+      `the shell-reading name ${JSON.stringify(name)}`,
+      withRegion(`---\nname: ${name}\n---`, '{"stages":{}}'),
+      /has a name a scope cannot have\. Rename the scope to/,
+    ] as [string, string, RegExp])),
     ...([".", "..", ".hidden"].map((name) => [
       `the name ${JSON.stringify(name)}`,
       withRegion(`---\nname: ${name}\n---`, '{"stages":{}}'),
@@ -381,9 +381,11 @@ describe("t344 record parse failures name the file and never degrade silently", 
     });
   }
 
-  test("a name with capitals, underscores, or dots still parses", () => {
-    const body = withRegion("---\nname: Lean_Feature.v2\n---", '{"stages":{}}');
-    expect(parseComposedScopeRecord(body, "aidlc/scopes/x.md").name).toBe("Lean_Feature.v2");
+  test("a name that was safe as a file name and a command word still parses", () => {
+    for (const name of ["Lean_Feature.v2", "release+candidate", "team@2", "a=b,c:d%e"]) {
+      const body = withRegion(`---\nname: ${name}\n---`, '{"stages":{}}');
+      expect(parseComposedScopeRecord(body, "aidlc/scopes/x.md").name, name).toBe(name);
+    }
   });
 
   test("the missing-region message names the recovery path", () => {

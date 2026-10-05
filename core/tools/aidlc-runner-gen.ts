@@ -562,7 +562,7 @@ function readScopeFront(path: string): ScopeFront {
   if (!name) throw new Error(`Scope file ${path} missing required frontmatter: name`);
   if (!isScopeName(name)) {
     throw new Error(
-      `Scope file ${path} has a name a scope cannot have. Rename it in its frontmatter to ${SCOPE_NAME_RULE}.`,
+      `Scope file ${path} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`,
     );
   }
   const plugin = scalarField(fm, "plugin");

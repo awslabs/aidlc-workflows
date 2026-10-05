@@ -568,7 +568,7 @@ export function parseComposedScopeRecord(
   }
   if (!isScopeName(name)) {
     throw new Error(
-      `Composed scope record ${filePath} has a name a scope cannot have. Rename it in the record's frontmatter to ${SCOPE_NAME_RULE}.`,
+      `Composed scope record ${filePath} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`,
     );
   }
   // Exactly one sentinel pair, or refuse. Duplicates would make the split

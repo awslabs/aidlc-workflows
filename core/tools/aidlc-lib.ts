@@ -33388,16 +33388,16 @@ function loadScopeGridForMapping(): ScopeGridForMapping {
 }
 
 // A scope name becomes part of file names and of the commands the engine
-// prints, so wherever it is read it is letters, digits, dots, underscores,
-// and hyphens, starting with a letter or digit.
-const SCOPE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// prints, so wherever it is read it holds only what shellArg prints bare,
+// with no folder separator, starting with a letter or digit.
+const SCOPE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:@%+=,-]*$/;
 
 export function isScopeName(name: string): boolean {
   return SCOPE_NAME.test(name);
 }
 
 export const SCOPE_NAME_RULE =
-  "letters, digits, dots, underscores, and hyphens only, starting with a letter or digit";
+  "letters, digits, and . _ - + = @ % : , only, starting with a letter or digit";
 
 export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
   if (_scopeMetadataAll !== null) return _scopeMetadataAll;
@@ -33421,7 +33421,7 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
     const name = scalarField(fm, "name");
     if (!name) throw new Error(`Scope file ${filePath} missing required frontmatter: name`);
     if (!isScopeName(name)) {
-      throw new Error(`Scope file ${filePath} has a name a scope cannot have. Rename it in its frontmatter to ${SCOPE_NAME_RULE}.`);
+      throw new Error(`Scope file ${filePath} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`);
     }
     const previousFile = nameToFile.get(name);
     if (previousFile) {
