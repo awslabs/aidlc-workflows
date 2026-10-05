@@ -567,6 +567,94 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
   });
 
+  // One message can approve and ask for more ("approve, and turn plan approval
+  // off"): the approval carries out the first half, and the rest still stands
+  // until a question is put to the person after it.
+  function setter(args: string[]): { rc: number; out: string } {
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ...args, "--project-dir", proj], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  }
+
+  test("an approval does not spend the rest of the person's message: the switch they asked for in it goes through", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const approved = guarded(proj, ["approve", slug, "--user-input", "Approve"]);
+    expect(approved.rc, approved.out).toBe(0);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+    expect(off.out).toContain("Each code plan is now built without asking.");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/- \*\*Plan Approval\*\*: off/);
+  });
+
+  test("a question put to the person after their message is theirs to answer first; their next reply carries the switch", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    appendAuditEntry("DECISION_RECORDED", { Stage: field(proj, "Current Stage"), Decision: "Which name?" }, proj);
+    const refused = setter(["config-change", "--plan-approval", "off"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("No reply from the person has arrived since the last decision");
+    // The step the refusal names: the person replies, and the setter runs.
+    recordHumanTurn(proj);
+    const off = setter(["config-change", "--plan-approval", "off"]);
+    expect(off.rc, off.out).toBe(0);
+  });
+
+  test("the approval itself still needs a reply of its own: one message never approves two gates", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
+    const next = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${next}=in-progress`]);
+    guarded(proj, ["gate-start", next]);
+    expect(guarded(proj, ["approve", next, "--user-input", "Approve"]).rc).not.toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // The person said stop while the run approved on its own: the engine's
+  // approval after their message carries the run on, and never spends the stop.
+  test("an autonomous approval landing after the person's stop does not spend it: the park is theirs", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    recordHumanTurn(proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: field(proj, "Current Stage") }, proj);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  test("a question put to the person after their stop keeps the run moving until they reply again", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    recordHumanTurn(proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: field(proj, "Current Stage") }, proj);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: field(proj, "Current Stage") }, proj);
+    const refused = guarded(proj, ["park"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("no reply from the person is on record");
+    // The step it names: when the person asks to stop, park then.
+    recordHumanTurn(proj);
+    const parked = guarded(proj, ["park"]);
+    expect(parked.rc, parked.out).toBe(0);
+  });
+
   // --- Scenario H: persisted per-work switches cannot lower the key holder ---
   test("H: a persisted human-presence Guards Off entry is ignored", () => {
     const slug = field(proj, "Current Stage"); // feasibility

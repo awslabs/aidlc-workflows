@@ -603,7 +603,7 @@ longer holds strict.
 `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering
 before consulting that bypass.
 
-A setter or creation that lowers a check is carried out when a person has spoken since the last gate resolution (`humanActedSinceGate`): the conductor runs what they asked for in their own words, and the typed switch remains a shortcut. Run with no such reply, it refuses:
+A setter or creation that lowers a check is carried out when a person has spoken since the last gate resolution (`humanActedSinceGate`): the conductor runs what they asked for in their own words, and the typed switch remains a shortcut. A decision recorded after the person's message (an approval they gave in it, or the engine's own approval under autonomous Construction) carries it out and does not use up the rest of it; a question put to them after it, or an autonomy grant, does. An approval itself still needs its own reply. So "approve, and turn plan approval off" in one message approves, then turns it off (`personSpokeSinceGate` with `requests`). Run with no such reply, it refuses:
 
 > Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
 
