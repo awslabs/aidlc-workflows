@@ -544,6 +544,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-journey-code-plan-approval.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/unit/t-plan-approval-recovery-paths.test.ts",
           "mechanism": "cli"
         }
@@ -1265,6 +1269,10 @@
       "unitId": "WORKFLOW_PARKED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-journey-code-plan-approval.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/integration/t-scope-run-moves-switch.test.ts",
           "mechanism": "none"
@@ -12729,6 +12737,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t-journey-code-plan-approval.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
@@ -12834,6 +12846,10 @@
         },
         {
           "file": "tests/integration/t-journey-check-off-on.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t-journey-code-plan-approval.sdk.test.ts",
           "mechanism": "sdk"
         },
         {
