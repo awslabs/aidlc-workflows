@@ -515,6 +515,11 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const forBetaFirst = report("--choice", "redo", "--target", "functional-design", "--unit", "beta");
     expect(forBetaFirst.kind).toBe("print");
     expect(forBetaFirst.message).toContain("Run `next --stage functional-design --unit beta`");
+    // A step beta finished while the stage's own checkbox still waits is
+    // reopened for beta, never refused as not run.
+    const forBetaEarlier = report("--choice", "redo", "--target", "nfr-design", "--unit", "beta");
+    expect(forBetaEarlier.kind).toBe("print");
+    expect(forBetaEarlier.message).toContain("Run `next --stage nfr-design --unit beta`");
     writeFileSync(
       statePath(p),
       unitMajor.replace(

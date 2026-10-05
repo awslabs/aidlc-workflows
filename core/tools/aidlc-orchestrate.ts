@@ -12179,6 +12179,12 @@ function emitTypedResumeChoice(
       named = undefined;
       unitStep = unitStage;
       redoStage = unitStage;
+    } else if ((flags.unit !== undefined || flags.everyUnit) && nodeForSlug(wanted) !== undefined) {
+      // A redo for named Units is reopening that step for them, and the reopen
+      // judges what each Unit has run: a Unit can finish a step while the
+      // stage's own checkbox waits for the others.
+      named = undefined;
+      redoStage = wanted;
     }
     else if (parseCheckboxes(stateContent).some((box) => box.slug === wanted && box.state === "completed")) choice = "jump";
     else {

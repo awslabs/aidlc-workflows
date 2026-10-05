@@ -6,6 +6,7 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import { readReviewArtifactContexts } from "./aidlc-review-brief.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { isCompiledExecutable } from "./aidlc-runtime-paths.ts";
+import { stageLabel } from "./aidlc-validity.ts";
 import {
   type CheckboxState,
   countCheckboxes,
@@ -155,6 +156,23 @@ export function main(argv: string[]): void {
   } catch (e) {
     error(errorMessage(e));
   }
+}
+
+// A forward jump says, in the person's terms, what it passed over and how to
+// come back: jumping back to where they were resets those stages again. The
+// agent repeats this as written, so a plugin's stage is named by its slug,
+// never by its own display text.
+export function forwardJumpNotice(
+  target: { slug: string; name: string; plugin?: string },
+  skipped: readonly { slug: string; name: string; plugin?: string }[],
+  cameFrom: string,
+): string {
+  const names = skipped
+    .map((node) => stageLabel(node, node.slug))
+    .filter((name): name is string => name !== null);
+  const list = names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+  return `Moved to ${stageLabel(target, target.slug) ?? "that stage"}${list ? `; skipped ${list}` : ""}. ` +
+    `To go back, type \`${entrySkillInvocation()} --stage ${cameFrom}\`.`;
 }
 
 if (import.meta.main) {
@@ -665,15 +683,8 @@ function handleExecute(args: string[]): void {
 
   writeStateFile(pd, content);
 
-  // A forward jump says, in the person's terms, what it passed over and how to
-  // come back: jumping back to where they were resets those stages again.
-  const named = (slugs: readonly string[]): string => {
-    const names = graph.filter((node) => slugs.includes(node.slug)).map((node) => node.name);
-    return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  };
   const notice = direction === "forward"
-    ? `Moved to ${targetStage.name}${stagesSkipped.length > 0 ? `; skipped ${named(stagesSkipped)}` : ""}. ` +
-      `To go back, type \`${entrySkillInvocation()} --stage ${cameFrom}\`.`
+    ? forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom)
     : undefined;
 
   console.log(
