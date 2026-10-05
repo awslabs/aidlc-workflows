@@ -823,7 +823,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = String(nextIn(proj).narration);
     expect(said).toStartWith("Setting up a bugfix workflow for this");
-    expect(said).toContain("; no learnings ritual or summary confirmation.");
+    expect(said).toContain("; no learnings ritual or summary confirmation; lead agent only.");
   });
 
   test("how a pasted document was split is said with the first stage", () => {

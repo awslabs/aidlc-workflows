@@ -75,17 +75,17 @@ function contextBytes(
 
 describe("t314 minimal-scope dispatch and handoff budget", () => {
   test("Minimal context rosters are exact and byte-bounded", () => {
+    // poc ships collaborators off, so intent capture carries only its lead's
+    // context: the architect who supports it is not brought in.
     const intent = directive("poc", "intent-capture");
     const intentPaths = intent.inline_context_paths as string[];
     expect(intentPaths).toEqual([
       ".claude/agents/aidlc-product-agent.md",
-      ".claude/agents/aidlc-architect-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
       ".claude/knowledge/aidlc-product-agent/requirements-elicitation.md",
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
-      ".claude/knowledge/aidlc-architect-agent/architecture-guide.md",
     ]);
     expect(
       contextBytes(intent.projectDir as string, intentPaths),
@@ -108,7 +108,9 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
   });
 
   test("Standard context remains full and pipeline dispatch count stays two", () => {
-    const standard = directive("mvp", "intent-capture");
+    // Feasibility at Standard depth with collaborators on: the lead and both
+    // supports keep their full knowledge.
+    const standard = directive("feature", "feasibility", "state-mid-ideation.md", true);
     const standardPaths = standard.inline_context_paths as string[];
     expect(standardPaths.length).toBeGreaterThan(20);
     expect(
