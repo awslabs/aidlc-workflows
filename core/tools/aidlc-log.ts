@@ -1421,6 +1421,18 @@ function enginePlanApprovalChoices(): readonly string[] {
   return [...PLAN_APPROVAL_CHOICES, ...GROUPED_PLAN_APPROVAL_CHOICES, PLAN_REVIEW_CHOICE];
 }
 
+// What was recorded, when the stop the person asked for with it was not.
+const PARK_FAILED_LEAD = {
+  approve: "The person's Plan Approval is recorded",
+  "request-changes": "The person's change request for the plan is recorded",
+  edit: "The person's choice to edit the plan files is recorded",
+} as const;
+const PARK_FAILED_SAID = {
+  approve: "the plan is approved",
+  "request-changes": "their change request is saved",
+  edit: "their choice to edit the files is saved",
+} as const;
+
 // The conductor records what the person chose at the engine's Plan Approval
 // question, as it read their reply: approve, request changes, or edit the files
 // themselves, for every Unit asked about or the ones named in --unit/--units.
@@ -1487,7 +1499,15 @@ function answerEnginePlanApproval(
         return `${message} The workflow is parked, as the person asked: run next, which answers parked, and tell them ` +
           "how to resume.";
       })
-      .catch((e: unknown) => `${message} It could not be parked (${errorMessage(e)}); run next.`)
+      // An unattended run has nobody to stop for, so it keeps moving. Anyone
+      // else said stop: their choice stands, and nothing more runs until they
+      // say to go on. The whole message is replaced, since the recorded one
+      // ends by naming next.
+      .catch((e: unknown) => humanTurnMintAllowed()
+        ? `${PARK_FAILED_LEAD[choice]}, but the stop they asked for could not be recorded (${errorMessage(e)}). ` +
+          `Tell them in one line that ${PARK_FAILED_SAID[choice]} and that nothing more runs until they say to go on. ` +
+          "Do not run next or start any work until they do."
+        : `${message} It could not be parked (${errorMessage(e)}); run next.`)
       .then((text) => console.log(JSON.stringify({ recorded: choice, message: text })));
     return;
   }

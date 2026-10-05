@@ -417,6 +417,25 @@ describe("the engine asks for Plan Approval", () => {
     expect(readFileSync(file, "utf-8")).not.toContain("- **Parked**:");
   });
 
+  // The approval is recorded before the stop. When the stop cannot be
+  // recorded (a state with no Runtime State section, as a live run hit), the
+  // person said stop, so nothing more runs until they say to go on.
+  test("an approval whose stop cannot be recorded says so and does not send the agent on to the build", () => {
+    const proj = project();
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(/^## Runtime State\n/m, ""), "utf-8");
+    askFor(proj);
+    reply(proj, "approve the plan, but let's stop there for today");
+    const said = answer(proj, "Approve Plan", ["--park", "--session", SESSION]);
+    expect(said.code, said.message).toBe(0);
+    expect(said.recorded).toBe("approve");
+    expect(said.message).toContain("the stop they asked for could not be recorded");
+    expect(said.message).toContain("Tell them in one line that the plan is approved");
+    expect(said.message).toContain("Do not run next or start any work until they do.");
+    expect(said.message).not.toMatch(/(?:^|[.;] )[Rr]un next\./);
+    expect(readFileSync(file, "utf-8")).not.toContain("- **Parked**:");
+  });
+
   test("an approval that asks to stop parks an autonomous run too", () => {
     const proj = project();
     const file = seededStateFile(proj);
