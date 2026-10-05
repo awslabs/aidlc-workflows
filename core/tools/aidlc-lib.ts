@@ -19501,12 +19501,13 @@ export function freshReviewReceipts(
       ...[...acceptedArtifactChanges.values()].map((change) => ({
         ...change,
         changed: change.changed !== null && change.changed.length > 0 ? change.changed : null,
-        notice: relaxedReviewNotice(
-          change.changed !== null && change.changed.length > 0
-            ? renderChangedPaths(change.changed)
-            : stage.review_artifact ?? "Its documents",
-          change.unit ?? null,
-        ),
+        // An edit with no write record (one made in an editor) names no file:
+        // the line names the stage's documents, not one that may not have changed.
+        notice: change.changed !== null && change.changed.length > 0
+          ? relaxedReviewNotice(renderChangedPaths(change.changed), change.unit ?? null)
+          : `${change.unit ? `The ${unitPlainName(change.unit)} Unit's` : "The"} ${reviewedStageName} ` +
+            `${(stage.produces ?? []).length === 1 ? "document changed after it was" : "documents changed after they were"}` +
+            " reviewed; carrying on.",
       })),
       ...acceptedChanges,
     ],

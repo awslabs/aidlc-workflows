@@ -918,7 +918,7 @@ describe("t278 engine-emitted wave contract", () => {
         env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
       });
       expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
-      expect(`${opened.stdout}`).toContain("changed after the alpha Unit was reviewed; carrying on.");
+      expect(`${opened.stdout}`).toContain("The alpha Unit's Functional Design documents changed after they were reviewed; carrying on.");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
