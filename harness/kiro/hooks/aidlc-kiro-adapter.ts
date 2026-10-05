@@ -254,8 +254,10 @@ function nativePreloadError(projectDir: string, agents: string[]): PreloadFailur
       );
     }
   }
+  // Each missing file is put back on its own: a whole-folder checkout would
+  // throw away the team's edits to the files still there.
   const restore = `Put this space's method files back under aidlc/spaces/${space}/memory/ ` +
-    `(for example \`git checkout -- aidlc/spaces/${space}/memory\` when the project tracks them), ` +
+    `(for example \`git checkout -- aidlc/spaces/${space}/memory/org.md\` for a tracked file that is missing), ` +
     `then start the specialist again.`;
   try {
     for (const _file of new Bun.Glob(pattern).scanSync({

@@ -1630,6 +1630,9 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.stderr).toContain(workerFile);
       expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
       expect(result.stderr).toContain("Put this space's method files back under aidlc/spaces/default/memory/");
+      // One missing file at a time, never a checkout over the whole folder.
+      expect(result.stderr).toContain("git checkout -- aidlc/spaces/default/memory/org.md` for a tracked file that is missing");
+      expect(result.stderr).not.toContain("git checkout -- aidlc/spaces/default/memory`");
       // The step it names: with a method file back, the dispatch goes through.
       writeFileSync(join(memory, "org.md"), "# Organization\n");
       const restored = runAdapter(dir, "deliver-stage-rules", {

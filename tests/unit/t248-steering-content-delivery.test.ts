@@ -1507,6 +1507,21 @@ describe("t248 deterministic steering delivery", () => {
     expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
   });
 
+  test("a rule file that is there but not UTF-8 is repaired in place, never checked out over the team's edits", () => {
+    const proj = project();
+    const orgPath = join(proj, "aidlc", "spaces", "default", "memory", "org.md");
+    const org = readFileSync(orgPath);
+    writeFileSync(orgPath, Buffer.concat([org, Buffer.from([0xff, 0xfe, 0x00])]));
+    const args = ["--scope", "mvp", "--stage", "intent-capture"];
+    const result = invoke(proj, "next", args).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("Keep a copy of the file, then fix its permissions or save it as UTF-8");
+    expect(result.message).not.toContain("git checkout");
+    // The named step works: saved as UTF-8, the same request starts the stage.
+    writeFileSync(orgPath, org);
+    expect(invoke(proj, "next", args).directive.kind).not.toBe("error");
+  });
+
   test("rejected background dispatch leaves no in-flight ledger", () => {
     const proj = project();
     rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
