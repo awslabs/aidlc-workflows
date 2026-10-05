@@ -295,6 +295,37 @@ describe("t304 source and store generation interleavings", () => {
     );
   });
 
+  // The snapshot cannot fingerprint a path that is not there, or a tree
+  // holding something that is not a file or folder. Each refusal names the
+  // --paths step, and that step goes through.
+  test("a snapshot it cannot fingerprint names the --paths step, and that step is accepted", () => {
+    const project = freshProject();
+    mkdirSync(join(project, "src", "payments"), { recursive: true });
+    writeFileSync(join(project, "src", "payments", "charge.ts"), "export const charge = 1;\n");
+    const typo = runUtility(project, ["codekb-snapshot", "--paths", "src/paymnts", "--json"]);
+    expect(typo.status).not.toBe(0);
+    expect(`${typo.stdout}${typo.stderr}`).toContain(
+      "src/paymnts is not in the repository: run it again with --paths naming paths that exist.",
+    );
+    expect(snapshot(project, ["src/payments"]).paths).toEqual(["src/payments"]);
+  });
+
+  test.skipIf(process.platform === "win32")("outside git, a named pipe under the paths names leaving it out, and that is accepted", () => {
+    const project = createTestProject();
+    tempDirs.push(project);
+    mkdirSync(join(project, "src", "payments"), { recursive: true });
+    mkdirSync(join(project, "src", "run"), { recursive: true });
+    writeFileSync(join(project, "src", "payments", "charge.ts"), "export const charge = 1;\n");
+    expect(spawnSync("mkfifo", [join(project, "src", "run", "dev.pipe")]).status).toBe(0);
+    const refused = runUtility(project, ["codekb-snapshot", "--paths", "src", "--json"]);
+    expect(refused.status).not.toBe(0);
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      "is not a regular file or folder (a socket or named pipe) or cannot be read: run it again " +
+        "with --paths naming only the folders that hold source, leaving that one out.",
+    );
+    expect(snapshot(project, ["src/payments"]).source_fingerprint).toStartWith("tree:");
+  });
+
   test("a snapshot recovers an interrupted directory swap before reading generations", () => {
     const project = freshProject();
     const source = join(project, "src", "payments");

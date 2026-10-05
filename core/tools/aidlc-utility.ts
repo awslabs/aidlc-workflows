@@ -9665,7 +9665,24 @@ function handleCodekbSnapshot(
     recoverCodekbTransactions(projectDir, space, repo);
     const sourceFingerprint = codekbSourceFingerprint(repoDir, paths, excludes);
     if (sourceFingerprint === null) {
-      die(`codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}`);
+      // Name what to change: a path that is not there, else an entry under
+      // the paths that cannot be read as a file or folder.
+      const absent = paths.filter((path) => {
+        try {
+          return lstatSync(join(repoDir, path), { throwIfNoEntry: false }) === undefined;
+        } catch {
+          return false;
+        }
+      });
+      die(
+        `codekb-snapshot: cannot fingerprint source paths: ${paths.join(", ")}. ` +
+          (absent.length > 0
+            ? `${absent.join(", ")} ${absent.length === 1 ? "is" : "are"} not in the repository: ` +
+              `run it again with --paths naming paths that exist.`
+            : `Something under ${paths.length === 1 ? "it" : "them"} is not a regular file or folder (a socket or named pipe) or ` +
+              `cannot be read: run it again with --paths naming only the folders that hold ` +
+              `source, leaving that one out.`),
+      );
     }
     return {
       repo,
