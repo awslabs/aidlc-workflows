@@ -1697,6 +1697,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ANSWER_SOURCE_ON_INSTRUCTION",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:anyIntentRecordExists",
       "minMechanism": "none",
       "coveredBy": [],

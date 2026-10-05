@@ -82,6 +82,40 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toEqual([]);
   });
 
+  // "Choose the recommended answers", said in the opening command before the
+  // questions came: the agent's answers carry the words, and that turn backs them.
+  test("a choice the person left to the agent is backed by the turn that said so", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc build the lunch poll, and choose the  Recommended answers for the questions");
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "intent-capture", Details: "Q1: A; Q2: B",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "choose the recommended answers",
+    });
+    expect(drive.unbacked()).toEqual([]);
+  });
+
+  test("a choice marked as left to the agent in words the person never sent is flagged", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc build the lunch poll");
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "intent-capture", Details: "Q1: A",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "up to you",
+    });
+    row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis" });
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "requirements-analysis", Details: "Q1: B",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "",
+    });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain("QUESTION_ANSWERED intent-capture");
+    expect(problems[1]).toContain("QUESTION_ANSWERED requirements-analysis");
+  });
+
   test("an answer needs a turn after its question opened; another stage's turn does not count", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);

@@ -10799,6 +10799,11 @@ export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
 export const COMMAND_TURN_REPLY = "command";
 export const QUESTION_TURN_REPLY = "question";
 
+// An answer the agent chose because the person left the choice to it ("up to
+// you", "choose the recommended answers"): the record says who chose and keeps
+// the words that handed it over (log answer --on-instruction).
+export const ANSWER_SOURCE_ON_INSTRUCTION = "chosen by the agent as the person asked";
+
 // A human turn that replied: more than a command to AIDLC or a question about
 // a switch.
 export function isReplyTurn(row: { event: string; block: string }): boolean {

@@ -36,6 +36,7 @@ type AuditReader = Pick<
   | "decisionAnsweredBy"
   | "DECISION_CLOSING_EVENTS"
   | "findStageBySlug"
+  | "ANSWER_SOURCE_ON_INSTRUCTION"
 >;
 let reader: AuditReader | undefined;
 // The engine's own audit reader and question pairing, loaded on first use:
@@ -113,6 +114,11 @@ const gateItem = (row: AuditShardEvent) =>
  * the human-turn hook reads it) does not count. A command still backs what it
  * can ask for: a stage reopened by a jump, a changed project type.
  *
+ * A choice the person left to the agent (its row says Answer Source "chosen
+ * by the agent as the person asked") is backed by a turn anywhere in the drive
+ * that holds the words its Instruction quotes; the words, not the field, are
+ * what back it.
+ *
  * Which rows are the engine's own comes from the trail and the stage graph,
  * never from a field a row carries. An approval is the engine's when the
  * person's grant of autonomous Construction is in force (the latest
@@ -169,10 +175,20 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       let since: number | undefined;
       let reply = true;
       let answer = false;
+      let instruction: string | undefined;
       if (closes) {
         since = pending?.index ?? answered.get(stage) ?? -1;
         answered.set(stage, since);
         answer = true;
+        // A choice the person left to the agent, which they can say before the
+        // question comes: any turn of the drive that holds the words the row
+        // quotes backs it, a command included, and backs every answer it covers.
+        if (auditBlockField(row.block, "Answer Source") === audit().ANSWER_SOURCE_ON_INSTRUCTION) {
+          instruction = plainWords(auditBlockField(row.block, "Instruction") ?? "");
+          since = -1;
+          reply = false;
+          answer = false;
+        }
       } else if (gate && !engineApproved) {
         reply = row.event === "GATE_APPROVED";
         if (pending && decisionAnsweredBy(pending.block, row.event, row.block)) {
@@ -196,10 +212,12 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       if (since !== undefined && index >= first) {
         const after = Math.max(since + 1, first);
         const needsReply = reply;
-        const backing = turns.findIndex((turn, which) => {
+        const quoted = instruction;
+        const backing = quoted === "" ? -1 : turns.findIndex((turn, which) => {
           const at = turn.cursor.get(key) ?? 0;
           return at >= after && at <= index && !(needsReply && isCommand(turn.words)) &&
-            (!answer || used[which] < (turn.selections ?? openQuestions(events, at)));
+            (!answer || used[which] < (turn.selections ?? openQuestions(events, at))) &&
+            (quoted === undefined || plainWords(turn.words).includes(quoted));
         });
         if (backing === -1) problems.push(describe(row, key, turns));
         else if (answer) used[backing]++;
@@ -241,6 +259,11 @@ function openQuestions(events: readonly AuditShardEvent[], at: number): number {
     else if (DECISION_CLOSING_EVENTS.has(row.event)) open = Math.max(0, open - 1);
   }
   return Math.max(open, 1);
+}
+
+// Words compared as the person typed them, whatever the spacing or case.
+function plainWords(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
 /** The Units of the work's compiled DAG (`<record>/runtime-graph.json`), when it has one. */
