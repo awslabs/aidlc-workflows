@@ -4874,7 +4874,13 @@ function inlineContextEntries(
   // knowledge context. The ladder falls back to the on-disk packaged
   // distribution the same way readConductorPersona resolves conductor.md.
   const harnessRoot = resolveHarnessRoot();
-  const entries = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
+  const shipped = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
+  // The project's own knowledge comes right after the personas, before the
+  // shipped knowledge: it is the team's word for this work, an agent reading
+  // the roster in order reaches it second, and the roster cap never drops it.
+  let personas = 0;
+  while (personas < shipped.length && /\/agents\/[^/]+\.md$/.test(shipped[personas].rel)) personas++;
+  const entries: InlineContextEntry[] = shipped.slice(0, personas);
 
   if (codekbCtx) {
     const customRoot = join(
@@ -4902,6 +4908,7 @@ function inlineContextEntries(
       );
     }
   }
+  entries.push(...shipped.slice(personas));
 
   // De-duplicate on rel (first wins), matching the old Set-of-paths shape.
   const seen = new Set<string>();
