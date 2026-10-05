@@ -765,9 +765,12 @@ function verifyOnce(
       after.result.ready && after.result.fingerprint === before.result.fingerprint &&
       after.verificationCommand?.sha256 === proof.command_sha256;
     const passed = proof.exit_code === 0 && proof.signal === null && proof.error === null;
-    const changedByCheck = passed && !proof.evidence_unchanged && after.root === before.root &&
-      after.result.ready && after.verificationCommand?.sha256 === proof.command_sha256;
-    if (changedByCheck && secondRun) proof.error = CHECK_KEPT_CHANGING;
+    // A check that ran to its end and changed the Unit's files, whether it
+    // passed or failed (a fixer that exits non-zero once it fixed something),
+    // runs once more; the second run decides.
+    const changedByCheck = proof.signal === null && proof.error === null && !proof.evidence_unchanged &&
+      after.root === before.root && after.result.ready && after.verificationCommand?.sha256 === proof.command_sha256;
+    if (changedByCheck && secondRun && passed) proof.error = CHECK_KEPT_CHANGING;
     proof.verified = passed && proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
