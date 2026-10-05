@@ -52,6 +52,9 @@ const manifest: HarnessManifest = {
       "needs upgrading for this agent engine, quit Kiro and start it again in this folder with: " +
       "kiro-cli chat --agent-engine v2 --agent aidlc (from an ACP client, start " +
       "`kiro-cli acp --agent-engine v2`).",
+    // A session without the aidlc agent runs none of these hooks, even after
+    // an earlier session did, so the person's reply can go unrecorded.
+    missesReplies: true,
     agentStep:
       "Kiro is not running this project's aidlc agent in this session. You cannot change that " +
       "from inside it: do not approve, retry, or ask the person to answer again. If Kiro's own " +

@@ -2053,7 +2053,7 @@ export interface ParkResult {
 // A park the person asked for, in their own words, is theirs: when a person
 // has typed since the last gate resolution, the stop wins over the autonomous
 // grant and is recorded as theirs. On a host whose hooks can miss a reply
-// (its hookActivation names that), an attended session's stop under the
+// (its hookActivation says so), an attended session's stop under the
 // autonomous grant is theirs too, with a note that no reply was on record. A
 // park no person stands behind still never stops an unattended autonomous run:
 // AIDLC_UNATTENDED is never attended, and a reply means a HUMAN_TURN on record
@@ -2062,7 +2062,9 @@ function handlePark(_args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const attendedSession = humanTurnMintAllowed();
   const replied = attendedSession && personSpokeSinceGate(pd);
-  const missedReply = attendedSession && !replied && hookActivation()?.missedReply !== undefined &&
+  const activation = hookActivation();
+  const missedReply = attendedSession && !replied &&
+    (activation?.missedReply !== undefined || activation?.missesReplies === true) &&
     getField(readStateFile(pd), "Construction Autonomy Mode")?.trim() === "autonomous";
   const result = parkWorkflow(pd, { attended: replied || missedReply });
   console.log(JSON.stringify(missedReply

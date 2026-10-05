@@ -154,6 +154,12 @@ export type HarnessManifest = {
      */
     missedReply?: string;
     /**
+     * Set when a session can run without this tree's hooks after they ran in
+     * an earlier one, so a reply can go unrecorded even with a heartbeat on
+     * record. A host with `missedReply` is one already.
+     */
+    missesReplies?: true;
+    /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
      * harness's hooks leave a heartbeat on the first chat message; doctor then
      * warns with this text instead of passing.

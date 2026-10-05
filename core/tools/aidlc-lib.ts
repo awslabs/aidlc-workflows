@@ -376,6 +376,7 @@ export interface DocumentExtractorSpec {
 export interface HookActivation {
   recovery: string;
   missedReply?: string;
+  missesReplies?: true;
   notRunYet?: string;
   notRunInWorkflow?: string;
   agentStep?: string;
@@ -553,6 +554,7 @@ function readShippedHarnessData(): ShippedHarnessData {
         ? {
           recovery: activation.recovery,
           ...(typeof activation.missedReply === "string" ? { missedReply: activation.missedReply } : {}),
+          ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
           ...(typeof activation.notRunInWorkflow === "string"
             ? { notRunInWorkflow: activation.notRunInWorkflow }
