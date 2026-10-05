@@ -12443,7 +12443,7 @@ function emitTypedResumeChoice(
   const stopThere = `${flags.park === true
     ? " The person also asked to stop there for now: make"
     : " If the person also asked to stop there for now, make"} the move, following each print up to where it says ` +
-    `to re-run \`next\`, then run \`${aidlcInvocation()} park\` in place of that \`next\` and act on its \`parked\` directive.`;
+    `to re-run \`next\`, then run \`${aidlcToolInvocation("orchestrate")} park\` in place of that \`next\` and act on its \`parked\` directive.`;
   const move = (directive: PrintDirective | ErrorDirective): PrintDirective | ErrorDirective =>
     directive.kind === "print" ? printDirective(`${directive.message}${stopThere}`) : directive;
   if (choice === "resume") {

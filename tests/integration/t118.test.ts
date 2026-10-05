@@ -672,6 +672,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(stopped.kind, extra.join(" ")).toBe("print");
       expect(stopped.message, extra.join(" ")).toContain(stopAsked);
       expect(stopped.message, extra.join(" ")).toContain(parkInstead);
+      // The engine's own park, which every tool runs without asking.
+      expect(stopped.message, extra.join(" ")).toMatch(/orchestrate(\.ts)? park` in place of that `next`/);
       const plain = report(...extra);
       expect(plain.message, extra.join(" ")).not.toContain(stopAsked);
       expect(plain.message, extra.join(" ")).toContain("If the person also asked to stop there for now, make the move");
