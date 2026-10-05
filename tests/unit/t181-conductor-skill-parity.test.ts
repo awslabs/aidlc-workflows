@@ -708,6 +708,10 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!/put them in single\s+quotes, never double quotes/.test(body)) missing.push(`${rel}  missing the quoting rule`);
       if (!body.includes("'\\''")) missing.push(`${rel}  missing the '\\'' escape`);
+      // Copilot's terminal can be cmd.exe, which does not group single quotes.
+      if (rel === "harness/copilot/skills/aidlc/SKILL.md" && !body.includes("In cmd.exe, which does not group single quotes, put them in double quotes instead")) {
+        missing.push(`${rel}  missing the cmd.exe double-quote form`);
+      }
       if (rel.endsWith("SKILL.md") && !body.includes("--details '<the remedy's op>'")) {
         missing.push(`${rel}  missing: the recovery pick passes the remedy's op`);
       }
