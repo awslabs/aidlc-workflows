@@ -64,7 +64,8 @@ const manifest: HarnessManifest = {
       "from inside it: do not approve, retry, or ask the person to answer again. If Kiro's own " +
       'line under your replies says `agent "aidlc" needs upgrading for this agent engine, using ' +
       '"default"`, show the person this line: "Quit Kiro and start it again in this folder ' +
-      'with: kiro-cli chat --agent-engine v2 --agent aidlc". Otherwise show this line: "Type ' +
+      'with: kiro-cli chat --agent-engine v2 --agent aidlc, then type <entry> to carry on." ' +
+      'Otherwise show this line: "Type ' +
       '/agent and pick aidlc, then carry on." Then end your turn.',
   },
   harnessDir: ".kiro",

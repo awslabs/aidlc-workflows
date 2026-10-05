@@ -79,16 +79,20 @@ import {
   randomBytes,
 } from "node:crypto";
 import {
+  closeSync,
   constants as fsConstants,
   copyFileSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -321,6 +325,8 @@ import {
   HOOKS_OFF_RERUN,
   hookStatusPathLinked,
   humanTurnMintAllowed,
+  assertNoSymlinkInChainOrThrow,
+  sessionsDir,
   type WorkspaceCommand,
   type WorkflowSelection,
   writeActiveDirectiveMarker,
@@ -377,6 +383,7 @@ import {
   type InlineContextEntry,
   inlineAgentsFor,
   markdownFilesUnder,
+  readBoundedRegularFile,
   shippedInlineContextEntries,
 } from "./aidlc-inline-context.ts";
 import {
@@ -682,6 +689,85 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
   return step;
 }
 
+// The request the first `next` carried when the stop above came before any
+// workflow. Where the tool's step is a restart, the new chat never saw it, so
+// the first bare `next` there carries on with it, once; new words from the
+// person replace it. It is kept for a day in this machine's own runtime
+// folder, which git never shares, and only in the shape of a request: words or
+// a scope with their creation settings, never a command of another kind.
+const KEPT_REQUEST_FILE = "kept-request.json";
+const KEPT_REQUEST_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const KEPT_REQUEST_MAX_BYTES = 64 * 1024;
+const KEPT_REQUEST_LINE = "Carrying on with your earlier request.";
+const KEPT_REQUEST_FLAGS = new Set([
+  "intent", "scope", "positionalScope", "depth", "testStrategy", "projectType", "review",
+  "changeControl", "ceremony", "planChanges", "newIntent", "compose", "newScope",
+]);
+// Said first on the step the kept request leads to.
+let activeKeptRequestLine: string | null = null;
+
+function isKeptRequest(args: readonly string[]): boolean {
+  const flags = parseNextFlags([...args]);
+  if (flags.parseError || !(flags.intent || flags.scope || flags.positionalScope)) return false;
+  return Object.entries(flags).every(([key, value]) => value === undefined || KEPT_REQUEST_FLAGS.has(key));
+}
+
+// Null when anything on the way from the project's own folder is a link, so
+// the request is never written to or read from anywhere else.
+function keptRequestPath(projectDir: string): string | null {
+  try {
+    const anchor = realpathSync(projectDir);
+    return assertNoSymlinkInChainOrThrow(anchor, relative(anchor, join(sessionsDir(anchor), KEPT_REQUEST_FILE)));
+  } catch {
+    return null;
+  }
+}
+
+function keepStoppedRequest(projectDir: string, space: string, args: readonly string[]): void {
+  if (isReadOnlyEngineProbe() || !isKeptRequest(args) || keptRequestPath(projectDir) === null) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    const path = keptRequestPath(projectDir);
+    if (path === null) return;
+    const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0);
+    const fd = openSync(path, flags, 0o600);
+    try {
+      writeSync(fd, `${JSON.stringify({ at: Date.now(), space, args })}\n`);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Not kept: after the restart the person types the request again.
+  }
+}
+
+function dropKeptRequest(projectDir: string): void {
+  const path = keptRequestPath(projectDir);
+  if (path === null) return;
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // It expires on its own.
+  }
+}
+
+// The request kept for this space, still fresh and still a request, or null.
+function keptRequest(projectDir: string, space: string): string[] | null {
+  const path = keptRequestPath(projectDir);
+  const text = path === null ? null : readBoundedRegularFile(path, KEPT_REQUEST_MAX_BYTES);
+  if (text === null) return null;
+  try {
+    const saved = JSON.parse(text) as { at?: unknown; space?: unknown; args?: unknown };
+    if (typeof saved.at !== "number" || saved.space !== space || !Array.isArray(saved.args)) return null;
+    const age = Date.now() - saved.at;
+    if (!(age > -60_000 && age <= KEPT_REQUEST_MAX_AGE_MS)) return null;
+    const args = saved.args.filter((arg): arg is string => typeof arg === "string");
+    return args.length === saved.args.length && isKeptRequest(args) ? args : null;
+  } catch {
+    return null;
+  }
+}
+
 // Print exactly one directive as JSON to stdout, after validating it against
 // the frozen contract. A malformed directive is a hard error (clean
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
@@ -798,6 +884,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
     const projectDir = emissionProjectDir(directive);
     const line = projectDir ? codeGenerationResumeNarration(projectDir, directive.unit ?? null) : null;
     if (line !== null) directive.narration = line;
+  }
+  if (activeKeptRequestLine !== null) {
+    directive.narration = directive.narration
+      ? `${activeKeptRequestLine} ${directive.narration}`
+      : activeKeptRequestLine;
+    activeKeptRequestLine = null;
   }
   // A route check asks one question: which Unit would the engine route now? It
   // never loads rules, so it skips transport entirely - which also keeps it from
@@ -6362,6 +6454,25 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         return;
       }
     } catch { /* advisory: guard is best-effort, never blocks a real next */ }
+  }
+
+  // A bare `next` with no workflow selected carries on with the request a
+  // stopped first `next` kept for the chat after a restart, once. A request of
+  // the person's own replaces it.
+  if (!isReadOnlyEngineProbe()) {
+    const pdKept = resolveProjectDir(projectDir);
+    if (args.length > 0) {
+      if (isKeptRequest(args)) dropKeptRequest(pdKept);
+    } else {
+      const selection = engineSelection(pdKept);
+      const kept = selection.intent === null ? keptRequest(pdKept, selection.space) : null;
+      if (kept !== null) {
+        dropKeptRequest(pdKept);
+        activeKeptRequestLine = KEPT_REQUEST_LINE;
+        routeNext(kept, projectDir);
+        return;
+      }
+    }
   }
 
   // Branch 1a - in-session configuration alias. Unlike the read-only utilities,
@@ -14019,6 +14130,11 @@ export function main(argv: string[]): void {
   if (commandKind === "next" && !unjoined) {
     const stop = hooksOffStop(resolvedProjectDir, resolvedSelection, subArgs);
     if (stop !== null) {
+      // Before any workflow, the request it carried waits for the chat the
+      // step may restart into.
+      if (resolvedSelection.intent === null) {
+        keepStoppedRequest(resolvedProjectDir, resolvedSelection.space, subArgs);
+      }
       // The stop carries the step; the notice is not added on top.
       activeHookHealthNotice = null;
       emit(printDirective(stop));
@@ -14075,6 +14191,7 @@ export function main(argv: string[]): void {
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;
+    activeKeptRequestLine = null;
     engineProjectDir = undefined;
     resolvedDirectiveLimit = null;
     engineSessionId = undefined;
