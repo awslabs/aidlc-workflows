@@ -1587,9 +1587,15 @@ function withoutRedirections(segment: string): string {
  * never runs in. A computed target ($VAR, glob), `cd -` and stack operands
  * (`+1`) add nothing. Past the cap the oldest collected directories are
  * dropped, never `cwd`, $HOME or the newest, so an absolute `cd` late in a
- * long command still counts.
+ * long command still counts. A command `shell` names as PowerShell is read
+ * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
+ * their -Path, -LiteralPath or first positional value, a `\` as a separator.
  */
-export function shellDirectoryRoots(command: string, cwd = process.cwd()): string[] {
+export function shellDirectoryRoots(
+  command: string,
+  cwd = process.cwd(),
+  shell: CommandShell = "posix",
+): string[] {
   const roots = [resolve(cwd)];
   const pinned = new Set(roots);
   const add = (dir: string, pin = false) => {
@@ -1604,6 +1610,24 @@ export function shellDirectoryRoots(command: string, cwd = process.cwd()): strin
       roots.splice(oldest, 1);
     }
   };
+  // A literal operand is read from every directory collected so far.
+  const change = (operand: string) => {
+    const next = new Set<string>();
+    for (const root of roots) {
+      const dir = normalizeShellTarget(operand, root);
+      if (dir) next.add(dir);
+    }
+    const reading = homeReading(operand);
+    if (reading) next.add(resolve(reading));
+    for (const dir of next) add(dir);
+  };
+  if (shell === "powershell") {
+    for (const operand of powerShellLocationChanges(command, 0)) {
+      if (operand === null) add(resolve(shellHome()), true);
+      else change(operand);
+    }
+    return roots;
+  }
   for (const segment of shellCommandSegments(command)) {
     const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
     if (!invocation || !SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) continue;
@@ -1612,24 +1636,55 @@ export function shellDirectoryRoots(command: string, cwd = process.cwd()): strin
     const operand = end >= 0
       ? args[end + 1]
       : args.find((arg) => !arg.startsWith("-") && !arg.startsWith("+"));
-    const next = new Set<string>();
-    let home: string | null = null;
-    if (operand === undefined) {
-      // `cd -` and stack operands name a directory this command cannot see.
-      const previous = args.some((arg) => arg === "-" || /^[+-]\d+$/.test(arg));
-      if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) home = resolve(shellHome());
-    } else {
-      for (const root of roots) {
-        const dir = normalizeShellTarget(operand, root);
-        if (dir) next.add(dir);
-      }
-      const reading = homeReading(operand);
-      if (reading) next.add(resolve(reading));
+    if (operand !== undefined) {
+      change(operand);
+      continue;
     }
-    for (const dir of next) add(dir);
-    if (home) add(home, true);
+    // `cd -` and stack operands name a directory this command cannot see.
+    const previous = args.some((arg) => arg === "-" || /^[+-]\d+$/.test(arg));
+    if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) add(resolve(shellHome()), true);
   }
   return roots;
+}
+
+// How Set-Location and Push-Location bind the directory they move to.
+const LOCATION_CHANGE: CmdletWrite = {
+  positional: [["path", "literalpath"]],
+  paths: ["path", "literalpath"],
+  valued: ["stackname"],
+  switches: ["passthru"],
+  aliases: { pspath: "literalpath", lp: "literalpath" },
+  pipelinePath: false,
+};
+const POWERSHELL_LOCATION_COMMANDS: Record<string, "set-location" | "push-location"> = {
+  "set-location": "set-location",
+  cd: "set-location",
+  chdir: "set-location",
+  sl: "set-location",
+  "push-location": "push-location",
+  pushd: "push-location",
+};
+
+// The directory operands of a PowerShell command line's location changes, in
+// groups too, with `\` read as a separator; null for a bare Set-Location,
+// read as $HOME. `-` and `+` (the location history) add nothing.
+function powerShellLocationChanges(command: string, depth: number): Array<string | null> {
+  if (depth > 8) return [];
+  const nested: string[] = [];
+  const out: Array<string | null> = [];
+  for (const { name, args } of readPowerShell(command, nested).commands) {
+    const location = name === null || !Object.hasOwn(POWERSHELL_LOCATION_COMMANDS, name)
+      ? null
+      : POWERSHELL_LOCATION_COMMANDS[name];
+    if (location === null) continue;
+    const { targets } = cmdletWriteTargets(LOCATION_CHANGE, args, true);
+    if (targets.length === 0 && location === "set-location") out.push(null);
+    for (const target of targets) {
+      if (target !== "-" && target !== "+") out.push(target.replaceAll("\\", "/"));
+    }
+  }
+  for (const inner of nested) out.push(...powerShellLocationChanges(inner, depth + 1));
+  return out;
 }
 
 /**
@@ -1648,7 +1703,7 @@ export function shellWriteTargets(
   shell: CommandShell = "posix",
 ): string[] {
   const out: string[] = [];
-  shellDirectoryRoots(command, cwd).forEach((root, index) => {
+  shellDirectoryRoots(command, cwd, shell).forEach((root, index) => {
     for (const target of shellWriteTargetsFrom(command, root, index === 0 ? rawWords : undefined, shell)) {
       if (!out.includes(target)) out.push(target);
     }

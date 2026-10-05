@@ -2534,7 +2534,13 @@ function buildForward(): Forward {
         hook: target === "review-freeze"
           ? "aidlc-review-freeze.ts"
           : "aidlc-state-transition-guard.ts",
-        input: { hook_event_name: "PreToolUse", ...call, cwd: shellToolCwd(ide.toolName ?? "", toolArgs) },
+        input: {
+          hook_event_name: "PreToolUse",
+          ...call,
+          cwd: shellToolCwd(ide.toolName ?? "", toolArgs),
+          // Both guards read a PowerShell command the way PowerShell runs it.
+          ...(isKiroPowerShellTool(ide.toolName ?? "") ? { aidlc_shell: "powershell" } : {}),
+        },
       };
     }
     case "audit-and-sensors": {

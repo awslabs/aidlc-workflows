@@ -186,7 +186,8 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   `new_string`; `str_replace`, `oldStr`/`newStr` as `old_string`/`new_string`;
   `delete_file`, `targetFile` as the path), a shell tool as Bash judged from
   the call's own `cwd` (and from every directory a literal `cd` or `pushd` in
-  the command leaves it in), and the payload `session_id` rides along; every other
+  the command leaves it in; `execute_pwsh` marked `aidlc_shell: "powershell"`,
+  so both read it as PowerShell), and the payload `session_id` rides along; every other
   tool is not forwarded. Kiro
   runs project PreToolUse hooks on a delegated agent's own calls too, with the
   conductor's `session_id` and no agent identity, and honours exit 2 there

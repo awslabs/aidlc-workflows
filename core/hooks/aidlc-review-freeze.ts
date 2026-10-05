@@ -248,7 +248,8 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
 
   const toolName = parsed.tool_name ?? "";
   const cwd = typeof parsed.cwd === "string" ? parsed.cwd : projectDir;
-  const targets = writeTargets(toolName, parsed.tool_input, cwd);
+  // Set by the adapter that ran the tool, outside the agent's input.
+  const targets = writeTargets(toolName, parsed.tool_input, cwd, parsed.aidlc_shell === "powershell" ? "powershell" : "posix");
   if (targets.length === 0) return 0;
 
   // No audit ledger means no receipts to protect - the common non-AIDLC case,

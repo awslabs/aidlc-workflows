@@ -600,6 +600,30 @@ describe("t264 (a) judgeFreeze decision table", () => {
     );
   });
 
+  test("writeTargets: a PowerShell location change moves the reading the way PowerShell does", () => {
+    const targets = (command: string): string[] =>
+      writeTargets("Bash", { command }, "/p", "powershell")
+        .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""));
+    for (const command of [
+      "Set-Location .kiro\\hooks; Set-Content y.json x",
+      "cd .kiro\\hooks; Set-Content y.json x",
+      "sl -Path .kiro\\hooks; Set-Content y.json x",
+      "Set-Location -LiteralPath '.kiro\\hooks'; Set-Content y.json x",
+      "Push-Location .kiro; Set-Content hooks\\y.json x",
+      "pushd .kiro; 'x' | Tee-Object hooks\\y.json",
+      "Write-Output (Set-Location .kiro\\hooks); Set-Content y.json x",
+    ]) {
+      expect(targets(command), command).toContain("/p/.kiro/hooks/y.json");
+    }
+    // The reading from the call's cwd stays; history and stack names add nothing.
+    expect(targets("Set-Location -; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    expect(targets("Set-Location +; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    expect(targets("Push-Location -StackName s; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    // The POSIX reading of the same line drops the backslashes.
+    expect(writeTargets("Bash", { command: "cd .kiro\\hooks; echo x > y.json" }, "/p")
+      .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");
+  });
+
   test("writeTargets: a PowerShell command is read as PowerShell (#1639)", () => {
     const targets = (command: string): string[] =>
       writeTargets("Bash", { command }, "/p", "powershell")
@@ -1215,6 +1239,23 @@ describe("t264 (d) Kiro IDE adapter route", () => {
       expect(r.code, command).toBe(2);
       expect(r.stderr, command).toContain("review-freeze");
     }
+    // An execute_pwsh command reaches the freeze marked as PowerShell, so a
+    // backslash path, Tee-Object and Set-Location read the way PowerShell runs them.
+    const backslashed = reviewedDir.replaceAll("/", "\\");
+    for (const command of [
+      `Set-Content ${backslashed}\\requirements.md changed`,
+      `'changed' | Tee-Object ${backslashed}\\requirements.md`,
+      `Set-Location ${backslashed}; Set-Content requirements.md changed`,
+      `Push-Location -Path ${backslashed}; sc requirements.md changed`,
+    ]) {
+      const r = runKiroIde(p, "review-freeze", { tool_name: "execute_pwsh", tool_input: { command, cwd: p } });
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain("review-freeze");
+    }
+    expect(runKiroIde(p, "review-freeze", {
+      tool_name: "execute_pwsh",
+      tool_input: { command: `Set-Location ${backslashed}; Set-Content notes.md x`, cwd: p },
+    }).code).toBe(0);
     expect(runKiroIde(p, "review-freeze", { tool_name: "read_file", tool_input: { path: file } }).code).toBe(0);
     expect(runKiroIde(p, "review-freeze", {
       tool_name: "fs_write",

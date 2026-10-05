@@ -1373,7 +1373,12 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
     // The shell removes a backslash-newline continuation before it parses
     // anything, so `au\<newline>dit` is `audit` to it and must be to us.
     const command = raw.replace(/\\\r?\n/g, "");
-    if (!protectedShell(command, cwd)) return null;
+    // A command the adapter marks as PowerShell (outside the agent's input) is
+    // also read as PowerShell; the POSIX reading below stays, so the mark can
+    // only add targets.
+    const powerShellWrite = input.aidlc_shell === "powershell" &&
+      shellWriteTargets(raw, cwd, undefined, "powershell").some((path) => protectedWriteTarget(path, cwd));
+    if (!powerShellWrite && !protectedShell(command, cwd)) return null;
     return auditTrailMatched ? "audit" : "runtime";
   }
   if (!["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) return null;
