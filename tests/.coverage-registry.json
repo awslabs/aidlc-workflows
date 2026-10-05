@@ -9738,6 +9738,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SCOPE_NAME_RULE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SCOPE_SETTING_KEYS",
       "minMechanism": "none",
       "coveredBy": [],

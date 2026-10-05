@@ -63,13 +63,15 @@ import {
   frontmatterBlock,
   hasRunnerGenMarker,
   isPluginEnabled,
+  isScopeName,
   loadScopeMetadataAll,
   loadStageGraphAll,
   pluginsEnabled,
   runnerFrontmatterAdditions,
   scopeGridPath,
+  SCOPE_NAME_RULE,
 } from "./aidlc-lib.ts";
-import { type GraphStage, isScopeName, loadGraph } from "./aidlc-graph.ts";
+import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
   aidlcDispatcherInvocation,
   aidlcToolInvocation,
@@ -560,7 +562,7 @@ function readScopeFront(path: string): ScopeFront {
   if (!name) throw new Error(`Scope file ${path} missing required frontmatter: name`);
   if (!isScopeName(name)) {
     throw new Error(
-      `Scope file ${path} has a name a scope cannot have. Rename it in its frontmatter to letters, digits, dots, underscores, and hyphens only.`,
+      `Scope file ${path} has a name a scope cannot have. Rename it in its frontmatter to ${SCOPE_NAME_RULE}.`,
     );
   }
   const plugin = scalarField(fm, "plugin");

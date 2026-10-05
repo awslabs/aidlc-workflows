@@ -6915,7 +6915,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       validScopes().has(flags.scope) &&
       flags.scope !== currentStateScope
     ) {
-      const parts = [`--scope ${flags.scope}`];
+      const parts = [`--scope ${shellArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
       emit(planChanges ? planChangeDirective(planChanges, command, null) : turnEndingPrint(
@@ -7286,7 +7286,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // finished stages alone; once it is approved the walk returns here.
   if (reverseEngineeringOwedBehindCursor(stateContent)) {
     emit(printDirective(
-      `Reverse Engineering is on the plan and has not run. Run \`${aidlcToolInvocation("jump")} execute --target reverse-engineering --direction redo --scope ${scope}\` ` +
+      `Reverse Engineering is on the plan and has not run. Run \`${aidlcToolInvocation("jump")} execute --target reverse-engineering --direction redo --scope ${shellArg(scope)}\` ` +
         `to run it now (finished stages stay finished, and the workflow returns to ${currentSlug} after it), then re-run \`next\` to continue.`,
     ));
     return;
@@ -9680,7 +9680,7 @@ function unitMajorRedo(
       OTHER_UNITS_KEPT;
   }
   const reopen = `${aidlcToolInvocation("jump")} reopen --target ${redone} ` +
-    `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${unit} --via redo --scope ${scope}`;
+    `--stages ${blockSlugs.slice(blockSlugs.indexOf(redone)).join(",")} --units ${unit} --via redo --scope ${shellArg(scope)}`;
   // Code Generation is redone plan included, so a new plan is approved again
   // unless plan approval is off.
   const name = walk.block.find((stage) => stage.slug === redone)?.name || redone;
@@ -9870,7 +9870,7 @@ function unitMajorReopen(
     : `Reopened ${reopenedText}.` +
       (kept.length > 0 ? `${keptLine} Say 'for every unit' to redo it for ${kept.length === 1 ? kept[0] : "them"} too.` : "");
   const reopen =
-    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${scope}`;
+    `${aidlcToolInvocation("jump")} reopen --target ${targetSlug} --stages ${stages.join(",")} --units ${reopened.join(",")} --scope ${shellArg(scope)}`;
   return {
     kind: "print",
     message:
@@ -10288,7 +10288,7 @@ function ensureSingleStageStarted(
     if (recordedScope !== null && recordedScope !== scope) {
       return `The open isolated attempt uses scope "${recordedScope}", not requested scope "${scope}". ` +
         `Complete it with \`report --single --stage ${node.slug} --result approved\`, ` +
-        `or re-run with \`--scope ${recordedScope}\`.`;
+        `or re-run with \`--scope ${shellArg(recordedScope)}\`.`;
     }
     return null;
   }
@@ -10429,7 +10429,7 @@ function skippedJumpDirective(target: string, direction: string, current: string
     return printDirective(
       `${offPlan}, and the person asked to jump to it, so put it back on the plan and jump: run ` +
         `\`${aidlcDispatcherInvocation("recompose")} --add ${target} --reason ${shellArg(`jump to ${target}`)}\`, then ` +
-        `\`${aidlcToolInvocation("jump")} execute --target ${target} --direction forward --scope ${scope}\`, ` +
+        `\`${aidlcToolInvocation("jump")} execute --target ${target} --direction forward --scope ${shellArg(scope)}\`, ` +
         "then re-run `next` to continue from the jump target. If recompose refuses, tell the person in plain " +
         "words why it could not, and the way it names to do it instead, and run nothing else. After the jump, tell the person in one line: " +
         `"${target} was not on the plan; it is now, and the workflow moved to it. To go back, type ` +
@@ -10582,7 +10582,7 @@ function emitJumpDirective(
     // conductor runs it, the NEXT `next` sees the pivoted state and emits the
     // run-stage for the now-current target.
     emit(printDirective(
-      `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
+      `Run ${unitMajor?.before ?? ""}\`${aidlcToolInvocation("jump")} execute --target ${targetSlug} --direction ${direction}${unitMajor?.flags ?? ""} --scope ${shellArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.` +
         (unitMajor?.said ?? "") + everyUnitLine,
     ));
     return;
@@ -11908,7 +11908,7 @@ function handleResumeReport(
       return;
     }
     emit(printDirective(
-      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
+      `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${slug} --direction redo --scope ${shellArg(scope)}\` to reset the current stage, then re-run \`next\` to start it over.`,
     ));
     return;
   }

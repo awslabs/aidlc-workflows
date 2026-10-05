@@ -1,4 +1,4 @@
-// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:isScopeName
+// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:isScopeName, function:SCOPE_NAME_RULE
 //
 // t344 - the durable composed-scope RECORD contract.
 //
@@ -35,6 +35,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  __resetGraphCache,
   backfillComposedScopeRecords,
   composedFoldBack,
   parseComposedScopeRecord,
@@ -42,6 +43,7 @@ import {
   type ComposedScopeRecord,
 } from "../../core/tools/aidlc-graph.ts";
 import { discoverScopes } from "../../core/tools/aidlc-runner-gen.ts";
+import { loadScopeMetadataAll } from "../../core/tools/aidlc-lib.ts";
 
 const IDENTITY = [
   "---",
@@ -363,6 +365,11 @@ describe("t344 record parse failures name the file and never degrade silently", 
       withRegion("---\nname: x;id\n---", '{"stages":{}}'),
       /has a name a scope cannot have/,
     ],
+    ...([".", "..", ".hidden"].map((name) => [
+      `the name ${JSON.stringify(name)}`,
+      withRegion(`---\nname: ${name}\n---`, '{"stages":{}}'),
+      /starting with a letter or digit/,
+    ] as [string, string, RegExp])),
   ];
   for (const [what, body, diagnostic] of cases) {
     test(`throws on ${what}`, () => {
@@ -526,6 +533,18 @@ describe("t344 a scope name that is not one is never written or run", () => {
   test("a grid column whose name is not a scope name is not folded back", () => {
     const r = composedFoldBack({}, JSON.stringify({ "x;id": { stages: STAGES } }), STOCK, new Set(["x;id"]));
     expect([...r.names]).toEqual([]);
+  });
+
+  test("a scope file whose name is not a scope name is refused before it becomes a scope", () => {
+    withScopesDirs((_root, scopes) => {
+      writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", "name: x;id"));
+      __resetGraphCache();
+      try {
+        expect(() => loadScopeMetadataAll()).toThrow(/has a name a scope cannot have/);
+      } finally {
+        __resetGraphCache();
+      }
+    });
   });
 
   test("a scope file whose name is not a scope name gets no runner", () => {

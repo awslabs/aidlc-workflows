@@ -106,6 +106,8 @@ import {
   stageEnabledBySelection,
   toPosix,
   validScopes,
+  isScopeName,
+  SCOPE_NAME_RULE,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -539,14 +541,7 @@ export interface ComposedScopeRecord {
   stages: Record<string, "EXECUTE" | "SKIP">;
 }
 
-// A scope name read back from a record, a scope file, or the grid becomes part
-// of file names and of the commands the engine prints, so it is letters,
-// digits, dots, underscores, and hyphens only.
-const SCOPE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-export function isScopeName(name: string): boolean {
-  return SCOPE_NAME.test(name);
-}
+export { isScopeName };
 
 /** `file` inside `dir`, or a throw when the joined path would land anywhere else. */
 function fileInside(dir: string, file: string): string {
@@ -573,7 +568,7 @@ export function parseComposedScopeRecord(
   }
   if (!isScopeName(name)) {
     throw new Error(
-      `Composed scope record ${filePath} has a name a scope cannot have. Rename it in the record's frontmatter to letters, digits, dots, underscores, and hyphens only.`,
+      `Composed scope record ${filePath} has a name a scope cannot have. Rename it in the record's frontmatter to ${SCOPE_NAME_RULE}.`,
     );
   }
   // Exactly one sentinel pair, or refuse. Duplicates would make the split

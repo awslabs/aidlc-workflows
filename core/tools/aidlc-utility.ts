@@ -10844,7 +10844,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       outputLines = [
         `Switched to ${newScope}: ${executeStages.length} stages (${completedCount} done), ` +
           `${gates} approval gates${ceremonyOffClause(summary)}. ` +
-          `To go back, type \`${entrySkillInvocation()} --scope ${oldScope}\`.`,
+          `To go back, type \`${entrySkillInvocation()} --scope ${shellArg(oldScope)}\`.`,
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
             `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
@@ -11358,7 +11358,7 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
     ].join(", ");
     process.stdout.write(
       `Saved as scope ${name} (${running} stages, ${settings}).\n` +
-        `Next time: ${entrySkillInvocation()} --scope ${name} "<what to build>"\n`,
+        `Next time: ${entrySkillInvocation()} --scope ${shellArg(name)} "<what to build>"\n`,
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
