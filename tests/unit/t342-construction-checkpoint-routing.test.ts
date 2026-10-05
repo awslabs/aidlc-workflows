@@ -123,7 +123,8 @@ function cover(p: string, unit: string, selected = stages, receipts = true) {
 }
 
 function next(p: string) {
-  const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p);
+  // The env is passed for the same reason as in approve() below.
+  const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, [], { env: process.env });
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as {
     kind: string; stage: string; unit?: string; gate?: boolean; batch?: number;
