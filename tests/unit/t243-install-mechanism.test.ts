@@ -3928,6 +3928,16 @@ describe("t243 project initialization", () => {
     expect(level.status, level.stdout + level.stderr).toBe(0);
     expect(stampOf(".claude")).toBe(AIDLC_VERSION);
     expect(level.stdout).not.toContain("To bring it to");
+
+    // A copied tree no config run has recorded first records its own files,
+    // as doctor's row says, so the command after it finds them owned.
+    rmSync(join(project, ".kiro", "tools", "data", "aidlc-manifest.json"));
+    const unrecorded = run(INIT, ["config", "--project-dir", project, "--from", next, "--harness", "claude", "--yes"], project, env);
+    expect(unrecorded.status, unrecorded.stdout + unrecorded.stderr).toBe(0);
+    expect(unrecorded.stdout).toContain(
+      `To bring it to ${NEXT_VERSION}: \`bun .claude/tools/aidlc.ts config --harness kiro --download\`, then ` +
+        `\`bun .claude/tools/aidlc.ts config --harness kiro --from ${quoteCommandArgument(next)}\`.`,
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("exact legacy root signatures are adopted", () => {

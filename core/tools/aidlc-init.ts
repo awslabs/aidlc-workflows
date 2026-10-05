@@ -9599,12 +9599,18 @@ function treesLeftBehindLines(
       : `is on ${tree.frameworkVersion}`;
     const harness = `--harness ${tree.distribution}`;
     const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
+    // A copied tree no config run has recorded the files of reads every file
+    // as unowned against another release, so it first records them at its
+    // own, as doctor's row says.
+    const record = source.copyChannel && !existsSync(join(tree.root, "tools", "data", "aidlc-manifest.json"))
+      ? `${command(`${harness} --download`)}, then `
+      : "";
     const step = plain.length === 1 && plain[0].stamp.frameworkVersion === written.version
       ? command(harness)
       : source.from && source.holds?.includes(tree.distribution) && printableArgs([source.from])
-      ? command(`${harness} --from ${quoteCommandArgument(source.from)}`)
+      ? `${record}${command(`${harness} --from ${quoteCommandArgument(source.from)}`)}`
       : source.copyChannel
-      ? `get ${copyRuntimeUrl(written.version, source.releaseBaseUrl)} and its .sha256 into one folder, then run ${
+      ? `get ${copyRuntimeUrl(written.version, source.releaseBaseUrl)} and its .sha256 into one folder, then run ${record}${
         command(`${harness} --from <that file>`)
       }`
       : source.requiredVersion === undefined
