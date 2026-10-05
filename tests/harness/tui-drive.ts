@@ -1578,7 +1578,14 @@ function makeTerminator(projectDir: string, a: Args): Terminator {
 // Anchor it to a numbered option so the ordinary `>` input prompt cannot match.
 const AUQ_CARET_OPTION = /^\s*❯\s+\d+\.\s/m;
 function gridHasCaret(grid: string): boolean {
-  return AUQ_CARET_OPTION.test(grid);
+  return AUQ_CARET_OPTION.test(unglueRules(grid));
+}
+
+// A Windows repaint can leave a rule's `─` cells glued to a row's text, even in
+// the cell a space belongs in (`❯ 1.─Approve───`). The menu readers take such a
+// row as the text it carries; a row that is only a rule stays a rule.
+export function unglueRules(grid: string): string {
+  return grid.split("\n").map((line) => (/[^\s─]/.test(line) ? line.replace(/─+/g, " ") : line)).join("\n");
 }
 
 // Is a waiting AskUserQuestion menu painted on the grid right now? A menu shows
@@ -1593,7 +1600,7 @@ export function gridHasMenu(grid: string): boolean {
 // The rows that keep an answered menu actionable: its caret row through its
 // footer. Other rows can repaint while these still take a key.
 function actionableMenuRange(grid: string): [number, number] | null {
-  const lines = grid.split("\n");
+  const lines = unglueRules(grid).split("\n");
   const caret = lines.findLastIndex((line) => AUQ_CARET_OPTION.test(line));
   if (caret < 0) return null;
   let footer = caret;
@@ -1757,7 +1764,7 @@ export function reviewedPicks(grid: string): string[] {
 // review screen) nor the tab-strip `☐`/`☒` glyphs (present on EVERY tab,
 // single-select ones included) — both misfire.
 function gridIsMultiSelect(grid: string): boolean {
-  return /\d+\.\s*\[[ ✔]\]/.test(grid); // a numbered option line carrying a checkbox
+  return /\d+\.\s*\[[ ✔]\]/.test(unglueRules(grid)); // a numbered option line carrying a checkbox
 }
 
 // Is this a MULTI-TAB AUQ form (more than one question batched into one gate)? Such
@@ -1780,7 +1787,7 @@ function gridIsMultiTabForm(grid: string): boolean {
 // actually rendered.
 function parseMenuOptions(grid: string): { num: number; label: string }[] {
   const out: { num: number; label: string }[] = [];
-  for (const line of grid.split("\n")) {
+  for (const line of unglueRules(grid).split("\n")) {
     const m = /^\s*❯?\s*(\d+)\.\s+(.*\S)\s*$/.exec(line);
     if (m) out.push({ num: Number(m[1]), label: m[2].trim() });
   }
@@ -2362,7 +2369,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       });
       // A retry after a lost final key finds the box already ticked; another
       // Space would clear it.
-      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(grid)) {
+      if (!/^\s*❯\s+\d+\.\s*\[✔\]/m.test(unglueRules(grid))) {
         await backend.send(session, "Space", false, true); // toggle the Recommended option ON
         await sleep(150);
       }
