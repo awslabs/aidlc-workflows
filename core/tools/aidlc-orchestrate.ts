@@ -415,7 +415,7 @@ import {
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
-import { codeGenerationResumeNarration, promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { codeGenerationResumeNarration, codeGenerationStartNarration, promotableTestingPosture } from "./aidlc-testing-posture.ts";
 import {
   guardPolicyCreationGranted,
   planApprovalOffAtCreation,
@@ -796,15 +796,18 @@ function prepareEmission(directive: Directive): PreparedEmission {
     else directive.narration = line;
   }
   // A Code Generation build cut off part way and picked up again: the person
-  // hears where it picks up instead of the stage starting over. Nothing ticked,
-  // or a build that has not started under the current approval, says nothing new.
+  // hears where it picks up instead of the stage starting over. Otherwise an
+  // approved build starts with the plan's own count, from the same reading of
+  // the plan, so the two lines never disagree.
   // The line is about the run-stage being issued, not the directive on disk,
   // so a repeated `next` or a `continue` of its rules says the same line.
   if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
     const projectDir = emissionProjectDir(directive);
     const unit = directive.unit ?? null;
     const issued = { kind: "run-stage" as const, ...(unit !== null ? { unit } : {}) };
-    const line = projectDir ? codeGenerationResumeNarration(projectDir, unit, issued) : null;
+    const line = projectDir
+      ? codeGenerationResumeNarration(projectDir, unit, issued) ?? codeGenerationStartNarration(projectDir, unit)
+      : null;
     if (line !== null) directive.narration = line;
   }
   // A route check asks one question: which Unit would the engine route now? It

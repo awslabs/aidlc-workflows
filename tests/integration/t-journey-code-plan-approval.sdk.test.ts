@@ -74,7 +74,8 @@ const SKIP_QUESTION = "skip plan approval?";
 // deployment, so skipping it is refused for a reason of its own.
 const SKIP_DEPLOYMENT = "/aidlc --skip deployment-execution";
 const APPROVE_AND_STOP = "approve the plan, but let's stop there for today";
-const PICKING_UP = /Picking up the code at step (\d+) of (\d+)/;
+// A plan grouped under "Step N" headings counts its tasks ("at task 7 of 19").
+const PICKING_UP = /Picking up the code at (?:step|task) (\d+) of (\d+)/;
 const SEP = "\u2014";
 
 type Row = ReturnType<typeof readAuditShardEvents>[number];
@@ -286,7 +287,7 @@ describe.skipIf(
       const chat3 = await driveAidlc("/aidlc --resume", {
         projectDir: proj,
         persistSession: true,
-        stopAfterToolResult: { toolName: "Bash", resultIncludes: "Picking up the code at step" },
+        stopAfterToolResult: { toolName: "Bash", resultIncludes: "Picking up the code at " },
         timeoutMs: budget(),
       });
       expect(chat3.stoppedAfterToolResult, "the build was not picked up").toBe(true);

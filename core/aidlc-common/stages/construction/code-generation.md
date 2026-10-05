@@ -356,10 +356,11 @@ bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoi
 
 ### Step 4: PART 2 — Generation
 
-Before delegating, display to the user:
-"Generating code for [N] plan steps. This may take several minutes depending on project complexity. I'll show a summary when complete."
-When the directive's `narration` says where an interrupted build picks up, say
-that line instead.
+The directive's `narration` is the user's line for this build: the engine
+counts the plan the way the plan file shows it ("Generating code for 9 plan
+steps. This may take several minutes ...") or says where an interrupted build
+picks up. Say it once before delegating if you have not yet; never count the
+plan's steps yourself.
 
 Delegate to Task tool with subagent_type="aidlc-developer-agent".
 

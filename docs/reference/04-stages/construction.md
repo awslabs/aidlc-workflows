@@ -995,12 +995,17 @@ This stage has a **two-part structure**: planning followed by generation.
 
 #### PART 2 -- Generation (Steps 4-7)
 
-4. **Generate Code** -- Before delegating, display to the user:
-   "Generating code for [N] plan steps. This may take several minutes
-   depending on project complexity. I'll show a summary when complete."
-   When the directive's `narration` says where an interrupted build picks up
-   (for example "Picking up unit-2's code at step 5 of 9 (1-4 done)."), say
-   that line instead.
+4. **Generate Code** -- The directive's `narration` is the user's line for
+   this build, said once before delegating. The engine counts the plan from
+   the plan file, once for both lines:
+   "Generating unit-2's code for 9 plan steps. This may take several minutes
+   depending on project complexity. I'll show a summary when complete." at
+   the start, and where an interrupted build picks up ("Picking up unit-2's
+   code at step 5 of 9 (1-4 done)."). When the plan groups its tasks under
+   "Step N" headings, both lines count the tasks and name the heading
+   ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
+   up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
+   never counts the steps itself.
 
    Delegate to Task tool with the aidlc-developer-agent subagent
    (subagent_type="aidlc-developer-agent").

@@ -1582,6 +1582,8 @@ export interface PlanStep {
   ticked: boolean;
   /** Paths the step (its line and the lines indented under it) names in code spans. */
   paths: string[];
+  /** The "Step N" heading the step sits under, when the plan groups its steps under such headings. */
+  heading?: string;
 }
 
 export interface CodeGenerationResume {
@@ -1597,6 +1599,8 @@ export interface CodeGenerationResume {
 }
 
 const PLAN_TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX-])\](?=[ \t]|$)/;
+const PLAN_HEADING_RE = /^ {0,3}#{1,6}[ \t]+(.*)$/;
+const PLAN_STEP_HEADING_RE = /^[*_]{0,2}step[ \t]+(\d+)\b/i;
 // A bare file name the engine treats as a path: a common source or configuration
 // extension. With a directory in it, any extension (or a trailing slash) will do.
 const NAMED_FILE_RE =
@@ -1624,6 +1628,7 @@ export function planSteps(plan: string): PlanStep[] {
   const body = contentBeforeTerminalReviewAppendix(plan.replace(/^\uFEFF/, ""));
   const steps: PlanStep[] = [];
   let open = -1;
+  let heading: string | undefined;
   for (const line of visibleMarkdownLines(body, { preserveIndentedCode: true })) {
     if (line.trim().length === 0) continue;
     const indent = (/^[ \t]*/.exec(line)?.[0] ?? "").replace(/\t/g, "    ").length;
@@ -1631,13 +1636,38 @@ export function planSteps(plan: string): PlanStep[] {
       steps[steps.length - 1].paths.push(...namedPaths(line));
       continue;
     }
+    const title = PLAN_HEADING_RE.exec(line);
+    if (title) {
+      // A "## Step 3: Tests" heading groups the tasks under it; any other
+      // heading ends the group.
+      const number = PLAN_STEP_HEADING_RE.exec(title[1])?.[1];
+      heading = number === undefined ? undefined : `Step ${number}`;
+      open = -1;
+      continue;
+    }
     const task = PLAN_TASK_LINE_RE.exec(line);
     open = task ? indent : -1;
     if (!task) continue;
     const text = line.slice(task[0].length).trim();
-    steps.push({ text, ticked: task[1] === "x" || task[1] === "X", paths: namedPaths(text) });
+    steps.push({
+      text,
+      ticked: task[1] === "x" || task[1] === "X",
+      paths: namedPaths(text),
+      ...(heading !== undefined ? { heading } : {}),
+    });
   }
   return steps;
+}
+
+/**
+ * The "Step N" headings of a plan whose every task sits under one and that
+ * has fewer headings than tasks, in order; null otherwise. The person reads
+ * those headings as the plan's steps, so the lines name tasks within them.
+ */
+function stepHeadings(steps: PlanStep[]): string[] | null {
+  if (steps.length === 0 || steps.some((step) => step.heading === undefined)) return null;
+  const headings = [...new Set(steps.map((step) => step.heading as string))];
+  return headings.length < steps.length ? headings : null;
 }
 
 /**
@@ -1860,10 +1890,35 @@ export function codeGenerationResumeNarration(
   const whose = unit === null ? "the code" : `${unit}'s code`;
   const total = resume.steps.length;
   const written = resume.from === "files";
+  // A plan grouped under "Step N" headings counts its tasks, and names the
+  // heading the next one sits under, so every number matches the plan file.
+  const grouped = stepHeadings(resume.steps) !== null;
+  const item = grouped ? "task" : "step";
   if (resume.next === null) {
-    return `Picking up ${whose}: all ${total} steps ${written ? "wrote their files, checking them" : "are done, checking their files"}.`;
+    return `Picking up ${whose}: all ${total} ${item}s ${written ? "wrote their files, checking them" : "are done, checking their files"}.`;
   }
-  return `Picking up ${whose} at step ${resume.next} of ${total} (${stepRanges(resume.ticked)} ${written ? "wrote their files" : "done"}).`;
+  const where = grouped ? `, in ${resume.steps[resume.next - 1].heading}` : "";
+  const done = `${grouped ? "tasks " : ""}${stepRanges(resume.ticked)} ${written ? "wrote their files" : "done"}`;
+  return `Picking up ${whose} at ${item} ${resume.next} of ${total}${where} (${done}).`;
+}
+
+/**
+ * The line the person hears as an approved build starts, counted from the plan
+ * file the way the pick-up line counts it, or null when the plan has no steps.
+ */
+export function codeGenerationStartNarration(projectDir: string, unit: string | null): string | null {
+  try {
+    const steps = planSteps(readFileSync(join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md"), "utf-8"));
+    if (steps.length === 0) return null;
+    const headings = stepHeadings(steps);
+    const count = headings !== null
+      ? `the ${steps.length} tasks in ${headings.length} plan steps`
+      : `${steps.length} plan ${steps.length === 1 ? "step" : "steps"}`;
+    return `Generating ${unit === null ? "code" : `${unit}'s code`} for ${count}. ` +
+      "This may take several minutes depending on project complexity. I'll show a summary when complete.";
+  } catch {
+    return null;
+  }
 }
 
 function isPlanApprovalLabel(value: string): boolean {

@@ -771,3 +771,78 @@ describe("the pick-up says only what is certain", () => {
     expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
   });
 });
+
+// One owner for the count. The agent once counted the plan's "Step N" headings
+// ("Generating code for 4 plan steps") while the pick-up counted its boxes
+// ("step 7 of 19"). The engine now says both lines from one reading of the plan.
+describe("the start line and the pick-up line count the plan the same way", () => {
+  const GROUPED = [
+    "## Step 1: Fix the filter",
+    "- [ ] Task 1: change `src/part1.ts`",
+    "- [ ] Task 2: change `src/part2.ts`",
+    "## Step 2: Tests",
+    "- [ ] Task 3: test `src/part3.ts`",
+    "- [ ] Task 4: test `src/part4.ts`",
+    "- [ ] Task 5: test `src/part5.ts`",
+  ].join("\n");
+
+  function tickTasks(proj: string, ...numbers: number[]): void {
+    let plan = readFileSync(planPath(proj), "utf-8");
+    for (const number of numbers) plan = plan.replace(`- [ ] Task ${number}: `, `- [x] Task ${number}: `);
+    writeFileSync(planPath(proj), plan, "utf-8");
+  }
+
+  function groupedPlan(proj: string): string {
+    return "# Code Generation Plan\n\n## Summary\n\n- Builds: five parts\n- Touches: src/\n- Tests: 3 unit tests\n\n" +
+      `${GROUPED}\n\n${renderTestingContract(resolveTestingPosture(proj))}`;
+  }
+
+  test("a plan with no Step headings: N plan steps at the start, step N of M at the pick-up", () => {
+    const proj = project();
+    const { build } = approvedBuild(proj);
+    expect(build.narration).toBe(
+      `Generating ${UNIT}'s code for 9 plan steps. This may take several minutes depending on project complexity. ` +
+        "I'll show a summary when complete.",
+    );
+    dispatch(proj, brief(proj));
+    tick(proj, UNIT, 1, 2);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at step 3 of 9 (1-2 done).`);
+  });
+
+  test("a plan grouped under Step headings: tasks within the steps, and the heading the next task is in", () => {
+    const proj = project();
+    startedBuildOf(proj, [], groupedPlan(proj));
+    tickTasks(proj, 1, 2);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code at task 3 of 5, in Step 2 (tasks 1-2 done).`);
+    tickTasks(proj, 3, 4, 5);
+    expect(next(proj).narration).toBe(`Picking up ${UNIT}'s code: all 5 tasks are done, checking their files.`);
+  });
+
+  test("the start line of a grouped plan names its tasks and its steps", () => {
+    const proj = project();
+    mkdirSync(codeGenerationRecordDir(proj, UNIT), { recursive: true });
+    writeFileSync(planPath(proj), groupedPlan(proj), "utf-8");
+    writeFileSync(
+      join(codeGenerationRecordDir(proj, UNIT), "unit-test-instructions.md"),
+      "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n",
+      "utf-8",
+    );
+    expect(next(proj).ask_type).toBe("plan-approval");
+    approve(proj);
+    expect(next(proj).narration).toBe(
+      `Generating ${UNIT}'s code for the 5 tasks in 2 plan steps. This may take several minutes depending on ` +
+        "project complexity. I'll show a summary when complete.",
+    );
+    const steps = planSteps(groupedPlan(proj));
+    expect(steps.map((step) => step.heading)).toEqual(["Step 1", "Step 1", "Step 2", "Step 2", "Step 2"]);
+  });
+
+  test("zero-Unit work starts with the same count", () => {
+    const proj = stageLevelProject();
+    const { build } = approvedBuild(proj, null);
+    expect(build.narration).toBe(
+      "Generating code for 9 plan steps. This may take several minutes depending on project complexity. " +
+        "I'll show a summary when complete.",
+    );
+  });
+});
