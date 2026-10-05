@@ -119,7 +119,7 @@ function questionFile(id: string): string {
 // Words alone over active work first get the re-entry readings (a redo,
 // jump, or fresh start, or else this); their `next --request` asks the
 // routing question with the words kept.
-function asWork(words: string): Record<string, any> {
+function asWork(words: string) {
   const read = JSON.parse(next([words]).stdout.trim()) as { kind: string; message: string };
   expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
   const request = /`([^`]* next --request [0-9a-f]{8})`/.exec(read.message)?.[1];
