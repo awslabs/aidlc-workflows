@@ -2490,6 +2490,47 @@ describe("t147 Kiro CLI reads what the person typed from the expanded skill body
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  // A pasted request can hold a line break or a backtick: every word after it
+  // still reaches the engine, and the call the agent is told to run quotes it.
+  const pasted = "fix the `parse` step\nso the totals add up";
+  const words = ["fix", "the", "`parse`", "step", "so", "the", "totals", "add", "up"];
+
+  test("a request with a backtick and a line break reaches the engine whole", () => {
+    const dir = scratchProject(false);
+    try {
+      const calls = stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`--scope classic ${pasted}`) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain("ALREADY");
+      expect(readFileSync(calls, "utf8").trim().split("\n").map((line) => JSON.parse(line)))
+        .toEqual([["next", "--scope", "classic", ...words]]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("forwarded, it is quoted so the call carries the words and runs none of them", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(pasted) }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      const call = "engine orchestrate next fix the '`parse`' step so the totals add up";
+      expect(r.stdout).toContain(`${call}\n`);
+      const latch = join(dir, "aidlc", ".aidlc-forwarding-latch");
+      expect(JSON.parse(readFileSync(latch, "utf8")).args).toEqual(words);
+      const guard = (command: string) => runAdapter(dir, "guard-tool-call", {
+        cwd: dir, tool_name: "execute_bash", tool_input: { command },
+      });
+      const cut = guard("bun .kiro/tools/aidlc.ts engine orchestrate next fix the");
+      expect(cut.code).toBe(2);
+      expect(cut.stderr).toContain(call);
+      expect(guard(`bun .kiro/tools/aidlc.ts ${call}`).code).toBe(0);
+      // A word with an apostrophe takes double quotes, literal in sh and PowerShell alike.
+      const apostrophe = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded(`say "it's done" now; really`) }, [], env);
+      const quoted = `engine orchestrate next say "it's done" 'now;' really`;
+      expect(apostrophe.stdout).toContain(`${quoted}\n`);
+      expect(guard(`bun .kiro/tools/aidlc.ts ${quoted}`).code).toBe(0);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("a bare `/aidlc` dispatches nothing, and no `--stage <slug>`", () => {
     const dir = scratchProject(true);
     try {

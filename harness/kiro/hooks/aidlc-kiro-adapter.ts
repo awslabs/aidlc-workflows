@@ -326,26 +326,60 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
 // typed `/aidlc ...` text. The fallback recovers argv directly from that raw
 // shape.
+// The step-1 line of the expanded body, from its opening words to its closing
+// ones: what lies between its `next` and the closing words is exactly what the
+// person typed, newlines and backticks included.
+const NEXT_ANCHOR_LINE = "printed by running `";
+const NEXT_ANCHOR_CLOSE = "` bare (no shell capture, no pipe)";
+
+function anchoredArgs(prompt: string): string | null {
+  const close = prompt.indexOf(NEXT_ANCHOR_CLOSE);
+  const line = close < 0 ? -1 : prompt.lastIndexOf(NEXT_ANCHOR_LINE, close);
+  if (line < 0) return null;
+  const open = /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?/.exec(prompt.slice(line, close));
+  return open === null ? null : prompt.slice(line + open.index + open[0].length, close);
+}
+
+// The engine call the agent is told to run: the typed words as they are, or,
+// when they hold a line break or a character a shell would act on, each
+// argument quoted, so the call carries words and never runs any. Single quotes
+// are literal in sh and in PowerShell alike; a word with an apostrophe takes
+// double quotes when nothing in it expands there.
+function forwardedArgs(raw: string, args: string[]): string {
+  if (!/[\r\n`$;&|<>()]/.test(raw)) return raw;
+  const quote = (arg: string): string => {
+    if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(arg)) return arg;
+    if (!arg.includes("'")) return `'${arg}'`;
+    if (!/["`$\\]/.test(arg)) return `"${arg}"`;
+    return `'${arg.replaceAll("'", "''")}'`;
+  };
+  return args.map(quote).join(" ");
+}
+
 function extractNextInvocation(
   prompt: string,
-): { raw: string; args: string[]; typed: string } {
-  // The args end at the anchor's closing backtick. Accept the native
-  // dispatcher anchor and the legacy filename shape. A body with a single
-  // `next` span has no example to mistake for it.
+): { raw: string; args: string[]; typed: string; forwarded: string } {
+  // The step-1 line's own boundary first; then the anchor's closing backtick,
+  // in the native dispatcher or the legacy filename shape. A body with a
+  // single `next` span has no example to mistake for it.
+  const payload = anchoredArgs(prompt);
   const spans = [...prompt.matchAll(/(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)`/g)];
-  const anchor = prompt.match(
+  const anchor = payload !== null ? null : prompt.match(
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)` bare\b/,
   ) ?? (spans.length === 1 ? spans[0] : null);
-  const rawInvocation = anchor
+  const rawInvocation = payload ?? (anchor
     ? anchor[1]
-    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
-  if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt };
+    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1]);
+  if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt, forwarded: "" };
   // An anchor Kiro left unexpanded carries no typed args.
   const raw = rawInvocation.trim() === "$ARGUMENTS" ? "" : rawInvocation.trim();
   // What the person typed: the prompt itself, or for an expanded body the
   // `/aidlc` line the body was expanded from.
-  const typed = anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
-  return { raw, args: splitKiroCommandArgs(raw), typed };
+  const typed = payload !== null || anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
+  // A line break inside a quoted argument reads as a space, so the call the
+  // agent runs stays on one line and matches what the guard compares.
+  const args = splitKiroCommandArgs(raw).map((arg) => arg.replace(/\s*[\r\n]+\s*/g, " "));
+  return { raw, args, typed, forwarded: forwardedArgs(raw, args) };
 }
 
 /** The text of every context line a core hook printed, as plain stdout for Kiro. */
@@ -520,7 +554,7 @@ if (target === "verb-intercept") {
           join(cwd, "aidlc", ".aidlc-forwarding-latch"),
           JSON.stringify({
             turn,
-            raw: invocation.raw,
+            raw: invocation.forwarded,
             args,
           }) + "\n",
           "utf-8",
@@ -530,7 +564,7 @@ if (target === "verb-intercept") {
         preface +
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
-          `{{INVOKE}} engine orchestrate next ${invocation.raw}\n`,
+          `{{INVOKE}} engine orchestrate next ${invocation.forwarded}\n`,
       );
     } else if (preface) {
       process.stdout.write(preface);
