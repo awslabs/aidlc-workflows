@@ -12153,11 +12153,20 @@ function emitTypedResumeChoice(
   let choice = flags.choice?.trim().toLowerCase() ?? "";
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
   let named = flags.target;
-  // "Redo <stage>": the current stage is a plain redo, another stage is the
-  // jump back to it, which works out the direction.
+  // "Redo <stage>": the current stage is a plain redo, a stage that already
+  // ran is the jump back to it, and a stage that has not run yet has nothing
+  // to redo.
   if (choice === "redo" && named !== undefined) {
-    if (named.trim() === slug) named = undefined;
-    else choice = "jump";
+    const wanted = named.trim();
+    if (wanted === slug) named = undefined;
+    else if (parseCheckboxes(stateContent).some((box) => box.slug === wanted && box.state === "completed")) choice = "jump";
+    else {
+      emit(errorDirective(
+        `${nodeForSlug(wanted) ? `"${wanted}" has not run yet, so there is nothing to redo` : `No stage is named "${wanted}"`}. ` +
+          "Tell the person, and ask whether they want to jump there or redo the current stage.",
+      ));
+      return;
+    }
   }
   if (named !== undefined && choice !== "jump") {
     emit(errorDirective("--target goes only with --choice jump: it names the stage to jump to."));
@@ -12194,8 +12203,14 @@ function emitTypedResumeChoice(
     // step the walk is on, as a jump back to it would.
     const unitStage = getField(stateContent, "Unit Stage")?.trim();
     const step = unitStage && nodeForSlug(unitStage) ? unitStage : slug;
+    if (nodeForSlug(step) === undefined) {
+      emit(errorDirective(
+        `This workflow's current stage is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
+      ));
+      return;
+    }
     emit(printDirective(
-      `Redo accepted. Run \`next --stage ${step}${units}\`; it reopens that step for the Units named and says plainly if it cannot.`,
+      `Redo accepted. Run \`next --stage ${shellArg(step)}${units}\`; it reopens that step for the Units named and says plainly if it cannot.`,
     ));
     return;
   }

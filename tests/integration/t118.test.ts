@@ -416,7 +416,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(r.message).not.toContain("touch pwned");
     }
     writeFileSync(statePath(p), state.replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation$(touch pwned)"), "utf-8");
-    for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
+    for (const r of [
+      report("--choice", "redo"),
+      report("--user-input", "2"),
+      report("--choice", "redo", "--unit", "beta"),
+      report("--choice", "redo", "--every-unit"),
+    ]) {
       expect(r.kind).toBe("error");
       expect(r.message).not.toContain("touch pwned");
     }
@@ -465,13 +470,19 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(wrong.message).toContain('Unknown --choice "sideways"');
 
     // "Redo <stage>" never drops the stage it names: the current stage is a
-    // plain redo, another stage is the jump back to it.
+    // plain redo, a stage that ran is the jump back to it, and a stage that has
+    // not run has nothing to redo.
     const redoHere = report("--choice", "redo", "--target", "code-generation");
     expect(redoHere.kind).toBe("print");
     expect(redoHere.message).toContain("--direction redo");
-    const redoThere = report("--choice", "redo", "--target", "requirements-analysis");
+    const redoThere = report("--choice", "redo", "--target", "market-research");
     expect(redoThere.kind).toBe("print");
-    expect(redoThere.message).toContain("Run `next --stage requirements-analysis`");
+    expect(redoThere.message).toContain("Run `next --stage market-research`");
+    for (const notRun of ["requirements-analysis", "build-and-test"]) {
+      const r = report("--choice", "redo", "--target", notRun);
+      expect(r.kind).toBe("error");
+      expect(r.message).toContain(`"${notRun}" has not run yet, so there is nothing to redo`);
+    }
     // The choice alone is enough; the person's words are not needed in the command.
     expect(report("--choice", "resume").message).toContain("Re-run `next`");
 
