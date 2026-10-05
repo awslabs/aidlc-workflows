@@ -7355,6 +7355,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personCheckSwitchAllowed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:personLineHeard",
       "minMechanism": "none",
       "coveredBy": [

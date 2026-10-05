@@ -872,6 +872,16 @@ describe("t342 Construction checkpoint routing", () => {
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(refused.status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
+    // A presence bypass skips the presence check, never the unattended rule.
+    const bypassed = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), "set-construction-checkpoints", "disabled", "--project-dir", p,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      env: { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    });
+    expect(bypassed.status).not.toBe(0);
+    expect(`${bypassed.stdout}${bypassed.stderr}`).toContain("An unattended run does not change");
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a choice for another pending decision cannot authorize policy", () => {

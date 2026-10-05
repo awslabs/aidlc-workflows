@@ -1,5 +1,5 @@
 // covers: hook:aidlc-plan-approval-guard, audit:PLAN_APPROVAL_BLOCKED
-// covers: function:parseGuardRestartContinuationCommand, function:personAskedSinceGate
+// covers: function:parseGuardRestartContinuationCommand, function:personAskedSinceGate, function:personCheckSwitchAllowed
 //
 // t265 - code-generation's plan-before-generation ordering, enforced
 // deterministically (issue: the plan was generated AFTER the code, beside
@@ -76,6 +76,7 @@ import {
   setActiveIntentCursor,
   stateDigest,
   workspaceSourceFingerprint,
+  personCheckSwitchAllowed,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -1679,6 +1680,11 @@ describe("t265b hook lifecycle", () => {
       for (const args of off.filter((item) => !item.includes("plan-approval"))) {
         for (const command of spellings(args)) expect(code(command, { AIDLC_UNATTENDED: "1" }), command).toBe(2);
       }
+      // The shared rule hosts use for their own confirmation reads the same table.
+      expect(personCheckSwitchAllowed(proj, "guard.review-freeze", "off")).toBe(true);
+      expect(personCheckSwitchAllowed(proj, "plan-approval", "off")).toBe(true);
+      expect(personCheckSwitchAllowed(proj, "depth", "Minimal")).toBe(false);
+      expect(personCheckSwitchAllowed(proj, "guard.human-presence", "off")).toBe(false);
       // Only the switch alone: another value, another key, or anything joined to it is not.
       for (const command of [
         "aidlc engine config set guard.review-freeze off --force",

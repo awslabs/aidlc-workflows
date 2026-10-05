@@ -1200,7 +1200,13 @@ function emitConstructionPolicySet(
 // at an older policy question. Returns the words of the turn that asked, for
 // the record, or null.
 function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): string | null {
-  if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction" || humanPresenceGuardDisabled()) return null;
+  if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
+  // An unattended run never changes it on its own, whatever presence bypass is
+  // in force: only a choice the person recorded earlier counts there.
+  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value) !== "receipt") {
+    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
+  }
+  if (humanPresenceGuardDisabled()) return null;
   const authority = constructionPolicyChangeAuthority(pd, content, field, value);
   if (authority === null) {
     error(

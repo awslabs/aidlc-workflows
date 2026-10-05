@@ -144,6 +144,7 @@ export function stateFilePathForSelection(projectDir: string): string {
 }
 export function humanActedSinceGate(): boolean { return process.env.T250_HUMAN_ACTED === "1"; }
 export function constructionPolicyChangeAllowed(_projectDir: string, field: string, value: string): boolean { return process.env.T250_POLICY_RECEIPT === field + "=" + value; }
+export function personCheckSwitchAllowed(_projectDir: string, key: string, value: string): boolean { return (process.env.T250_CHECK_SWITCH ?? "").split(",").includes(key + "=" + value); }
 export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status") || (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")); }
 export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
@@ -1948,6 +1949,30 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
       }
       // Autonomy has no recorded-choice receipt to bind to, so it keeps the prompt.
       expect(decision("aidlc engine bolt set-autonomy --mode autonomous", "Construction Checkpoints=disabled")).toBeUndefined();
+    } finally {
+      s.cleanup();
+    }
+  });
+
+  test("27l: a check the person asked to switch runs click-free; any other setting keeps the prompt", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, allowed?: string) =>
+        shellDecision(runAdapter(s, "guard-tool-call", shellCall(command), { T250_CHECK_SWITCH: allowed })).hookSpecificOutput?.permissionDecision;
+      for (const [key, value] of [
+        ["guard.review-freeze", "off"], ["guard.state-transition", "off"], ["guard.reviewer-scope", "off"],
+        ["summary-confirmation", "off"], ["plan-approval", "off"], ["guard-policy", "relaxed"], ["guard-policy", "strict"],
+      ]) {
+        const command = `aidlc engine config set ${key} ${value}`;
+        // The setter would carry it out (on always, off once the person asked): no second confirmation.
+        expect(decision(command, `${key}=${value}`), command).toBe("allow");
+        // Not asked for: the host still asks.
+        expect(decision(command), command).toBeUndefined();
+      }
+      // Another setting, or the switch with anything joined to it, keeps the prompt.
+      expect(decision("aidlc engine config set depth Minimal")).toBeUndefined();
+      expect(decision("aidlc engine config set guard.review-freeze off --global", "guard.review-freeze=off")).toBeUndefined();
     } finally {
       s.cleanup();
     }

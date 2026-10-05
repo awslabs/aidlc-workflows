@@ -55,6 +55,7 @@ import {
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
   writeActiveDirectiveMarker,
+  readSessionIntentHandoff,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
   stateDigest,
@@ -383,12 +384,32 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("1a: stop forwards session identity and allows an exact post-create handoff", () => {
+  test("1a: stop forwards session identity and allows an exact switch handoff", () => {
     const dir = scratchProject(true);
     try {
       const original = readIntentRegistry(dir)[0];
       const created = createIntent(dir, "new-work", "default", "bugfix");
       const sessionId = "kiro-handoff-session";
+      writeSessionIntentUuid(dir, sessionId, created.uuid);
+      writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid, "switch");
+
+      const r = runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop as Record<string, unknown>,
+        session_id: sessionId,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a1: new work created beside other work carries on: the stop right after creation is pushed on", () => {
+    const dir = scratchProject(true);
+    try {
+      const original = readIntentRegistry(dir)[0];
+      const created = createIntent(dir, "new-work", "default", "bugfix");
+      const sessionId = "kiro-create-session";
       writeSessionIntentUuid(dir, sessionId, created.uuid);
       writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
 
@@ -397,7 +418,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         session_id: sessionId,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe("");
+      expect((JSON.parse(r.stdout) as { decision?: string }).decision).toBe("block");
+      // The receipt is spent either way.
+      expect(readSessionIntentHandoff(dir, sessionId)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

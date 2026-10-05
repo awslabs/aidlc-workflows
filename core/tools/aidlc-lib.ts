@@ -11006,6 +11006,28 @@ export function personAskedSinceGate(projectDir: string): boolean {
   return process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true });
 }
 
+// The person's checks a setter switches for this piece of work, and the values
+// that turn each one on (only adding a stop) or off (the person's call).
+const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[]; off: readonly string[] }>> = {
+  "plan-approval": { on: ["on"], off: ["off"] },
+  "guard.plan-approval": { on: ["on"], off: ["off"] },
+  "summary-confirmation": { on: ["on"], off: ["off"] },
+  "guard.review-freeze": { on: ["on"], off: ["off"] },
+  "guard.state-transition": { on: ["on"], off: ["off"] },
+  "guard.reviewer-scope": { on: ["on"], off: ["off"] },
+  "guard-policy": { on: ["strict"], off: ["relaxed", "off"] },
+};
+
+// Whether `config set <key> <value>` switches one of the person's checks the
+// way the setter would carry it out now: on always, off only once the person
+// asked since the last decision. Hosts that skip their own confirmation for it,
+// and the plan-wait admission, share this one rule.
+export function personCheckSwitchAllowed(projectDir: string, key: string, value: string): boolean {
+  const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;
+  if (values === undefined) return false;
+  return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
+}
+
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label

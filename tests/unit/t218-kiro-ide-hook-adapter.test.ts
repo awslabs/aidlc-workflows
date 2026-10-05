@@ -765,9 +765,11 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         toIntentUuid: createdUuid,
       });
 
+      // The new work carries on in this chat: the stop right after creation
+      // is pushed on into its first stage, and the receipt is spent.
       const stop = runIde(dir, "continue-workflow", null);
       expect(stop.code).toBe(0);
-      expect(stop.stdout.trim()).toBe("");
+      expect((JSON.parse(stop.stdout) as { decision?: string }).decision).toBe("block");
       expect(existsSync(handoffPath)).toBe(false);
 
       const before =
@@ -929,7 +931,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           }),
         );
         expect(stop.code, entry.label).toBe(0);
-        expect(stop.stdout.trim(), entry.label).toBe("");
+        // Session one's new work carries on, so its stop is pushed on; the
+        // receipt it spent proves the hook read session one, not session two.
+        expect((JSON.parse(stop.stdout) as { decision?: string }).decision, entry.label).toBe("block");
         expect(existsSync(handoffPath), entry.label).toBe(false);
       } finally {
         rmSync(dir, { recursive: true, force: true });

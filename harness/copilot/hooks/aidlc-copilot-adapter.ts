@@ -96,6 +96,7 @@ import {
   boundDirectiveMessage,
   claimCopilotCommand,
   constructionPolicyChangeAllowed,
+  personCheckSwitchAllowed,
   humanActedSinceGate,
   type CopilotCommandClaim,
   type CopilotDirectiveMetadata,
@@ -644,7 +645,11 @@ export async function run(
       case "space": return !["", "list", "create"].includes(verb);
       // Onboarding and sync run the extractor the project's harness names.
       case "knowledge": return verb === "onboard" || verb === "sync";
-      case "config": return verb === "set";
+      // One of the person's checks switched as they asked runs click-free when
+      // the setter would carry it out (on always, off once they asked since the
+      // last decision); any other setting keeps the prompt.
+      case "config":
+        return verb === "set" && !(rest.length === 2 && personCheckSwitchAllowed(projectDir, rest[0], rest[1]));
       // Turning Construction checkpoints on or off runs click-free when the
       // setter's own check passes (the person asked for it since the last
       // decision, or chose it); without that it keeps the prompt.

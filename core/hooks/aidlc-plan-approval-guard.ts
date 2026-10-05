@@ -92,6 +92,7 @@ import {
   parseCheckboxes,
   parseStateStageSuffixes,
   personAskedSinceGate,
+  personCheckSwitchAllowed,
   personSpokeSinceGate,
   readActiveDirectiveMarker,
   activeDirectiveOutOfDateReason,
@@ -921,19 +922,10 @@ function recordedSwitchChangeAdmitted(projectDir: string, args: readonly string[
 // waits it passes once they have asked in the chat since the last decision:
 // the setter then records it with their words and says how to undo it. Plan
 // approval itself is admitted beside the other plan-wait prerequisites.
-const CHAT_SWITCHES: Readonly<Record<string, { on: readonly string[]; off: readonly string[] }>> = {
-  "summary-confirmation": { on: ["on"], off: ["off"] },
-  "guard.review-freeze": { on: ["on"], off: ["off"] },
-  "guard.state-transition": { on: ["on"], off: ["off"] },
-  "guard.reviewer-scope": { on: ["on"], off: ["off"] },
-  "guard-policy": { on: ["strict"], off: ["relaxed", "off"] },
-};
-
 function chatSwitchChangeAdmitted(projectDir: string, args: readonly string[]): boolean {
   if (args.length !== 5 || args[0] !== "engine" || args[1] !== "config" || args[2] !== "set") return false;
-  const values = Object.hasOwn(CHAT_SWITCHES, args[3]) ? CHAT_SWITCHES[args[3]] : undefined;
-  if (values === undefined) return false;
-  return values.on.includes(args[4]) || (values.off.includes(args[4]) && personAskedSinceGate(projectDir));
+  if (args[3] === "plan-approval" || args[3] === "guard.plan-approval") return false;
+  return personCheckSwitchAllowed(projectDir, args[3], args[4]);
 }
 
 // How a shell command line is read. Every harness keeps the POSIX reading
