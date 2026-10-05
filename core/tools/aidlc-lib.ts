@@ -24599,6 +24599,13 @@ function touchTurnMarker(projectDir: string, name: string, intent?: string, spac
   }
 }
 
+// A turn mark's stat, read through the same no-symlink path it is written by:
+// a link anywhere on the way reads as no mark.
+function turnMarkerStat(projectDir: string, name: string, intent?: string, space?: string) {
+  const target = recordFileTargetOrThrow(docsRoot(projectDir, intent, space), join(ENGINE_DIR, name));
+  return lstatSync(target, { throwIfNoEntry: false });
+}
+
 function clearTurnMarker(recordRoot: string, relative: string): void {
   try {
     rmSync(recordFileTargetOrThrow(recordRoot, relative), { force: true, recursive: true });
@@ -24650,8 +24657,8 @@ export function markTurnEnd(projectDir: string, endsTurn: boolean, intent?: stri
 // evidence, and the caller falls through to its usual checks.
 export function turnEndIsOpen(projectDir: string, intent?: string, space?: string): boolean {
   try {
-    const endStat = lstatSync(turnEndMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
-    const humanStat = lstatSync(humanTurnMarkerPath(projectDir, intent, space), { throwIfNoEntry: false });
+    const endStat = turnMarkerStat(projectDir, "turn-end", intent, space);
+    const humanStat = turnMarkerStat(projectDir, "human-turn", intent, space);
     if (!endStat?.isFile() || !humanStat?.isFile()) return false;
     return endStat.mtimeMs > humanStat.mtimeMs;
   } catch {
@@ -24701,8 +24708,6 @@ export function turnMarkersShowConversational(
   space?: string,
 ): boolean {
   try {
-    const humanPath = humanTurnMarkerPath(projectDir, intent, space);
-    const enginePath = engineTouchMarkerPath(projectDir, intent, space);
     // Both markers must be present AND be regular files. An absent engine
     // marker is NOT read as "the engine was never touched, therefore chat": it
     // is read as "no evidence", because that is also the shape of a fresh
@@ -24711,8 +24716,8 @@ export function turnMarkersShowConversational(
     // dangling symlink) would otherwise contribute a meaningless mtime to the
     // comparison, and on the engine side a meaningless-but-old mtime reads as
     // "chat" and releases the stop.
-    const humanStat = lstatSync(humanPath, { throwIfNoEntry: false });
-    const engineStat = lstatSync(enginePath, { throwIfNoEntry: false });
+    const humanStat = turnMarkerStat(projectDir, "human-turn", intent, space);
+    const engineStat = turnMarkerStat(projectDir, "engine-touch", intent, space);
     if (!humanStat?.isFile() || !engineStat?.isFile()) return false;
     return humanStat.mtimeMs > engineStat.mtimeMs;
   } catch {

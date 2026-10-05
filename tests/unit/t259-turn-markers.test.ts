@@ -247,6 +247,15 @@ describe("t259 turn-shape markers — the transcript-free tier-3 predicate", () 
     expect(readFileSync(join(outside, "turn-end"), "utf-8")).toBe("keep\n");
     expect(readFileSync(canary, "utf-8")).toBe("keep\n");
     expect(existsSync(join(outside, "human-turn"))).toBe(false);
+    // Marks found through a linked engine folder read as no marks.
+    const now = Date.now() / 1000;
+    writeFileSync(join(outside, "human-turn"), "x\n", "utf-8");
+    writeFileSync(join(outside, "engine-touch"), "x\n", "utf-8");
+    utimesSync(join(outside, "engine-touch"), now - 60, now - 60);
+    utimesSync(join(outside, "human-turn"), now - 30, now - 30);
+    utimesSync(join(outside, "turn-end"), now, now);
+    expect(turnEndIsOpen(other)).toBe(false);
+    expect(turnMarkersShowConversational(other)).toBe(false);
   });
 });
 
