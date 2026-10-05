@@ -49,16 +49,19 @@ import {
   recordAcceptedChanges,
   recordDir,
   recordFileTargetOrThrow,
+  renderChangedPaths,
   renderReviewRequestCommand,
   resolveBoltDag,
   resolveReviewClass,
   resolveWorkflowSelection,
+  restrictSourceListing,
   reviewArtifactFingerprint,
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
   selfAttributedDecisionMarker,
   setField,
   sortAttemptEvents,
+  sourceListingChangedPaths,
   unitLifecycleSnapshot,
   unitMajorConstructionStageSlugs,
   unitSkippedUnits,
@@ -71,6 +74,7 @@ import {
   type AuditShardEvent,
   type BoltDagResolution,
   type FreshReviewReceipts,
+  type SourceClaimModel,
   type UnitLifecycleSnapshot,
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
@@ -296,6 +300,88 @@ interface Snapshot {
   state: string;
   verificationCommand: VerificationCommand | null;
   accepted: AcceptedChange[];
+  /** Each stage's evidence as an approval of the Unit records it. */
+  approvedEvidence: string;
+}
+
+/** One stage's evidence as an approval of the Unit saw it. */
+interface ApprovedStageEvidence {
+  artifact: string;
+  source: string | null;
+  /** The Unit's own claimed paths and their entries, kept when there are few. */
+  files: WorkspaceSourceListing | null;
+  /** The stage's run floor the approval recorded. */
+  floor: string | null;
+}
+
+const APPROVED_FILES_CAP = 50;
+
+// "Approved Evidence" on a GATE_APPROVED row: one JSON line from stage slug to
+// [artifact fingerprint, source fingerprint or null] plus, for a stage with
+// source and at most APPROVED_FILES_CAP claimed paths, an object of those path
+// keys and their listing entries. Null when the row has none or it is unreadable.
+function readApprovedEvidence(block: string): Map<string, ApprovedStageEvidence> | null {
+  const value = auditBlockField(block, "Approved Evidence");
+  if (value === null) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    const floors = JSON.parse(auditBlockField(block, "Run floors") ?? "{}") as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const floorOf = (slug: string): string | null => {
+      const floor = floors !== null && typeof floors === "object" ? (floors as Record<string, unknown>)[slug] : null;
+      return typeof floor === "string" ? floor : null;
+    };
+    const recorded = new Map<string, ApprovedStageEvidence>();
+    for (const [slug, entry] of Object.entries(parsed)) {
+      if (!Array.isArray(entry) || (entry.length !== 2 && entry.length !== 3) || typeof entry[0] !== "string" ||
+        (entry[1] !== null && typeof entry[1] !== "string")) return null;
+      let files: WorkspaceSourceListing | null = null;
+      if (entry.length === 3) {
+        if (entry[2] === null || typeof entry[2] !== "object" || Array.isArray(entry[2])) return null;
+        files = new Map();
+        for (const [key, oid] of Object.entries(entry[2] as Record<string, unknown>)) {
+          if (typeof oid !== "string") return null;
+          files.set(key, oid);
+        }
+      }
+      recorded.set(slug, { artifact: entry[0], source: entry[1], files, floor: floorOf(slug) });
+    }
+    return recorded;
+  } catch {
+    return null;
+  }
+}
+
+// The one change an approved Unit's work made to a stage no review re-checks.
+// Its files are named only from a kept listing that is the approved one: the
+// listing reproduces the approved source fingerprint under the Unit's manifest.
+function approvedWorkChange(
+  slug: string,
+  unit: string,
+  recorded: ApprovedStageEvidence,
+  artifact: string,
+  source: string | null,
+  claimed: { model: SourceClaimModel; sha256: string } | null,
+  listing: WorkspaceSourceListing | null,
+): AcceptedChange {
+  const artifactMoved = recorded.artifact !== artifact;
+  const sourceMoved = recorded.source !== source;
+  const paths = !artifactMoved && sourceMoved && recorded.files !== null && claimed !== null && listing !== null &&
+    unitSourceFingerprint(recorded.files, claimed.model, claimed.sha256) === recorded.source
+    ? sourceListingChangedPaths(recorded.files, restrictSourceListing(listing, claimed.model))
+    : [];
+  const pair = (artifactValue: string, sourceValue: string | null): string =>
+    [artifactMoved ? artifactValue : null, sourceMoved ? sourceValue : null]
+      .filter((value): value is string => value !== null).join(",");
+  return {
+    checkpoint: "construction-unit", stage: slug, unit,
+    changed: paths.length > 0 ? paths : null,
+    recorded: pair(recorded.artifact, recorded.source),
+    current: pair(artifact, source),
+    notice: paths.length > 0
+      ? `${renderChangedPaths(paths)} changed after you approved Unit ${unit}; carrying on.`
+      : `Unit ${unit}'s files changed after you approved it; carrying on.`,
+  };
 }
 
 function locked<T>(
@@ -350,6 +436,19 @@ function snapshot(
   // reads it.
   let accepting: boolean | null = null;
   const acceptsChanges = (): boolean => (accepting ??= guardPolicyAcceptsChanges(projectDir, state));
+  const gate = onlyLatest(rows.filter((row) => {
+    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
+    if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
+    const rowUnit = auditBlockField(row.block, "Unit");
+    if (rowUnit !== null && rowUnit !== unit) return false;
+    if (!stages.some((stage) => stagesInRow(row).includes(stage))) return false;
+    return row.event === "GATE_REJECTED" ||
+      auditBlockField(row.block, "Checkpoint") === checkpointName(kind);
+  }));
+  // What this Unit's latest approval saw, read for a stage no review re-checks.
+  const recordedEvidence = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit
+    ? readApprovedEvidence(gate.block) : null;
+  const approvedEvidence: Record<string, [string | null, string | null] | [string | null, string, Record<string, string>]> = {};
 
   for (const slug of stages) {
     const stage = findStageBySlug(slug);
@@ -394,6 +493,7 @@ function snapshot(
     ) errors.push(`${slug}: current Unit completion evidence is missing or stale.`);
 
     let source: string | null = null;
+    let claimed: { model: SourceClaimModel; sha256: string } | null = null;
     if (stage.workspace_requires) {
       sourceStages++;
       // The manifest reader validates the claim model; independently refuse
@@ -409,11 +509,14 @@ function snapshot(
           errors.push(`${slug}: ${manifest.ok ? "source manifest changed while reading" : manifest.reason}`);
         } else if (listing !== null) {
           source = unitSourceFingerprint(listing, manifest, manifest.rawBytesSha256);
+          claimed = { model: { claims: manifest.claims, prefixes: manifest.prefixes }, sha256: manifest.rawBytesSha256 };
         }
       } catch {
         errors.push(`${slug}: source manifest is missing or unbindable.`);
       }
     }
+    const ownSource = source;
+    let keptFiles: WorkspaceSourceListing | null = null;
     const reviewClass = stage.reviewer
       ? resolveReviewClass(stage.review_class ?? "adversarial", scope, state)
       : "none";
@@ -509,7 +612,29 @@ function snapshot(
           }
         }
       }
+    } else {
+      // No review re-checks this stage: a later change to the work the person
+      // approved, which its Guard Policy accepts, keeps the approved values in
+      // the fingerprint and is said once.
+      const recorded = recordedEvidence?.get(slug);
+      if (
+        recorded && recorded.floor === floor && artifact !== null &&
+        (source !== null) === Boolean(stage.workspace_requires) &&
+        (recorded.source !== null) === (source !== null) &&
+        (recorded.artifact !== artifact || recorded.source !== source) &&
+        acceptsChanges()
+      ) {
+        accepted.push(approvedWorkChange(slug, unit, recorded, artifact, source, claimed, listing));
+        artifact = recorded.artifact;
+        source = recorded.source;
+        keptFiles = recorded.files;
+      }
     }
+    const files = source === null ? null
+      : source === ownSource && claimed && listing ? restrictSourceListing(listing, claimed.model) : keptFiles;
+    approvedEvidence[slug] = files !== null && source !== null && files.size <= APPROVED_FILES_CAP
+      ? [artifact, source, Object.fromEntries(files)]
+      : [artifact, source];
     evidence.push({
       slug, floor, artifact, source, review_class: reviewClass,
       // Receipt presence/currentness is checked above. Re-recording the same
@@ -550,15 +675,6 @@ function snapshot(
     auditBlockField(verification.block, "Command SHA-256") === commandSha256 &&
     auditBlockField(verification.block, "Verified") === "true";
   const verifiedNow = verifiedWith(shared.verificationCommand?.sha256);
-  const gate = onlyLatest(rows.filter((row) => {
-    if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
-    if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
-    const rowUnit = auditBlockField(row.block, "Unit");
-    if (rowUnit !== null && rowUnit !== unit) return false;
-    if (!stages.some((stage) => stagesInRow(row).includes(stage))) return false;
-    return row.event === "GATE_REJECTED" ||
-      auditBlockField(row.block, "Checkpoint") === checkpointName(kind);
-  }));
   const gateApproved = gate?.event === "GATE_APPROVED" &&
     auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
@@ -583,6 +699,7 @@ function snapshot(
     : { verdict: recheckVerdict, approved_before: approvedBefore, changed: recheckChanged };
   return {
     root, rows, state, verificationCommand: shared.verificationCommand, accepted,
+    approvedEvidence: JSON.stringify(approvedEvidence),
     result: {
       kind, unit, stages, fingerprint, verified, approved,
       human_required: humanRequired, enabled, ready, errors,
@@ -603,6 +720,39 @@ export function resolveConstructionCheckpoint(
   evidence?: ConstructionEvidence,
 ): ConstructionCheckpoint {
   return snapshot(projectDir, unit, kind, stateContent, evidence).result;
+}
+
+/**
+ * The changes to approved Units' work that their Guard Policy accepted, for
+ * every approved Unit but `except`. Such a Unit stays approved, so nothing
+ * verifies it again: the next checkpoint's verify and the Construction stage's
+ * own check record these, and recordAcceptedChanges says each once.
+ */
+export function approvedUnitChanges(
+  projectDir: string,
+  stateContent: string,
+  except?: string,
+): { changeControlRead: boolean; acceptedChanges: AcceptedChange[] } {
+  const acceptedChanges: AcceptedChange[] = [];
+  if (!checkpointPolicyEnabled(stateContent)) return { changeControlRead: false, acceptedChanges };
+  let evidence: ConstructionEvidence;
+  try {
+    evidence = loadConstructionEvidence(projectDir, stateContent);
+  } catch {
+    return { changeControlRead: false, acceptedChanges };
+  }
+  if (evidence.dag.state !== "ok") return { changeControlRead: false, acceptedChanges };
+  const order = evidence.dag.batches.flat();
+  for (const unit of evidence.dag.units) {
+    if (unit === except) continue;
+    try {
+      const current = snapshot(projectDir, unit, constructionCheckpointKind(stateContent, unit, order), stateContent, evidence);
+      if (current.result.approved) acceptedChanges.push(...current.accepted);
+    } catch {
+      // Missing, stale or malformed evidence is unfinished work.
+    }
+  }
+  return { changeControlRead: acceptedChanges.length > 0, acceptedChanges };
 }
 
 function requireReady(result: ConstructionCheckpoint): void {
@@ -681,9 +831,11 @@ function verifyOnce(
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     // A change to this Unit's reviewed work that its Guard Policy accepts is
-    // recorded and said once, before the person is asked to approve.
-    if (current.accepted.length > 0) governedGuardPolicy(projectDir, current.state);
-    const notices = recordAcceptedChanges(projectDir, current.accepted);
+    // recorded and said once, before the person is asked to approve; so is one
+    // to another approved Unit's work that no step has said yet.
+    const changes = [...approvedUnitChanges(projectDir, current.state, unit).acceptedChanges, ...current.accepted];
+    if (changes.length > 0) governedGuardPolicy(projectDir, current.state);
+    const notices = recordAcceptedChanges(projectDir, changes);
     const authorization = current.verificationCommand;
     if (!authorization) {
       throw new Error("Construction verification requires the state's command and a matching current VERIFICATION_COMMAND_RECORDED receipt. " + VERIFICATION_COMMAND_RECOVERY);
@@ -896,6 +1048,7 @@ export function approveConstructionCheckpoint(
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...gateFields(projectDir, rechecked.result, rechecked.state),
       "Verification Id": rechecked.result.verification!.id,
+      "Approved Evidence": rechecked.approvedEvidence,
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...(words ? { "Person Reply": words } : {}),

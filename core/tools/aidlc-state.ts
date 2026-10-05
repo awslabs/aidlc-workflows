@@ -215,6 +215,7 @@ import {
 } from "./aidlc-usage.ts";
 import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
 import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -5594,6 +5595,9 @@ function verifyConstructionCheckpointPrecondition(
 ): void {
   if (artifactGuardDisabled(pd)) return;
   const gaps = constructionCheckpointGaps(pd, stateContent, stage);
+  // A change to an approved Unit's work its Guard Policy accepted, made after
+  // its checkpoint and not said yet, is recorded and said once here.
+  if (gaps !== null) observeChangeControl(pd, stateContent, approvedUnitChanges(pd, stateContent));
   if (gaps === null || gaps.length === 0) return;
   refuseStateGuard(pd, stateContent, stage, {
     code: "CONSTRUCTION_CHECKPOINTS_MISSING",

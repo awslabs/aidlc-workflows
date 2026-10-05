@@ -35936,7 +35936,8 @@ export type ChangeCheckpoint =
   | "plan-approval"
   | "review-receipt"
   | "summary-confirmation"
-  | "swarm-batch";
+  | "swarm-batch"
+  | "construction-unit";
 
 /** One accepted input change, ready to become a CHANGE_ACCEPTED row. */
 export interface AcceptedChange {
