@@ -2098,6 +2098,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           'bun .aidlc/tools/aidlc.ts engine log decision --stage requirements-analysis --decision "Q1,Q2,Q3,Q4" --options "Q1: Inclusive end / exclusive+day-after / inclusive-for-total-only / parameterized / Other; Q2: date-only / may-carry-time / mixed-normalize / Other; Q3: filter.ts only / review-others / broader-rework / Other; Q4: regression-test / test+manual / no-new-test / Other"',
           'bun .aidlc/tools/aidlc.ts engine log answer --stage requirements-analysis --details "Q1: A (inclusive end); Q2: A (date-only, plain inclusive comparison); Q3: A (filter.ts only, AssetApi untouched); Q4: A (add targeted regression test, keep existing tests green)"',
         ]) expect(decision(command, shell), `${shell}: ${command}`).toBe("allow");
+        // Lettered options, which Windows would read as a path on drive A:.
+        expect(decision('aidlc engine log decision --stage requirements-analysis --decision "Q3?" --options "A: yes only fix the end,B: also change start,Other"', shell), String(shell)).toBe("allow");
         // A workflow command with such words is claimed, rewritten, and allowed.
         const report = shellDecision(runAdapter(s, "guard-tool-call", { ...shellCall(
           'aidlc engine orchestrate report --stage requirements-analysis --result approved --user-input "yes (the closed range)"',
@@ -2119,6 +2121,14 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           'aidlc engine log answer --stage requirements-analysis --details "100% (of it)"',
           'aidlc engine log answer --stage requirements-analysis --details "a ^& b"',
         ]) expect(decision(command, shell), `${shell}: ${command}`).not.toBe("allow");
+      }
+      // On Windows a word naming a drive that does exist is still a place
+      // outside the project, so it keeps the prompt.
+      const otherDrive = process.platform === "win32"
+        ? "CDEFGHIJKLMNOPQRSTUVWXYZ".split("").find((letter) => letter !== s.projectRoot[0].toUpperCase() && existsSync(`${letter}:\\`))
+        : undefined;
+      if (otherDrive) {
+        expect(decision(`aidlc engine log decision --stage requirements-analysis --decision "Q?" --options "${otherDrive}: elsewhere"`)).toBeUndefined();
       }
     } finally {
       s.cleanup();

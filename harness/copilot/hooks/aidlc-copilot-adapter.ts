@@ -478,6 +478,9 @@ export async function run(
       const root = normalizeDriveLetter(realpathSync(projectDir));
       let probe = resolve(projectDir, terminalPath(value));
       while (!existsSync(probe) && dirname(probe) !== probe) probe = dirname(probe);
+      // On Windows a word such as `A: yes,B: no` reads as a path on drive A:.
+      // A drive that does not exist holds no file, so it reaches nothing.
+      if (/^[A-Za-z]:[\\/]$/.test(probe) && !existsSync(probe)) return true;
       const rel = relative(root, normalizeDriveLetter(realpathSync(probe)));
       return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
     } catch {
