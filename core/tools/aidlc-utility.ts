@@ -12084,6 +12084,12 @@ export async function main(argv: string[]): Promise<void> {
       unitMain(["participate", "--project-dir", projectDir]);
       break;
     case "doctor":
+      // This runs the project's checks. An update check reaches the network and
+      // the machine's update cache, so it goes through the public command, the
+      // one each host asks the person about.
+      if (["check-updates", "release-base-url", "ca-bundle"].some((flag) => flag in flags || missingValueFlags.has(flag))) {
+        die(`An update check runs through \`${aidlcInvocation()} doctor --check-updates\`.`);
+      }
       await (await import("./aidlc-doctor.ts")).main(rawArgs);
       break;
     case "intent-create":

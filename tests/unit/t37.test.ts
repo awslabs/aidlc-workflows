@@ -1055,3 +1055,40 @@ describe("t37 aidlc-lib / aidlc-utility — exports + constants", () => {
     expect(merged).toHaveLength(1);
   });
 });
+
+describe("t37 aidlc-utility doctor: project checks only", () => {
+  test("24: an update check through the utility refuses and contacts no host", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requests++;
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const installRoot = mkdtempSync(join(tmpdir(), "aidlc-t37-install-"));
+    tempDirs.push(installRoot);
+    const p = track(createTestProject());
+    try {
+      for (const flags of [
+        ["--check-updates", "--release-base-url", `http://127.0.0.1:${server.port}/x`],
+        [`--release-base-url=http://127.0.0.1:${server.port}/x`],
+        ["--check-updates", "--ca-bundle", join(p, "bundle.pem")],
+      ]) {
+        const child = Bun.spawn([BUN, UTIL, "doctor", ...flags, "--project-dir", p], {
+          env: { ...process.env, AIDLC_OFFLINE: "0", AIDLC_INSTALL_ROOT: installRoot },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = `${await new Response(child.stdout).text()}${await new Response(child.stderr).text()}`;
+        expect(await child.exited, out).not.toBe(0);
+        expect(out).toContain("doctor --check-updates`");
+      }
+      expect(requests).toBe(0);
+      expect(existsSync(join(installRoot, "update-check.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
