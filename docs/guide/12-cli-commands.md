@@ -1201,8 +1201,14 @@ setter too); update Kiro IDE or start new work from a lower-default scope.
 In either the config or flags-first form, `--intent <name>` and `--space <name>`
 select the piece of work; omitted selectors use the hook payload session's
 workflow selection.
-A nonexistent named intent is refused, and a selection without a state file
-receives: `Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
+A nonexistent named intent is refused. A Guard Policy `relaxed` or `off`
+switch typed before the work exists is kept for the piece of work this chat
+starts next: `Guard Policy relaxed for the piece of work you start now (set by you).`
+Typed with a request, it goes with that request
+(`Guard Policy relaxed for the work you are asking for (set by you).`): new work
+takes it at creation, and continuing open work applies it there; the message
+alone never changes open work. A fence switch with no state file receives:
+`Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
 The `off` form names `off` instead of `relaxed`.
 Hooks run on Windows too, so the typed switch works on every harness that
 forwards the prompt without a setter-side session lookup.
@@ -1240,7 +1246,7 @@ person has arrived since the last decision, refuses with:
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
 is below that default (`relaxed` on an `off` scope is a raise and applies):
-create the piece of work, and the agent runs the setter when the person asks for the lower value. Naming the scope's own default at creation records the scope's
+create the piece of work, and the agent runs the setter when the person asks for the lower value. Typed by the person before the work exists, or in the same message as new work, Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next and answers that request: `intent create --request <id>` for it records `Guard Policy: <value> (set by you)`, with or without the flag, and any open work keeps its own policy. Naming the scope's own default at creation records the scope's
 value without another prompt. A running workflow moving to a scope with a lower
 default takes it when the person asked for the scope change; otherwise it keeps
 its stricter policy and says so in one line. Creation that would lower the

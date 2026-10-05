@@ -2183,7 +2183,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test.each([
     { prompt: "/aidlc --guard-policy relaxed", value: "relaxed" },
-    { prompt: "/aidlc --guard-policy relaxed build the auth service", value: "relaxed" },
     { prompt: "$aidlc --guard-policy relaxed", value: "relaxed" },
     { prompt: "Guard policy off.", value: "off" },
   ])("the human-turn hook applies an affirmative policy prompt immediately: $prompt", ({ prompt, value }) => {
@@ -2209,7 +2208,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test.each([
     {
-      prompt: "/aidlc --guard-policy relaxed build auth --depth impossible",
+      prompt: "/aidlc --guard-policy relaxed --depth impossible",
       error: 'Unknown depth: "impossible". Valid depths: minimal, standard, comprehensive.',
     },
     {
@@ -2249,8 +2248,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   test.each([
     "/aidlc --guard-policy relaxed --depth minimal --sensors off",
-    "/aidlc --guard-policy relaxed build auth --depth minimal --sensors off",
-    "/aidlc --scope classic --guard-policy relaxed build auth --depth minimal --sensors off",
     "/aidlc config set guard-policy relaxed --depth minimal --sensors off",
   ])("a valid typed lowering command applies all companion settings atomically: %s", (prompt) => {
     const { proj, state } = project("enterprise");
@@ -2357,9 +2354,17 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
   });
 
   test.each([
-    { prompt: "/aidlc --guard-policy relaxed", setting: "Guard Policy relaxed" },
-    { prompt: "/aidlc config set guard.state-transition off", setting: "guard.state-transition off" },
-  ])("a typed $setting switch with no state asks the person to create the piece of work first", ({ prompt, setting }) => {
+    {
+      prompt: "/aidlc --guard-policy relaxed",
+      setting: "Guard Policy relaxed",
+      said: "Guard Policy relaxed for the piece of work you start now (set by you).",
+    },
+    {
+      prompt: "/aidlc config set guard.state-transition off",
+      setting: "guard.state-transition off",
+      said: "apply to a piece of work: create it, then type this again.",
+    },
+  ])("a typed $setting switch with no state creates nothing; Guard Policy is kept for the next piece of work", ({ prompt, setting, said }) => {
     const proj = createTestProject();
     tempDirs.push(proj);
     seedAidlcMemory(proj);
@@ -2372,7 +2377,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     const before = records();
     const context = JSON.parse(recordHumanPrompt(proj, prompt));
     expect(context.additionalContext).toContain(setting);
-    expect(context.additionalContext).toContain("apply to a piece of work: create it, then type this again.");
+    expect(context.additionalContext).toContain(said);
     expect(records()).toEqual(before);
     expect(readAuditShardEvents(proj)).toEqual([]);
   });
@@ -2445,7 +2450,7 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(mutationRows(proj)).toEqual(ledger);
     recordHumanPrompt(
       proj,
-      "aidlc --scope classic --guard-policy relaxed build auth --guard.state-transition off",
+      "aidlc --scope classic --guard-policy relaxed --guard.state-transition off",
     );
     const switched = readFileSync(state, "utf-8");
     expect(getField(switched, "Scope")).toBe("enterprise");

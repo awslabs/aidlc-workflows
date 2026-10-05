@@ -416,6 +416,7 @@ import {
 } from "./aidlc-plan-approval-ask.ts";
 import { codeGenerationResumeNarration, promotableTestingPosture } from "./aidlc-testing-posture.ts";
 import {
+  guardPolicyCreationGranted,
   planApprovalOffAtCreation,
   planApprovalEnv,
   planApprovalOffForOpenRequest,
@@ -1867,14 +1868,16 @@ function guardPolicyLowered(flags: ParsedFlags): boolean {
 function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
   const extra: string[] = [];
   if (flags.review) extra.push(`--review ${flags.review}`);
-  if (flags.changeControl && !guardPolicyLowered(flags)) extra.push(`--guard-policy ${flags.changeControl}`);
+  // The human-turn hook keeps a lowered Guard Policy typed with the request
+  // off the open work, so it rides every answer and lands on the work picked.
+  if (flags.changeControl) extra.push(`--guard-policy ${flags.changeControl}`);
   const existingWork = `${carriedCreationFlags(flags)}${extra.length > 0 ? ` ${extra.join(" ")}` : ""}`;
   const stages: string[] = [];
   if (flags.planChanges?.skip.length) stages.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) stages.push(`--add ${flags.planChanges.add.join(",")}`);
   return {
     creation: carriedCreationFlags(flags),
-    newWork: `${existingWork}${guardPolicyLowered(flags) ? ` --guard-policy ${flags.changeControl}` : ""}`,
+    newWork: existingWork,
     existingWork,
     planChanges: stages.length > 0 ? ` ${stages.join(" ")}` : "",
   };
@@ -3625,6 +3628,17 @@ function activeWorkLabel(stateContent: string): string {
 function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question: StoredQuestion): string {
   if (!guardPolicyLowered(flags)) return "";
   const value = flags.changeControl as string;
+  // Typed with the new work, it is that work's: creation applies the words the
+  // human-turn hook kept for this chat.
+  let session: string | null = null;
+  try {
+    session = resolveInvokingSessionId(projectDir);
+  } catch {
+    session = null;
+  }
+  if (guardPolicyCreationGranted(projectDir, session, question.id) === value) {
+    return `Guard Policy ${value} for the new work (set by you).`;
+  }
   const words = value === "off" ? "turn the guard policy off" : "relax the guard policy";
   const target = question.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
   let askedState: string | null = null;

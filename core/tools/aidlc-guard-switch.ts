@@ -603,9 +603,15 @@ export function applyTypedGuardSwitchPrompt(
   if (parsed.settings.some((setting) => setting.key === "plan-approval" && setting.value === "on")) {
     consumePlanApprovalCreationGrant(projectDir, sessionId);
   }
+  const forNewWork: TypedGuardSwitchOutcome[] = [];
   if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
-    const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space, true);
-    if (parsed.switches.length === 0) return outcome;
+    forNewWork.push(grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space, true));
+  }
+  if (parsed.newWorkGuardPolicy !== undefined && parsed.error === null) {
+    forNewWork.push(grantGuardPolicyAtCreation(projectDir, sessionId, parsed.space, parsed.newWorkGuardPolicy, true));
+  }
+  if (forNewWork.length > 0 && parsed.switches.length === 0) {
+    return { applied: forNewWork.every((outcome) => outcome.applied), lines: forNewWork.flatMap((outcome) => outcome.lines) };
   }
   if (parsed.switches.length === 0) return null;
   if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
@@ -632,6 +638,10 @@ export function applyTypedGuardSwitchPrompt(
       // confirmation): the work this chat creates next starts with it off.
       if (guardSwitches.length === 0 && parsed.switches.some((wanted) => wanted.key === "plan-approval")) {
         return grantPlanApprovalOffAtCreation(projectDir, sessionId, space);
+      }
+      const policy = guardSwitches.find((wanted) => wanted.key === "guard-policy");
+      if (policy !== undefined && guardSwitches.length === 1 && (policy.value === "relaxed" || policy.value === "off")) {
+        return grantGuardPolicyAtCreation(projectDir, sessionId, space, policy.value);
       }
       const wanted = guardSwitches[0];
       if (wanted === undefined) return null;
@@ -876,4 +886,78 @@ export function planApprovalOffForOpenRequest(projectDir: string, sessionId: str
 export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
   if (!sessionId) return;
   removePlanApprovalRuntimeRecord(planApprovalCreationGrantPath(projectDir, sessionId));
+}
+
+// Guard Policy relaxed or off, typed by the person with the new work or before
+// any work exists, is theirs for the piece of work this chat creates next, the
+// same way as plan approval off: their words, kept by the human-turn hook, and
+// bound to the request they answered.
+interface GuardPolicyCreationGrant extends PlanApprovalCreationGrant {
+  value: "relaxed" | "off";
+}
+
+function guardPolicyCreationGrantPath(projectDir: string, sessionId: string): string {
+  const segment = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 96);
+  return planApprovalRuntimeFile(projectDir, `guard-policy-at-creation-${segment}.json`);
+}
+
+function grantGuardPolicyAtCreation(
+  projectDir: string,
+  sessionId: string,
+  space: string | null,
+  value: "relaxed" | "off",
+  withDescription = false,
+): TypedGuardSwitchOutcome {
+  try {
+    const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
+      .find((declaration) => declaration.value === "strict");
+    if (memoryStrict !== undefined) return { applied: false, lines: [guardPolicyMemoryStrictRefusal(memoryStrict)] };
+    const grant: GuardPolicyCreationGrant = {
+      version: 1,
+      session: sessionId,
+      value,
+      request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+      recordedAt: isoTimestamp(),
+      ...(withDescription ? { withDescription: true as const } : {}),
+    };
+    writePlanApprovalRuntimeRecord(projectDir, guardPolicyCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
+  } catch (error) {
+    return { applied: false, lines: [errorMessage(error)] };
+  }
+  return {
+    applied: true,
+    lines: [withDescription
+      ? `Guard Policy ${value} for the work you are asking for (set by you).`
+      : `Guard Policy ${value} for the piece of work you start now (set by you).`],
+  };
+}
+
+/** The Guard Policy the person asked for in this chat before this work existed, for the request it answered. */
+export function guardPolicyCreationGranted(
+  projectDir: string,
+  sessionId: string | null,
+  request: string | null = null,
+): "relaxed" | "off" | null {
+  if (!sessionId || request === null || process.env.AIDLC_UNATTENDED === "1") return null;
+  try {
+    const grant = readPlanApprovalRuntimeRecord<GuardPolicyCreationGrant>(
+      guardPolicyCreationGrantPath(projectDir, sessionId),
+      "Guard Policy creation grant",
+    );
+    if (grant?.version !== 1 || grant.session !== sessionId || (grant.value !== "relaxed" && grant.value !== "off")) {
+      return null;
+    }
+    const answered = grant.request ??
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
+    return answered !== null && (answered === request || readQuestion(projectDir, request)?.composedFrom === answered)
+      ? grant.value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Spent by the next piece of work this chat creates, as plan approval off is. */
+export function consumeGuardPolicyCreationGrant(projectDir: string, sessionId: string | null): void {
+  if (!sessionId) return;
+  removePlanApprovalRuntimeRecord(guardPolicyCreationGrantPath(projectDir, sessionId));
 }

@@ -30,7 +30,14 @@ import {
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { legacyPlanApprovalOffNotice, publishPlanApprovalSkip, withBuiltPlanReviews } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 import { planApprovalCreationGranted, resolvePlanApprovalSetting } from "../../dist/claude/.claude/tools/aidlc-guard-switch.ts";
-import { acquireAuditLock, getField, hooksHealthDir, planApprovalRuntimeFile, releaseAuditLock } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  acquireAuditLock,
+  getField,
+  hooksHealthDir,
+  pendingPersonLines,
+  planApprovalRuntimeFile,
+  releaseAuditLock,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   firstFrontQuestionSince,
   latestFrontQuestionId,
@@ -938,6 +945,121 @@ describe("asked before the piece of work exists", () => {
       // Plain text refusal.
     }
     expect(refusal).toContain(`Your team set Guard Policy to strict in ${memory}`);
+  });
+});
+
+// Guard Policy relaxed or off the person types before the work exists, or in
+// the same message as the new work, is that work's: it is not refused, not
+// asked for again, and never lands on other work that is open.
+describe("Guard Policy typed before or with the new work", () => {
+  const requestFor = (proj: string, task: string, flags: string[] = []): { id: string; message: string } => {
+    const printed = runOrchestrateNext(ORCHESTRATE, proj, ["--scope", "enterprise", ...flags, "--", task], {
+      env: { ...process.env, ...CLEAR },
+    });
+    const message = String((printed.directive as { message?: unknown } | null)?.message);
+    const id = /--request ([0-9a-f]{8})/.exec(message);
+    if (id === null) throw new Error(`no request in ${printed.out}`);
+    return { id: id[1], message };
+  };
+  const createdPolicy = (proj: string): string | null => {
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    return getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Guard Policy");
+  };
+
+  test("typed before the work is described, it is set on the next piece of work this chat starts", () => {
+    const proj = emptyProject();
+    expect(reply(proj, "/aidlc --guard-policy off")).toContain(
+      "Guard Policy off for the piece of work you start now (set by you).",
+    );
+    const asked = requestFor(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toBe("off (set by you)");
+  });
+
+  test("typed with the description, creation takes it with no refusal", () => {
+    const proj = emptyProject();
+    expect(reply(proj, "/aidlc --guard-policy relaxed --scope enterprise -- build the export")).toContain(
+      "Guard Policy relaxed for the work you are asking for (set by you).",
+    );
+    const asked = requestFor(proj, "build the export", ["--guard-policy", "relaxed"]);
+    const made = utility(proj, ["intent-create", "--request", asked.id, "--guard-policy", "relaxed"]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toBe("relaxed (set by you)");
+  });
+
+  test("typed with new work while other work is open, the open work keeps its own Guard Policy", () => {
+    const proj = project();
+    setPolicy(proj, "strict");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    expect(reply(proj, "/aidlc --guard-policy off -- add a CSV export")).toContain(
+      "Guard Policy off for the work you are asking for (set by you).",
+    );
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+  });
+
+  test("typed with new work beside open work, the new work it routes to gets it and the person hears so", () => {
+    const proj = emptyProject();
+    expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
+    // The open work's session runs AI-DLC's hooks, which left a heartbeat in its record.
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const open = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    const openBefore = readFileSync(join(intents, open, "aidlc-state.md"), "utf-8");
+    expect(reply(proj, "/aidlc --guard-policy off enterprise fix the parser")).toContain(
+      "Guard Policy off for the work you are asking for (set by you).",
+    );
+    const routing = runOrchestrateNext(
+      ORCHESTRATE, proj, ["--guard-policy", "off", "enterprise", "fix the parser"],
+      { env: { ...process.env, ...CLEAR } },
+    );
+    const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
+    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+    // The person picks new work.
+    const command = String(ask?.new_intent_command);
+    const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+      env: { ...process.env, ...CLEAR },
+    });
+    // The person hears it with the next step the agent speaks from.
+    expect(pendingPersonLines(proj, SESSION).lines.join(" "), routed.out).toContain(
+      "Guard Policy off for the new work (set by you).",
+    );
+    const id = /--request ([0-9a-f]{8})/.exec(String((routed.directive as { message?: unknown } | null)?.message))?.[1];
+    if (id === undefined) throw new Error(`no request in ${routed.out}`);
+    const made = utility(proj, ["intent-create", "--request", id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toBe("off (set by you)");
+    expect(readFileSync(join(intents, open, "aidlc-state.md"), "utf-8")).toBe(openBefore);
+  });
+
+  test("typed with words beside open work, choosing to continue the open work applies it there", () => {
+    const proj = emptyProject();
+    expect(utility(proj, ["intent-create", "--scope", "enterprise"]).status).toBe(0);
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
+    reply(proj, "/aidlc --guard-policy off fix the parser");
+    const routing = runOrchestrateNext(ORCHESTRATE, proj, ["--guard-policy", "off", "--", "fix the parser"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    const ask = routing.directive as { ask_type?: string; continue_command?: string } | null;
+    expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+    const command = String(ask?.continue_command);
+    expect(command).toContain("--guard-policy off");
+    const kept = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+      env: { ...process.env, ...CLEAR },
+    });
+    expect(String((kept.directive as { message?: unknown } | null)?.message), kept.out).toContain("guard-policy off");
+  });
+
+  test("a command with no words of the person's behind it still cannot lower it at creation", () => {
+    const proj = emptyProject();
+    const asked = requestFor(proj, "build the export");
+    const refused = utility(proj, ["intent-create", "--request", asked.id, "--guard-policy", "off"]);
+    expect(refused.status).not.toBe(0);
   });
 });
 

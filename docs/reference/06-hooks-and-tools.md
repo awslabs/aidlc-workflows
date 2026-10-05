@@ -103,7 +103,14 @@ only selectors present in the message; omitted selectors use that session's
 workflow selection.
 A named intent that does not resolve is refused with
 `<intent> is not a piece of work in space <space>.`
-A selection without a state file is refused with
+A Guard Policy `relaxed` or `off` switch with no state file is kept for the
+piece of work this chat starts next
+(`Guard Policy relaxed for the piece of work you start now (set by you).`).
+Typed in the same message as a request, it goes with that request
+(`Guard Policy relaxed for the work you are asking for (set by you).`): new work
+takes it at creation, and an answer that continues open work applies it there.
+The message alone never changes open work's policy.
+A fence switch with no state file is refused with
 `Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
 The requested `off` value or `guard.<fence> off` wording replaces `relaxed` as
 appropriate.
@@ -578,7 +585,7 @@ or `fenceKeyBypassed` permits the fixture/harness-launch presence bypass.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
 value is below the selected scope's default (`relaxed` on an `off` scope is a
 raise and applies): create the piece of work,
-and the agent runs the setter when the person asks for the lower value. Naming
+and the agent runs the setter when the person asks for the lower value. Typed by the person before the work exists, or in the same message as new work, Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next and answers that request: `intent create --request <id>` for it records `Guard Policy: <value> (set by you)`, with or without the flag, and any open work keeps its own policy. Naming
 the scope's own default at creation records the scope's value without another
 prompt. A running workflow keeps its stricter policy when changing to a scope
 with a lower default until the person asks for the lower value.
@@ -1854,7 +1861,7 @@ path for a framework command.
 | `version` | Print the framework version | — |
 | `status` | Read-only status check from `aidlc-state.md`. Surfaces `[?]` / `[R]` gate awareness; team mode appends the pure Team Construction snapshot. | — |
 | `doctor` | Health check: verify hooks, prerequisites, file structure, Kiro IDE ignore sources that hide `.kiro/`, plus local-only team claim stamp/activity/orphan-ref reconciliation (never fetches or releases). | `HEALTH_CHECKED` |
-| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` from chat is refused when it differs from the selected scope's default: create the piece of work, and the agent runs the setter when the person asks for the lower value. Naming the scope's own default is recorded as the scope's value; scope defaults apply without asking. Only `fenceKeyBypassed` permits CLI lowering through the fixture/harness-launch presence bypass, after memory-strict and unattended checks. `--skip <slug,...>` / `--add <slug,...>` apply a composed plan's own stage changes to the scope's grid at creation, written as the state file's EXECUTE/SKIP suffixes with a `Plan: custom, based on <scope>` field; an unknown slug, an initialization stage, a stage on both lists, or a change the scope already makes is refused before any mutation. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
+| `intent-create` | Create a new intent and run the three deterministic Initialization stages. `--space <name>` creates under an existing space and reads that space's memory; `--intent` is refused. Explicit `--guard-policy relaxed\|off` from chat is refused when it differs from the selected scope's default: create the piece of work, and the agent runs the setter when the person asks for the lower value. A value the person typed before the work existed, or with the new work, is recorded for the request it answered. Naming the scope's own default is recorded as the scope's value; scope defaults apply without asking. Only `fenceKeyBypassed` permits CLI lowering through the fixture/harness-launch presence bypass, after memory-strict and unattended checks. `--skip <slug,...>` / `--add <slug,...>` apply a composed plan's own stage changes to the scope's grid at creation, written as the state file's EXECUTE/SKIP suffixes with a `Plan: custom, based on <scope>` field; an unknown slug, an initialization stage, a stage on both lists, or a change the scope already makes is refused before any mutation. | `WORKFLOW_STARTED`, `PHASE_STARTED`, `PHASE_SKIPPED`, `STAGE_STARTED`, `STAGE_COMPLETED`, `WORKSPACE_*`, and the init-to-first-post-init phase hand-off events |
 | `init` | Transition error only in this release; start work by describing what to build so the engine routes to `intent-create`. | none |
 | `intent [name]` | List intents (`--json`; `--all` includes archived) or switch the active-intent cursor. Normally routed from `/aidlc intent [name]`. | — |
 | `intent archive <name> [--reason <text>]` | Retire an in-flight or completed intent: registry row `archived`, state `Status: Archived` (prior Status kept in `Archived From`), record dir, audit shards, and Bolt worktrees preserved, default listing hides it. Normally routed from `/aidlc intent archive <name>`. | `WORKFLOW_ARCHIVED` |

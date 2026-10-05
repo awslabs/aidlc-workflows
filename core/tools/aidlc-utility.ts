@@ -45,7 +45,9 @@ import {
   applyReviewOverride,
   CONFIG_KEYS,
   type ConfigKey,
+  consumeGuardPolicyCreationGrant,
   consumePlanApprovalCreationGrant,
+  guardPolicyCreationGranted,
   formatPlanApprovalSetting,
   type IntentSettingsRequest,
   parseReviewOverride,
@@ -7649,8 +7651,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // Naming the scope's own default is not a lowering: the same creation without
   // the flag would carry that value from the scope, so it is recorded that way.
   const scopeDefaultPolicy = scopeDefinitionGuardPolicy(loadScopeMapping()[scope]);
+  // Guard Policy relaxed or off the person typed in this chat with this work,
+  // or before it existed: the human-turn hook kept their words for it.
+  const guardPolicyAsked = preflightMemoryStrict === null
+    ? guardPolicyCreationGranted(projectDir, initialSelection.sessionId, questionId ?? null) : null;
+  consumeGuardPolicyCreationGrant(projectDir, initialSelection.sessionId);
+  const wantedChangeControl = flaggedChangeControl ?? guardPolicyAsked;
+  const guardPolicySetByPerson = guardPolicyAsked !== null && wantedChangeControl === guardPolicyAsked;
   const requestedChangeControl =
-    flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
+    wantedChangeControl !== "strict" && wantedChangeControl === scopeDefaultPolicy ? null : wantedChangeControl;
   // Plan approval off is the person's move too. Naming the scope's own default
   // is not a lowering; a memory-held strict Guard Policy keeps it on for everyone.
   // When the person asked for it off in this chat before the work existed (the
@@ -7677,7 +7686,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // Only a value below the scope default lowers fences: relaxed on an off scope raises them.
   if (
     requestedChangeControl !== null && requestedChangeControl !== "strict" &&
-    !guardPolicyAtLeast(requestedChangeControl, scopeDefaultPolicy)
+    !guardPolicyAtLeast(requestedChangeControl, scopeDefaultPolicy) && !guardPolicySetByPerson
   ) {
     const wanted: GuardSwitch = { key: "guard-policy", value: requestedChangeControl };
     // An unattended driver never lowers fences, including a recorded presence bypass.

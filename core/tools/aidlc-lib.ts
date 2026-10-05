@@ -36526,6 +36526,8 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   error: string | null;
   /** `--plan-approval off` typed as a flag of the new work the message describes. */
   newWorkPlanApprovalOff?: true;
+  /** `--guard-policy relaxed|off` typed as a flag of the new work the message describes. */
+  newWorkGuardPolicy?: "relaxed" | "off";
   /** The plain-words switch asked as a question ("skip plan approval?"). */
   asked?: true;
 } {
@@ -36682,6 +36684,14 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
       settings.delete(ceremony);
     }
   }
+  // Guard Policy typed with the new work is for that work, never for the work
+  // open now: creation honors it for the piece of work this chat creates next.
+  const typedPolicy = settings.get("guard-policy");
+  const newWorkGuardPolicy = described && (typedPolicy === "relaxed" || typedPolicy === "off") ? typedPolicy : undefined;
+  if (newWorkGuardPolicy !== undefined) {
+    switches.delete("guard-policy");
+    settings.delete("guard-policy");
+  }
   return {
     switches: [...switches.values()],
     settings: [...settings].map(([key, value]) => ({ key, value })),
@@ -36690,6 +36700,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     scope,
     error,
     ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
+    ...(newWorkGuardPolicy ? { newWorkGuardPolicy } : {}),
   };
 }
 
