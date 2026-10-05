@@ -539,9 +539,14 @@ export interface ComposedScopeRecord {
   stages: Record<string, "EXECUTE" | "SKIP">;
 }
 
-// A name read back from a record becomes part of a file name, so it has to be
-// one plain part of one: no folder separators.
-const NOT_A_FILE_NAME_PART = /[\\/\0]/;
+// A scope name read back from a record, a scope file, or the grid becomes part
+// of file names and of the commands the engine prints, so it is letters,
+// digits, dots, underscores, and hyphens only.
+const SCOPE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function isScopeName(name: string): boolean {
+  return SCOPE_NAME.test(name);
+}
 
 /** `file` inside `dir`, or a throw when the joined path would land anywhere else. */
 function fileInside(dir: string, file: string): string {
@@ -566,9 +571,9 @@ export function parseComposedScopeRecord(
   if (!name) {
     throw new Error(`Composed scope record ${filePath} missing required frontmatter: name`);
   }
-  if (NOT_A_FILE_NAME_PART.test(name)) {
+  if (!isScopeName(name)) {
     throw new Error(
-      `Composed scope record ${filePath} has a / or \\ in its name. Rename the scope in its frontmatter without it.`,
+      `Composed scope record ${filePath} has a name a scope cannot have. Rename it in the record's frontmatter to letters, digits, dots, underscores, and hyphens only.`,
     );
   }
   // Exactly one sentinel pair, or refuse. Duplicates would make the split
@@ -802,6 +807,7 @@ export function backfillComposedScopeRecords(
   const dir = mutableComposedScopesDir(projectDir);
   const written: string[] = [];
   for (const name of [...gridOnlyNames].sort()) {
+    if (!isScopeName(name)) continue;
     const stages = grid[name]?.stages;
     if (stages === undefined) continue;
     const identityPath = harnessScopeFileFor(projectDir, name);
@@ -2245,7 +2251,7 @@ export function composedFoldBack(
   );
   const gridOnlyNames = new Set(
     [...composedScopeNames(onDiskJson, stockScopeNames)].filter(
-      (name) => installedScopeNames.has(name) && !recordNames.has(name),
+      (name) => isScopeName(name) && installedScopeNames.has(name) && !recordNames.has(name),
     ),
   );
   let onDisk: Record<string, unknown> = {};

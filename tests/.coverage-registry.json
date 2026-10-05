@@ -5568,6 +5568,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isScopeName",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isStopHookProbe",
       "minMechanism": "none",
       "coveredBy": [

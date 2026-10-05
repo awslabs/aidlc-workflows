@@ -1,4 +1,4 @@
-// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack
+// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:isScopeName
 //
 // t344 - the durable composed-scope RECORD contract.
 //
@@ -30,7 +30,7 @@
 // directly against literal inputs. No temp project, no env seams needed.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,6 +41,7 @@ import {
   renderComposedScopeRecord,
   type ComposedScopeRecord,
 } from "../../core/tools/aidlc-graph.ts";
+import { discoverScopes } from "../../core/tools/aidlc-runner-gen.ts";
 
 const IDENTITY = [
   "---",
@@ -350,12 +351,17 @@ describe("t344 record parse failures name the file and never degrade silently", 
     [
       "a name with a folder separator",
       withRegion("---\nname: x/../../other\n---", '{"stages":{}}'),
-      /has a \/ or \\ in its name/,
+      /has a name a scope cannot have/,
     ],
     [
       "a name with a Windows folder separator",
       withRegion("---\nname: x\\..\\other\n---", '{"stages":{}}'),
-      /has a \/ or \\ in its name/,
+      /has a name a scope cannot have/,
+    ],
+    [
+      "a name with shell characters",
+      withRegion("---\nname: x;id\n---", '{"stages":{}}'),
+      /has a name a scope cannot have/,
     ],
   ];
   for (const [what, body, diagnostic] of cases) {
@@ -367,6 +373,11 @@ describe("t344 record parse failures name the file and never degrade silently", 
       );
     });
   }
+
+  test("a name with capitals, underscores, or dots still parses", () => {
+    const body = withRegion("---\nname: Lean_Feature.v2\n---", '{"stages":{}}');
+    expect(parseComposedScopeRecord(body, "aidlc/scopes/x.md").name).toBe("Lean_Feature.v2");
+  });
 
   test("the missing-region message names the recovery path", () => {
     // The record is committed user work, so aborting compile has to tell the
@@ -480,21 +491,17 @@ describe("t344 composedFoldBack source priority", () => {
   });
 });
 
-describe("t344 a scope file is written only inside its folder", () => {
-  test("a back-fill whose scope name would leave the record folder writes nothing", () => {
+describe("t344 a scope name that is not one is never written or run", () => {
+  function withScopesDirs<T>(run: (root: string, scopes: string, records: string) => T): T {
     const root = mkdtempSync(join(tmpdir(), "t344-inside-"));
     const scopes = join(root, "project", ".claude", "scopes");
     const records = join(root, "project", "aidlc", "scopes");
     const saved = { scopes: process.env.AIDLC_SCOPES_DIR, records: process.env.AIDLC_COMPOSED_SCOPES_DIR };
     try {
       mkdirSync(scopes, { recursive: true });
-      const name = "x/../../../other";
-      writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", `name: ${name}`));
       process.env.AIDLC_SCOPES_DIR = scopes;
       process.env.AIDLC_COMPOSED_SCOPES_DIR = records;
-      expect(() => backfillComposedScopeRecords(join(root, "project"), new Set([name]), JSON.stringify({ [name]: { stages: STAGES } })))
-        .toThrow(/is not inside/);
-      expect(existsSync(join(root, "project", "other.md"))).toBe(false);
+      return run(root, scopes, records);
     } finally {
       if (saved.scopes === undefined) delete process.env.AIDLC_SCOPES_DIR;
       else process.env.AIDLC_SCOPES_DIR = saved.scopes;
@@ -502,5 +509,29 @@ describe("t344 a scope file is written only inside its folder", () => {
       else process.env.AIDLC_COMPOSED_SCOPES_DIR = saved.records;
       rmSync(root, { recursive: true, force: true });
     }
+  }
+
+  for (const name of ["x/../../../other", "x/../other", "x;id"]) {
+    test(`a back-fill for the grid-only name ${JSON.stringify(name)} writes no record`, () => {
+      withScopesDirs((root, scopes, records) => {
+        writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", `name: ${name}`));
+        const written = backfillComposedScopeRecords(join(root, "project"), new Set([name]), JSON.stringify({ [name]: { stages: STAGES } }));
+        expect(written).toEqual([]);
+        expect(existsSync(records) ? readdirSync(records) : []).toEqual([]);
+        expect(existsSync(join(root, "project", "other.md"))).toBe(false);
+      });
+    });
+  }
+
+  test("a grid column whose name is not a scope name is not folded back", () => {
+    const r = composedFoldBack({}, JSON.stringify({ "x;id": { stages: STAGES } }), STOCK, new Set(["x;id"]));
+    expect([...r.names]).toEqual([]);
+  });
+
+  test("a scope file whose name is not a scope name gets no runner", () => {
+    withScopesDirs((_root, scopes) => {
+      writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", "name: x;id\nrunner: true"));
+      expect(() => discoverScopes()).toThrow(/has a name a scope cannot have/);
+    });
   });
 });
