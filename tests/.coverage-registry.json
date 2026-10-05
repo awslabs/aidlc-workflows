@@ -706,6 +706,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-scope-run-moves-second-review.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
@@ -1690,6 +1694,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-guard-operation-contract.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:aidlcEntryWords",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-aidlc-entry-reply.test.ts",
           "mechanism": "none"
         }
       ],
@@ -13437,6 +13453,10 @@
         },
         {
           "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-moves-second-review.test.ts",
           "mechanism": "none"
         },
         {
