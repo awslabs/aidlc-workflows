@@ -3938,6 +3938,14 @@ describe("t243 project initialization", () => {
       `To bring it to ${NEXT_VERSION}: \`bun .claude/tools/aidlc.ts config --harness kiro --download\`, then ` +
         `\`bun .claude/tools/aidlc.ts config --harness kiro --from ${quoteCommandArgument(next)}\`.`,
     );
+    // The same goes for the plain command.
+    rmSync(join(project, ".claude", "tools", "data", "aidlc-manifest.json"));
+    const plainUnrecorded = run(INIT, ["config", "--project-dir", project, "--from", KIRO_RELEASES[0], "--harness", "kiro", "--yes"], project, runtimeEnv);
+    expect(plainUnrecorded.status, plainUnrecorded.stdout + plainUnrecorded.stderr).toBe(0);
+    expect(plainUnrecorded.stdout).toContain(
+      `To bring it to ${AIDLC_VERSION}: \`bun .kiro/tools/aidlc.ts config --harness claude --download\`, then ` +
+        "`bun .kiro/tools/aidlc.ts config --harness claude`.",
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("exact legacy root signatures are adopted", () => {

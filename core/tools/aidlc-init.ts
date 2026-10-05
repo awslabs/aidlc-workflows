@@ -9606,7 +9606,7 @@ function treesLeftBehindLines(
       ? `${command(`${harness} --download`)}, then `
       : "";
     const step = plain.length === 1 && plain[0].stamp.frameworkVersion === written.version
-      ? command(harness)
+      ? `${record}${command(harness)}`
       : source.from && source.holds?.includes(tree.distribution) && printableArgs([source.from])
       ? `${record}${command(`${harness} --from ${quoteCommandArgument(source.from)}`)}`
       : source.copyChannel
