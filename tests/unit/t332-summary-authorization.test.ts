@@ -705,6 +705,34 @@ describe("t332 stage-level questions for per-unit stages", () => {
     },
   );
 
+  test("a Unit's confirmed summary stays confirmed after the person switches back to stage by stage", () => {
+    const proj = project({ ...target, scope: "infra", unitsGeneration: "EXECUTE" });
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "## Current Status", "- **Construction Iteration**: unit-major\n\n## Current Status",
+    ));
+    const unitTarget = { ...target, unit: "api" };
+    const perUnit = paths(proj, unitTarget);
+    const unitId = confirm(proj, perUnit.questions, "Looks correct", undefined, unitTarget);
+    writeArtifact(proj, perUnit.artifact, "# Confirmed Unit NFR output\n");
+    expect(auditBlockField(artifactWrites(proj).at(-1)!.block, SUMMARY_AUTHORIZATION_FIELD)).toBe(unitId as string);
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: true, required: true });
+    // The unit-major walk records the stage's start late, then the person
+    // says "go stage by stage": that start is no new attempt for the Unit.
+    appendAuditEntry("STAGE_STARTED", { Stage: NFR_STAGE }, proj);
+    appendAuditEntry("CONSTRUCTION_POLICY_SET", {
+      Field: "Construction Iteration", Value: "stage-major", "Previous Value": "unit-major",
+      "Construction Iteration": "stage-major", "Construction Checkpoints": "unset",
+    }, proj);
+    writeFileSync(file, readFileSync(file, "utf-8").replace(
+      "- **Construction Iteration**: unit-major", "- **Construction Iteration**: stage-major",
+    ));
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: true, required: true });
+    // A start after the switch is a real restart: the Unit confirms again.
+    appendAuditEntry("STAGE_STARTED", { Stage: NFR_STAGE }, proj);
+    expect(evidence(proj, unitTarget)).toMatchObject({ ok: false });
+  });
+
   test("infra with an EXECUTE override requires the specified Unit's own questions and confirmation", () => {
     const proj = project({ ...target, scope: "infra", unitsGeneration: "EXECUTE" });
     const stageLevel = paths(proj, target);

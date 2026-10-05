@@ -1540,6 +1540,33 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(reviewed().get("alpha")).toBe("READY");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("a Unit reviewed under one Unit at a time is not reviewed again after the person switches back", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    reviewReady(p, "nfr-design", "alpha");
+    const nfr = findStageBySlug("nfr-design")!;
+    const reviewed = () => freshReviewReceipts(p, readFileSync(seededStateFile(p), "utf-8"), nfr).unitVerdicts;
+    expect(reviewed().get("alpha")).toBe("READY");
+    // The unit-major walk records the stage's start late; then the person says
+    // "turn checkpoints off and go stage by stage".
+    appendAuditEntry("STAGE_STARTED", { Stage: "nfr-design" }, p);
+    appendAuditEntry("CONSTRUCTION_POLICY_SET", {
+      Field: "Construction Checkpoints", Value: "disabled", "Previous Value": "enabled",
+      "Construction Iteration": "unit-major", "Construction Checkpoints": "disabled",
+    }, p);
+    appendAuditEntry("CONSTRUCTION_POLICY_SET", {
+      Field: "Construction Iteration", Value: "stage-major", "Previous Value": "unit-major",
+      "Construction Iteration": "stage-major", "Construction Checkpoints": "disabled",
+    }, p);
+    const file = seededStateFile(p);
+    writeFileSync(file, setField(setField(readFileSync(file, "utf-8"),
+      "Construction Checkpoints", "disabled"), "Construction Iteration", "stage-major"));
+    expect(reviewed().get("alpha")).toBe("READY");
+    // A start after the switch is a real restart of the stage.
+    appendAuditEntry("STAGE_STARTED", { Stage: "nfr-design" }, p);
+    expect(reviewed().get("alpha")).not.toBe("READY");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // Every Unit built and approved, and the stage gates approved in order until
   // Current Stage reaches `through`, the later per-unit gate.
   function gatesApprovedUntil(through: string, options: Options = {}): string {

@@ -11981,7 +11981,9 @@ function summaryFlowStartedInAttempt(
   const events = readAuditShardEvents(projectDir);
   const unitMajor = isPerUnitStage(stage) &&
     getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major";
-  const floors = summaryAttemptFloors(events, stage.slug, options.workflow, unitMajor);
+  const floors = summaryAttemptFloors(
+    events, stage.slug, options.workflow, unitMajor, isPerUnitStage(stage) ? events : undefined,
+  );
   return events.some((entry) => {
     if (entry.event !== "DECISION_RECORDED" && entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
     if (auditBlockField(entry.block, "Stage") !== stage.slug ||
@@ -12048,13 +12050,18 @@ function latestEventFrontier(candidates: AuditShardEvent[]): AuditShardEvent[] {
  * The attempt boundary the summary confirmation binds to: for an isolated run
  * its last STAGE_COMPLETED, otherwise the newest WORKFLOW_STARTED, STAGE_JUMPED,
  * or (stage-major) STAGE_STARTED for the stage. Empty when the ledger has none.
+ * With `policyRows` (every audit row, for a per-Unit stage), a stage start
+ * recorded while unit-major flooring was in force is no boundary after a switch
+ * back, so a Unit confirmed then is not asked again.
  */
 export function summaryAttemptFloors(
   events: AuditShardEvent[],
   stageSlug: string,
   workflow: string | undefined,
   unitMajor: boolean,
+  policyRows?: readonly AuditShardEvent[],
 ): AuditShardEvent[] {
+  const unitFloored = unitMajor || policyRows === undefined ? null : stageStartsUnderUnitFlooring(policyRows);
   const candidates = events.filter((entry) => {
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (workflow !== undefined) {
@@ -12071,7 +12078,7 @@ export function summaryAttemptFloors(
     return (
       auditBlockField(entry.block, "Stage") === stageSlug &&
       entry.event === "STAGE_STARTED" &&
-      !unitMajor
+      !unitMajor && !unitFloored?.has(entry)
     );
   });
   return latestEventFrontier(candidates);
@@ -12629,8 +12636,8 @@ export function checkSummaryConfirmationEvidence(
     );
   }
 
-  const events = readAuditShardEvents(projectDir)
-    .filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
+  const auditRows = readAuditShardEvents(projectDir);
+  const events = auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
   if (events.length === 0) {
     return failure(
       "SUMMARY_RECEIPT_MISSING",
@@ -12677,7 +12684,9 @@ export function checkSummaryConfirmationEvidence(
       getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
       getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
     );
-  const floors = summaryAttemptFloors(events, stage.slug, workflow, unitMajor);
+  const floors = summaryAttemptFloors(
+    events, stage.slug, workflow, unitMajor, isPerUnitStage(stage) ? auditRows : undefined,
+  );
   const afterFloor = (entry: AuditShardEvent): true | false | null => {
     if (floors.length === 0) return true;
     const relations = floors.map((floor): true | false | null => {
@@ -17097,6 +17106,9 @@ export function reviewAttemptWindow(
   // lifecycle floors are per Unit, solo unit-major included (#1411).
   const unitScopedRejections =
     artifactPerUnit && unitScopedLifecycleFloors(stateContent);
+  // A stage start recorded while unit-major flooring was in force is no
+  // boundary after a switch back, so a Unit reviewed then is not reviewed again.
+  const unitFloored = artifactPerUnit && !unitMajor ? stageStartsUnderUnitFlooring(allEvents) : null;
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -17107,7 +17119,7 @@ export function reviewAttemptWindow(
         (event.event === "GATE_REJECTED" &&
           !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
         (event.event === "STAGE_STARTED" &&
-          !unitMajor &&
+          !unitMajor && !unitFloored?.has(event) &&
           !auditBlockField(event.block, "Workflow")?.startsWith(
             "single-stage:",
           ));
@@ -17408,6 +17420,10 @@ export function reviewAttemptAccounting(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const unitScopedRejections =
     stage.for_each === "unit-of-work" && unitScopedLifecycleFloors(stateContent);
+  // As in reviewAttemptWindow: a start recorded under unit-major flooring is no
+  // boundary after a switch back.
+  const unitFloored = stage.for_each === "unit-of-work" && !unitMajor
+    ? stageStartsUnderUnitFlooring(attemptView.allEvents) : null;
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -17515,7 +17531,7 @@ export function reviewAttemptAccounting(
     } else if (
       auditBlockField(entry.block, "Stage") === stage.slug &&
       entry.event === "STAGE_STARTED" &&
-      !unitMajor &&
+      !unitMajor && !unitFloored?.has(entry) &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
     ) {
       const tied = tiedAcrossShards(i);
@@ -32268,7 +32284,8 @@ function stageStartsUnderUnitFlooring(
       before(row, start) && !boundaries.some((boundary) => before(row, boundary) && before(boundary, start));
     const first = !rows.some((other) =>
       other !== start && other.event === "STAGE_STARTED" &&
-      auditBlockField(other.block, "Stage") === slug && opened(other));
+      auditBlockField(other.block, "Stage") === slug &&
+      !auditBlockField(other.block, "Workflow")?.startsWith("single-stage:") && opened(other));
     if (
       first &&
       changes.some((change) => before(change, start) && constructionPolicyFoundUnitMajor(change)) &&
