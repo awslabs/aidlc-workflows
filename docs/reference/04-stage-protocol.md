@@ -1213,7 +1213,14 @@ exception is a terminal receipt invalidated by a later reviewed-output write: th
 first request after stale evidence is exactly one marked recovery request at
 the next ordinal, even when normal adversarial budget remained. Either
 recovery verdict is terminal; a second invalidation requires human reset
-instead of another request. Autonomous Units halt before `finalize` and
+instead of another request. With Construction checkpoints on, a Unit whose
+code or documents changed after their review gets that recovery again each
+time the person approves the Unit, and under `relaxed` and `off`, where such a
+change is accepted, a review of that Unit is the same one recovery. A review
+the person asked for (they spoke since the last decision and since that review
+was last requested) is never refused: the budget and the recovery bound only
+the passes the conductor starts on its own.
+Autonomous Units halt before `finalize` and
 restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
 for stages without a `reviewer` field. See the `reviewer` /

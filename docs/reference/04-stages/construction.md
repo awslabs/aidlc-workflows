@@ -104,7 +104,7 @@ After the per-unit work:
 
 **Route checkpoints before bodies.** A `construction_checkpoint` directive
 verifies and approves existing Unit work; it does not rerun Code Generation.
-When it carries `rereview`, the Unit's code changed since its review: run that
+When it carries `rereview`, the Unit's code or documents changed since their review: run that
 request at once, without asking, then verify and ask the one approval question.
 Only Guard Policy `strict` re-checks: under `relaxed` and `off` there is no
 `rereview`, a change to the Unit's code or documents is accepted with one line,

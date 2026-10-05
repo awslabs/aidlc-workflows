@@ -97,6 +97,7 @@ import {
   governedChangeControl,
   readAuditShardEvents,
   isRequestTurn,
+  personSpokeSinceGate,
   ANSWER_SOURCE_ON_INSTRUCTION,
   unitSkippedUnits,
   readActiveAuditShardEvents,
@@ -2385,6 +2386,30 @@ function handleLink(args: string[]): void {
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
 
+// The person asked for this review: they spoke since the last decision, after
+// the last request for this review. The pass cap and the one recovery bound
+// only the reviews the agent starts on its own.
+function personAskedForReview(
+  pd: string,
+  stage: string,
+  reviewer: string,
+  unit: string | undefined,
+  intent?: string | null,
+  space?: string,
+): boolean {
+  if (!personSpokeSinceGate(pd, { requests: true })) return false;
+  let turn: AuditShardEvent | null = null;
+  let request: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(readAuditShardEvents(pd, intent ?? undefined, space))) {
+    if (isRequestTurn(row)) turn = row;
+    else if (
+      row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Stage") === stage &&
+      auditBlockField(row.block, "Reviewer") === reviewer && (auditBlockField(row.block, "Unit") || undefined) === unit
+    ) request = row;
+  }
+  return turn !== null && (request === null || attemptEventDefinitelyBefore(request, turn));
+}
+
 function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
   return (
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
@@ -2808,11 +2833,10 @@ function handleReview(args: string[]): void {
           single: flags.single === "true",
         })
       : null;
-    // A review of a Unit whose code changed after its review, with checkpoints
-    // on, re-checks that change: it is reviewed, not accepted as a change.
+    // A review of a Unit whose code or documents changed after its review,
+    // with checkpoints on, re-checks that change: it is reviewed, not accepted.
     const recheck = flags.unit !== undefined &&
-      getField(state, "Construction Checkpoints") === "enabled" &&
-      receipts?.unitSourceMoved.has(flags.unit) === true;
+      getField(state, "Construction Checkpoints") === "enabled";
     if (receipts?.changeControlRead || summaryEvidence.changeControlRead) {
       governedChangeControl(pd, state, { intent, space });
       notices.push(...recordAcceptedChanges(pd, [
@@ -2924,18 +2948,22 @@ function handleReview(args: string[]): void {
           receipts?.newestSourceUnit === (flags.unit ?? null);
         const sourceScopeStale =
           sameSourceRecoveryScope && receipts?.sourceStale === true;
+        // A Unit whose reviewed work changed, whether the Guard Policy made its
+        // review stale or accepted the change, gets the same one recovery pass.
         const artifactScopeStale =
           receipts !== null &&
           (flags.unit
-            ? receipts.unitStale.has(flags.unit)
+            ? receipts.unitStale.has(flags.unit) ||
+              receipts.acceptedChanges.some((change) => change.unit === flags.unit)
             : receipts.stageStale);
-        // With Construction checkpoints on, a Unit whose reviewed code changed
-        // outside any review must be reviewed again before its checkpoint, under
-        // every Guard Policy: that is the one recovery pass.
-        const unitSourceScopeStale =
-          receipts !== null && flags.unit !== undefined && !artifactScopeStale &&
-          getField(state, "Construction Checkpoints") === "enabled" &&
-          receipts.unitSourceMoved.has(flags.unit);
+        // With Construction checkpoints on, a review of a Unit whose reviewed
+        // code changed outside any review re-checks that change: it is the
+        // recovery pass, and the person's approval of the Unit since the last
+        // re-check opens a fresh one.
+        const checkpointUnit = receipts !== null && flags.unit !== undefined &&
+          getField(state, "Construction Checkpoints") === "enabled";
+        const unitSourceScopeStale = checkpointUnit && !artifactScopeStale &&
+          receipts.unitSourceMoved.has(flags.unit as string);
         const scopeStale =
           process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1" &&
           fields.Workflow === undefined &&
@@ -2945,8 +2973,12 @@ function handleReview(args: string[]): void {
           sourceScopeStale &&
           (receipts?.sourceRecoverySpent === true ||
             receipts?.sourceStaleProgress?.recoverySpent === true);
-        const recoverySpent =
-          attempt.recoverySpent || sourceRecoverySpent;
+        const recoverySpent = !(checkpointUnit && receipts.unitRecheckReopened.has(flags.unit as string)) &&
+          (attempt.recoverySpent || sourceRecoverySpent);
+        // A review the person asked for is never refused for want of passes.
+        let asked: boolean | null = null;
+        const personAsked = (): boolean =>
+          (asked ??= personAskedForReview(pd, flags.stage as string, flags.reviewer as string, flags.unit, intent, space));
         const refuseAttemptGuard = (
           code: string,
           invariant: string,
@@ -3238,7 +3270,7 @@ function handleReview(args: string[]): void {
           scopeStale &&
           attempt.pendingIterations.size === 0 &&
           !recoverySpent;
-        if (scopeStale && recoverySpent) {
+        if (scopeStale && recoverySpent && !personAsked()) {
           const message = reviewRecoverySpentMessage(
               flags.stage,
               autonomousCandidate && attempt.boltStarted
@@ -3269,7 +3301,7 @@ function handleReview(args: string[]): void {
             message,
           );
         }
-        if (recoverySpent) {
+        if (recoverySpent && !personAsked()) {
           const message = reviewRecoveryAlreadyRequestedMessage(
               flags.stage,
               attempt.recoveryIteration ?? iteration,
@@ -3319,7 +3351,7 @@ function handleReview(args: string[]): void {
         // REVIEW_EVIDENCE_MISSING, because the revision path needs the fresh
         // receipt the refusal just forbade. The only remedy left is a redo jump,
         // which discards the attempt the human was mid-revision on.
-        if (!recoveryEligible && budget !== null && expected > budget) {
+        if (!recoveryEligible && budget !== null && expected > budget && !personAsked()) {
           refuseAttemptGuard(
             "REVIEW_BUDGET_EXHAUSTED",
             "Review requests do not exceed the configured attempt budget.",

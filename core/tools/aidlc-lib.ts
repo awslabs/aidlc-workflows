@@ -14264,6 +14264,10 @@ export interface FreshReviewReceipts {
    *  recorded (an edit outside any review), under every Guard Policy and
    *  whether or not a newer claim shields the path, with their next review. */
   unitSourceMoved: Map<string, StaleReviewProgress>;
+  /** Units the person approved at their checkpoint after their latest
+   *  re-check: that approval opens a fresh one, so their progress above
+   *  reports it unspent. */
+  unitRecheckReopened: Set<string>;
   /** Effective stage-entry source baseline for unclaimed-path verification. */
   sourceBaseline: SourceBaselineResult;
   /** Current source listing from the guard's single workspace walk, when needed. */
@@ -18263,6 +18267,7 @@ export function freshReviewReceipts(
     freshUnitClaims: new Map(),
     unitSourceAttributed: new Set(),
     unitSourceMoved: new Map(),
+    unitRecheckReopened: new Set(),
     sourceBaseline: { state: "legacy" },
     currentSourceListing: null,
     stageStaleProgress: null,
@@ -19028,6 +19033,27 @@ export function freshReviewReceipts(
     }
   }
 
+  // A Unit's re-check is spent only until the person next approves the Unit
+  // at its checkpoint: that approval opens a fresh one.
+  const unitRecheckReopened = new Set<string>();
+  for (const unit of new Set([...unitSourceMoved.keys(), ...unitStaleProgress.keys()])) {
+    const recheck = events.slice(floorIdx + 1).findLast((row) =>
+      row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Recovery") === "stale-receipt" &&
+      auditBlockField(row.block, "Stage") === stage.slug && auditBlockField(row.block, "Unit") === unit &&
+      auditBlockField(row.block, "Reviewer") === reviewer && eventMatchesClaimAttempt(projectDir, row.block, unit));
+    if (!recheck || !allEvents.some((row) =>
+      row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === unit &&
+      auditBlockField(row.block, "User Input") === "Approve" &&
+      ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "") &&
+      gateStagesFromBlock(row.block).includes(stage.slug) &&
+      eventMatchesClaimAttempt(projectDir, row.block, unit) && attemptEventDefinitelyBefore(recheck, row))) continue;
+    unitRecheckReopened.add(unit);
+    for (const progress of [unitSourceMoved, unitStaleProgress]) {
+      const current = progress.get(unit);
+      if (current) progress.set(unit, { ...current, recoverySpent: false });
+    }
+  }
+
   // Anchor the unclaimed-path baseline to the stage's real entry. Unit-major
   // NEVER trusts STAGE_STARTED because shell/generator source writes can precede
   // that row without ARTIFACT_* evidence. GATE_REJECTED resets review accounting
@@ -19124,6 +19150,7 @@ export function freshReviewReceipts(
     freshUnitClaims,
     unitSourceAttributed,
     unitSourceMoved,
+    unitRecheckReopened,
     sourceBaseline,
     currentSourceListing: sourceFreshnessApplies ? currentSourceListing : null,
     stageStaleProgress,

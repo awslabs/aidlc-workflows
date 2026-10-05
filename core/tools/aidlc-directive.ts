@@ -286,9 +286,9 @@ export interface RunStageDirective {
     // Only the Unit's reviewed code changed since its review: run this review
     // request now, without asking, then verify again.
     rereview?: { stage: string; reviewer: string; iteration: number; command: string };
-    // The current review re-checked that changed code; the person gets one
-    // approval question that says so.
-    rechecked?: { verdict: string; approved_before: boolean };
+    // The current review re-checked that changed code or those documents; the
+    // person gets one approval question that says so.
+    rechecked?: { verdict: string; approved_before: boolean; changed: "code" | "documents" };
   };
   swarm_checkpoint?: {
     batch: number;
@@ -1434,7 +1434,8 @@ function checkRunStageShared(
       const rechecked = checkpoint.rechecked;
       if (
         "rechecked" in checkpoint &&
-        (!isObject(rechecked) || typeof rechecked.verdict !== "string" || typeof rechecked.approved_before !== "boolean")
+        (!isObject(rechecked) || typeof rechecked.verdict !== "string" || typeof rechecked.approved_before !== "boolean" ||
+          (rechecked.changed !== "code" && rechecked.changed !== "documents"))
       ) errors.push(`${kind}: construction_checkpoint.rechecked must carry its verdict`);
     }
   }

@@ -9,7 +9,7 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 The directive's `review_class` field tells you HOW the review runs - the engine has already resolved it (stage declaration, lowered by the scope's `review_cap` and any per-run `--review` override; a `none` resolution omits the reviewer block entirely, so a directive that carries a reviewer always carries a class):
 
 - **`adversarial`** - the refute-and-repair loop below, up to `reviewer_max_iterations` passes with lead fixes between them. The default for Construction stages, where findings are machine-checkable and fix loops converge.
-- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and print the engine's derived findings brief for the human to triage. The bounded stale-receipt recovery below is the only exception. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
+- **`advisory`** - ONE normal-flow review pass as decision support for the human gate (`reviewer_max_iterations` is 1). Whatever the verdict, do NOT re-invoke the lead and do NOT re-run the reviewer during normal flow: record the terminal receipt, proceed to §13 only when the `learnings` module is listed (otherwise directly to the approval gate), and print the engine's derived findings brief for the human to triage. The bounded stale-receipt recovery below, and a review the person asks for, are the only exceptions. The default for the human-gated ideation/inception prose stages, where readiness is a judgment call that belongs to the human at the gate.
 
 ### What the user hears from this section
 
@@ -254,7 +254,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    brief below with `Why now: Re-check after the artifact changed.` If that
    recovery receipt is invalidated again, request no further review. On an
    interactive stage, present the recovery-spent refusal to the human; only
-   Request Changes (`GATE_REJECTED`) resets the attempt. Under `relaxed` or
+   Request Changes (`GATE_REJECTED`) resets the attempt. A review the person
+   asks for is never refused for want of passes: when they asked for one since
+   the last decision, request it, past the cap or a spent recovery. The cap and
+   the one recovery bound only the reviews you start on your own. Under `relaxed` or
    `off`, the receipt stays valid and no recovery review is requested: the gate or
    completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
@@ -266,9 +269,11 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    following this protocol rather than by a refusal. Construction checkpoints
    read the same value: under `relaxed` and `off` a change to a Unit's code or
    documents after their review is accepted there too, with one line, and the
-   Unit's approval stands. Under `strict`, a Unit whose reviewed code changed
-   after its review gets that one recovery review, and its checkpoint directs
-   it (`construction_checkpoint.rereview`).
+   Unit's approval stands. Under `strict`, a Unit whose reviewed code or
+   documents changed after their review gets that one recovery review, and its
+   checkpoint directs it (`construction_checkpoint.rereview`); each time the
+   person approves that Unit it gets a fresh one, so a Unit edited again later
+   is re-checked again.
    **Review brief (required at every reviewer-backed human gate).** Before the
    structured approval question, run
    `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --why <first|revision|stale>`;

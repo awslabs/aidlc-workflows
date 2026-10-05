@@ -34,7 +34,8 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
 3. **`directive.construction_checkpoint`** uses **Unit and skeleton checkpoints**
    below. The Unit body has already run; do not regenerate it or report the
    whole Code Generation stage complete for this Unit. A checkpoint carrying
-   `rereview` re-checks the Unit's changed code first, as described there.
+   `rereview` re-checks the Unit's changed code or documents first, as
+   described there.
 4. **`directive.construction_policy.completion_only === true`** closes the stage
    after its Units were approved. It must also carry
    `human_completion_required: false`. Skip the body, questions, reviewer, and
@@ -219,11 +220,12 @@ The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
 proof file cannot verify a Unit.
 
-When the checkpoint carries `rereview`, the Unit's reviewed code changed after
-its review (the person's edit, a formatter, anything no review saw) and nothing
-else is missing. Do not ask the person anything first: run `rereview.command`
-now (it opens the stage's one recovery review), dispatch `rereview.reviewer` for
-that request through the reviewer module, record its verdict with the
+When the checkpoint carries `rereview`, the Unit's reviewed code or documents
+changed after their review (the person's edit, a formatter, anything no review
+saw) and nothing else is missing. Do not ask the person anything first: run
+`rereview.command` now (it opens the Unit's re-check, which the pass cap never
+refuses; each approval of the Unit by the person opens a fresh one), dispatch
+`rereview.reviewer` for that request through the reviewer module, record its verdict with the
 `recordVerdict` command the request returned, re-run `next`, and verify. Either
 verdict is final for this re-check. The re-check runs under Guard Policy
 `strict` only. Under `relaxed` and `off` a change to a Unit's code or documents
@@ -268,11 +270,12 @@ command, never abbreviated, in the approval question: "Verified with
 `verification_command` from the current tool output, with a code-span delimiter
 that preserves any backticks. When the checkpoint carries `rechecked`, this is
 the one question about the re-check: no learnings question comes before it, and
-its line after the verified sentence is "<unit>'s code changed since you
+its line after the verified sentence is "<unit>'s <changed> changed since you
 approved it, so it was re-checked: <verdict>. Approve it?" when
-`rechecked.approved_before` is true, otherwise "<unit>'s code changed after its
-review, so it was re-checked: <verdict>. Approve it?", with the verdict in plain
-words (ready, or not ready). On a `NOT-READY` verdict, print the Review brief
+`rechecked.approved_before` is true, otherwise "<unit>'s <changed> changed after
+its review, so it was re-checked: <verdict>. Approve it?", with `<changed>` as
+`rechecked.changed` (code, or documents) and the verdict in plain words (ready,
+or not ready). On a `NOT-READY` verdict, print the Review brief
 first, as the reviewer module asks after a recovery verdict:
 `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --unit "<unit>" --why stale`.
 The human's reply in that session, to this checkpoint question, authorizes the

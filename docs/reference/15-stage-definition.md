@@ -478,7 +478,7 @@ loop above — the default when a `reviewer` is declared without a class) or
 `advisory` (one normal-flow pass whose findings the human approval gate shows
 from the engine-owned findings list, no repair loop; the effective iteration budget is 1). A later
 write that invalidates its terminal receipt permits one bounded recovery request
-at the next ordinal. The shipped split:
+at the next ordinal, and a review the person asks for is never refused. The shipped split:
 the 7 human-gated ideation/inception prose stages declare `advisory`; the 5
 Construction design/build stages default `adversarial`. `none` is deliberately
 not a stage value — a stage that wants no review deletes its `reviewer:` line;
