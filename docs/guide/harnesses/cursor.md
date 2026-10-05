@@ -179,7 +179,11 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   fail closed rather than losing delegated-agent attribution. Delegates may use
   ordinary Shell commands, but general-purpose interpreters and dynamic command
   evaluation are denied; use Cursor's native read/search tools and let the parent
-  conversation run executable probes.
+  conversation run executable probes. These delegate limits apply only while the
+  reviewer read-scope or state-transition check holds for the piece of work:
+  when both stand aside (Guard Policy off does that), delegates run builds,
+  tests and searches like the main conversation, a Task starts even when its
+  record cannot be written, and Cursor's own approval applies.
 - **Generated stage and scope runners are explicit-only.** Cursor receives
   `disable-model-invocation: true` on generated runner skills, including plugin
   runners, so ordinary coding prompts cannot auto-activate state-mutating

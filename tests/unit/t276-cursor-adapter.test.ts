@@ -4469,4 +4469,73 @@ if (import.meta.main) {
       "nested delegation is not allowed",
     );
   });
+
+  test("38: with Guard Policy off a delegate runs its builds and tests, and its Task starts", () => {
+    // Under Guard Policy off the reviewer read scope and the state-transition
+    // check stand aside, and the delegate identity checks serve only those two.
+    // A developer delegate's `npm test` or `bun test` was refused all the same.
+    const proj = installedProject();
+    seedStateFile(proj, "state-construction.md");
+    const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+    const withPolicy = (line: string) => writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8")
+        .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+        .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${line}`),
+    );
+    withPolicy("off (from scope classic)");
+    // A design stage: no code plan is waiting, so the plan check has nothing to hold.
+    setCurrentStage(proj, "functional-design");
+    clearLedger(proj);
+    registerTaskParent(proj);
+    const spawn = runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_input: {
+          description: "Developer probe",
+          prompt: "Implement the unit.",
+          subagent_type: "aidlc-developer-agent",
+        },
+      }),
+    );
+    expectAllowJson(spawn);
+    const delegateShell = (command: string) => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseShell", proj, {
+        conversation_id: "developer-under-guard-policy-off",
+        session_id: "developer-under-guard-policy-off",
+        tool_input: { command },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    for (const command of ["bun test", "node --test", "npm test", "grep -rn formatPrice ."]) {
+      const out = delegateShell(command);
+      expect(out.permission, `${command}: ${out.agent_message ?? ""}`).toBe("allow");
+    }
+    // A Task whose record cannot be written still starts: nothing reads the record.
+    const unrecordedTask = () => JSON.parse(runAdapter(
+      proj,
+      "guards",
+      payload("preToolUseTask", proj, {
+        tool_use_id: "",
+        generation_id: "",
+        tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+      }),
+    ).stdout) as { permission?: string; agent_message?: string };
+    expect(unrecordedTask().permission).toBe("allow");
+    // Under strict the identity checks hold, and each refusal names the step that works.
+    withPolicy("strict (set by you)");
+    const held = delegateShell("bun test");
+    expect(held.permission).toBe("deny");
+    expect(held.agent_message ?? "").toContain("have the parent conversation run executable probes");
+    const heldTask = unrecordedTask();
+    expect(heldTask.permission).toBe("deny");
+    expect(heldTask.agent_message ?? "").toContain("Start it again");
+    expect(heldTask.agent_message ?? "").toContain("doctor");
+    // The named step: the same Task with its ids starts.
+    expect(JSON.parse(runAdapter(proj, "guards", payload("preToolUseTask", proj, {
+      tool_input: { description: "Developer probe", prompt: "Implement the unit.", subagent_type: "aidlc-developer-agent" },
+    })).stdout).permission).toBe("allow");
+  });
 });
