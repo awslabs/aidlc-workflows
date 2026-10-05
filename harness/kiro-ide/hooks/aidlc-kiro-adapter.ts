@@ -154,7 +154,6 @@ import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-path
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
 import {
   canonicalWriteTool,
-  isGuardedWriteTool,
   isKiroAppendTool,
   isKiroDelegationTool,
   isKiroGenericDelegationTool,
@@ -1880,7 +1879,7 @@ function guardToolCall(
   toolName: string,
   toolArgs: Record<string, unknown>,
 ): { tool_name: string; tool_input: Record<string, unknown> } | null {
-  const writeTool = isGuardedWriteTool(toolName) ? canonicalWriteTool(toolName) : "";
+  const writeTool = canonicalWriteTool(toolName);
   if (writeTool) {
     const paths = inputPaths(toolArgs);
     const text = typeof toolArgs.text === "string"
@@ -1930,7 +1929,7 @@ function unreadableGuardCall(): string | null {
   const toolName = ide.toolName ?? "";
   if (toolName === "") return "its hook payload names no tool";
   const toolArgs = ide.toolArgs ?? {};
-  if (isGuardedWriteTool(toolName) && inputPaths(toolArgs).length === 0) {
+  if (canonicalWriteTool(toolName) !== "" && inputPaths(toolArgs).length === 0) {
     return `${toolName} names no file`;
   }
   if (

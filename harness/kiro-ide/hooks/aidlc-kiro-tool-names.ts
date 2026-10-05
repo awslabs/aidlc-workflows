@@ -7,7 +7,7 @@
 // `orchestrate_subagent` on Kiro CLI. The adapter asks this table what a name
 // is. The hook registrations (hooks/*.json) are written by hand, and t245
 // compares each one's matcher with the one KIRO_HOOK_MATCHERS builds from this
-// table: a shell, delegate, audited or guarded write name added here also has
+// table: a write, shell, delegate or audited write name added here also has
 // to be added to the registrations that deliver it.
 //
 // This file has no imports: t245 reads it straight from the authored tree, and
@@ -22,17 +22,7 @@ type KiroTool =
   // `audited` says whether the audit route can read this tool's result text
   // ("Created the <PATH> file.", "Replaced text in <PATH>") — it has to be
   // stated for every name, so adding one is a decision about its audit too.
-  // `guarded` says whether review-freeze and state-transition-guard can read the
-  // call's targets from its input: only a name whose payload shape is captured.
-  // An unguarded name reaches neither guard, rather than an empty target they
-  // would allow; Plan Approval still counts it as a mutation.
-  | {
-    role: "write" | "edit";
-    audited: boolean;
-    guarded: boolean;
-    legacyPlanningWrite?: true;
-    append?: true;
-  }
+  | { role: "write" | "edit"; audited: boolean; legacyPlanningWrite?: true; append?: true }
   | { role: "shell"; powershell?: true }
   | { role: "delegate"; pipeline?: true }
   | { role: "read" };
@@ -42,18 +32,19 @@ const KIRO_TOOLS: Record<string, KiroTool> = {
   // legacy planning writes may author the plan files. `write` is the kiro-cli
   // 2.6.1 name (captured with `command: "create"`); no KAS capture carries it,
   // but a call under that name is still a write.
-  write: { role: "write", audited: false, guarded: true },
-  fs_write: { role: "write", audited: true, guarded: true, legacyPlanningWrite: true },
-  create_file: { role: "write", audited: false, guarded: false },
-  str_replace: { role: "edit", audited: true, guarded: true, legacyPlanningWrite: true },
-  fs_append: { role: "edit", audited: true, guarded: true, append: true },
+  write: { role: "write", audited: false },
+  fs_write: { role: "write", audited: true, legacyPlanningWrite: true },
+  create_file: { role: "write", audited: false },
+  str_replace: { role: "edit", audited: true, legacyPlanningWrite: true },
+  fs_append: { role: "edit", audited: true, append: true },
   // `delete_file` names its target `targetFile` (every captured payload is
   // {explanation, targetFile}).
-  delete_file: { role: "edit", audited: false, guarded: true },
-  // No payload of these is captured, and a patch carries its paths inside its
-  // text (none was seen on Kiro IDE 1.2.4 or Kiro CLI 2.27.1).
-  apply_patch: { role: "edit", audited: false, guarded: false },
-  edit_file: { role: "edit", audited: false, guarded: false },
+  delete_file: { role: "edit", audited: false },
+  // No payload of these is captured (none was seen on Kiro IDE 1.2.4 or Kiro
+  // CLI 2.27.1), and a patch carries its paths inside its text, which the
+  // adapter does not read: one with no path field the adapter reads is refused.
+  apply_patch: { role: "edit", audited: false },
+  edit_file: { role: "edit", audited: false },
   // The shell tool is `execute_bash` on POSIX hosts, `execute_pwsh` on Windows,
   // and `shell` in some IDE generations.
   execute_bash: { role: "shell" },
@@ -161,12 +152,6 @@ export function isKiroAppendTool(name: string): boolean {
   return (tool?.role === "write" || tool?.role === "edit") && tool.append === true;
 }
 
-// A file mutation review-freeze and state-transition-guard receive.
-export function isGuardedWriteTool(name: string): boolean {
-  const tool = kiroTool(name);
-  return (tool?.role === "write" || tool?.role === "edit") && tool.guarded;
-}
-
 export function isPlanApprovalSafeReadTool(name: string): boolean {
   return kiroTool(name)?.role === "read";
 }
@@ -190,8 +175,8 @@ export const KIRO_HOOK_MATCHERS = {
   ).join("|"),
   shellPostToolUse: shellNames,
   shellPreToolUse: `^(${shellNames})$`,
-  guardedPreToolUse: `^(${
-    [...namesWhere((tool) => (tool.role === "write" || tool.role === "edit") && tool.guarded), shellNames].join("|")
+  writeOrShellPreToolUse: `^(${
+    [...namesWhere((tool) => tool.role === "write" || tool.role === "edit"), shellNames].join("|")
   })$`,
   delegateCompletion: `^(${
     [`${NAMED_DELEGATE_PREFIX}.+`, ...namesWhere((tool) => tool.role === "delegate")].join("|")

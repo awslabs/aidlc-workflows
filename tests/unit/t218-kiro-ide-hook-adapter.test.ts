@@ -38,7 +38,7 @@ import {
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isGuardedWriteTool, isKiroShellTool } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
+import { canonicalWriteTool, isKiroShellTool } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   createIntent,
   readAllAuditShards,
@@ -2534,13 +2534,14 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
   });
 
   // Both registrations carry a matcher so Kiro starts them only for the tools
-  // the adapter forwards (the tool-name table's guarded writes and shells; t245
+  // the adapter forwards (the tool-name table's writes and shells; t245
   // pins each matcher to the table), and each forwarded name reaches the guard.
   test("the guard matcher selects exactly the tools the adapter forwards", () => {
     const forwardedNames = [
-      "write", "fs_write", "str_replace", "fs_append", "delete_file", "execute_bash", "execute_pwsh", "shell",
+      "write", "fs_write", "create_file", "str_replace", "fs_append", "delete_file", "apply_patch", "edit_file",
+      "execute_bash", "execute_pwsh", "shell",
     ];
-    for (const name of forwardedNames) expect(isGuardedWriteTool(name) || isKiroShellTool(name), name).toBe(true);
+    for (const name of forwardedNames) expect(canonicalWriteTool(name) !== "" || isKiroShellTool(name), name).toBe(true);
     for (const file of ["aidlc-review-freeze.json", "aidlc-state-transition-guard.json"]) {
       const hook = (JSON.parse(readFileSync(join(REPO_ROOT, "harness", "kiro-ide", "hooks", file), "utf-8")) as {
         hooks: Array<{ matcher?: string }>;
@@ -2551,11 +2552,9 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       for (const name of [
         "read_file", "read_files", "list_directory", "grep_search", "file_search", "memory", "todo_list",
         "invoke_sub_agent", "orchestrate_subagent", "subagent_response", "report_progress", "fs_read", "control_bash_process",
-        // Mapped write names with no captured payload: a patch carries its paths in its text.
-        "apply_patch", "edit_file", "create_file",
       ]) {
         expect(matcher.test(name), `${file} ${name}`).toBe(false);
-        expect(isGuardedWriteTool(name) || isKiroShellTool(name), name).toBe(false);
+        expect(canonicalWriteTool(name) !== "" || isKiroShellTool(name), name).toBe(false);
       }
     }
     const dir = scratchProject(true);
@@ -2572,8 +2571,8 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         }), { AIDLC_COMPILED_EXECUTABLE: "" });
         expect(r.code, name).toBe(0);
       }
-      // Even when Kiro is not filtered by the matcher (the dispatcher route), an
-      // apply_patch whose paths live in its text reaches no guard as an empty Edit.
+      // An apply_patch whose paths live only in its text is refused, never
+      // forwarded as an Edit with no target.
       const patch = runIdeStdin(dir, "review-freeze", JSON.stringify({
         hook_event_name: "PreToolUse",
         cwd: dir,
@@ -2581,7 +2580,8 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         tool_name: "apply_patch",
         tool_input: { input: "*** Begin Patch\n*** Update File: notes.md\n*** End Patch\n" },
       }), { AIDLC_COMPILED_EXECUTABLE: "" });
-      expect(patch.code).toBe(0);
+      expect(patch.code).toBe(2);
+      expect(patch.stderr).toContain("apply_patch names no file");
       expect(readFileSync(capture, "utf-8").trim().split("\n").length).toBe(forwardedNames.length);
     } finally {
       rmSync(dir, { recursive: true, force: true });
