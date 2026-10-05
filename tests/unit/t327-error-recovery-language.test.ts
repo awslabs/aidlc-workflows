@@ -78,6 +78,10 @@ describe("t327 refusal narration contract", () => {
       expect(clause).toContain("a workflow transition changes its operation or target");
       expect(clause).toContain("two refused review requests with corrected flags reach the limit");
       expect(clause).toContain("a successful unrelated status check between them does not reset it");
+      // The plan-approval guard's refusal is the person's sentence only; its steps are here.
+      expect(clause).toContain('"Nothing is built or changed while the plan waits for your approval."');
+      expect(clause).toContain("show that question again and end the turn");
+      expect(clause).toContain("when they reply, record the choice they made, then run `{{INVOKE}} engine orchestrate next` as a command of its own");
       expect(clause).toContain("a different review target");
       expect(clause).toContain("never read framework or workflow source files");
       expect(clause).toContain("follow the `error` row under \"Acting on a directive\"");

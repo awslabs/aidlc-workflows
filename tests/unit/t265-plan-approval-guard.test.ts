@@ -1814,7 +1814,7 @@ describe("t265b hook lifecycle", () => {
       for (const target of [plan, join(proj, "src", "inline.ts")]) {
         const result = runHook(proj, WRITE(target));
         expect(result.code, target).toBe(2);
-        expect(result.stderr).toContain("Nothing is built or changed while the plan waits for approval.");
+        expect(result.stderr).toContain("Nothing is built or changed while the plan waits for your approval.");
       }
     } finally {
       rmSync(proj, { recursive: true, force: true });
