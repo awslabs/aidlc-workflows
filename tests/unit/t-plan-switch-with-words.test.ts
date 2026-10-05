@@ -161,6 +161,7 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
     ["/aidlc --guard-policy off Approve", "off"],
     ["/aidlc --guard-policy relaxed yes, go ahead", "relaxed"],
     ["$aidlc --guard-policy off looks good, build it", "off"],
+    ['/aidlc --guard-policy off "approve -- after checking step 2"', "off"],
   ] as const) {
     test(`"${typed}": the switch lands on this work and the agent records the choice`, () => {
       const proj = project("strict");

@@ -1213,9 +1213,10 @@ Typed with a request, it goes with that request
 (`Guard Policy relaxed for the work you are asking for (set by you).`): new work
 takes it at creation, and continuing open work applies it there; the message
 alone never changes open work. The one exception is while the code plan question
-is open: then a setting typed with words is for this work, and the words are the
-reply to that question (`/aidlc --guard-policy off approve the plan`). Words after
-`--` still describe new work. A fence switch with no state file receives:
+is open and the person is not editing the plan files: then a setting typed with
+words is for this work, and the words are the reply to that question
+(`/aidlc --guard-policy off approve the plan`). Words after an unquoted `--`
+still describe new work. A fence switch with no state file receives:
 `Guard Policy relaxed and fence switches apply to a piece of work: create it, then type this again.`
 The `off` form names `off` instead of `relaxed`.
 Hooks run on Windows too, so the typed switch works on every harness that

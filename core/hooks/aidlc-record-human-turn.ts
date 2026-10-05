@@ -126,7 +126,8 @@ async function aidlcEntryReply(prompt: string): Promise<string | null> {
 // words. Words after an explicit `--` describe new work. Null for anything else.
 function planAnswerAfterSwitch(projectDir: string, prompt: string): string | null {
   try {
-    if (/(?:^|\s)--(?:\s|$)/.test(prompt)) return null;
+    const entry = /^(?:\/aidlc|\$aidlc|aidlc)(?:\s+|$)/i.exec(prompt.trim());
+    if (entry !== null && splitKiroCommandArgs(prompt.trim().slice(entry[0].length)).includes("--")) return null;
     const parsed = parseTypedGuardSwitchRequest(prompt, { wordsAnswer: true });
     if (parsed.words === undefined || parsed.error !== null || parsed.settings.length === 0) return null;
     const question = openPlanApprovalQuestion(projectDir, parsed.words);
