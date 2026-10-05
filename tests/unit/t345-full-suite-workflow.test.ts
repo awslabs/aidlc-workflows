@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { classifyLiveFiles, discoverLiveFiles, FAMILIES, LIVE_MATRICES, LIVE_SHARD_COUNTS, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
+import { classifyLiveFiles, discoverLiveFiles, FAMILIES, LIVE_MATRICES, liveFilter, liveShardCount, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, RELEASE_OMITTED_JOBS, FULL_VERIFICATION_OMITTED_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds, type SuitePurpose } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { macosNamedUnitFiles, macosUnitSelection, selectionOutput } from "../../scripts/ci-macos-unit-selection.ts";
@@ -1289,7 +1289,7 @@ describe("t345 complete nightly coverage", () => {
           !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(row.platform as NodeJS.Platform));
         if (row.shard) {
           const [index, total] = row.shard.split("/").map(Number);
-          expect(total).toBe(Math.min(LIVE_SHARD_COUNTS[row.family]!, files.length));
+          expect(total).toBe(Math.min(liveShardCount(row.family, row.platform as NodeJS.Platform), files.length));
           expect(index).toBeGreaterThan(0);
           expect(index).toBeLessThanOrEqual(total);
           actual.push(...selectedLiveFiles(row.family, row.platform as NodeJS.Platform, row.shard).map(file => `${row.family}:${row.platform}:${file}`));

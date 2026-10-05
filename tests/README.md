@@ -266,16 +266,17 @@ support one-hour sessions and the documented Bedrock models. The credential-free
 Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
-Live matrices use bounded, duration-balanced shards on the existing platforms:
-two Claude SDK, three Claude TUI, one Codex and one opencode shard per OS
-(**21 live jobs**). Linux allows four concurrent live jobs, macOS two and Windows
-three. Each shard uses up to two isolated file workers; Windows Codex files remain
-serial. A worker starts each file/attempt from the original checkout snapshot
-and fresh home, temporary directories, application profiles and Git config.
-Installed tools and dependencies are reused. Confirmed process/transport cleanup
-is required before reuse; cleanup uncertainty stops the shard and marks pending
-files incomplete. A short assertion failure can retry once in fresh state, with
-both attempts retained. Successful files are not rerun.
+Live matrices use bounded, duration-balanced shards on the existing platforms: two
+Claude SDK (four on Linux, which alone runs the golden journeys), three Claude
+TUI, one Codex and one opencode shard per OS (**23 live jobs**). Linux allows four
+concurrent live jobs, macOS two and Windows three. Each shard uses up to two
+isolated file workers; Windows Codex files remain serial. A worker starts each
+file/attempt from the original checkout snapshot and fresh home, temporary
+directories, application profiles and Git config. Installed tools and dependencies
+are reused. Confirmed process/transport cleanup is required before reuse; cleanup
+uncertainty stops the shard and marks pending files incomplete. A short assertion
+failure can retry once in fresh state, with both attempts retained. Successful
+files are not rerun.
 
 Each platform prepares independently. Jobs allow 80 minutes and test steps 70,
 with a shared one-hour runner budget including setup, work and cleanup. Required

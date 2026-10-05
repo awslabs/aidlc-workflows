@@ -7,7 +7,7 @@ import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import {
-  classifyLiveFiles, FAMILIES, LIVE_SHARD_COUNTS, LIVE_MATRICES, LIVE_RUN_CEILING_SECONDS as LIVE_RUN_CEILING, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
+  classifyLiveFiles, FAMILIES, LIVE_PLATFORM_SHARD_COUNTS, LIVE_SHARD_COUNTS, LIVE_MATRICES, liveShardCount, LIVE_RUN_CEILING_SECONDS as LIVE_RUN_CEILING, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand,
   PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily,
 } from "../../scripts/ci-live-filter.ts";
 import { sandboxCommand } from "../../scripts/ci-live-sandbox.ts";
@@ -65,7 +65,7 @@ describe("bounded live file sharding", () => {
         const eligible = partition.get(row.family)!.filter((file) =>
           !PLATFORM_ONLY[file] || PLATFORM_ONLY[file].includes(row.platform));
         const [index, total] = row.shard.split("/").map(Number);
-        expect(total).toBe(Math.min(eligible.length, LIVE_SHARD_COUNTS[row.family]!));
+        expect(total).toBe(Math.min(eligible.length, liveShardCount(row.family, row.platform)));
         expect(index).toBeGreaterThan(0);
         const selected = selectedLiveFiles(row.family, row.platform, row.shard);
         expect(selected.length).toBeGreaterThan(0);
@@ -89,7 +89,7 @@ describe("bounded live file sharding", () => {
         for (const row of scoped.include) {
           const [index, total] = row.shard.split("/").map(Number);
           const files = selectedLiveFiles(family, row.platform);
-          expect(total).toBe(Math.min(files.length, LIVE_SHARD_COUNTS[family]!));
+          expect(total).toBe(Math.min(files.length, liveShardCount(family, row.platform)));
           expect(index).toBeGreaterThan(0);
           planned.push(...selectedLiveFiles(family, row.platform, row.shard).map(file => `${row.platform}:${file}`));
         }
@@ -145,11 +145,12 @@ describe("bounded live file sharding", () => {
 
   test("the live matrix stays bounded as files accumulate", () => {
     expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, opencode: 1, "release-contract": 1 });
-    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(21);
-    expect(selectedLiveFiles("claude-sdk", "linux", "1/2").length).toBeGreaterThan(1);
+    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 4 } });
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(23);
+    expect(selectedLiveFiles("claude-sdk", "linux", "1/4").length).toBeGreaterThan(1);
     expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(6);
-    const file = selectedLiveFiles("claude-sdk", "linux", "2/2")[0];
-    expect(() => selectedLiveFiles("claude-sdk", "linux", "1/2", file)).toThrow("outside the selected shard");
+    const file = selectedLiveFiles("claude-sdk", "linux", "2/4")[0];
+    expect(() => selectedLiveFiles("claude-sdk", "linux", "1/4", file)).toThrow("outside the selected shard");
   });
 
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {

@@ -1602,8 +1602,9 @@ After authorization and dependency installation, the plan emits `--matrix
 linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
-SDK, three Claude TUI, one Codex and one opencode shard: 21 live harness jobs in
-all. Timing weights in `tests/live-shard-weights.json` are scheduling hints;
+SDK (four on Linux, which alone runs the golden journeys), three Claude TUI, one
+Codex and one opencode shard: 23 live harness jobs in all. Timing weights in
+`tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
 Every shard has at most two file workers; Windows Codex files remain serial.
