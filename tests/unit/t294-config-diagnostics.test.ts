@@ -4002,6 +4002,48 @@ process.exit(0);
     }
   }, 60_000);
 
+  // Windows PowerShell 5.1's `Set-Content -Encoding utf8`, and some editors,
+  // start a file with a UTF-8 byte order mark.
+  test("a settings file saved with a byte order mark is read, and kept as the person saved it", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const mcpPath = join(project, ".mcp.json");
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes"];
+    for (const path of [settingsPath, mcpPath]) writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    const saved = [readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")];
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const result = run(args, project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("Note:");
+      expect([readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")]).toEqual(saved);
+    }
+
+    const doctor = spawnSync(BUN, [
+      join(project, ".claude", "tools", "aidlc.ts"), "--doctor", "--json", "--offline",
+    ], {
+      cwd: project,
+      env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (doctor.error) throw doctor.error;
+    const checks = JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>;
+    expect(checks.some((check) => check.label.includes("settings.json unreadable"))).toBe(false);
+
+    // A refresh that adds AI-DLC's entries back keeps the person's own, and the mark.
+    const settings = JSON.parse(saved[0].slice(1));
+    settings.permissions = { deny: ["Bash(rm -rf:*)"] };
+    writeFileSync(settingsPath, `\uFEFF${JSON.stringify(settings, null, 2)}\n`);
+    const restored = run(args, project, env);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(restored.stdout).toContain("added the AI-DLC command allow entries that were missing from .claude/settings.json");
+    const after = readFileSync(settingsPath, "utf-8");
+    expect(after.startsWith("\uFEFF")).toBe(true);
+    expect(JSON.parse(after.slice(1)).permissions.deny).toEqual(["Bash(rm -rf:*)"]);
+    expect(JSON.parse(after.slice(1)).permissions.allow).toEqual(JSON.parse(saved[0].slice(1)).permissions.allow);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
     const project = install("claude");
     const env = runtimeEnv();
