@@ -216,8 +216,8 @@ or switches to another agent, none of these hooks run. With no hooks, no
 `HUMAN_TURN` receipts are recorded, so every approval and confirmation is
 refused. No write events are recorded either, so reviews are refused.
 After the first workflow stage, `/aidlc --doctor` reports this as "Hooks have
-never executed". Before that, doctor reports the heartbeats as not yet fired
-and passes, so it cannot tell you whether the hooks run. Restarting on the v3
+never executed". Before that, doctor warns that AI-DLC's hooks have not run in
+this project yet and names the same step. Restarting on the v3
 engine does not fix it. With another agent picked, type `/agent` and pick
 `aidlc`, then carry on in the same chat. On the 3.0 engine (Kiro prints
 `agent "aidlc" needs upgrading for this agent engine` under its replies), quit

@@ -239,8 +239,9 @@ changes nothing.
 
 These behaviours were measured on Kiro CLI 2.21.1, and a later Kiro CLI may
 change them. After you switch, send a message and run `/aidlc --doctor`. On
-the `kiro` distribution, doctor can confirm the hooks only after the first
-workflow stage; before that it reports the heartbeats as not yet fired.
+the `kiro` distribution, your message leaves the first heartbeat, so doctor
+confirms the hooks from then on; until then it warns that they have not run in
+this project yet.
 
 ### GitHub Copilot hooks not running
 
