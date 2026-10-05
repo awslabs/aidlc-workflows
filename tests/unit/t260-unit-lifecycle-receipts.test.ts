@@ -34,7 +34,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -162,6 +163,7 @@ function writeUnitArtifacts(proj: string, unit: string): void {
 }
 
 let proj = "";
+const shims: string[] = [];
 function constructionProject(
   iteration: "unit-major" | "stage-major" = "unit-major",
 ): string {
@@ -196,6 +198,7 @@ function enableAutonomy(): void {
 afterEach(() => {
   if (proj) cleanupTestProject(proj);
   proj = "";
+  for (const dir of shims.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("t260 receipts are the transition, artifacts the evidence", () => {
@@ -370,9 +373,14 @@ describe("t260 single active unit", () => {
 
   test("unit start uses top-level next/continue verbs through the compiled dispatcher seam", () => {
     constructionProject();
-    const dispatcherSource = join(proj, "aidlc-compiled-shim.ts");
+    // The shim is built outside the project: its TypeScript source in the
+    // project folder would be new code there, and AI-DLC would ask whether the
+    // folder is existing code before the Unit starts.
+    const shimDir = mkdtempSync(join(tmpdir(), "t260-shim-"));
+    shims.push(shimDir);
+    const dispatcherSource = join(shimDir, "aidlc-compiled-shim.ts");
     const dispatcher = join(
-      proj,
+      shimDir,
       process.platform === "win32" ? "aidlc-compiled-shim.exe" : "aidlc-compiled-shim",
     );
     if (process.platform === "win32") {
@@ -417,7 +425,7 @@ describe("t260 single active unit", () => {
     const started = unitVerb(proj, "start", "unit-a", [], {
       AIDLC_COMPILED_EXECUTABLE: dispatcher,
     });
-    expect(started.rc).toBe(0);
+    expect(started.rc, started.out).toBe(0);
     expect(started.out).toContain("UNIT_STARTED");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
