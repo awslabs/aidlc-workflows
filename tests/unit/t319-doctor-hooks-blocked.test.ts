@@ -186,7 +186,7 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
     const text = output(run);
     expect(text).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(text).toContain(
-      "fix: This is expected before your first chat message here. If you already sent one, choose Trust Folder & Continue when Kiro asks whether you trust this folder, then send a message and run doctor again.",
+      "fix: This is expected before your first chat message here. If you already sent one, trust this folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run doctor again.",
     );
     expect(text).not.toContain("agent picker");
     expect(text).not.toContain("Hook heartbeats: not yet fired");
@@ -223,8 +223,10 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
     );
     expect(output(run)).toContain(
-      "In Kiro IDE, choose Trust Folder & Continue when Kiro asks whether you trust this folder, then say carry on.",
+      "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on.",
     );
+    // Trust takes effect after the reload; the agent picker does not stop the hooks.
+    expect(output(run)).not.toContain("agent picker");
     expect(output(run)).toContain("In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.");
     // What an ACP client must send is in the Kiro IDE guide, not in this line.
     expect(output(run)).toContain("If you use an ACP client, the Kiro IDE guide says what it must send");

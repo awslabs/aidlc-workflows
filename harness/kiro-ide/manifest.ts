@@ -155,14 +155,19 @@ const manifest: HarnessManifest = {
   // folder it has not been allowed to run commands in. Then every agent
   // command comes back with no output and exit code -1, so no AI-DLC message
   // can run; the agent's step sits in what it reads first (its orchestrator
-  // skill). Another agent in the picker did not stop the hooks. What an ACP
-  // client must send to run hooks is in the Kiro IDE guide.
+  // skill). Trust takes effect only after a window reload: a trusted folder ran
+  // no hook until Developer: Reload Window (measured 2026-10-05 on Kiro IDE
+  // 1.1.14 from the Restricted Mode banner, and on 1.2.4 from both the banner
+  // and Trust Folder & Continue), so every copy of the step names both.
+  // Another agent in the picker did not stop the hooks. What an ACP client
+  // must send to run hooks is in the Kiro IDE guide.
   hookActivation: {
     recovery:
-      "In Kiro IDE, choose Trust Folder & Continue when Kiro asks whether you trust this " +
-      "folder, then say carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this " +
-      "folder. If you use an ACP client, the Kiro IDE guide says what it must send for AI-DLC's " +
-      "hooks to run.",
+      "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you " +
+      "trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: " +
+      "Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say " +
+      "carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you use an " +
+      "ACP client, the Kiro IDE guide says what it must send for AI-DLC's hooks to run.",
     // Says what happened and asks for nothing again; it adds no step to the
     // refusal it joins.
     missedReply:
@@ -172,9 +177,11 @@ const manifest: HarnessManifest = {
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:
-      "This is expected before your first chat message here. If you already sent one, choose " +
-      "Trust Folder & Continue when Kiro asks whether you trust this folder, then send a message " +
-      "and run doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "This is expected before your first chat message here. If you already sent one, trust this " +
+      "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
+      "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
+      "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
+      "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
   },
   harnessDir: ".kiro",
   orchestratorSkillPath: ".kiro/skills/aidlc/SKILL.md",

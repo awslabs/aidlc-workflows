@@ -5513,10 +5513,12 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
       const recovery = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
         hookActivation: { recovery: string };
       }).hookActivation.recovery;
-      expect(recovery).toContain("choose Trust Folder & Continue when Kiro asks whether you trust this folder");
+      expect(recovery).toContain("choose Trust Folder & Continue when Kiro asks whether you trust it");
       expect(r.stderr).toContain(`${recovery} \`/aidlc --doctor\` shows anything else to fix.`);
-      // No window reload or agent picker: doctor no longer asks for either.
-      expect(r.stderr).not.toContain("Reload Window");
+      // Trust takes effect after a window reload (measured), so the step names
+      // it; another agent in the picker does not stop the hooks, so it names no
+      // picker.
+      expect(r.stderr).toContain("Then run Developer: Reload Window from the Command Palette");
       expect(r.stderr).not.toContain("agent picker");
       // Its own words say what to do, never how the hooks work, and never ask
       // for the answer again.
@@ -5525,6 +5527,57 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Measured on Kiro IDE: trusting the folder from the Restricted Mode banner
+  // runs no AI-DLC hook until Developer: Reload Window. Every copy of the trust
+  // step the person or the agent reads (doctor, the refusals, the skill, the
+  // guide) names the reload, so none leaves them with the hooks still off.
+  test("no copy of the Kiro IDE trust step leaves out the window reload", () => {
+    const stale = [
+      "you trust this folder, then say carry on",
+      "you trust this folder, then send a message",
+      "do not suggest reloading",
+      "on the Restricted Mode banner), then say carry on",
+      "then **Trust**. 2. Say carry on",
+    ];
+    const roots = [
+      KIRO_IDE_TREE,
+      join(REPO_ROOT, "dist-release", "kiro-ide", ".kiro"),
+      join(REPO_ROOT, "harness", "kiro-ide"),
+      join(REPO_ROOT, "docs", "guide"),
+    ].filter((root) => existsSync(root));
+    expect(roots).toContain(KIRO_IDE_TREE);
+    const hits: string[] = [];
+    for (const root of roots) {
+      for (const entry of readdirSync(root, { recursive: true }) as string[]) {
+        if (!/\.(md|ts|json|hook|txt)$/.test(entry)) continue;
+        let text: string;
+        try {
+          text = readFileSync(join(root, entry), "utf-8");
+        } catch {
+          continue;
+        }
+        const flat = text.replace(/\s+/g, " ");
+        for (const phrase of stale) {
+          if (flat.includes(phrase)) hits.push(`${relative(REPO_ROOT, join(root, entry))}: ${phrase}`);
+        }
+      }
+    }
+    expect(hits).toEqual([]);
+    const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
+      hookActivation: { recovery: string; notRunYet: string };
+    }).hookActivation;
+    for (const text of [activation.recovery, activation.notRunYet]) {
+      expect(text).toContain("Developer: Reload Window");
+      expect(text).toContain("select Manage on the Restricted Mode banner, then Trust");
+      expect(text).not.toContain("agent picker");
+    }
+    const skill = readFileSync(join(KIRO_IDE_TREE, "skills", "aidlc", "SKILL.md"), "utf-8");
+    expect(skill).toContain(
+      'Give the person this line and end your turn: "In Kiro IDE, trust this folder: choose Trust Folder & Continue',
+    );
+    expect(skill.replace(/\s+/g, " ")).toContain("Then run Developer: Reload Window from the Command Palette");
   });
 });
 

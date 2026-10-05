@@ -24,7 +24,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Kiro IDE: the agent cites "my memory" and suggests bypassing a check or running a hook by hand | Ignore it and delete that Kiro memory (see [Kiro memories carry old AI-DLC advice](harnesses/kiro-ide.md#kiro-memories-carry-old-ai-dlc-advice)) |
 | State file corrupted | Run `/aidlc --doctor`, compare against state template |
 | Stuck at approval gate | Type your response; use `/aidlc --stage <target>` to jump past it |
-| Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
+| Kiro IDE: your reply to an approval question is not seen, or commands come back with exit code -1 | Choose **Trust Folder & Continue** when Kiro asks whether you trust this folder (or select **Manage**, then **Trust**, on the Restricted Mode banner), then run **Developer: Reload Window** from the Command Palette and say carry on; if your next message is still not recorded, `/aidlc --doctor` shows why. In Kiro CLI, quit and start `kiro-cli` again in the folder (see [Kiro IDE hooks not running](#kiro-ide-hooks-not-running)) |
 | Kiro CLI (or a Kiro ACP client): every approval says no human reply has arrived, and restarting does not help | The engine does not match the distribution: `kiro` needs Kiro CLI's v2 engine, `kiro-ide` needs v3 (see [Kiro CLI hooks not running](#kiro-cli-hooks-not-running)) |
 | Context compacted mid-session | Run `/aidlc` to resume from checkpoint |
 | Audit log too large | Leave it where it is: a long project's audit file is large by design, and the engine reads it to know what you approved and finished (see [Audit Log Growing Too Large](#audit-log-growing-too-large)) |
@@ -198,10 +198,11 @@ sufficient.
 ### Kiro IDE hooks not running
 
 Kiro IDE runs a folder's hooks only after you allow it to run commands in that
-folder. Until then every command the agent runs comes back with no output and
-exit code -1, so no AI-DLC message can show; the agent gives you the step
-itself. Before your first chat message in the project, doctor warns "AIDLC
-hooks have not run in this project yet"; that is expected.
+folder and then reload the window. Until you allow it, every command the agent
+runs comes back with no output and exit code -1, so no AI-DLC message can show;
+the agent gives you the step itself. Before your first chat message in the
+project, doctor warns "AIDLC hooks have not run in this project yet"; that is
+expected.
 
 Trust only a folder whose contents you know (your own project, or one you have
 checked), because trusting lets the folder's `.kiro` hooks run commands on your
@@ -210,7 +211,9 @@ machine (see [First run](harnesses/kiro-ide.md#first-run)).
 1. Choose **Trust Folder & Continue** when Kiro asks whether you trust this
    folder. If the Restricted Mode banner shows at the top of the window
    instead, select **Manage** on it, then **Trust**.
-2. Say carry on in the same chat. If your next message is still not recorded,
+2. Open the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) and run
+   **Developer: Reload Window**. Trust takes effect after the reload.
+3. Say carry on in the chat. If your next message is still not recorded,
    `/aidlc --doctor` shows why.
 
 ### Kiro CLI hooks not running
