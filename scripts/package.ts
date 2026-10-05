@@ -1001,6 +1001,7 @@ function buildTree(
   expandCursorToolAllows(treeRoot, m);
   expandClaudeToolAllows(treeRoot, m);
   expandKiroToolAllows(treeRoot, m);
+  expandKiroIdeConductorAllows(treeRoot, m, invoke);
   writeProjectionData(outRoot, treeRoot, m);
 
   // 6. Generated table regions are build products, not authored prose. Refresh
@@ -1173,6 +1174,26 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
     writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
   }
   if (expanded === 0) throw new Error("[kiro] no agent names the tools-folder pattern to expand");
+}
+
+// Kiro IDE's authored conductor (agents/aidlc.md) allows AI-DLC's tool
+// scripts and the dispatcher's engine namespace. The copy channel's
+// projection adds, after the engine line, each dispatcher command a copy
+// channel pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands),
+// so reading a setting or running doctor shows no card while any config change
+// still does. Every persona's deny lists the same commands
+// (delegate-shell-deny.ts). The native release keeps its one engine entry, as
+// every native harness does.
+function expandKiroIdeConductorAllows(treeRoot: string, m: HarnessManifest, invoke: string): void {
+  if (m.name !== "kiro-ide" || invoke === "aidlc") return;
+  const conductor = join(treeRoot, "agents", "aidlc.md");
+  const engine = `        - "${invoke} engine *"\n`;
+  const value = readFileSync(conductor, "utf-8");
+  if (value.split(engine).length !== 2) {
+    throw new Error(`[kiro-ide] agents/aidlc.md must allow ${invoke} engine * exactly once`);
+  }
+  const exact = copyChannelDispatcherCommands().map((command) => `        - "${invoke} ${command}"\n`);
+  writeFileSync(conductor, value.replace(engine, `${engine}${exact.join("")}`));
 }
 
 // Cursor's authored cli.json names AI-DLC's tool scripts with one glob. The

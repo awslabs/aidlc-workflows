@@ -140,6 +140,14 @@ of `.kiro/`, so copy it separately (or copy the whole
 `$RUNTIME_ROOT/kiro-ide/` tree at once). `/aidlc --doctor` fails its
 "workspace shell ready" check if it is missing.
 
+In a copied project, the `aidlc` agent runs AI-DLC's engine commands
+(`bun .kiro/tools/aidlc.ts engine ...`), its tool scripts, and its read-only
+commands (`doctor`, `version`, `--doctor`, `status`,
+`config <section> --show --json` and `config <section> --help`) with no card. A
+`config` change, the commands that change the machine's AI-DLC install (`use`,
+`update`, `rollback`, `uninstall`, `system`), and a command holding `$`, a
+backtick, `>`, `<`, `&`, `@(`, `@{`, or a line break show Kiro's card first.
+
 The versioned runtime uses the native `aidlc` command. Framework developers who
 need the Bun-shaped source projection can clone the repository, run
 `bun install --frozen-lockfile` and `bun scripts/package.ts`, then use the

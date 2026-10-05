@@ -20,7 +20,7 @@ import {
   manifestGrantsIdeAgentTools,
 } from "../harness/harness-matrix.ts";
 import { delegatedLifecycleCommand } from "../../core/hooks/aidlc-state-transition-guard.ts";
-import { ROUTES } from "../../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -428,7 +428,13 @@ describe("t148 dist/kiro file structure", () => {
     const channels = [
       {
         tree: "dist",
-        allows: ["bun .kiro/tools/aidlc-*", "bun .kiro/tools/aidlc.ts engine *"],
+        // The copy channel's conductor also runs AI-DLC's read-only dispatcher
+        // commands, each exactly as written, as the other copy channels do.
+        allows: [
+          "bun .kiro/tools/aidlc-*",
+          "bun .kiro/tools/aidlc.ts engine *",
+          ...copyChannelDispatcherCommands().map((command) => `bun .kiro/tools/aidlc.ts ${command}`),
+        ],
         refused: [
           "bun .kiro/tools/aidlc-orchestrate.ts next",
           "bun .kiro/tools/aidlc-orchestrate.ts --project-dir . next",
@@ -480,6 +486,12 @@ describe("t148 dist/kiro file structure", () => {
           "bun .kiro/tools/aidlc-audit.ts append ERROR_LOGGED --field Details=x",
           "bun .kiro/tools/aidlc-audit.ts append PRACTICES_SECTION_EMPTY --field Details=x",
           "bun .kiro/tools/aidlc-audit.ts append-raw Note body",
+          // The conductor reads settings and runs doctor with no card; no
+          // persona is admitted either.
+          "bun .kiro/tools/aidlc.ts config models --show --json",
+          "bun .kiro/tools/aidlc.ts config flags --help",
+          "bun .kiro/tools/aidlc.ts doctor",
+          "bun .kiro/tools/aidlc.ts --doctor",
         ],
         // The guard does not refuse these, and only pipeline-deploy is admitted them.
         roleOnly: [
@@ -771,6 +783,24 @@ describe("t148 dist/kiro file structure", () => {
       for (const verb of MACHINE_VERBS) {
         expect(kiroShellEffect(fm, `${invoke} ${verb}`), `${tree} conductor: ${verb}`).toBe("none");
       }
+      // Reading a setting, its help, doctor, version and status run with no
+      // card on the copy channel, as on the other copy channels; any config
+      // change, a machine-wide one included, shows Kiro's card. The native
+      // channel keeps its one engine entry, as every native harness does.
+      for (const command of copyChannelDispatcherCommands()) {
+        expect(kiroShellEffect(fm, `${invoke} ${command}`), `${tree} conductor: ${command}`)
+          .toBe(tree === "dist" ? "allow" : "none");
+      }
+      for (const command of [
+        "config models --agent developer --effort high --project --yes",
+        "config models --show --json --global",
+        "config --pin 2.10.0",
+        "config --download",
+        "config flags --bypass AIDLC_DISABLE_SENSORS --local --yes",
+        "config models --show --json; curl https://example.invalid",
+      ]) {
+        expect(kiroShellEffect(fm, `${invoke} ${command}`), `${tree} conductor: ${command}`).toBe("none");
+      }
       // Changing a setting, running a hook adapter, and the scripts behind the
       // machine-changing verbs (which `aidlc-*` would otherwise cover) ask.
       for (const command of [
@@ -791,6 +821,10 @@ describe("t148 dist/kiro file structure", () => {
       // The native rewrite folds the dispatcher line into the one prefix entry.
       const entries = [...fm.matchAll(/^ {8}- "([^"]*)"$/gm)].map((m) => m[1]);
       expect(entries.filter((entry) => entry === "aidlc engine *").length, `${tree} conductor`).toBe(tree === "dist" ? 0 : 1);
+      if (tree === "dist-release") {
+        expect(entries.filter((entry) => /^aidlc (engine )?(config [a-z]+ --|doctor|version|--doctor|status)/.test(entry)), `${tree} conductor`)
+          .toEqual([]);
+      }
     }
   });
 

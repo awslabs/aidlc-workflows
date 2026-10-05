@@ -4,9 +4,9 @@
 // A delegate's own calls carry no agent identity, so that branch never fires
 // on Kiro, and on a delegated call Kiro enforces the persona's deny but not its
 // allow: the delegate runs whatever the conductor's allow covers (measured on
-// Kiro CLI 2.27.1 and IDE 1.2.4). The conductor allows `bun .kiro/tools/aidlc-*`
-// and the dispatcher's engine namespace in the copy channel, and
-// `aidlc engine *` in the native one.
+// Kiro CLI 2.27.1 and IDE 1.2.4). The conductor allows `bun .kiro/tools/aidlc-*`,
+// the dispatcher's engine namespace and its read-only commands in the copy
+// channel, and `aidlc engine *` in the native one.
 //
 // Kiro matches the command text as written, so a deny that lists forbidden
 // spellings misses a quoted or re-spaced one. The persona therefore denies the
@@ -25,7 +25,7 @@ import {
   delegateAdmittedVerbs,
   delegatedLifecycleCommand,
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
-import { resolveAction, ROUTES } from "../../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, resolveAction, ROUTES } from "../../core/tools/aidlc.ts";
 import { LAUNCHER_GLOBAL_FLAGS, trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { isWorkspaceNoun, parseWorkspaceCommand, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
@@ -88,14 +88,20 @@ function engineRouteExclusions(agent: string, engine: string): string[] {
   return exclude;
 }
 
-// The copy channel's conductor allows the tool scripts and the dispatcher's
-// engine namespace, so the persona denies both.
+// The copy channel's conductor allows the tool scripts, the dispatcher's
+// engine namespace, and the dispatcher's read-only commands exactly as written
+// (reading a setting, doctor, version, status), so the persona denies all
+// three. delegateAdmittedVerbs admits no persona any of those commands.
 export function copyChannelDelegateShellDeny(harnessDir: string, agent: string): ShellDeny {
   const tool = (file: string) => `bun ${harnessDir}/tools/${file}`;
   const engine = `${tool("aidlc.ts")} ${TRUSTED_ROUTE_NAMESPACE}`;
   const admitted = delegateAdmittedVerbs(agent);
   return {
-    match: [tool("aidlc-*"), `${engine} *`],
+    match: [
+      tool("aidlc-*"),
+      `${engine} *`,
+      ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command}`),
+    ],
     exclude: [
       ...Object.keys(admitted).sort().flatMap((file) =>
         admitted[file].flatMap((verb) => exclusionsFor(`${tool(file)} ${verb}`))
