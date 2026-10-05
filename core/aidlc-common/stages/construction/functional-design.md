@@ -96,7 +96,7 @@ Focus areas:
 - Business rules, constraints, and validation logic
 - Data flow and transformations
 - Integration points with other units or external systems
-- Error handling and edge cases
+- Error handling and edge cases (sweep each component against `{{HARNESS_DIR}}/knowledge/aidlc-product-agent/corner-checklist.md`; corners the requirements already settled carry forward, and only open corners that need the user's judgement become questions)
 - Frontend Components (component hierarchy, props/state, interaction flows, form validation)
 - Business Scenarios (end-to-end user journeys, happy/unhappy paths, concurrency edge cases)
 

@@ -1648,6 +1648,9 @@ describe("t248 deterministic steering delivery", () => {
     expect(paths).not.toContain(
       ".claude/knowledge/aidlc-product-agent/functional-design-guide.md",
     );
+    expect(paths).not.toContain(
+      ".claude/knowledge/aidlc-product-agent/corner-checklist.md",
+    );
   });
 
   test("Minimal routing retains recursively composed plugin knowledge that collides by basename", () => {
@@ -1764,6 +1767,9 @@ describe("t248 deterministic steering delivery", () => {
     );
     expect(paths).toContain(
       ".claude/knowledge/aidlc-architect-agent/architecture-patterns.md",
+    );
+    expect(paths).toContain(
+      ".claude/knowledge/aidlc-product-agent/corner-checklist.md",
     );
   });
 

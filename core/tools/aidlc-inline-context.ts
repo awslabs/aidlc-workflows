@@ -148,6 +148,7 @@ const SHIPPED_INLINE_KNOWLEDGE: Readonly<
     "worktree-info-schema.md",
   ]),
   "aidlc-product-agent": new Set([
+    "corner-checklist.md",
     "functional-design-guide.md",
     "market-research-methods.md",
     "prioritization-frameworks.md",
