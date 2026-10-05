@@ -461,7 +461,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
 
     const unknown = report("--choice", "jump", "--target", "no-such-stage", ...words("go to the moon"));
     expect(unknown.kind).toBe("error");
-    expect(unknown.message).toContain('No stage is named "no-such-stage"');
+    expect(unknown.message).toBe('No stage is named "no-such-stage". Say the stage again by its name.');
 
     // A fresh start carries none of the person's words: the new work starts the
     // way new work always does, with their description quoted shell-safe.
@@ -490,11 +490,50 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const redoThere = report("--choice", "redo", "--target", "market-research");
     expect(redoThere.kind).toBe("print");
     expect(redoThere.message).toContain("Run `next --stage market-research`");
-    for (const notRun of ["requirements-analysis", "build-and-test"]) {
+    // The error is shown to the person as written: it says what happened and
+    // what they can say, never an agent's instruction or a flag.
+    const forThePerson = (message: string) => {
+      for (const internal of ["Tell the person", "--target", "--choice", "Report again"]) {
+        expect(message).not.toContain(internal);
+      }
+    };
+    for (const [notRun, name] of [["requirements-analysis", "Requirements Analysis"], ["build-and-test", "Build and Test"]]) {
       const r = report("--choice", "redo", "--target", notRun);
       expect(r.kind).toBe("error");
-      expect(r.message).toContain(`"${notRun}" has not run yet, so there is nothing to redo`);
+      expect(r.message).toBe(
+        `${name} has not run yet, so there is nothing to redo. ` +
+          `Say "jump to ${name}" to go there now, or "redo" to redo the step you are on.`,
+      );
+      forThePerson(r.message);
+      // Asked for named Units or every Unit, a stage that is not a per-unit
+      // step and has not run is still not run: never a jump ahead to it.
+      for (const units of [["--every-unit"], ["--unit", "beta"]]) {
+        const forUnits = report("--choice", "redo", "--target", notRun, ...units);
+        expect(forUnits.kind, units.join(" ")).toBe("error");
+        expect(forUnits.message).toBe(r.message);
+      }
     }
+    const unknownRedo = report("--choice", "redo", "--target", "no-such-stage");
+    expect(unknownRedo.kind).toBe("error");
+    expect(unknownRedo.message).toBe(
+      'No stage is named "no-such-stage". Say the stage again by its name, or "redo" to redo the step you are on.',
+    );
+    forThePerson(unknownRedo.message);
+    forThePerson(unknown.message);
+    // Stage by stage, a per-unit step after the current one has run for no
+    // Unit: a redo of it for every Unit is not run either.
+    writeFileSync(
+      statePath(p),
+      before
+        .replace("- [S] functional-design", "- [-] functional-design")
+        .replace("- [-] code-generation", "- [ ] code-generation")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design"),
+      "utf-8",
+    );
+    const laterStep = report("--choice", "redo", "--target", "code-generation", "--every-unit");
+    expect(laterStep.kind).toBe("error");
+    expect(laterStep.message).toContain("Code Generation has not run yet, so there is nothing to redo.");
+    writeFileSync(statePath(p), before, "utf-8");
     // Unit by Unit, the step the Unit is on is the current one too.
     const unitMajor = readFileSync(statePath(p), "utf-8");
     writeFileSync(

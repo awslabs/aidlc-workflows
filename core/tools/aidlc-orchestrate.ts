@@ -9961,6 +9961,33 @@ function unitMajorRedo(
     `for unit "${unit}" again from the start. ${OTHER_UNITS_KEPT}`;
 }
 
+// A per-unit step a "redo <stage>" names, read from a solo unit-major walk:
+// whether it is the step the Unit in flight is on, and whether that Unit has
+// gone past it (unitMajorReopen's own reach for a jump back with no Unit
+// named). Null outside such a walk, or for a stage outside its steps.
+function unitWalkStepNamed(
+  projectDir: string,
+  scope: string,
+  stateContent: string,
+  currentSlug: string,
+  slug: string,
+): { live: boolean; past: boolean } | null {
+  if (!validScopes().has(scope)) return null;
+  const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
+  if (!walk) return null;
+  const blockSlugs = walk.block.map((stage) => stage.slug);
+  const at = blockSlugs.indexOf(slug);
+  if (at === -1) return null;
+  const step = walk.step;
+  const liveStage = step.kind === "work" || step.kind === "summary"
+    ? step.stage.slug
+    : step.kind === "paused" ? step.stage : null;
+  return {
+    live: liveStage === slug,
+    past: liveStage === null ? step.kind === "checkpoint" : blockSlugs.indexOf(liveStage) > at,
+  };
+}
+
 // Whether the person's Redo on re-entry answered the re-use question for
 // this Unit's step (`jump reopen --via redo` records it). The answer is spent
 // once the Unit starts the step, and a later reopen or jump asks again. Rows are
@@ -12350,29 +12377,44 @@ function emitTypedResumeChoice(
   // to redo.
   if (choice === "redo" && named !== undefined) {
     const wanted = named.trim();
+    const node = nodeForSlug(wanted);
+    const forUnits = flags.unit !== undefined || flags.everyUnit;
     // Unit-by-Unit Construction keeps Current Stage on the block's first stage
     // while the Unit works through later ones: the step it is on is current too.
     const unitStage = getField(stateContent, "Unit Stage")?.trim();
-    if (wanted === slug) {
+    const walkStep = node !== undefined && isPerUnit(node)
+      ? unitWalkStepNamed(pd, scope, stateContent, slug, wanted)
+      : null;
+    const box = parseCheckboxes(stateContent).find((entry) => entry.slug === wanted)?.state;
+    if (!forUnits && walkStep?.past) {
+      // A step the Unit in flight already did, the block's first stage
+      // included, is reopened for that Unit, as the jump back to it does.
+      choice = "jump";
+    } else if (wanted === slug) {
       named = undefined;
       redoStage = slug;
-    } else if (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined) {
+    } else if (
+      (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined) || walkStep?.live
+    ) {
       named = undefined;
-      unitStep = unitStage;
-      redoStage = unitStage;
-    } else if ((flags.unit !== undefined || flags.everyUnit) && nodeForSlug(wanted) !== undefined) {
+      unitStep = wanted;
+      redoStage = wanted;
+    } else if (forUnits && node !== undefined && isPerUnit(node) && (walkStep !== null || box !== "pending")) {
       // A redo for named Units is reopening that step for them, and the reopen
       // judges what each Unit has run: a Unit can finish a step while the
-      // stage's own checkbox waits for the others.
+      // stage's own checkbox waits for the others. A stage that is not a
+      // per-unit step, or one no Unit can have reached, is judged as below.
       named = undefined;
       redoStage = wanted;
     }
-    else if (parseCheckboxes(stateContent).some((box) => box.slug === wanted && box.state === "completed")) choice = "jump";
+    else if (box === "completed") choice = "jump";
     else {
-      emit(errorDirective(
-        `${nodeForSlug(wanted) ? `"${wanted}" has not run yet, so there is nothing to redo` : `No stage is named "${wanted}"`}. ` +
-          "Tell the person, and ask whether they want to jump there or redo the current stage.",
-      ));
+      // Shown to the person as written: what happened, and what they can say.
+      const name = node?.name || wanted;
+      emit(errorDirective(node
+        ? `${name} has not run yet, so there is nothing to redo. ` +
+          `Say "jump to ${name}" to go there now, or "redo" to redo the step you are on.`
+        : `No stage is named "${wanted}". Say the stage again by its name, or "redo" to redo the step you are on.`));
       return;
     }
   }
@@ -12450,9 +12492,7 @@ function emitTypedResumeChoice(
     }
     const node = nodeForSlug(target);
     if (node === undefined) {
-      emit(errorDirective(
-        `No stage is named "${target}". Report again with --target set to one of: ${loadGraph().map((stage) => stage.slug).join(", ")}.`,
-      ));
+      emit(errorDirective(`No stage is named "${target}". Say the stage again by its name.`));
       return;
     }
     emit(printDirective(

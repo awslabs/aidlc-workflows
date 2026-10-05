@@ -2209,6 +2209,46 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(redo(p)).toContain("execute --target functional-design --direction redo");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // "Redo <stage>" with no Unit named, read the way the conductor types it.
+  function redoNamed(p: string, stage: string) {
+    const answered = JSON.parse(tool(p, "orchestrate", [
+      "report", "--result", "resumed", "--choice", "redo", "--target", stage,
+    ]).stdout) as { kind: string; message: string };
+    expect(answered.kind, JSON.stringify(answered)).toBe("print");
+    return answered.message;
+  }
+
+  test("a redo naming a step beta already did, with no Unit named, reopens that step for beta", () => {
+    const p = betaBuilding();
+    // The block's first stage is Current Stage too, and a step between it and
+    // beta's own is one whose checkbox still waits for the other Units: both
+    // are the stage named, never beta's Code Generation.
+    for (const stage of ["functional-design", "nfr-design"]) {
+      const message = redoNamed(p, stage);
+      expect(message).toContain(`Run \`next --stage ${stage}\``);
+      expect(message).not.toContain("code-generation");
+    }
+    // The step beta is on is beta's own redo.
+    expect(redoNamed(p, "code-generation")).toContain('Redo accepted at "code-generation" for unit "beta"');
+    const said = reopenFor(p, ["--stage", "functional-design"]);
+    expect(said).toContain(
+      "reopen --target functional-design --stages functional-design,nfr-requirements,nfr-design,infrastructure-design,code-generation --units beta ",
+    );
+    expect(said).toContain("\"Reopened Functional Design for unit beta. alpha keeps its finished work.");
+    expect(jumped(p)).toBe(0);
+    expect(approved(p, "alpha")).toBe(true);
+    expect(unitCompletedReceipts(p, "functional-design").has("alpha")).toBe(true);
+    expect(unitCompletedReceipts(p, "functional-design").has("beta")).toBe(false);
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("at beta's checkpoint, a redo naming an earlier step reopens that step, not beta's last one", () => {
+    const p = betaBuilding();
+    cover(p, "beta", ["code-generation"]);
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(redoNamed(p, "functional-design")).toContain("Run `next --stage functional-design`");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // One review through the logger, as a real run records it: the request, the
   // reviewer's file in the slot it names, then the verdict. A `finding` makes
   // it a NOT-READY review with that one finding.
