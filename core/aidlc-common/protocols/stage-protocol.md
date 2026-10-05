@@ -823,9 +823,9 @@ Both levels MUST stay in sync. NO EXCEPTIONS. If a step is done, its checkbox is
 ### Generating ISO timestamps
 CLI tools (`aidlc-state.ts`, `aidlc-audit.ts`, `aidlc-jump.ts`) auto-generate fresh ISO timestamps for each call. The audit trail never needs a timestamp from you: every row is stamped by the tool or hook that appends it.
 
-When an artifact template asks for a UTC timestamp (a review file's `Date` field, for example), generate it via:
+When an artifact template asks for a UTC timestamp (a review file's `Date` field, for example), take it from the engine's clock and paste what it prints:
 ```bash
-date -u +"%Y-%m-%dT%H:%M:%SZ"
+{{INVOKE}} engine now
 ```
 NEVER use date-only format (e.g. `2026-02-17`). Always include the time component and Z suffix.
 

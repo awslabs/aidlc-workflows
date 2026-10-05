@@ -780,7 +780,7 @@ describe("t148 dist/kiro file structure", () => {
       ]) {
         expect(kiroShellEffect(fm, command), `${tree} conductor: ${command}`).toBe("ask");
       }
-      const prefixes = [`${invoke} engine log decision --stage s --decision`, "date -u"];
+      const prefixes = [`${invoke} engine log decision --stage s --decision`, `${invoke} engine now`];
       if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-utility.ts codekb-path --repo");
       for (const prefix of prefixes) {
         for (const tail of SHELL_FORM_TAILS) {
@@ -803,7 +803,7 @@ describe("t148 dist/kiro file structure", () => {
       expect(personas.length).toBe(14);
       for (const persona of personas) {
         const fm = frontmatter(join(agentsDir, persona));
-        const prefixes = ["date -u", `${invoke} engine log answers --stage x --details`];
+        const prefixes = [`${invoke} engine now`, `${invoke} engine log answers --stage x --details`];
         if (tree === "dist") prefixes.push("bun .kiro/tools/aidlc-log.ts answers --stage x --details");
         for (const prefix of prefixes) {
           for (const tail of SHELL_FORM_TAILS) {
@@ -819,10 +819,10 @@ describe("t148 dist/kiro file structure", () => {
           expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("allow");
         }
         // A delegate runs under the conductor's allow and its own deny, so a
-        // risky form on an AI-DLC command it is admitted (or on `date -u`) is
-        // refused outright, whatever ask Kiro applies to the call; the plain
-        // command still runs.
-        const admitted = [`${invoke} engine log answers --stage x`, "date -u"];
+        // risky form on an AI-DLC command it is admitted (the engine's clock
+        // among them) is refused outright, whatever ask Kiro applies to the
+        // call; the plain command still runs.
+        const admitted = [`${invoke} engine log answers --stage x`, `${invoke} engine now`];
         if (tree === "dist") admitted.push("bun .kiro/tools/aidlc-log.ts answers --stage x");
         for (const command of admitted) {
           expect(kiroShellEffect(fm, command), `${tree} ${persona}: ${command}`).not.toBe("deny");

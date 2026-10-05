@@ -172,7 +172,7 @@ The install ships:
   pipeline-deploy persona creates, merges, discards, and restores Bolt
   worktrees.
   No agent-v1 JSON ships. Their shell
-  rules run AI-DLC's own commands, `date -u`, and `bun --version` without
+  rules run AI-DLC's own commands and `bun --version` without
   asking; the project's own test and build commands still ask.
 - `.kiro/settings/cli.json` — pins Kiro CLI to its v3 engine and the `aidlc`
   agent. Kiro CLI's default v2 engine runs none of the `.kiro/hooks/`

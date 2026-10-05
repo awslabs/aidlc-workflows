@@ -2273,6 +2273,7 @@ describe("t230 dispatcher route completeness", () => {
       [["engine", "config", "set", "depth"], "config"],
       [["engine", "status"], "top-status"],
       [["engine", "recompose"], "top-recompose"],
+      [["engine", "now"], "top-now"],
     ];
     for (const [args, routeId] of semanticRoutes) {
       expect(routePolicyFor(args)?.id, args.join(" ")).toBe(routeId);
@@ -2333,6 +2334,11 @@ describe("t230 dispatcher route completeness", () => {
       type: "delegate",
       tool: TOOLS.utility,
       args: ["status"],
+    });
+    expect(resolveAction(["engine", "now"])).toEqual({
+      type: "delegate",
+      tool: TOOLS.utility,
+      args: ["now"],
     });
     expect(resolveAction(["engine", "recompose", "--skip", "market-research"]))
       .toEqual({

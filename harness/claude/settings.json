@@ -7,7 +7,6 @@
       "Edit(/**)",
       "Bash(bun .claude/tools/aidlc.ts engine *)",
       "Bash(bun .claude/tools/aidlc-*)",
-      "Bash(date -u *)",
       "Task",
       "WebSearch"
     ]

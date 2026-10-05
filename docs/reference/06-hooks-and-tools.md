@@ -1820,7 +1820,6 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 |-------------|-------------|
 | `Edit(/**)` | Creating and changing artifacts and project files anywhere in the project, through `Edit` and `Write` (never the `audit/` shards, which the guards refuse) |
 | `Bash(bun .claude/tools/aidlc.ts engine *)`, one exact entry per read-only dispatcher command (`doctor`, `version`, `--doctor`, `status`, `config <section> --show --json`, `config <section> --help`), and `Bash(bun .claude/tools/aidlc-<tool>.ts)` plus `Bash(bun .claude/tools/aidlc-<tool>.ts *)` per AI-DLC tool script | AI-DLC's own workflow commands (`Bash(aidlc engine *)` in the native release) |
-| `Bash(date -u *)` | Timestamps |
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 

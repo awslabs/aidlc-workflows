@@ -50,11 +50,11 @@ const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
 // Each persona's shell deny admits what the guard admits that persona, and
-// refuses a risky shell form on any AI-DLC command or `date -u`.
+// refuses a risky shell form on any AI-DLC command.
 const copyShellDeny = new Map<string, string[]>(
   DELEGATION_AGENTS.map((agent) => [agent, [
     ...shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent)),
-    ...riskyFormDenyLines(["bun .kiro/tools/aidlc", "date -u"]),
+    ...riskyFormDenyLines(["bun .kiro/tools/aidlc"]),
   ]]),
 );
 
@@ -92,7 +92,6 @@ function personaFrontmatter(agent: string): string[] {
     // pattern above does not reach. Its engine namespace only: the public
     // verbs that change the machine's install keep asking, as on native.
     `        - "bun .kiro/tools/aidlc.ts engine *"`,
-    `        - "date -u *"`,
     // A read-only version check the personas run before a project's tests;
     // the tests themselves keep asking.
     `        - "bun --version"`,
@@ -302,7 +301,7 @@ const manifest: HarnessManifest = {
       from,
       to: [
         ...shellDenyLines(nativeDelegateShellDeny(agent)),
-        ...riskyFormDenyLines(["aidlc", "date -u"]),
+        ...riskyFormDenyLines(["aidlc"]),
       ].join("\n"),
     })),
 

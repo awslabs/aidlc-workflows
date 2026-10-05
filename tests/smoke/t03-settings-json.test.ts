@@ -118,7 +118,6 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
         `Bash(bun .claude/tools/${script})`,
         `Bash(bun .claude/tools/${script} *)`,
       ]),
-      "Bash(date -u *)",
       "Task",
       "WebSearch",
     ]);
@@ -195,7 +194,7 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       "bun .claude/tools/aidlc.ts --doctor",
       "bun .claude/tools/aidlc-utility.ts codekb-path",
       "bun .claude/tools/aidlc-utility.ts",
-      "date -u +%Y-%m-%dT%H:%M:%SZ",
+      "bun .claude/tools/aidlc.ts engine now",
     ]) {
       expect(claudeBashEffect(command), command).toBe("allow");
     }

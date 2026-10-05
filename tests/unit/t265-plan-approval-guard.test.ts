@@ -1522,6 +1522,10 @@ describe("t265b hook lifecycle", () => {
         ["bun .claude/tools/aidlc-doctor.ts doctor --verbose", 0],
         ["aidlc --version", 0],
         ["aidlc status", 0],
+        // The engine's clock, for a time a document asks for.
+        ["aidlc engine now", 0],
+        ["bun .claude/tools/aidlc.ts engine now", 0],
+        ["bun .claude/tools/aidlc-utility.ts now", 0],
         ["aidlc doctor --export --output out", 2],
         ["aidlc doctor --export=bundle", 2],
         ["bun .claude/tools/aidlc-doctor.ts doctor --export=bundle", 2],

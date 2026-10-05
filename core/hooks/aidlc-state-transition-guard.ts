@@ -135,7 +135,7 @@ export const DELEGATED_LIFECYCLE_SCRIPTS: readonly string[] = [
 // The refusals above stay what the guard enforces where a call names its agent.
 export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>> = {
   "aidlc-utility.ts": [
-    "help", "version", "status", "detect", "project-description", "codekb-path", "codekb-scope-diff",
+    "help", "version", "now", "status", "detect", "project-description", "codekb-path", "codekb-scope-diff",
     "codekb-snapshot", "codekb-publish", "plugin-list", "plugin-validate", "config-get", "config-list",
     "resolve-env-scope", "scope-table", "stage-table", "select-plugins", "document-input",
   ],

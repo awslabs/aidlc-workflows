@@ -49,7 +49,7 @@ from the compiled stage graph and scope grid:
   single-line preview to the state `Project` field
 - Project type (greenfield/brownfield from workspace-detection)
 - Workspace state (languages, frameworks, build system from workspace-detection)
-- Start date — run `date -u +'%Y-%m-%dT%H:%M:%SZ'` via Bash
+- Start date: the time `{{INVOKE}} engine now` prints
 - Scope configuration (stages to execute/skip per scope routing)
 - Full stage progress checkboxes (all stages, with INITIALIZATION stages marked [x] for workspace-scaffold, workspace-detection)
 - Mark state-init as `[-]` in progress

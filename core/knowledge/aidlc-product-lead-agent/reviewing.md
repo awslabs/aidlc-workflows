@@ -71,7 +71,7 @@ Use this exact format:
 
 **Verdict:** READY | NOT-READY
 **Reviewer:** aidlc-product-lead-agent
-**Date:** [ISO timestamp from Bash]
+**Date:** [the UTC time `{{INVOKE}} engine now` prints]
 **Iteration:** [1, 2, etc.]
 
 ### Findings
@@ -94,7 +94,7 @@ Use this exact format:
 [1-2 sentences: overall assessment. What's the main issue holding it back, or why it's ready.]
 ```
 
-For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output. Never guess or infer the date.
+For the `Date` field, run `{{INVOKE}} engine now` and paste the time it prints. Never guess or infer the date.
 
 ### Severity Levels
 

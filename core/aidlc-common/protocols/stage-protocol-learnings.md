@@ -33,7 +33,7 @@ When this module is listed, trigger after Step N-1 (completion message rendered)
    - **Tradeoffs** — alternatives considered and why you picked what you did
    - **Open questions** — anything to confirm before next run, or uncertain context worth flagging
 
-   Each entry is a bullet under the appropriate heading with an ISO 8601 timestamp prefix:
+   Each entry is a bullet under the appropriate heading with an ISO 8601 timestamp prefix (`{{INVOKE}} engine now` prints it):
    ```markdown
    - 2026-05-20T10:14:32Z — <one-line summary>; <2-3 sentences of context>
    ```

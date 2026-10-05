@@ -912,6 +912,8 @@ function lastFlagValue(args: string[], flag: string): string | null {
 function isReadOnlyDiagnostic(args: readonly string[]): boolean {
   const [head = "", ...rest] = args;
   if (["status", "--status", "version", "--version", "help", "--help"].includes(head)) return true;
+  // The engine's clock, for a time a document asks for.
+  if (head === "engine" && rest.length === 1 && rest[0] === "now") return true;
   if (head !== "doctor" && head !== "--doctor") return false;
   return !rest.some((arg) =>
     arg === "--export" || arg === "--output" ||
@@ -1169,7 +1171,8 @@ function isNativePlanApprovalPrerequisite(
 // aidlc-utility.ts), which the unified entry point dispatches to.
 function isReadOnlyToolDiagnostic(stem: string, args: readonly string[]): boolean {
   if (stem === "doctor") return args[0] === "doctor" && isReadOnlyDiagnostic(args);
-  return stem === "utility" && (args[0] === "status" || args[0] === "version");
+  return stem === "utility" &&
+    (args[0] === "status" || args[0] === "version" || (args[0] === "now" && args.length === 1));
 }
 
 // Construction entry choices the person makes before the first Unit's plan
