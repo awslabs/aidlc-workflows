@@ -154,6 +154,13 @@ const manifest: HarnessManifest = {
 
   emit: null,
 
+  // The standing rule names the doctor the way each install runs it: a copied
+  // install through its own Bun dispatcher, the native release as `aidlc`.
+  nativeReplacements: [{
+    from: "run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),",
+    to: "run `aidlc doctor`,",
+  }],
+
   plugin: { manifestDir: ".cursor-plugin", kind: "cursor" },
 };
 

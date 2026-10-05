@@ -33,7 +33,7 @@ practices, or workflow questions:
 
 If every tool call here is refused before it runs, AI-DLC cannot start in
 this Cursor window, and nothing you retry will get through. Stop and tell the
-person, in one message: open a terminal in this folder and run `aidlc doctor`,
-whose Runtime hook PATH line names what to fix (on a copied install, run
-`bun --version` there instead, and install Bun from https://bun.sh/install if
-it fails). Then quit Cursor fully and open this folder again.
+person, in one message: open a terminal in this folder and
+run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),
+whose Runtime hook PATH line names what to fix. Then quit Cursor fully and
+open this folder again.

@@ -354,12 +354,16 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       // the always-applied rule sends the person here: this doctor run prints
       // the Runtime hook PATH line the rule names, and `aidlc doctor` routes.
       expect(r.stdout).toContain("Runtime hook PATH");
-      for (const tree of [CURSOR_ROOT, CURSOR_RELEASE_ROOT]) {
+      // Each install names its own doctor: the copied one runs it through Bun.
+      for (const [tree, doctor] of [
+        [CURSOR_ROOT, "run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),"],
+        [CURSOR_RELEASE_ROOT, "run `aidlc doctor`,"],
+      ] as const) {
         const standing = readFileSync(join(tree, ".cursor", "rules", "aidlc.mdc"), "utf-8");
         expect(standing, tree).toContain("If every tool call here is refused before it runs");
-        expect(standing, tree).toContain("run `aidlc doctor`,\nwhose Runtime hook PATH line names what to fix");
-        expect(standing, tree).toContain("`bun --version`");
-        expect(standing, tree).toContain("quit Cursor fully and open this folder again");
+        expect(standing, tree).toContain(`${doctor}\nwhose Runtime hook PATH line names what to fix`);
+        expect(standing, tree).not.toContain("bun --version");
+        expect(standing, tree).toContain("quit Cursor fully and\nopen this folder again");
       }
       expect(resolveAction(["doctor"]).type).not.toBe("error");
     } finally {
