@@ -321,6 +321,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const tok of [
         "**The person's checks, off or on when they ask.**",
         "never refuse, never ask them to type it",
+        "Asking for the guards or the checks as a whole to be off (\"turn the guards off\") is Guard Policy `off`",
       ]) {
         if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
       }
@@ -334,6 +335,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     };
     for (const tok of [
       "never refuse, never ask them to type it",
+      "Asking for the guards or the checks as a whole to be off (\"turn the guards off\") is Guard Policy `off`",
       "Where it applies is what they say: this piece of work, this project, or this machine.",
       "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
       "`{{INVOKE}} engine config set <key> <on|off>`",
