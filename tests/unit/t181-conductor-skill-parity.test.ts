@@ -1501,6 +1501,23 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     ).toContain("(at an approval gate too, where it is that request and not the gate's answer)");
   });
 
+  // Text a shell would act on never goes on the command line at all: every
+  // SKILL and the protocol send it through the record's answer-text file.
+  test("every shipped conductor SKILL and the protocol send shell-unsafe answer text through a file", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      for (const token of [
+        "goes in a file instead, so no shell reads it at all",
+        "`<record>/.aidlc-engine/answer-text/answer.txt` and pass `--details-file .aidlc-engine/answer-text/answer.txt`",
+        "`--on-instruction-file`",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   // In double quotes a shell runs a `$(...)`, a backtick or a `$NAME` inside
   // the text, and a choice's text can come from the project: answer text is
   // shown single-quoted, as the protocol's own rule for the person's words says.

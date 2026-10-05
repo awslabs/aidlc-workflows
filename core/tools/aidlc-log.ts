@@ -23,6 +23,7 @@ import {
   maximalAttemptEvents,
   verificationCommandDetails,
   readVerificationCommandFile,
+  readAnswerTextFile,
   protectedQuestionRelativePath,
   mintProtectedQuestion,
   protectedTargetDigest,
@@ -310,7 +311,12 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
   const howToPass = (example: string): string =>
     "Run the command again with each value as one argument, in the person's exact words; " +
     `in Windows PowerShell write each double quote inside a value as \\" (for example ${textFlag} '${example}'), ` +
-    "or as a single quote ('') when the value also holds &, |, <, > or ^.";
+    "or as a single quote ('') when the value also holds &, |, <, > or ^." +
+    (subcommand === "answer"
+      ? " An answer holding any of those, or a quote, $, %, ! or a line break, goes in a file instead: write it to " +
+        "<record>/.aidlc-engine/answer-text/answer.txt with your file tool and pass " +
+        "--details-file .aidlc-engine/answer-text/answer.txt."
+      : "");
   const options = subcommand === "decision" ? DECISION_OPTIONS : ANSWER_OPTIONS;
   let first: { flag: string; value: string; words: string[] } | null = null;
   let open: { flag: string; value: string; words: string[] } | null = null;
@@ -396,6 +402,7 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 // --on-instruction: a stage question the person left to the agent.
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
+  "--details-file", "--on-instruction-file",
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -1537,7 +1544,18 @@ function answerEnginePlanApproval(
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
-  if (!flags.details) error("Missing --details <text>");
+  // Text that holds shell characters arrives in a file the agent wrote, so no
+  // shell (bash, PowerShell, or cmd.exe through aidlc.cmd) reads it on the way.
+  for (const [text, file] of [["details", "details-file"], ["on-instruction", "on-instruction-file"]] as const) {
+    if (flags[file] === undefined) continue;
+    if (flags[text] !== undefined) error(`Pass either --${text} or --${file}, not both.`);
+    try {
+      flags[text] = readAnswerTextFile(resolveActiveProjectDir(projectDir), flags[file]);
+    } catch (err) {
+      error(errorMessage(err));
+    }
+  }
+  if (!flags.details) error("Missing --details <text> (or --details-file <file>)");
   // A stage question the person left to the agent. Checkpoints and approvals
   // stay the person's own each time, and an unattended run has nobody to hand
   // anything over.

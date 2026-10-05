@@ -73,6 +73,7 @@ import {
   type ClaudeCodeHookInput,
   composerProposalPath,
   docsRoot,
+  ANSWER_TEXT_DIR,
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
@@ -847,6 +848,20 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
     ) return false;
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
     const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
+  } catch {
+    return false;
+  }
+}
+
+// The record folder where the agent writes a person's answer text for
+// `log answer --details-file`: a plain file inside the work's own record,
+// reached through no link. Writing it changes nothing and builds nothing.
+function isAnswerTextTarget(projectDir: string, target: string): boolean {
+  try {
+    const record = docsRoot(projectDir);
+    if (!record || !isTrustedRecordTarget(projectDir, target, join(record, ANSWER_TEXT_DIR))) return false;
+    const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
     return false;
@@ -2143,6 +2158,16 @@ async function evaluate(
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
       mutation.targets.every((candidate) => isComposerProposalTarget(projectDir, candidate))
+    ) {
+      return 0;
+    }
+    // A file-tool write of a person's answer text, for the log to read with no
+    // shell on the way, passes in every Plan Approval state too.
+    if (
+      WRITE_TOOLS.has(toolName) &&
+      !mutation.opaqueShell &&
+      mutation.targets.length > 0 &&
+      mutation.targets.every((candidate) => isAnswerTextTarget(projectDir, candidate))
     ) {
       return 0;
     }

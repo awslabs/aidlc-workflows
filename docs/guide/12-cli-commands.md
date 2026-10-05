@@ -1659,6 +1659,14 @@ aidlc engine audit history
 
 `log answers` returns JSON with paired answers, open questions, and ambiguous answers.
 `audit history` returns a JSON timeline of events and free-form notes.
+
+An answer whose text holds a character a shell acts on (`$`, a backtick, a quote,
+`%`, `&`, `|`, `<`, `>`, `^`, `!`, or a line break) reaches `log answer` through
+a file instead of the command line: the agent writes it to
+`<record>/.aidlc-engine/answer-text/answer.txt` and passes `--details-file
+.aidlc-engine/answer-text/answer.txt` (`--on-instruction-file` for the words that
+left a choice to the agent). The engine reads only that folder, through no link,
+up to 64 KiB, and removes the file once read.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals

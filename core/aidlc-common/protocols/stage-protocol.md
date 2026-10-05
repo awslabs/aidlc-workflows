@@ -302,7 +302,13 @@ recovery protocol's Session resume says, never as Request Changes.
   quotes, never double quotes, so no shell runs a `$(...)`, a backtick, or a
   `$NAME` they typed. Inside the quotes write a single quote as `'\''` in bash
   or zsh, or as `''` in PowerShell:
-  `` --details 'Request changes: don'\''t rename `foo`' ``.
+  `` --details 'Request changes: don'\''t rename `foo`' ``. An answer whose
+  text holds any of `$`, a backtick, a quote, `%`, `&`, `|`, `<`, `>`, `^`, `!`
+  or a line break goes in a file instead, so no shell reads it at all: write it
+  with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
+  pass `--details-file .aidlc-engine/answer-text/answer.txt` (or
+  `--on-instruction-file` for their words that left a choice to you); the
+  engine reads the file and removes it.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   park, and tell them how to resume.
 

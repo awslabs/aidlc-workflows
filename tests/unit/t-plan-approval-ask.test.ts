@@ -352,6 +352,13 @@ describe("the engine asks for Plan Approval", () => {
     expect(blocked.code).toBe(2);
     expect(blocked.stderr).toContain("The plan is waiting for the person to approve it");
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    // A person's answer text for `log answer --details-file` is written in the
+    // record's own answer-text folder, so no shell reads it; that alone passes.
+    const answerText = join(seededRecordDir(proj), ".aidlc-engine", "answer-text");
+    expect(guardWrite(proj, join(answerText, "answer.txt")).code).toBe(0);
+    expect(guardWrite(proj, join(seededRecordDir(proj), ".aidlc-engine", "answer.txt")).code).toBe(2);
+    expect(guardWrite(proj, join(answerText, "..", "..", "construction", "code-generation", "code-generation-plan.md")).code)
+      .toBe(2);
   });
 
   test("while the question is open, the old conductor commands point back to next, and a record needs their reply", () => {

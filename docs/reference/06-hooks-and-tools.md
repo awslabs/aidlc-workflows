@@ -1482,7 +1482,10 @@ and test instructions with a file tool, for what they asked with their answer
 the approval takes the fingerprint of the plan as it stands then, and the record
 says which files changed since the question was shown. The questions file, a
 plan the question does not ask about (or one already answered), shell writes,
-and code are refused until the engine routes work again.
+and code are refused until the engine routes work again. A file-tool write of a
+person's answer text in the record's `.aidlc-engine/answer-text/` folder passes
+in every Plan Approval state, so `log answer --details-file` can carry text a
+shell would act on.
 
 **While the engine's recovery question is open.** When a published
 guard-recovery ask is the active directive and the person has picked a remedy,

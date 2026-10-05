@@ -11530,6 +11530,40 @@ export function readVerificationCommandFile(projectDir: string, file: string): V
   );
 }
 
+/** The folder in a piece of work's record where the agent writes a person's
+ *  answer text for `log answer --details-file`, so the text reaches the engine
+ *  without passing through any shell (bash, PowerShell, or cmd.exe). */
+export const ANSWER_TEXT_DIR = ".aidlc-engine/answer-text";
+const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
+
+/**
+ * Read one answer text file the agent wrote, then remove it. The path is
+ * record-relative and must name a plain file inside ANSWER_TEXT_DIR, reached
+ * through no link; nothing outside that folder is ever read.
+ */
+export function readAnswerTextFile(projectDir: string, file: string): string {
+  const root = recordDir(projectDir);
+  if (!root) throw new Error("An answer text file needs an active piece of work.");
+  const relativePath = file.replaceAll("\\", "/");
+  const parts = relativePath.split("/");
+  if (
+    isAbsolute(file) || parts.some((part) => part === ".." || part === ".") ||
+    !relativePath.startsWith(`${ANSWER_TEXT_DIR}/`) || relativePath.length === ANSWER_TEXT_DIR.length + 1
+  ) {
+    throw new Error(
+      `An answer text file must be inside ${ANSWER_TEXT_DIR}/ in the work's record, named relative to the record ` +
+        `(for example ${ANSWER_TEXT_DIR}/answer.txt).`,
+    );
+  }
+  const path = recordFileTargetOrThrow(root, relativePath);
+  const text = readRegularFileNoFollowOrThrow(path, "answer text file", ANSWER_TEXT_MAX_BYTES)
+    .toString("utf-8")
+    .replace(/\r?\n$/, "");
+  removeRecordFileNoFollow(root, relativePath);
+  if (text.trim() === "") throw new Error(`The answer text file ${relativePath} is empty.`);
+  return text;
+}
+
 export function authorizedVerificationCommand(
   projectDir: string,
   stateContent: string,
