@@ -116,6 +116,17 @@ function questionFile(id: string): string {
   return join(proj, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
 }
 
+// Words alone over active work first get the re-entry readings (a redo,
+// jump, or fresh start, or else this); their `next --request` asks the
+// routing question with the words kept.
+function asWork(words: string): Record<string, any> {
+  const read = JSON.parse(next([words]).stdout.trim()) as { kind: string; message: string };
+  expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
+  const request = /`([^`]* next --request [0-9a-f]{8})`/.exec(read.message)?.[1];
+  expect(request, read.message).toBeDefined();
+  return JSON.parse(runEmittedCommand(request!).stdout.trim());
+}
+
 function printedCommand(message: string): string {
   const command = message.match(/Run `([^`]+)`/)?.[1];
   expect(command, message).toBeDefined();
@@ -599,7 +610,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       // While the workflow it asked about is selected, its reshape proceeds.
       expect(JSON.parse(runEmittedCommand(ask.compose_command).stdout.trim()).kind).toBe("print");
@@ -633,7 +644,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(emittedArgv(ask.continue_command)).toEqual(["next", "--continue", "--request", expect.stringMatching(/^[0-9a-f]{8}$/)]);
       // While the workflow it asked about is selected, "part of it" is exactly a bare next.
@@ -650,7 +661,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
@@ -665,7 +676,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       for (const reply of ["2", "Separate new piece of work"]) {
@@ -680,7 +691,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
@@ -694,7 +705,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       test(`a routing option said in prose (${reply}) asks again, never creates, when the workflow it named is gone`, () => {
         expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
         const [asked] = recordDirs(proj);
-        const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+        const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
         const again = JSON.parse(next([reply]).stdout.trim());
@@ -708,7 +719,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
       const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+      const ask = asWork("rename the settings page");
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       // The selected workflow's current stage is [-] with a logged, unanswered
@@ -745,7 +756,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       test(`a routing ${route} answer asks again, never creates, when the workflow it named is gone`, () => {
         expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
         const [asked] = recordDirs(proj);
-        const ask = JSON.parse(next(["rename the settings page"]).stdout.trim());
+        const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
         const again = JSON.parse(runEmittedCommand(ask[route]).stdout.trim());
