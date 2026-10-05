@@ -742,14 +742,17 @@ Codex uses `$aidlc` instead of `/aidlc`, including in refusals.
 Both config and flags-first forms accept companion intent settings plus
 `--intent <name>` and `--space <name>`; omitted selectors use the hook payload
 session's workflow selection. Each selector is permitted at most once.
-A nonexistent named intent is refused; without a state file, create the piece
-of work and type the switch again.
+A nonexistent named intent is refused. Without a state file, a fence switch
+says to create the piece of work and type it again, while Guard Policy
+`relaxed` or `off` (alone, or as a flag of the new work's description) is kept
+for the piece of work this chat starts next, as described below; a later
+`strict` withdraws it.
 The hook checks memory-held strict, then uses the shared settings transaction
 with `typedByPerson: true` to append audit rows and write state under the audit
 lock, returning the result as `AIDLC Guard Policy: ...` hook context on harnesses
 that inject it.
-No switch is saved for later, and the CLI performs no switch-authority session
-lookup; hooks run on Windows too, so every harness that forwards the prompt
+Apart from that one Guard Policy grant for the next piece of work, no switch is
+saved for later, and the CLI performs no switch-authority session lookup; hooks run on Windows too, so every harness that forwards the prompt
 supports this path.
 
 After the memory-strict check, `config-change` and `scope-change` carry out an

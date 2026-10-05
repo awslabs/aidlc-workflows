@@ -395,8 +395,9 @@ try {
       "AIDLC Guard Policy: the typed switch was not applied because AIDLC_UNATTENDED=1 withholds human authority on this driver; run it from an attended session.",
     );
   }
-  // Apply before the state-file gate so a first-use switch reports that the
-  // person must create the piece of work, then type the switch again.
+  // Apply before the state-file gate: a first-use fence switch says to create
+  // the piece of work and type it again, and Guard Policy relaxed or off is
+  // kept for the piece of work this chat starts next.
   const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
   if (mintAllowed && sessionId && typedPrompt) {
     try {

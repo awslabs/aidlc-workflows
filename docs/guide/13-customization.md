@@ -186,8 +186,8 @@ The typed forms `/aidlc config set guard-policy relaxed --intent <name> --space 
 and `/aidlc --guard-policy relaxed --intent <name> --space <name> ...` make the
 human-turn hook apply the switch at prompt time to that intent and space.
 The trailing `...` in the flags form stands for an optional task description.
-A nonexistent named intent is refused; without a state file, create the piece
-of work and type the switch again.
+A nonexistent named intent is refused. Without a state file, a fence switch says to create the piece
+of work and type it again, while Guard Policy `relaxed` or `off` is kept for the piece of work this chat starts next.
 
 Selectors target the same intent for state, memory policy, and audit without
 switching the active cursors. All supplied values are validated before mutation;
