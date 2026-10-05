@@ -1159,8 +1159,11 @@ describe("t276 cursor adapter payload conversion", () => {
         const denied = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
         expect(denied.permission).toBe("deny");
         // The refusal names the way out for the person, not only the failure.
-        // This tree runs from source, so the command is the install's own spelling.
-        expect(denied.agent_message ?? "").toContain("tell the person to run `bun .cursor/tools/aidlc.ts doctor` in a terminal");
+        // Cursor sends this input itself and doctor cannot see it, so the step
+        // is a retry, then a full restart of Cursor.
+        expect(denied.agent_message ?? "").toContain("Retry it once");
+        expect(denied.agent_message ?? "").toContain("quit Cursor fully and open this folder again");
+        expect(denied.agent_message ?? "").not.toContain("doctor");
       } else {
         expect(r.stdout.trim(), `${target}: advisory malformed input`).toBe("");
       }
