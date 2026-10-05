@@ -1944,6 +1944,125 @@ describe("the question's summary", () => {
   });
 });
 
+// While a plan waits, what the person asks for runs the first time: every
+// command the engine itself names for their request gets through the guard,
+// and code still waits for the approved plan.
+describe("what the engine names while a plan waits", () => {
+  // Commands a directive names: its command fields and backticked commands.
+  function namedCommands(directive: unknown): string[] {
+    const out = new Set<string>();
+    const visit = (value: unknown, key = ""): void => {
+      if (typeof value === "string") {
+        if (/(^|_)command$/.test(key) && /^(bun|aidlc)\b/.test(value)) out.add(value);
+        for (const m of value.matchAll(/`((?:bun|aidlc) [^`]*)`/g)) out.add(m[1]);
+      } else if (Array.isArray(value)) {
+        for (const entry of value) visit(entry, key);
+      } else if (value && typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) visit(v, k);
+      }
+    };
+    visit(directive);
+    return [...out];
+  }
+  // The protocol's own placeholders, filled the way the agent fills them here.
+  function filled(command: string): string {
+    return command
+      .replaceAll("<slug>", "code-generation")
+      .replaceAll('"<directive.stage>"', "code-generation")
+      .replaceAll("<first|revision|stale>", "first")
+      .replace(/"<[^"]*>"/g, '"x"');
+  }
+  // The review brief and the stage's question rows, as the shipped protocol names them.
+  function protocolCommands(): string[] {
+    const dir = join(AIDLC_SRC, "aidlc-common", "protocols");
+    const text = ["stage-protocol.md", "stage-protocol-reviewer.md"]
+      .map((name) => readFileSync(join(dir, name), "utf-8")).join("\n");
+    // A checkpoint row keeps its own rule, so only the plain question rows.
+    const commands = [...text.matchAll(/`(bun \.claude\/tools\/[^`\n]*(?:aidlc-review-brief\.ts|engine log (?:decision|answer) --stage <slug>)[^`\n]*)`/g)]
+      .map((m) => filled(m[1]))
+      .filter((command) => !command.includes("--checkpoint"));
+    expect(commands.length, "the protocol names no review brief or log row").toBeGreaterThan(3);
+    return [...new Set(commands)];
+  }
+  function waitingPlan(): string {
+    const proj = project("strict");
+    cpSync(join(AIDLC_SRC, "tools"), join(proj, ".claude", "tools"), { recursive: true });
+    askFor(proj);
+    return proj;
+  }
+  function resumeReport(proj: string, choice: string): unknown {
+    const result = spawnSync(BUN, [ORCHESTRATE, "report", "--result", "resumed", "--user-input", choice, "--project-dir", proj], {
+      cwd: proj,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const line = (result.stdout ?? "").split("\n").filter((entry) => entry.startsWith("{")).pop();
+    expect(line, `${result.stdout}${result.stderr}`).toBeDefined();
+    return JSON.parse(line as string);
+  }
+
+  test.each([
+    ["status", "/aidlc --status", ["--status"]],
+    ["help", "/aidlc --help", ["--help"]],
+    ["doctor", "/aidlc --doctor", ["--doctor"]],
+    ["version", "/aidlc --version", ["--version"]],
+    ["a jump back", "/aidlc --stage nfr-requirements", ["--stage", "nfr-requirements"]],
+    ["a jump to Reverse Engineering", "/aidlc --stage reverse-engineering", ["--stage", "reverse-engineering"]],
+    ["a redo of this stage", "/aidlc --stage code-generation", ["--stage", "code-generation"]],
+    ["a skip", "/aidlc --skip build-and-test", ["--skip", "build-and-test"]],
+    ["new work beside it", "/aidlc --new-intent add a csv export", ["--new-intent", "--scope", "poc", "add a csv export"]],
+    ["the resume menu's redo", "redo this stage from the start", null],
+  ] as const)("%s: every command the engine names gets through", (_label, typed, args) => {
+    const proj = waitingPlan();
+    reply(proj, typed);
+    const directive = args === null ? resumeReport(proj, "2") : next(proj, [...args]);
+    const commands = namedCommands(directive).map(filled);
+    expect(commands.length, `no command named: ${JSON.stringify(directive)}`).toBeGreaterThan(0);
+    for (const command of commands) {
+      const verdict = guardBash(proj, command);
+      expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
+    }
+    // Code is still held for the plan.
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+  });
+
+  test("the review brief and the stage's question rows get through, and an added write does not", () => {
+    const proj = waitingPlan();
+    for (const command of protocolCommands()) {
+      const verdict = guardBash(proj, command);
+      expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
+      expect(guardBash(proj, `${command}; printf x > src/a.ts`).code, `${command} with a write`).toBe(2);
+    }
+  });
+
+  test("a move the person asked for waits for them to have spoken", () => {
+    const proj = waitingPlan();
+    const jump = "bun .claude/tools/aidlc-jump.ts execute --target nfr-requirements --direction backward --scope poc";
+    expect(guardBash(proj, jump).code).toBe(2);
+    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test").code).toBe(2);
+    reply(proj, "/aidlc --stage nfr-requirements");
+    const verdict = guardBash(proj, jump);
+    expect(verdict.code, verdict.stderr).toBe(0);
+    // A skip passes with its own flags only.
+    expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test --scope feature").code).toBe(2);
+  });
+
+  // "This is existing code" at Code Generation: Reverse Engineering runs on
+  // its own, and its own steps and writes are its work, not the build's.
+  test("a Reverse Engineering run on its own at Code Generation is not held for the plan", () => {
+    const proj = waitingPlan();
+    reply(proj, "/aidlc --stage reverse-engineering --single");
+    const run = next(proj, ["--stage", "reverse-engineering", "--single"]);
+    expect(run.kind, JSON.stringify(run)).toBe("run-stage");
+    expect(run.stage).toBe("reverse-engineering");
+    const record = guardWrite(proj, join(seededRecordDir(proj), "inception", "reverse-engineering", "notes.md"));
+    expect(record.code, record.stderr).toBe(0);
+    const scan = guardBash(proj, "bun .claude/tools/aidlc.ts engine workspace codekb-scope-diff");
+    expect(scan.code, scan.stderr).toBe(0);
+  });
+});
+
 describe("stopping for now at Code Generation", () => {
   // Coming back the next day: the unpark the engine names gets through the
   // guard, and the approved plan is built with no new question.

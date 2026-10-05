@@ -95,6 +95,7 @@ import {
   personCheckSwitchAllowed,
   personSpokeSinceGate,
   readActiveDirectiveMarker,
+  readStoredActiveDirectiveMarker,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
@@ -1153,6 +1154,89 @@ function codeGenerationGateHeld(state: string): boolean {
     );
 }
 
+// What the engine names while a plan waits, other than building it: steps that
+// change nothing a plan governs, admitted at any time, and moves a person asks
+// for (`asked`), admitted once a person has spoken since the last decision.
+// Each is matched on `engine <noun> <verb>`; `admits` checks what follows the
+// noun. Code stays held for the approved plan either way.
+interface EngineDirectedRoute {
+  noun: string;
+  verbs?: readonly string[];
+  asked?: true;
+  admits?: (afterNoun: readonly string[]) => boolean;
+}
+
+// Only these flags, each with its value.
+function onlyFlags(args: readonly string[], allowed: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const [flag, inline] = args[i].split("=", 2);
+    if (!allowed.includes(flag)) return false;
+    if (inline === undefined) i++;
+  }
+  return true;
+}
+
+const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
+  // The review brief and the stage's own question rows (a checkpoint row keeps
+  // its own rule).
+  { noun: "review-brief", verbs: ["review", "context", "summary"] },
+  {
+    noun: "log", verbs: ["decision", "answer"],
+    admits: (afterNoun) =>
+      lastFlagValue(afterNoun.slice(1), "--stage") === GUARDED_STAGE &&
+      !afterNoun.some((arg) => arg === "--checkpoint" || arg.startsWith("--checkpoint=")),
+  },
+  // Status and help as the engine prints them.
+  { noun: "status" },
+  { noun: "orchestrate", verbs: ["help"] },
+  // The resume menu's choice: it only names the move, which is judged itself.
+  {
+    noun: "orchestrate", verbs: ["report"],
+    admits: (afterNoun) =>
+      lastFlagValue(afterNoun.slice(1), "--result") === "resumed" && !afterNoun.includes("--stage"),
+  },
+  // Moves the person asked for: a jump, a skip or add, new work, what the
+  // folder is, and the scan that follows it.
+  { noun: "jump", verbs: ["execute", "reopen"], asked: true },
+  { noun: "recompose", asked: true, admits: (afterNoun) => onlyFlags(afterNoun, ["--skip", "--add", "--reason"]) },
+  { noun: "intent", verbs: ["create"], asked: true },
+  { noun: "workspace", verbs: ["reclassify", "codekb-scope-diff"], asked: true },
+];
+
+function engineDirectedWhilePlanWaits(args: readonly string[], personSpoke: () => boolean): boolean {
+  if (args[0] !== "engine") return false;
+  const [noun, verb] = [args[1], args[2]];
+  return ENGINE_DIRECTED_WHILE_PLAN_WAITS.some((route) =>
+    route.noun === noun &&
+    (route.verbs === undefined || route.verbs.includes(verb ?? "")) &&
+    (route.admits === undefined || route.admits(args.slice(2))) &&
+    (route.asked !== true || personSpoke()));
+}
+
+// The engine's recovery question was the last step it issued, current or gone
+// stale: the remedy the person picks there is the only move it carries out
+// (guardRecoveryAnswerAdmits), and `next` names the step after it.
+function guardRecoveryAskOnRecord(projectDir: string): boolean {
+  const marker = readStoredActiveDirectiveMarker(projectDir);
+  return marker?.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE;
+}
+
+// Everything admitted while a plan waits, in one place: the prerequisites
+// below, the open question's own answers, read-only diagnostics, a recorded
+// switch, and what the engine names.
+function planWaitAdmits(
+  projectDir: string,
+  engineArgs: string[],
+  gateHeld: boolean,
+  askAdmits: (engineArgs: readonly string[]) => boolean,
+): boolean {
+  const personSpoke = () => personSpokeSinceGate(projectDir, { requests: true });
+  return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
+    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
+    chatSwitchChangeAdmitted(projectDir, engineArgs) ||
+    engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && !guardRecoveryAskOnRecord(projectDir));
+}
+
 function isPlanApprovalPrerequisite(
   args: string[],
   gateHeld = false,
@@ -1361,10 +1445,7 @@ function isFrameworkToolInvocation(
   enginePaths = false,
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
-  const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir, { requests: true })) ||
-    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    chatSwitchChangeAdmitted(projectDir, engineArgs);
+  const admitted = (engineArgs: string[]): boolean => planWaitAdmits(projectDir, engineArgs, gateHeld, askAdmits);
   if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
     // than the one these admissions were judged for.
@@ -1506,10 +1587,7 @@ function shellInvocationNeedsApproval(
   const executable = invocation.executable ?? invocation.name;
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
-  const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir, { requests: true })) ||
-    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
-    chatSwitchChangeAdmitted(projectDir, engineArgs);
+  const admitted = (engineArgs: string[]): boolean => planWaitAdmits(projectDir, engineArgs, gateHeld, askAdmits);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
     !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
@@ -1992,9 +2070,14 @@ async function evaluate(
       promptUnitMarkers(dispatchPrompt).length > 0 ||
       promptStageMarkers(dispatchPrompt).length > 0 ||
       promptTestingContractMarkers(dispatchPrompt).length > 0;
+    // A run of another stage on its own while Code Generation is current (the
+    // Reverse Engineering a person asked for once the folder turned out to hold
+    // existing code) is that stage's work, not Code Generation's.
+    const otherStageRunning = activeDirective?.version === 2 && activeDirective.kind === "run-stage" &&
+      directiveStage !== "" && directiveStage !== GUARDED_STAGE;
     const codeGenerationRelevant =
       directiveStage === GUARDED_STAGE ||
-      durableStage === GUARDED_STAGE ||
+      (durableStage === GUARDED_STAGE && !otherStageRunning) ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
