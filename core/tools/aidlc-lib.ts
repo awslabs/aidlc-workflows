@@ -35193,7 +35193,9 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
 // never holds a state file, so an unresolved selection also records nothing.
 // Refusals may need to name something outside the current project dir, such as
 // another checkout's path, on stderr while keeping the committed audit portable.
-export type EmitErrorMessage = string | { message: string; auditMessage: string };
+// `agentGuidance`: the message is the agent's next step (a decision the person
+// has not made), so callers hand it to the agent instead of the person.
+export type EmitErrorMessage = string | { message: string; auditMessage: string; agentGuidance?: boolean };
 
 export function emitError(
   projectDir: string,
@@ -35268,6 +35270,7 @@ export function emitError(
   console.error(JSON.stringify({
     error: changeNotices.length > 0 ? `${changeNotices.join("\n")}\n${message}` : message,
     ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+    ...(typeof msg !== "string" && msg.agentGuidance ? { agent_guidance: true } : {}),
   }));
   process.exit(1);
 }

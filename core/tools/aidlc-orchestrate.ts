@@ -11086,6 +11086,37 @@ function guardRecoveryAskFromToolOutput(
   return result.data;
 }
 
+// What `report` says when a state command it ran refuses. The tool's JSON
+// envelope is read, never shown. A decision the person has not made (or made
+// otherwise) is the agent's next step, handed to it with the question still
+// open; anything else stops the workflow with the tool's plain words.
+function stateRefusalDirective(lead: string, question: string, detail: string): PrintDirective | ErrorDirective {
+  let text = detail;
+  let agentGuidance = false;
+  try {
+    const parsed = JSON.parse(detail.split("\n").filter(Boolean).at(-1) ?? "") as {
+      error?: unknown;
+      agent_guidance?: unknown;
+    };
+    if (typeof parsed.error === "string") {
+      text = parsed.error.trim();
+      agentGuidance = parsed.agent_guidance === true;
+    }
+  } catch {
+    // Plain text already.
+  }
+  // The question is the person's to answer, so the turn may end at it.
+  if (agentGuidance) {
+    return turnEndingPrint(
+      `The question for ${question} is still open. ${text} ` +
+        "Show the question again if it is not on screen, and never answer it for the person.",
+    );
+  }
+  return errorDirective(
+    lead + (text ? `: ${text}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
+  );
+}
+
 type GuardPreflightOptions = {
   action: GuardPreflightAction;
   unit?: string;
@@ -12170,9 +12201,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         beat.unit,
       ]);
       if (res.exitCode !== 0) {
-        const detail = (res.stderr || res.stdout).trim();
-        emit(errorDirective(
-          `Could not skip "${slug}" for unit "${beat.unit}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
+        emit(stateRefusalDirective(
+          `Could not skip "${slug}" for unit "${beat.unit}"`,
+          `unit "${beat.unit}" of "${slug}"`,
+          (res.stderr || res.stdout).trim(),
         ));
         return;
       }
@@ -12250,10 +12282,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       "--route",
     ]);
     if (res.exitCode !== 0) {
-      const detail = (res.stderr || res.stdout).trim();
-      emit(errorDirective(
-        `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
-      ));
+      emit(stateRefusalDirective(`Could not skip "${slug}"`, `"${slug}"`, (res.stderr || res.stdout).trim()));
       return;
     }
     // A stage skipped because it does not apply is said, in one line, with the
@@ -12411,9 +12440,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             emit(guardAsk);
             return;
           }
-          emit(errorDirective(
-            `Transition rejected by aidlc-state.ts ${subArgs[0]} for unit "${unit}" of "${slug}"` +
-              (detail ? `: ${detail}` : "."),
+          emit(stateRefusalDirective(
+            `Could not update the approval status for unit "${unit}" of "${slug}"`,
+            `unit "${unit}" of "${slug}"`,
+            detail,
           ));
           return;
         }
@@ -12622,10 +12652,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit(guardAsk);
         return;
       }
-      emit(errorDirective(
-        `Could not update the approval status for "${slug}"` +
-          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
-      ));
+      emit(stateRefusalDirective(`Could not update the approval status for "${slug}"`, `"${slug}"`, detail));
       return;
     }
     const gateReply = withChangeNotices(
@@ -12822,19 +12849,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
       // aidlc-state.ts rejected the transition (error() exits non-zero). Surface
-      // its message verbatim so the rejection is a clear signal, not a silent miss.
+      // its words so the rejection is a clear signal, not a silent miss.
       const detail = (res.stderr || res.stdout).trim();
       const guardAsk = guardRecoveryAskFromToolOutput(detail);
       if (guardAsk !== null) {
         emit(guardAsk);
         return;
       }
-      emit({
-        kind: "error",
-        message:
-          `Could not complete "${slug}"` +
-          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
-      });
+      emit(stateRefusalDirective(`Could not complete "${slug}"`, `"${slug}"`, detail));
       return;
     }
     committed.push(subArgs[0]);

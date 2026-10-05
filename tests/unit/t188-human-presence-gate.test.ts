@@ -126,9 +126,10 @@ function guardedLog(
 
 // Drive the public report surface with the same guard posture. NOTE the
 // contract difference from `guarded`: when aidlc-state.ts refuses the
-// transition, orchestrate relays the refusal as an error DIRECTIVE
-// ({"kind":"error",...}) on stdout and exits 0 — only a malformed directive
-// exits non-zero. Refusal assertions must read the directive, not the rc.
+// transition, orchestrate relays the refusal as a DIRECTIVE on stdout and exits
+// 0 (a decision the person has not made is the agent's next step, a `print`;
+// anything else an `error`). Only a malformed directive exits non-zero, so
+// refusal assertions must read the directive, not the rc.
 function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
@@ -1361,7 +1362,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "fabricated approval",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
+      expect(approve.out).toContain('"kind":"print"');
       // The turn was spent on the interview answer: no reply is behind this approval.
       expect(approve.out).toContain("no new human reply");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -1396,7 +1397,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
           reply,
         ]);
         expect(approve.rc).toBe(0);
-        expect(approve.out).toContain('"kind":"error"');
+        expect(approve.out).toContain('"kind":"print"');
         expect(approve.out).toContain("no new human reply has been received");
         expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
         expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
@@ -1421,7 +1422,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "tighten the schema",
       ]);
       expect(reject.rc).toBe(0);
-      expect(reject.out).toContain('"kind":"error"');
+      expect(reject.out).toContain('"kind":"print"');
       expect(reject.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
       expect(field(proj, "Revision Count")).toBe("0");
@@ -1462,7 +1463,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "tighten the schema again",
       ]);
       expect(second.rc).toBe(0);
-      expect(second.out).toContain('"kind":"error"');
+      expect(second.out).toContain('"kind":"print"');
       expect(second.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });

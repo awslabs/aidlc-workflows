@@ -762,7 +762,9 @@ describe("t342 Construction checkpoint routing", () => {
       "--project-dir", p,
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(`${refused.stdout}${refused.stderr}`).toContain("human");
-    expect(JSON.parse(refused.stdout).kind).toBe("error");
+    // A change request nobody made goes back to the agent, the question open.
+    expect(JSON.parse(refused.stdout)).toMatchObject({ kind: "print" });
+    expect(JSON.parse(refused.stdout).message).toContain('The question for "functional-design" is still open.');
     for (const result of ["awaiting-approval", "approved"]) {
       const report = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",

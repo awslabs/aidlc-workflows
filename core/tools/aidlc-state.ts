@@ -67,6 +67,7 @@ import {
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
   evaluateGuardRefusal,
   eventMatchesClaimAttempt,
@@ -740,6 +741,15 @@ class StateCommandError extends Error {}
 // the original refusal without waiting again on the same unavailable audit.
 class StateAuditUnavailableError extends StateCommandError {}
 
+// A decision refused because the person has not made it, or made another one.
+// The message is the agent's next step, not news for the person, so the error
+// JSON marks it and the router hands it to the agent with the question open.
+class DecisionNotMadeError extends StateCommandError {}
+
+function refuseForAgent(msg: string): never {
+  throw new DecisionNotMadeError(msg);
+}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -988,6 +998,9 @@ export function main(argv: string[]): void {
           e.resourceFingerprints,
         ),
       );
+    }
+    if (e instanceof DecisionNotMadeError) {
+      exitWithError({ message: e.message, auditMessage: e.message, agentGuidance: true });
     }
     exitWithError(errorMessage(e));
   }
@@ -5779,7 +5792,7 @@ function verifyApprovalDecision(
       ? null
       : selfAttributedDecisionMarker(approvalInput, "approval");
   if (approvalAuthorship) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because --user-input says the choice came from the ` +
         `assistant (${approvalAuthorship.category}: "${approvalAuthorship.phrase}"). ` +
         "This check looks for explicit assistant provenance; it does not prove who wrote " +
@@ -5801,7 +5814,7 @@ function verifyApprovalDecision(
     // Host cancellation text is no reply, and a latest message that is exactly
     // Request Changes is their pick.
     if (approvalInput && isNonAnswer(approvalInput)) {
-      error(
+      refuseForAgent(
         `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
           "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
           "choice and wait for the human to choose one.",
@@ -5809,7 +5822,7 @@ function verifyApprovalDecision(
     }
     const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
     if (pick === "Request Changes") {
-      error(
+      refuseForAgent(
         `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
           "their words differently.",
       );
@@ -5822,7 +5835,7 @@ function verifyApprovalDecision(
     !humanPresenceGuardDisabled() &&
     !humanRepliedSinceGate(pd)
   ) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
         `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
@@ -5831,7 +5844,7 @@ function verifyApprovalDecision(
   // The conductor reports the choice the person made; a report that names none
   // records nothing.
   if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because no choice was passed. Re-present the original held gate with ` +
         "every offered choice, wait for the person's reply, then report the choice they made with " +
         '--user-input "Approve".',
@@ -5946,7 +5959,7 @@ function handleApprove(args: string[]): void {
       !humanPresenceGuardDisabled() &&
       !humanRepliedSinceGate(pd)
     ) {
-      error(
+      refuseForAgent(
         `Refusing to approve unit "${teamGate.unit}" for "${slug}": a real human ` +
           `has not acted at this gate since it opened.${commandTurnHint(pd)}`,
       );
@@ -6270,14 +6283,14 @@ function handleReject(args: string[]): void {
       slug,
       teamGate?.unit,
     );
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
         (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
         " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
     );
   }
   if (feedbackStatus === "awaiting-feedback") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
         `feedback. Ask "What should change?", end the turn, and wait for the ` +
         "human's separate response before retrying.",
@@ -6291,7 +6304,7 @@ function handleReject(args: string[]): void {
     ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
     : null;
   if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
         "read their words differently.",
     );
@@ -6321,21 +6334,21 @@ function handleReject(args: string[]): void {
       : undefined;
   if (personsWords !== null) feedback = personsWords;
   if (!feedback) {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
         "--feedback (or --reason through aidlc-orchestrate.ts report). Ask \"What should change?\", " +
         "end the turn, and pass their answer.",
     );
   }
   if (isNonAnswer(feedback)) {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
     );
   }
   if (feedbackStatus === "mismatch") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": --feedback does not exactly match the ` +
         "human's separate guard-recovery response. Pass their text unchanged.",
     );
@@ -6352,13 +6365,13 @@ function handleReject(args: string[]): void {
     !humanRepliedSinceGate(pd)
   ) {
     if (recoveryResetNeedsHuman) {
-      error(
+      refuseForAgent(
         `Cannot request changes for "${slug}" because its recovery review has already ` +
           `been used and only a new human choice can start another review attempt. Present ` +
           `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint()}`,
       );
     }
-    error(
+    refuseForAgent(
       `Cannot request changes for "${slug}" because no new human reply has been received ` +
         `for this approval question. Wait for the human to type Request Changes and their ` +
         `feedback, then retry.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
@@ -6379,7 +6392,7 @@ function handleReject(args: string[]): void {
       ? null
       : selfAttributedDecisionMarker(conductorFeedback, "rejection");
   if (rejectionAuthorship) {
-    error(
+    refuseForAgent(
       `Cannot request changes for "${slug}" because --feedback says it was written by the ` +
         `assistant (${rejectionAuthorship.category}: "${rejectionAuthorship.phrase}"). ` +
         `Requesting changes is the human's decision. Explain why another review is needed at ` +
@@ -8110,7 +8123,7 @@ function error(msg: string): never {
   throw new StateCommandError(msg);
 }
 
-function exitWithError(msg: string): never {
+function exitWithError(msg: EmitErrorMessage): never {
   // Honor module-level projectDir (set from --project-dir in main) so test
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);

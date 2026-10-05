@@ -527,7 +527,12 @@ class Journey {
     const before = this.state();
     const count = this.events("STAGE_COMPLETED", stage).length;
     const result = this.report("approved", ["--user-input", "Approve"], stage);
-    expect(["ask", "error"], JSON.stringify(result)).toContain(String(result.kind));
+    // A refusal for want of the person's reply goes back to the agent with the
+    // question still open; any other refusal is an ask or an error.
+    expect(["ask", "error", "print"], JSON.stringify(result)).toContain(String(result.kind));
+    if (result.kind === "print") {
+      expect(String(result.message)).toContain(`The question for "${stage}" is still open.`);
+    }
     expect(this.state()).toBe(before);
     expect(this.events("STAGE_COMPLETED", stage)).toHaveLength(count);
     return result;
@@ -734,7 +739,8 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const premature = p.report("rejected", [
       "--user-input", "Request Changes", "--reason", "The assistant selected team sharing.",
     ]);
-    expect(premature.kind).toBe("error");
+    expect(premature.kind, JSON.stringify(premature)).toBe("print");
+    expect(String(premature.message)).toContain(`The question for "${STAGE}" is still open.`);
     expect(String(premature.message)).toContain("not revision feedback");
     expect(p.state()).toBe(beforeRejection);
     expect(p.events("GATE_REJECTED", STAGE)).toHaveLength(0);
@@ -747,7 +753,8 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const mismatch = p.report("rejected", [
       "--user-input", "Request Changes", "--reason", "Make all saved searches visible to the team.",
     ]);
-    expect(mismatch.kind).toBe("error");
+    expect(mismatch.kind, JSON.stringify(mismatch)).toBe("print");
+    expect(String(mismatch.message)).toContain(`The question for "${STAGE}" is still open.`);
     expect(String(mismatch.message)).toContain("does not exactly match");
     expect(p.state()).toBe(beforeRejection);
     expect(p.events("GATE_REJECTED", STAGE)).toHaveLength(0);

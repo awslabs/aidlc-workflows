@@ -3737,7 +3737,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const refused = runLifecycle(
         dir, session, "source", ["report", "--stage", stage, "--result", "approved", "--user-input", "Approve"], "33b-approve",
       );
-      expect(refused.directive.kind, JSON.stringify(refused.directive)).toBe("error");
+      expect(refused.directive.kind, JSON.stringify(refused.directive)).toBe("print");
       expect(String(refused.directive.message)).toContain("no new human reply");
     } finally {
       if (bypass === undefined) delete process.env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;

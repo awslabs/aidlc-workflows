@@ -538,7 +538,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   test("SP7-reject: a change request needs what should change; with it, the gate is sent back", () => {
     const { p, guardedEnv } = heldGate();
     const bare = report(p, guardedEnv, ["--result", "rejected", "--user-input", "Request Changes"]);
-    expect(bare.kind).toBe("error");
+    expect(bare.kind, JSON.stringify(bare)).toBe("print");
     expect(bare.message).toContain("Request Changes requires nonblank revision feedback");
     expect(eventCount(p, "GATE_REJECTED")).toBe(0);
 

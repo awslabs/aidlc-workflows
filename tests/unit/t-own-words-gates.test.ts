@@ -50,6 +50,7 @@ import {
   stageGateApproval,
   stateDigest,
   stripRecommendedDecorator,
+  turnEndIsOpen,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { exactOptionPick } from "../../dist/claude/.claude/tools/aidlc-reply-reader.ts";
@@ -187,6 +188,19 @@ describe("the stage gate records the choice the agent read, with the person's wo
   });
   afterEach(() => cleanupTestProject(proj));
 
+  // A decision the person has not made goes back to the agent as its next
+  // step: never raw JSON for the person, nothing recorded, the question open.
+  function stillOpen(refuse: () => { kind: string; message?: string }): { kind: string; message?: string } {
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const refused = refuse();
+    expect(refused.kind, JSON.stringify(refused)).toBe("print");
+    expect(refused.message).toContain(`The question for "${slug}" is still open.`);
+    expect(refused.message).toContain("never answer it for the person");
+    expect(refused.message).not.toContain('"error":');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    return refused;
+  }
+
   test("an approval with an instruction is recorded once, with their words, and no second question", () => {
     says(proj, "looks fine but rename the handler");
     const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
@@ -234,8 +248,7 @@ describe("the stage gate records the choice the agent read, with the person's wo
     says(proj, "/aidlc --scope mvp");
     const turn = events(proj, "HUMAN_TURN").at(-1);
     expect(auditBlockField(turn?.block ?? "", "Reply")).toBe("command");
-    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "approve"]);
-    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "approve"]));
     expect(refused.message).toContain("a command to AIDLC, not a reply to this question: carry out the command");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
 
@@ -309,16 +322,14 @@ describe("the stage gate records the choice the agent read, with the person's wo
 
   test.each(["2", "B", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
     says(proj, pick);
-    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
-    expect(refused.kind).toBe("error");
+    const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
 
   test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
     picks(proj, "Request Changes");
-    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
-    expect(refused.kind).toBe("error");
+    const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
@@ -340,8 +351,9 @@ describe("the stage gate records the choice the agent read, with the person's wo
 
   test("an exact Approve is the person's pick: a rejection is refused", () => {
     says(proj, "Approve");
-    const refused = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"]);
-    expect(refused.kind).toBe("error");
+    const refused = stillOpen(() =>
+      report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"])
+    );
     expect(refused.message).toContain("picked Approve");
     expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
   });
@@ -361,10 +373,30 @@ describe("the stage gate records the choice the agent read, with the person's wo
   });
 
   test("nothing is decided without a reply from the person since the gate was shown", () => {
-    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
-    expect(refused.kind).toBe("error");
+    const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("no new human reply");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
+  test("an approval the agent says it made itself is refused, and the question stays theirs", () => {
+    says(proj, "looks fine");
+    const refused = stillOpen(() =>
+      report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Agent-initiated approval."])
+    );
+    expect(refused.message).toContain("came from the assistant");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    // The question is theirs to answer, so the turn may end at it.
+    expect(turnEndIsOpen(proj)).toBe(true);
+  });
+
+  test("a refusal that is not about their decision still stops, in plain words", () => {
+    says(proj, "Approve");
+    expect(state(proj, ["set", "Scope=no-such-scope"]).rc).toBe(0);
+    const refused = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.message).toContain(`Could not complete "${slug}"`);
+    expect(refused.message).not.toContain('{"error"');
+    expect(refused.message).not.toContain('"error":');
   });
 
   test("a misread Request Changes is undone in one step: revised shows the gate, and the approval records", () => {
