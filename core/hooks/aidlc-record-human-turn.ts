@@ -396,10 +396,12 @@ try {
   }
   // Apply before the state-file gate so a first-use switch reports that the
   // person must create the piece of work, then type the switch again.
+  // The plan question is bound to the state the switch changes, so a switch
+  // typed before a plan choice lands after the choice is noted, below.
   const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
-  if (mintAllowed && sessionId && typedPrompt) {
+  if (mintAllowed && sessionId && typedPrompt && switchAnswer === null) {
     try {
-      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt, { wordsAnswer: switchAnswer !== null });
+      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
       if (outcome !== null) {
         notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
       }
@@ -517,6 +519,14 @@ try {
         }
       } catch {
         // Non-authority marker consumption is independently best-effort.
+      }
+    }
+    if (switchAnswer !== null && mintAllowed && sessionId) {
+      try {
+        const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt, { wordsAnswer: true });
+        if (outcome !== null) notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
+      } catch {
+        // A switch failure must never block the human's turn.
       }
     }
     markHumanTurn(projectDir);
