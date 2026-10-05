@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
-// function:readStoredActiveDirectiveMarker
+// function:readStoredActiveDirectiveMarker, function:keepPlanApprovalAskOverStateWrite
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -78,6 +78,8 @@ import {
 import {
   activeDirectiveStorageDir,
   invalidateActiveDirectiveContext,
+  keepPlanApprovalAskOverStateWrite,
+  planApprovalAskIsOpen,
   mintProtectedQuestion,
   planApprovalRuntimeFile,
   readProtectedResponse,
@@ -2058,20 +2060,31 @@ describe("what the engine names while a plan waits", () => {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     reply(proj, "/aidlc --skip feedback-optimization");
     const named = next(proj, ["--skip", "feedback-optimization"]);
-    const commands = namedCommands(named);
-    const recompose = commands.find((command) => command.includes("engine recompose"));
-    const again = commands.find((command) => /aidlc-orchestrate\.ts next$/.test(command));
+    const recompose = namedCommands(named).find((command) => command.includes("engine recompose"));
     expect(recompose, JSON.stringify(named)).toBeDefined();
-    expect(again, JSON.stringify(named)).toBeDefined();
-    for (const command of [recompose, again] as string[]) {
-      const verdict = guardBash(proj, command);
-      expect(verdict.code, `${command}\n${verdict.stderr}`).toBe(0);
-      runInstalled(proj, command);
-    }
+    const verdict = guardBash(proj, recompose as string);
+    expect(verdict.code, `${recompose}\n${verdict.stderr}`).toBe(0);
+    runInstalled(proj, recompose as string);
+    // The plan question is still the open step.
+    expect(planApprovalAskIsOpen(proj)).toBe(true);
     reply(proj, "approve the plan, but let's stop there for today");
     const said = answer(proj, "Approve Plan", ["--park"]);
     expect(said.code, said.message).toBe(0);
     expect(auditText(proj)).toContain("**Person Reply**: approve the plan, but let's stop there for today");
+  });
+
+  // Only the skip's own write keeps the plan question open: any other change
+  // to the work's state still leaves it out of date, and the engine asks again.
+  test("a state change from anything but the skip still leaves the plan question out of date", () => {
+    const proj = waitingPlan();
+    expect(planApprovalAskIsOpen(proj)).toBe(true);
+    const file = seededStateFile(proj);
+    const before = readFileSync(file, "utf-8");
+    const after = before.replace("- **Depth**: Standard", "- **Depth**: Minimal");
+    expect(after).not.toBe(before);
+    writeFileSync(file, after, "utf-8");
+    expect(keepPlanApprovalAskOverStateWrite(proj, "# another state\n", after)).toBe(false);
+    expect(planApprovalAskIsOpen(proj)).toBe(false);
   });
 
   // "This is existing code" at Code Generation: Reverse Engineering runs on

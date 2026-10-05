@@ -287,6 +287,7 @@ import {
   selectIntentForSession,
   resolveWorkflowSelection,
   readStateFile,
+  keepPlanApprovalAskOverStateWrite,
   refreshActiveDirectiveMarker,
   resolveIntentRepoSet,
   isGitRepoDir,
@@ -11034,6 +11035,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
 
   withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, flags.intent, flags.space);
+    const before = content;
     // AUTONOMY GUARD (mirrors the park guard's shape in aidlc-state.ts): an
     // unattended autonomous Construction run has no human at the gate, so a
     // conductor that drifts into "improving the plan" must not flip pending
@@ -11235,6 +11237,11 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     ], projectDir, flags.intent, flags.space);
 
     writeStateFile(projectDir, content, flags.intent, flags.space);
+    try {
+      keepPlanApprovalAskOverStateWrite(projectDir, before, content);
+    } catch (e) {
+      recordHookDrop(projectDir, "active-directive", errorMessage(e));
+    }
 
     process.stdout.write(
       `Recomposed: ${skipList.length} skipped (${skipList.join(", ") || "none"}), ` +

@@ -8933,6 +8933,22 @@ export function clearActiveDirectiveMarker(projectDir: string): void {
       ? { marker, result: true, preserve: true } : { marker: null, result: true });
 }
 
+// A plan change the person asked for while the code plan's question waits
+// leaves that question the open step: only its state digest follows the write,
+// so their next reply is still kept as their answer to it. Its binding (target,
+// fingerprint, run floor) does not use the state digest.
+export function keepPlanApprovalAskOverStateWrite(
+  projectDir: string,
+  previousStateContent: string,
+  nextStateContent: string,
+): boolean {
+  return transactActiveDirective(projectDir, (marker) =>
+    marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE &&
+      marker.state_sha256 === stateDigest(previousStateContent)
+      ? { marker: { ...marker, state_sha256: stateDigest(nextStateContent) }, result: true }
+      : { marker, result: false, preserve: true });
+}
+
 export function refreshActiveDirectiveMarker(
   projectDir: string,
   stage: string,

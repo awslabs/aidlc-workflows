@@ -5790,6 +5790,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:keepPlanApprovalAskOverStateWrite",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-plan-approval-ask.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:keywordCollisions",
       "minMechanism": "none",
       "coveredBy": [],

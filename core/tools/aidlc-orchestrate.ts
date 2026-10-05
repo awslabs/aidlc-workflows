@@ -1348,11 +1348,15 @@ function emit(requested: Directive): void {
     prepared.marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
     prepared.projectDir !== undefined &&
     guardRecoveryAskMarkerIsCurrent(prepared.projectDir, prepared.marker);
+  // A plan change while the code plan's question is open leaves the question
+  // as the published step.
+  const planQuestionStays = planWaitPrints.has(requested);
   if (
     prepared.marker &&
     !isReadOnlyEngineProbe() &&
     !retainedIssuedDirective &&
-    !sameGuardRecoveryAsk
+    !sameGuardRecoveryAsk &&
+    !planQuestionStays
   ) {
     const projectDir = prepared.projectDir;
     try {
@@ -4179,6 +4183,9 @@ type SteeringTokenPayload = {
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
 // Prints the agent stops after (turnEndingPrint).
 const turnEndingPrints = new WeakSet<Directive>();
+// A plan change the person asked for while the code plan's question is open:
+// the question stays the published step (emit does not replace it).
+const planWaitPrints = new WeakSet<Directive>();
 const publicationContexts = new WeakMap<
   Directive,
   { projectDir: string; stateHash: string }
@@ -10491,14 +10498,15 @@ function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
   plan: { scope: string; stateContent: string } | null,
-  // The code plan's question is open: once the change is made, it is the open
-  // step again, so what the person says next is kept as their answer to it.
+  // The code plan's question is open: it stays the open step, so what the
+  // person says next is kept as their answer to it.
   planWaits = false,
 ): PrintDirective {
-  const end = planWaits
-    ? ` Then run \`${aidlcToolInvocation("orchestrate")} next\`: the code plan still waits for the person's answer, ` +
-      "so do not show its question again, and stop."
-    : " Then stop.";
+  const kept = (directive: PrintDirective): PrintDirective => {
+    if (planWaits) planWaitPrints.add(directive);
+    return directive;
+  };
+  const end = " Then stop.";
   // A stage the plan already skips or runs is no change: it is said, not sent
   // to recompose, so the undo line names only what changed. After a scope
   // change (plan null) the new plan is not known here, so every flip is sent.
@@ -10514,10 +10522,10 @@ function planChangeDirective(
     ? `${unchanged.join("; ").charAt(0).toUpperCase()}${unchanged.join("; ").slice(1)}.`
     : "";
   if (skip.length === 0 && add.length === 0) {
-    return turnEndingPrint(
+    return kept(turnEndingPrint(
       `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
         `"${noted} The plan is unchanged."${end}`,
-    );
+    ));
   }
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
@@ -10528,7 +10536,7 @@ function planChangeDirective(
     ...(add.length > 0 ? [`added ${add.join(", ")}`] : []),
   ].join(" and ");
   const recompose = `${aidlcDispatcherInvocation("recompose")} ${flips(skip, add)}`;
-  return turnEndingPrint(
+  return kept(turnEndingPrint(
     `${before ? `Run \`${before}\` and print its output verbatim, then run` : "Run"} \`${recompose}\` ` +
       "to change this workflow's remaining stages as the person asked, and do not show its output: " +
       "the one line below says what changed. " +
@@ -10536,7 +10544,7 @@ function planChangeDirective(
       "instead, then stop. " +
       `Otherwise tell the person in one line: "${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ` +
       `To undo it, type \`${entrySkillInvocation()} ${flips(add, skip)}\`.${noted ? ` ${noted}` : ""}"${end}`,
-  );
+  ));
 }
 
 // A jump to a stage the running plan skips. Ahead of the cursor, the jump
