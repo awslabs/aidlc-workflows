@@ -621,6 +621,8 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(targets("Set-Location -; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
     expect(targets("Set-Location +; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
     expect(targets("Push-Location -StackName s; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
+    expect(writeTargets("Bash", { command: "pushd +; echo x > y" }, "/p")
+      .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).toEqual(["/p/y"]);
     // The POSIX reading of the same line drops the backslashes.
     expect(writeTargets("Bash", { command: "cd .kiro\\hooks; echo x > y.json" }, "/p")
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).not.toContain("/p/.kiro/hooks/y.json");

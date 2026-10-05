@@ -1596,6 +1596,7 @@ export function shellDirectoryRoots(
   cwd = process.cwd(),
   shell: CommandShell = "posix",
 ): string[] {
+  const home = resolve(shellHome());
   const roots = [resolve(cwd)];
   const pinned = new Set(roots);
   const add = (dir: string, pin = false) => {
@@ -1619,12 +1620,11 @@ export function shellDirectoryRoots(
     }
     const reading = homeReading(operand);
     if (reading) next.add(resolve(reading));
-    const home = resolve(shellHome());
     for (const dir of next) add(dir, dir === home);
   };
   if (shell === "powershell") {
     for (const operand of powerShellLocationChanges(command, 0)) {
-      if (operand === null) add(resolve(shellHome()), true);
+      if (operand === null) add(home, true);
       else change(operand);
     }
     return roots;
@@ -1636,14 +1636,14 @@ export function shellDirectoryRoots(
     const end = args.indexOf("--");
     const operand = end >= 0
       ? args[end + 1]
-      : args.find((arg) => !arg.startsWith("-") && !/^\+\d+$/.test(arg));
+      : args.find((arg) => !arg.startsWith("-") && !/^\+\d*$/.test(arg));
     if (operand !== undefined) {
       change(operand);
       continue;
     }
     // `cd -` and stack operands name a directory this command cannot see.
-    const previous = args.some((arg) => arg === "-" || /^[+-]\d+$/.test(arg));
-    if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) add(resolve(shellHome()), true);
+    const previous = args.some((arg) => /^[+-]\d*$/.test(arg));
+    if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) add(home, true);
   }
   return roots;
 }
