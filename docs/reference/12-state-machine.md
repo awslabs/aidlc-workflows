@@ -753,7 +753,8 @@ current line with source `you` need no key.
 Direct `intent create --guard-policy relaxed|off` from chat is refused when the
 value is below the scope default: create
 the piece of work, and the agent runs the setter when the person asks for the
-lower value; scope defaults apply without asking.
+lower value; a scope's own default applies at creation without asking, and on a
+scope change a lower default applies when the person asked for that change.
 `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering
 before the presence bypass can apply.
 The session-start hook keeps its `presence-bypass-<session>` stamp in the Plan

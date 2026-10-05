@@ -1241,8 +1241,9 @@ Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
 is below that default (`relaxed` on an `off` scope is a raise and applies):
 create the piece of work, and the agent runs the setter when the person asks for the lower value. Naming the scope's own default at creation records the scope's
-value without another prompt. A running workflow preserves its stricter policy
-when moving to a scope with a lower default. Creation that would lower the
+value without another prompt. A running workflow moving to a scope with a lower
+default takes it when the person asked for the scope change; otherwise it keeps
+its stricter policy and says so in one line. Creation that would lower the
 policy to `relaxed` refuses with:
 
 > Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
