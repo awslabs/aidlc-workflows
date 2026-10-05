@@ -140,6 +140,7 @@ import {
   resolveReviewClass,
   selfAttributedDecisionMarker,
   stripRecommendedDecorator,
+  pickerAnswerNote,
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
   summaryConfirmationCommands,
@@ -2203,6 +2204,12 @@ function handleAnswer(args: string[]): void {
           + "Wait for the human to type an answer, then try again."
           + commandTurnHint(pd) + unattendedHumanPresenceHint(pd),
       );
+    }
+    // Where the person replied in a picker, an answer none of their picks
+    // carried is still recorded, with a note saying what they picked.
+    if (instruction === undefined && !autonomousDecision) {
+      const note = pickerAnswerNote(pd, flags.details);
+      if (note !== null) fields["Picker Note"] = note;
     }
 
     try {

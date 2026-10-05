@@ -26028,6 +26028,36 @@ export function keptRepliesSinceStageStart(
   return replies.length > 0 ? { replies, answered } : null;
 }
 
+// Where the person's latest turn was a picker reply, the note an answer gets
+// when none of their picks carried it: the agent logged a choice they never
+// saw, or one they did not pick. Null when the turn was typed, when a pick
+// matches (its label, with or without the "(Recommended)" decorator), or when
+// the answer is only an option letter or number. It is a note on the record,
+// never a refusal, so it never throws.
+export function pickerAnswerNote(projectDir: string, details: string): string | null {
+  try {
+    const content = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8");
+    const blocks = content.replace(/\r\n/g, "\n").split("\n---\n");
+    let turn: string | undefined;
+    for (let index = blocks.length - 1; index >= 0 && turn === undefined; index--) {
+      if (auditBlockField(blocks[index], "Event") === "HUMAN_TURN") turn = blocks[index];
+    }
+    const raw = turn === undefined ? null : auditBlockField(turn, "Picked");
+    if (!raw) return null;
+    const picked = JSON.parse(raw) as unknown;
+    if (!Array.isArray(picked) || picked.length === 0 || !picked.every((pick) => typeof pick === "string")) return null;
+    const plain = (text: string) => stripRecommendedDecorator(text).trim().toLowerCase();
+    const answer = plain(details);
+    if (answer === "" || /^(?:[a-z]|\d+)[.)]?$/.test(answer)) return null;
+    if (picked.some((pick) => plain(pick) === answer || answer.includes(plain(pick)) || plain(pick).includes(answer))) {
+      return null;
+    }
+    return `Not what the person picked in the picker (${picked.map((pick) => `"${pick}"`).join(", ")}).`;
+  } catch {
+    return null;
+  }
+}
+
 // The person's latest chat turn in this clone's ledger for the selected work:
 // when it was, and the words its chat kept right after it (null when the hook
 // kept none: a slash command, a picked option, an over-long message). Null when
