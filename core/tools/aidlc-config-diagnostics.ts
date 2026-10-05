@@ -16,11 +16,13 @@ import { delimiter, dirname, extname, join, relative, resolve } from "node:path"
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
+  jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
+  readJsonFile,
   type RootIntegration,
   rootBlockPath,
   sha256Bytes,
@@ -487,7 +489,7 @@ export function normalizeProjectChoicesRecord(
 
 export function readConfigDiagnosticRecords(harnessRoot: string): ConfigDiagnosticRecords {
   const path = join(harnessRoot, "tools", "data", "harness.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const policyKeys = ["models", "flags"].filter((key) => Object.hasOwn(value, key));
   if (policyKeys.length > 0) {
     throw new Error(
@@ -1224,8 +1226,9 @@ export function pendingProviderIssues(
     });
 }
 
+// The file keeps the byte order mark it had.
 function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, jsonFileText(value, existsSync(path) ? readFileSync(path, "utf-8") : ""));
 }
 
 function writeClaudeProvider(
@@ -1234,7 +1237,7 @@ function writeClaudeProvider(
   record: ProvidersRecord,
 ): void {
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
   stripLegacyClaudeModelAliases(env);
   env.CLAUDE_CODE_USE_BEDROCK = "1";
@@ -1246,7 +1249,7 @@ function writeClaudeProvider(
 
   const mcpPath = join(projectionRoot, ".mcp.json");
   if (!existsSync(mcpPath)) return;
-  const mcp = JSON.parse(readFileSync(mcpPath, "utf-8")) as Record<string, unknown>;
+  const mcp = readJsonFile(mcpPath) as Record<string, unknown>;
   if (applyMcpRegion(mcp, record.region as string)) writeJson(mcpPath, mcp);
 }
 
@@ -1316,7 +1319,7 @@ function clearClaudeProvider(
   harnessDir: string,
 ): void {
   const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
   const env = isRecord(settings.env) ? { ...settings.env } : {};
   const legacy = hasLegacyClaudeProviderConfig(env);
   let changed = false;
@@ -1450,7 +1453,7 @@ export function preserveKiroMcpRegion(
   const awsArgs = (path: string): { value: Record<string, unknown>; args: unknown[] } | null => {
     let value: Record<string, unknown>;
     try {
-      value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      value = readJsonFile(path) as Record<string, unknown>;
     } catch {
       return null;
     }
@@ -1495,7 +1498,7 @@ function writeOpenCodeProvider(
 ): void {
   if (!record.opencodeDefault) return;
   const path = join(projectionRoot, "opencode.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const providers = isRecord(value.provider) ? { ...value.provider } : {};
   const existing = isRecord(providers["amazon-bedrock"])
     ? providers["amazon-bedrock"]
@@ -1540,7 +1543,7 @@ function clearOpenCodeProvider(
 ): void {
   const path = join(projectionRoot, "opencode.json");
   if (!existsSync(path)) return;
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   if (!isRecord(value.provider)) return;
   const providers = { ...value.provider };
   if (!openCodeProviderMatchesRecord(
@@ -1568,7 +1571,7 @@ function writeClaudeFlags(
 ): void {
   if (!record.defaultScope) return;
   const path = join(projectionRoot, harnessDir, "settings.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   const env = isRecord(value.env) ? { ...value.env } : {};
   env.AWS_AIDLC_DEFAULT_SCOPE = record.defaultScope;
   value.env = env;
@@ -1827,7 +1830,7 @@ export function flagIssues(
   if (record.defaultScope && harness === "claude") {
     const path = join(projectDir, harnessDir, "settings.json");
     try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       const settingsEnv = isRecord(value.env) ? value.env : {};
       if (settingsEnv.AWS_AIDLC_DEFAULT_SCOPE !== record.defaultScope) {
         issues.push({
@@ -1881,7 +1884,7 @@ export function discoverInstalledPluginNames(
     const graphPath = join(dataDir, "stage-graph.json");
     if (existsSync(graphPath)) {
       try {
-        collectPluginNames(JSON.parse(readFileSync(graphPath, "utf-8")), names);
+        collectPluginNames(readJsonFile(graphPath), names);
       } catch {
         // Sidecars and scope files remain available when the graph is stale.
       }
@@ -1901,7 +1904,7 @@ export function discoverInstalledPluginNames(
 
 export function readPluginSelection(harnessRoot: string): string[] | null {
   const path = join(harnessRoot, "tools", "data", "harness.json");
-  const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  const value = readJsonFile(path) as Record<string, unknown>;
   if (!Object.hasOwn(value, "plugins")) return null;
   if (
     !Array.isArray(value.plugins) ||
@@ -2033,7 +2036,7 @@ export function projectChoiceIssues(
   let servers = new Set<string>();
   if (existsSync(path)) {
     try {
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       servers = new Set(
         isRecord(value.mcpServers) ? Object.keys(value.mcpServers) : [],
       );
@@ -2091,7 +2094,7 @@ export function providerSurfaceIssues(
     if (record.provider === "current" || record.provider === "other") {
       if (harness === "claude") {
         const path = join(projectDir, harnessDir, "settings.json");
-        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = readJsonFile(path) as Record<string, unknown>;
         const env = isRecord(value.env) ? value.env : {};
         if (hasLegacyClaudeProviderConfig(env)) {
           mismatch(
@@ -2112,9 +2115,7 @@ export function providerSurfaceIssues(
         }
         const localPath = join(projectDir, harnessDir, "settings.local.json");
         if (existsSync(localPath)) {
-          const local = JSON.parse(
-            readFileSync(localPath, "utf-8"),
-          ) as Record<string, unknown>;
+          const local = readJsonFile(localPath) as Record<string, unknown>;
           const localEnv = isRecord(local.env) ? local.env : {};
           const localOverrides: string[] = CLAUDE_BEDROCK_MODEL_KEYS.filter(
             (key) => Object.hasOwn(localEnv, key),
@@ -2171,7 +2172,7 @@ export function providerSurfaceIssues(
         }
       } else if (harness === "opencode" && record.provider === "other") {
         const path = join(projectDir, "opencode.json");
-        const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const value = readJsonFile(path) as Record<string, unknown>;
         const providers = isRecord(value.provider) ? value.provider : {};
         if (Object.hasOwn(providers, "amazon-bedrock")) {
           warning(
@@ -2192,7 +2193,7 @@ export function providerSurfaceIssues(
       );
     } else if (harness === "claude") {
       const settingsPath = join(projectDir, harnessDir, "settings.json");
-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+      const settings = readJsonFile(settingsPath) as Record<string, unknown>;
       const env = isRecord(settings.env) ? settings.env : {};
       if (
         env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
@@ -2203,7 +2204,7 @@ export function providerSurfaceIssues(
       }
       const localPath = join(projectDir, harnessDir, "settings.local.json");
       if (existsSync(localPath)) {
-        const local = JSON.parse(readFileSync(localPath, "utf-8")) as Record<string, unknown>;
+        const local = readJsonFile(localPath) as Record<string, unknown>;
         const localEnv = isRecord(local.env) ? local.env : {};
         const conflicts = [
           ...(Object.hasOwn(localEnv, "CLAUDE_CODE_USE_BEDROCK") &&
@@ -2240,7 +2241,7 @@ export function providerSurfaceIssues(
       }
     } else if (harness === "opencode" && record.opencodeDefault) {
       const path = join(projectDir, "opencode.json");
-      const value = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      const value = readJsonFile(path) as Record<string, unknown>;
       const providers = isRecord(value.provider) ? value.provider : {};
       const bedrock = isRecord(providers["amazon-bedrock"]) ? providers["amazon-bedrock"] : {};
       const options = isRecord(bedrock.options) ? bedrock.options : {};
@@ -3153,7 +3154,7 @@ const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Contin
 // The install's added-once record for .vscode/settings.json.
 function requestCapAddedBefore(harnessRoot: string): boolean {
   try {
-    const baseline = JSON.parse(readFileSync(join(harnessRoot, "tools", "data", "aidlc-manifest.json"), "utf-8")) as {
+    const baseline = readJsonFile(join(harnessRoot, "tools", "data", "aidlc-manifest.json")) as {
       rootContributions?: Record<string, { policy?: string; entries?: Record<string, string>; added?: string[] }>;
     };
     const record = baseline.rootContributions?.[".vscode/settings.json"];

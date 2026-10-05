@@ -71,8 +71,10 @@ import {
   aidlcDispatcherTarget,
   aidlcHookRegistrationHashes,
   isCustomClaudeStatusLine,
+  readJsonFile,
   sha256Bytes,
   TEAM_MEMORY_FILES,
+  withoutBom,
 } from "./aidlc-distribution.ts";
 import {
   artifactsRegistryFor,
@@ -4013,7 +4015,7 @@ export async function collectDoctorReport(
       // in settings.json (hook command paths like
       // "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-write-audit-log.ts" and the
       // statusLine command). Basename, not path, so the probe is dir-relative.
-      const parsed = JSON.parse(raw) as unknown;
+      const parsed = JSON.parse(withoutBom(raw)) as unknown;
       const parsedSettings = isPlainObject(parsed) ? parsed : {};
       settingsHooks = parsedSettings.hooks;
       customStatusLine = isCustomClaudeStatusLine(
@@ -4343,7 +4345,7 @@ export async function collectDoctorReport(
       const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
       let pinned = false;
       try {
-        const settings = JSON.parse(readFileSync(cliSettingsPath, "utf-8")) as Record<string, unknown>;
+        const settings = readJsonFile(cliSettingsPath) as Record<string, unknown>;
         pinned = settings["chat.agentEngine"] === "v3" && settings["chat.defaultAgent"] === "aidlc";
       } catch {
         pinned = false;
