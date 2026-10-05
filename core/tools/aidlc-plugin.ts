@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
@@ -25,6 +25,10 @@ import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
   aidlcInvocation,
   compiledExecutable,
+  LinkedFolderError,
+  refuseLinkOnTheWay,
+  resolveHarnessPath,
+  resolveSkillsPath,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
 import {
@@ -147,7 +151,9 @@ function regularFiles(root: string): string[] {
 }
 
 function surfaceFiles(root: string): string[] {
-  if (!existsSync(root)) return [];
+  // A surface that is itself a link stays out of the staged copy, so it stays
+  // out of the diff too.
+  if (!existsSync(root) || lstatSync(root).isSymbolicLink()) return [];
   const files: string[] = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory).sort()) {
@@ -910,15 +916,62 @@ function writeCompositionRecords(
   );
 }
 
+function firstLinkInside(
+  directory: string,
+  own: (name: string) => boolean = () => true,
+): string | null {
+  if (!existsSync(directory)) return null;
+  for (const entry of readdirSync(directory).sort()) {
+    if (!own(entry)) continue;
+    const path = join(directory, entry);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) return path;
+    if (stat.isDirectory()) {
+      const nested = firstLinkInside(path);
+      if (nested !== null) return nested;
+    }
+  }
+  return null;
+}
+
+// A staged run reads AI-DLC's own folders and writes them back. A link on the
+// way to one, or anywhere inside one, would take what it reads or writes
+// outside this project, so the command stops before anything changes.
+function refuseLinkedOwnFolders(projectDir: string, harnessDir: string): void {
+  const location = { mutable: true, projectDir, harnessDir };
+  const refuse = (folder: string, own?: (name: string) => boolean): void => {
+    refuseLinkOnTheWay(projectDir, folder);
+    const inside = firstLinkInside(folder, own);
+    if (inside !== null) throw new LinkedFolderError(relative(projectDir, inside));
+  };
+  for (const name of ["tools", "aidlc-common", "scopes", "sensors"]) {
+    refuse(resolveHarnessPath([name], location));
+  }
+  refuse(join(projectDir, "aidlc"));
+  // A person keeps their own agents and skills beside AI-DLC's.
+  const aidlcNamed = (name: string): boolean => name.startsWith("aidlc");
+  refuse(resolveHarnessPath(["agents"], location), aidlcNamed);
+  refuse(resolveSkillsPath([], location), aidlcNamed);
+}
+
 export function copyProjectSurfaces(
   projectDir: string,
   stagedProject: string,
   harnessDir: string,
 ): void {
+  refuseLinkedOwnFolders(projectDir, harnessDir);
   mkdirSync(stagedProject, { recursive: true });
   for (const entry of [harnessDir, ".agents", ".github", ".opencode", "aidlc"]) {
     const source = join(projectDir, entry);
-    if (existsSync(source)) cpSync(source, join(stagedProject, entry), { recursive: true });
+    // No link reaches the staged copy, so nothing a staged step writes can
+    // land outside it. A person's own link (a skill of theirs, say) stays as
+    // it is, and the plan refuses a write that would go through it.
+    if (existsSync(source)) {
+      cpSync(source, join(stagedProject, entry), {
+        recursive: true,
+        filter: (path) => !lstatSync(path).isSymbolicLink(),
+      });
+    }
   }
 }
 
@@ -1072,12 +1125,7 @@ function removeFragments(content: string, key: string, path: string): string {
   return output;
 }
 
-function pruneContributions(
-  stagedProject: string,
-  harnessDir: string,
-  key: string,
-  writable: (path: string) => boolean = () => true,
-): void {
+function pruneContributions(stagedProject: string, harnessDir: string, key: string): void {
   const sidecar = join(harnessDataDir(stagedProject, harnessDir), `plugin-contrib-${key}.json`);
   let records: Record<string, {
     produces?: string[];
@@ -1124,36 +1172,18 @@ function pruneContributions(
         }
       }
       after = removeFragments(after, key, path);
-      if (after !== before && writable(path)) writeFileSync(path, after);
+      if (after !== before) writeFileSync(path, after);
     }
   }
-  if (writable(sidecar)) rmSync(sidecar, { force: true });
+  rmSync(sidecar, { force: true });
 }
 
-// The first folder on the way from the project to `target` that links
-// elsewhere, relative to the project, or null. A removal or rewrite through it
-// would land outside this project and outside the transaction, so prune
-// leaves what is behind it alone and says so.
-function linkOnTheWay(projectDir: string, target: string): string | null {
-  let path = projectDir;
-  for (const part of relative(projectDir, dirname(target)).split(/[\\/]/).filter(Boolean)) {
-    path = join(path, part);
-    try {
-      if (lstatSync(path).isSymbolicLink()) return relative(projectDir, path);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-// Returns the first linked folder it left alone, or null.
 function pruneOwnedPlugin(
   stagedProject: string,
   harnessDir: string,
   key: string,
   ownership: OwnershipRecord | undefined,
-): string | null {
+): void {
   if (!ownership) {
     throw new Error(`cannot prune ${key}: no composition ownership record proves its files`);
   }
@@ -1164,23 +1194,14 @@ function pruneOwnedPlugin(
       throw new Error(`cannot prune ${key}: owned path changed since composition: ${file.path}`);
     }
   }
-  let leftAlone: string | null = null;
-  const writable = (target: string): boolean => {
-    const link = linkOnTheWay(stagedProject, target);
-    if (link !== null) leftAlone ??= link;
-    return link === null;
-  };
-  pruneContributions(stagedProject, harnessDir, key, writable);
+  pruneContributions(stagedProject, harnessDir, key);
   for (const file of ownership.files) {
-    const target = assertOwnedPath(stagedProject, file.path);
-    if (writable(target)) rmSync(target, { force: true });
+    rmSync(assertOwnedPath(stagedProject, file.path), { force: true });
   }
   const dataDir = harnessDataDir(stagedProject, harnessDir);
   for (const name of [`plugin-owned-${key}.json`, `plugin-compose-${key}.json`, `plugin-files-${key}.json`]) {
-    const target = join(dataDir, name);
-    if (writable(target)) rmSync(target, { force: true });
+    rmSync(join(dataDir, name), { force: true });
   }
-  return leftAlone;
 }
 
 function replaceOwnedPluginPrimitives(
@@ -1323,6 +1344,7 @@ export function projectDiffPlan(
     const stagedBytes = readFileSync(staged);
     if (current && readFileSync(current).equals(stagedBytes) &&
       (lstatSync(current).mode & 0o777) === (lstatSync(staged).mode & 0o777)) continue;
+    refuseLinkOnTheWay(projectDir, join(projectDir, ...path.split("/")));
     operations.push(writeOperation(
       path,
       stagedBytes,
@@ -1381,7 +1403,7 @@ export async function syncPlugins(
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
   lockRetry = 0,
-): Promise<{ synced: string[]; pruned: string[]; operations: number; leftAlone?: string }> {
+): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
@@ -1449,9 +1471,13 @@ export async function syncPlugins(
       );
       await runComposer(plugin, stagedProject, harnessDir);
     }
-    let leftAlone: string | null = null;
     for (const key of pruned) {
-      leftAlone = pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key)) ?? leftAlone;
+      // The staged copy holds no link, so a plugin file behind one is checked
+      // where it really is.
+      for (const file of evidence.ownership.get(key)?.files ?? []) {
+        refuseLinkOnTheWay(projectDir, assertOwnedPath(projectDir, file.path));
+      }
+      pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key));
     }
     const claimedPaths = new Set<string>();
     for (const plugin of plugins) {
@@ -1506,7 +1532,6 @@ export async function syncPlugins(
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned,
       operations: plan.operations.length,
-      ...(leftAlone !== null ? { leftAlone } : {}),
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -1545,10 +1570,7 @@ export async function main(argv: string[]): Promise<void> {
     if (command === "sync") {
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
-        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
-        (result.leftAlone
-          ? `\nLeft plugin files in ${result.leftAlone} alone: that folder links outside this project.`
-          : "");
+        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;
