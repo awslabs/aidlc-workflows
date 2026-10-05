@@ -12756,6 +12756,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t-journey-check-off-on.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
@@ -12897,6 +12901,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t-hook-context-reaches-claude.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t-journey-check-off-on.sdk.test.ts",
           "mechanism": "sdk"
         },
         {

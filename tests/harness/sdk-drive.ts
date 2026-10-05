@@ -180,6 +180,8 @@ export interface DriveResult {
   turns?: DriveTurnEnd[];
   /** Stop hook verdicts, when captureStopHooks was set. */
   stopHooks?: CapturedStopHook[];
+  /** What each SessionStart hook printed for the session (the SDK always reports it). */
+  sessionStarts?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -706,6 +708,7 @@ export async function driveAidlc(
   const askedQuestions: CapturedAskUserQuestion[] = [];
   const turns: DriveTurnEnd[] = [];
   const stopHooks: CapturedStopHook[] = [];
+  const sessionStarts: string[] = [];
   // toolUseID -> { toolName, input } so we can join tool_use to its later
   // synthetic-user tool_result block.
   const pendingTools = new Map<
@@ -910,6 +913,9 @@ export async function driveAidlc(
       if (msg.type === "system") {
         const m = msg as Record<string, unknown>;
         trackDriveTask(pendingTasks, m, settledTasks);
+        if (m.subtype === "hook_response" && m.hook_event === "SessionStart" && typeof m.stdout === "string") {
+          sessionStarts.push(m.stdout);
+        }
         if (m.subtype === "hook_response" && m.hook_event === "Stop") {
           const stop = capturedStopHook(m, turn);
           stopHooks.push(stop);
@@ -1158,6 +1164,7 @@ export async function driveAidlc(
     stoppedWhen,
     turns,
     stopHooks,
+    sessionStarts,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the
