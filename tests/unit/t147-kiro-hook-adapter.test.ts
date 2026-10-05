@@ -1485,7 +1485,6 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
   test.each([
     ["empty resources", JSON.stringify({ resources: [] })],
     ["absent resources", "{}"],
-    ["stale-space glob", JSON.stringify({ resources: ["file://aidlc/spaces/old-space/memory/**/*.md"] })],
     ["malformed JSON", "{not json"],
     ["missing worker file", null],
     ["partial memory glob", JSON.stringify({ resources: ["file://aidlc/spaces/default/memory/org*.md"] })],
@@ -1510,8 +1509,70 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
       expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
-      expect(result.stderr).toContain("/aidlc space switch default");
+      // A space switch only repoints a glob that is there, so the step named
+      // is the one that puts the shipped file back, and that route is real.
+      expect(result.stderr).toContain("config --harness kiro` in a terminal to put AI-DLC's Kiro files back");
+      expect(result.stderr).not.toContain("/aidlc space switch");
       expect(result.stderr).toContain("/aidlc --doctor");
+      expect(resolveAction(["config", "--harness", "kiro"]).type).not.toBe("error");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload repoints a core worker left on another space, and starting it again goes through", () => {
+    const dir = scratchProject(false);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(join(dir, "aidlc", "spaces", "default", "memory", "org.md"), "# Organization\n");
+      const oldMemory = join(dir, "aidlc", "spaces", "old-space", "memory");
+      mkdirSync(oldMemory, { recursive: true });
+      writeFileSync(join(oldMemory, "org.md"), "# Previous organization\n");
+      const shipped = JSON.parse(readFileSync(workerFile, "utf-8")) as { resources: string[] };
+      writeFileSync(workerFile, JSON.stringify({
+        ...shipped,
+        resources: shipped.resources.map((entry) =>
+          entry.replace("aidlc/spaces/default/memory/", "aidlc/spaces/old-space/memory/")
+        ),
+      }));
+      const payload = {
+        cwd: dir,
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
+      };
+      const stopped = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(stopped.code, stopped.stderr).toBe(2);
+      expect(stopped.stderr).toBe(
+        "[aidlc] This specialist was set up for another space and is now set up for this one. Start it again.\n",
+      );
+      expect(readFileSync(workerFile, "utf-8")).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      const again = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(again.code, again.stderr).toBe(0);
+      expect(again.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("native preload holds no worker for a conversation outside the workflow", () => {
+    const dir = scratchProject(true);
+    try {
+      const workerFile = join(dir, ".kiro", "agents", "aidlc-product-agent.json");
+      writeFileSync(workerFile, JSON.stringify({ resources: [] }));
+      const payload = {
+        cwd: dir,
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_name: "invoke_sub_agent",
+        tool_input: { name: "aidlc-product-agent", prompt: "Inspect the project." },
+      };
+      expect(runAdapter(dir, "deliver-stage-rules", payload).code).toBe(2);
+      // No cursor names the record, so this chat stands outside it.
+      const cursor = join(dirname(dirname(seededStateFile(dir))), "active-intent");
+      expect(existsSync(cursor)).toBe(true);
+      writeFileSync(cursor, "");
+      const outside = runAdapter(dir, "deliver-stage-rules", payload);
+      expect(outside.code, outside.stderr).toBe(0);
+      expect(outside.stderr).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1568,6 +1629,17 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(workerFile);
       expect(result.stderr).toContain("file://aidlc/spaces/default/memory/**/*.md");
+      expect(result.stderr).toContain("Put this space's method files back under aidlc/spaces/default/memory/");
+      // The step it names: with a method file back, the dispatch goes through.
+      writeFileSync(join(memory, "org.md"), "# Organization\n");
+      const restored = runAdapter(dir, "deliver-stage-rules", {
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{ role: "aidlc-product-agent", prompt_template: "Inspect the project." }],
+        },
+      });
+      expect(restored.code, restored.stderr).toBe(0);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

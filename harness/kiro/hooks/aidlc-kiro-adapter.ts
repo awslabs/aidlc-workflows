@@ -47,6 +47,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   hookOutsideGate,
+  hookStandsOutside,
   enterHookWorkflow,
   activeSpace,
   agentsDir,
@@ -66,6 +67,8 @@ import {
   stripOrchestratorLauncherOptions,
 } from "../tools/aidlc-lib.ts";
 import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
+import { aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 // The agent-v1 hook's default max_output_size is 10 KiB, independently of
@@ -185,7 +188,9 @@ function kiroDispatch(input: KiroHookInput): KiroDispatch | null {
   };
 }
 
-function nativePreloadError(projectDir: string, agents: string[]): string | null {
+type PreloadFailure = { message: string; repointable: boolean };
+
+function nativePreloadError(projectDir: string, agents: string[]): PreloadFailure | null {
   // Match the shared delivery hook's installed Markdown roster, including
   // plugin personas, and its composer exemption. JSON-only helpers are outside
   // that contract even when their names use the aidlc- prefix.
@@ -198,44 +203,69 @@ function nativePreloadError(projectDir: string, agents: string[]): string | null
   );
   if (workers.length === 0) return null;
   // Use the same active-space cursor as repointHarnessIncludes. Validate the
-  // persisted result rather than repointing here: Kiro may already have read
-  // the config, and a skipped or failed repoint must not silently admit work.
+  // persisted result rather than trusting a repoint made here: Kiro may already
+  // have read the config, and a skipped or failed repoint must not silently
+  // admit work.
   const space = activeSpace(projectDir);
   const pattern = `aidlc/spaces/${space}/memory/**/*.md`;
   const expected = `file://${pattern}`;
-  const failure = (agent: string, reason: string) =>
-    `[aidlc] Worker dispatch blocked: ${join(projectDir, ".kiro", "agents", `${agent}.json`)}: ${reason}. ` +
-    `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
-    // Plugin authoring reserves aidlc- for core; other roster namespaces have
-    // hand-authored native JSON that space switch and doctor cannot repair.
-    (agent.startsWith("aidlc-")
-      ? `Add or restore ${expected} in the worker JSON's resources array and repair the memory files, ` +
-        `then rerun /aidlc space switch ${space} to repoint the resources and /aidlc --doctor before retrying.\n`
-      : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.\n`);
+  // Each failure names the one step that repairs it. Plugin authoring reserves
+  // aidlc- for core; other roster namespaces have hand-authored native JSON
+  // that no AI-DLC command can repair.
+  const failure = (agent: string, reason: string, step: string, repointable = false): PreloadFailure => ({
+    message:
+      `[aidlc] Worker dispatch blocked: ${join(projectDir, ".kiro", "agents", `${agent}.json`)}: ${reason}. ` +
+      `Expected resources to include ${expected}, resolving to at least one existing Markdown file. ` +
+      `${agent.startsWith("aidlc-") ? step : `Add ${expected} to the resources array in the plugin's agent JSON and repair the active-space memory files before retrying.`}\n`,
+    repointable: repointable && agent.startsWith("aidlc-"),
+  });
+  const reinstall = `Run \`${aidlcInvocation()} config --harness kiro\` in a terminal to put AI-DLC's Kiro files back, ` +
+    `then start the specialist again; /aidlc --doctor names anything still wrong.`;
   for (const agent of new Set(workers)) {
     const file = join(projectDir, ".kiro", "agents", `${agent}.json`);
     try {
       const config: unknown = JSON.parse(readFileSync(file, "utf-8"));
       if (
         config === null || typeof config !== "object" ||
-        !("resources" in config) || !Array.isArray(config.resources) ||
-        !config.resources.includes(expected)
+        !("resources" in config) || !Array.isArray(config.resources)
       ) {
-        return failure(agent, "the active-space memory preload is absent or stale");
+        return failure(agent, "the active-space memory preload is absent", reinstall);
+      }
+      if (!config.resources.includes(expected)) {
+        // A glob for another space is what a space switch repoints; any other
+        // shape needs the shipped file back.
+        const otherSpace = config.resources.some((entry: unknown) =>
+          typeof entry === "string" && /^file:\/\/aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md$/.test(entry)
+        );
+        return otherSpace
+          ? failure(
+            agent,
+            "the active-space memory preload is stale",
+            `Run /aidlc space switch ${space} to point it at this space, then start the specialist again.`,
+            true,
+          )
+          : failure(agent, "the active-space memory preload is absent", reinstall);
       }
     } catch (error) {
-      return failure(agent, `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`);
+      return failure(
+        agent,
+        `cannot read or parse the worker config: ${String(error).replace(/[\r\n]+/g, " ")}`,
+        reinstall,
+      );
     }
   }
+  const restore = `Put this space's method files back under aidlc/spaces/${space}/memory/ ` +
+    `(for example \`git checkout -- aidlc/spaces/${space}/memory\` when the project tracks them), ` +
+    `then start the specialist again.`;
   try {
     for (const _file of new Bun.Glob(pattern).scanSync({
       cwd: projectDir,
       onlyFiles: true,
       followSymlinks: false,
     })) return null;
-    return failure(workers[0], "the active-space memory glob resolves to no Markdown files");
+    return failure(workers[0], "the active-space memory glob resolves to no Markdown files", restore);
   } catch (error) {
-    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`);
+    return failure(workers[0], `cannot resolve the active-space memory glob: ${String(error).replace(/[\r\n]+/g, " ")}`, restore);
   }
 }
 
@@ -900,11 +930,31 @@ if (target === "review-freeze") {
 if (target === "deliver-stage-rules") {
   const dispatch = kiroDispatch(kiro);
   if (dispatch === null) return 0;
-  const preloadError = nativePreloadError(projectDir, dispatch.agents);
+  // The shared hook's self-gate, first: a conversation that has not joined the
+  // selected workflow gets none of its rules, so its preload is not held either.
+  const dispatchWorkflow = enterHookWorkflow(projectDir, kiro.session_id);
+  try {
+    if (hookStandsOutside(dispatchWorkflow)) return 0;
+  } finally {
+    dispatchWorkflow.restore();
+  }
+  let preloadError = nativePreloadError(projectDir, dispatch.agents);
+  if (preloadError?.repointable === true) {
+    // A core persona still pointed at another space: repoint it once, as a
+    // space switch would. Kiro may have read the old config for this call, so
+    // the call still stops, and starting the specialist again goes through.
+    try {
+      repointHarnessIncludes(projectDir);
+    } catch { /* the check below names the switch */ }
+    preloadError = nativePreloadError(projectDir, dispatch.agents) ?? {
+      message: "[aidlc] This specialist was set up for another space and is now set up for this one. Start it again.\n",
+      repointable: false,
+    };
+  }
   if (preloadError !== null) {
-    process.stderr.write(preloadError);
+    process.stderr.write(preloadError.message);
     hookDebug(projectDir, "kiro-adapter", "Native active-space memory preload failed", {
-      target, transport: "native-preload", error: preloadError.trim(),
+      target, transport: "native-preload", error: preloadError.message.trim(),
     });
     return 2;
   }
