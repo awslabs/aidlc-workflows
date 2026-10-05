@@ -1892,4 +1892,20 @@ describe("t341 a checkpoint finds the session it runs in", () => {
     expect(readProtectedQuestion(pd, "t341-other")).toBeNull();
     expect(readProtectedQuestion(pd, "t341-owner")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The checkpoint finds its own session, so no shipped step or doc may tell the
+  // agent to pass one: an agent told to pass one goes looking for it, and on Kiro
+  // that was a permission prompt to read the person's environment.
+  test("no shipped step or doc asks the agent for a session to ask, approve, or reject a checkpoint", () => {
+    const root = join(import.meta.dir, "..", "..");
+    const files = (dir: string): string[] => fs.readdirSync(join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return files(rel);
+      return /\.(md|ts)$/.test(entry.name) ? [rel] : [];
+    });
+    const asksForSession = /checkpoint --action (?:ask|approve|reject)\b.*--session/;
+    const hits = ["core", "harness", "docs"].flatMap(files).filter((rel) =>
+      readFileSync(join(root, rel), "utf-8").split("\n").some((line) => asksForSession.test(line)));
+    expect(hits).toEqual([]);
+  });
 });
