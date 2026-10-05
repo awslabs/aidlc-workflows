@@ -267,10 +267,11 @@ to the checkpoint approval procedure when a human is required. Only after `verif
 reports `verified: true` and the current directive has `ready: true`, run `ask`.
 It refuses an unready or unverified checkpoint. Before presenting **Approve** /
 **Request Changes**, bind the question to the current checkpoint proof and
-authorized command digest in the invoking SessionStart session:
+authorized command digest. The command finds the session it runs in by itself,
+so pass no session and never look one up:
 
 ```bash
-{{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
+{{INVOKE}} engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
 
 Then present the choices and wait for the human. Show the complete recorded
@@ -287,7 +288,7 @@ its review, so it was re-checked: <verdict>. Approve it?", with `<changed>` as
 or not ready). On a `NOT-READY` verdict, print the Review brief
 first, as the reviewer module asks after a recovery verdict:
 `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts review --stage "<directive.stage>" --unit "<unit>" --why stale`.
-The human's reply in that session, to this checkpoint question, authorizes the
+The human's reply in this session, to this checkpoint question, authorizes the
 action you read from it: approve, or reject with what they asked to change
 (their words are kept with the record; add `--reason` when you want to say
 more). A reply from another session, or to a
@@ -302,11 +303,11 @@ question-and-answer flow.
 
 ```bash
 # Only after the human chose Approve:
-{{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Approve'
+{{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --user-input 'Approve'
 # Automatic approval: verified ordinary Unit and human_required: false only.
 {{INVOKE}} engine bolt checkpoint --action approve --unit "<unit>" --kind unit
 # Only after the human chose Request Changes and supplied feedback:
-{{INVOKE}} engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+{{INVOKE}} engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
 After approval or rejection, re-run `next`. Never use a checkpoint approval as

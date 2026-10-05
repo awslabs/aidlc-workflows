@@ -193,18 +193,19 @@ batch approval procedure when a human is required. Bookkeeping settlement never
 repeats an already handled ritual.
 
 After confirming `ready: true` and before presenting **Approve** / **Request Changes**,
-bind the question to the current batch fingerprint, per-Unit `Command SHA-256`
-set, and the invoking SessionStart session:
+bind the question to the current batch fingerprint and per-Unit `Command SHA-256`
+set. The command finds the session it runs in by itself, so pass no session and
+never look one up:
 
 ```bash
-{{INVOKE}} engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
+{{INVOKE}} engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"
 ```
 
 Then present the choices and wait for the human. Show "Verified with
 `<full command>` (exit 0). Approve this completed batch?" using the complete
 recorded command, never abbreviated. Copy the canonical `command` from the
 verification-command tool output into a code span whose delimiter preserves any
-backticks. The human's reply in that session, to this checkpoint question,
+backticks. The human's reply in this session, to this checkpoint question,
 authorizes the action you read from it: approve, or reject with what they asked
 to change (their words are kept with the record; add `--reason` when you want to
 say more). A reply from another session, or to a different question, does not
@@ -220,11 +221,11 @@ even under autonomous policy.
 
 ```bash
 # Only after a real human Approve:
-{{INVOKE}} engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Approve'
+{{INVOKE}} engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --user-input 'Approve'
 # Only when human_required is false:
 {{INVOKE}} engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>"
 # Only after a real human Request Changes:
-{{INVOKE}} engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+{{INVOKE}} engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
 Re-run `next` after batch approval or rejection. Approval advances batch routing,

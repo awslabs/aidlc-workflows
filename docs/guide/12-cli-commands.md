@@ -1882,23 +1882,25 @@ canonical command, not a prefix. Only after `verify` reports `verified: true` an
 the current checkpoint has `ready: true`, run `ask`; it refuses an unready or
 unverified checkpoint. Before presenting **Approve** / **Request Changes**, open
 the one-shot question for the current Unit, kind, fingerprint, verification proof
-ID, and authorized command digest in the invoking SessionStart session:
+ID, and authorized command digest. Each `checkpoint` action finds the session it
+runs in by itself; `--session <id>` overrides that only when it reports it cannot
+tell which session this is:
 
 ```bash
-aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"
+aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>
 ```
 
 Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
-they chose, with the same session:
+they chose:
 
 ```bash
 # Only after the human chose Approve:
-aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Approve'
+aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skeleton> --user-input 'Approve'
 # Only after the human chose Request Changes and supplied feedback:
-aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
 The action consumes the response. Re-running `verify` withdraws every open
@@ -1983,10 +1985,11 @@ aidlc engine bolt swarm-checkpoint --action status --batch <N> --units "<comma-s
 Only after status reports `ready: true`, run `swarm-checkpoint --action ask`;
 it refuses an unready batch. Before presenting **Approve** / **Request Changes**,
 open the one-shot question for the current batch, exact Unit set, fingerprint,
-and per-Unit `Command SHA-256` set in the invoking SessionStart session:
+and per-Unit `Command SHA-256` set. Like `checkpoint`, it finds its own session;
+`--session <id>` is only an override:
 
 ```bash
-aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"
+aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"
 ```
 Show "Verified with `<full command>` (exit 0)" in the approval question. Copy the
 complete canonical `command` from the verification-command tool output into a
@@ -1997,13 +2000,13 @@ Wait for the human's **Approve** / **Request Changes** reply in that
 session, to this checkpoint question. It authorizes only the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
-they chose, with the same session:
+they chose:
 
 ```bash
 # Only after the human chose Approve:
-aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Approve'
+aidlc engine bolt swarm-checkpoint --action approve --batch <N> --units "<Units>" --user-input 'Approve'
 # Only after the human chose Request Changes and supplied feedback:
-aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --session "<session ID>" --user-input 'Request Changes' --reason '<human feedback>'
+aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>" --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
 The action consumes the response; a changed checkpoint needs a new question and

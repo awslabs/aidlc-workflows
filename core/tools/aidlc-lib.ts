@@ -4626,7 +4626,7 @@ export function requireProtectedResponse(
   const response = readProtectedResponse(projectDir, session);
   const recovery = expected.kind === "verification-command" ? VERIFICATION_COMMAND_RECOVERY
     : expected.kind === "construction-policy" ? CONSTRUCTION_POLICY_RECOVERY
-    : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>" or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>" --session "<session ID>", then wait for Approve or Request Changes.';
+    : 'Re-ask with aidlc bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or aidlc bolt swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.';
   // The person replied to this exact question (the hook's record); the choice
   // is the one the conductor read from their words. That reply is the
   // person's presence: with it on record, a misrecord is corrected by

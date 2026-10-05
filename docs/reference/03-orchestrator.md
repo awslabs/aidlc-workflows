@@ -603,15 +603,15 @@ show the exact action forms.
 
 Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true`, open the human Unit/skeleton approval question with
-`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>`;
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
-`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
-does not. Pass that same `--session` on approval/rejection and never pass
-`--user-input` the human did not choose. Consent is one-shot and bound to the
+does not. These commands find their own session; never pass `--user-input`
+the human did not choose. Consent is one-shot and bound to the
 current checkpoint fingerprint, verification proof ID, and authorized command
 digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
 Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
