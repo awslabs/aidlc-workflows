@@ -4657,6 +4657,34 @@ describe("t243 project initialization", () => {
     ], malformedMcp);
     expect(malformedJson.status).toBe(4);
     expect(malformedJson.stdout).toContain("malformed JSON");
+    // A malformed file is not cleared by --force, so the step names fixing it
+    // or moving it aside, and that step goes through.
+    const malformedOut = malformedJson.stdout.replace(/\s+/g, " ");
+    expect(malformedOut).toContain("fix .mcp.json in place, or move it somewhere else, then run the same command again");
+    expect(malformedOut).not.toContain("--force");
+    const mcpArgs = [
+      "config", "--project-dir", malformedMcp, "--from", CLAUDE_RELEASE, "--harness", "claude", "--mcp", "defaults",
+    ];
+    writeFileSync(join(malformedMcp, ".mcp.json"), "{}\n");
+    const fixed = run(INIT, mcpArgs, malformedMcp);
+    expect(fixed.status, fixed.stdout + fixed.stderr).toBe(0);
+
+    // A malformed file beside an edited shipped one: moving both aside clears
+    // every cited conflict, and --force, which clears only the edit, is not named.
+    const shippedAgent = join(malformedMcp, ".claude", "agents", "aidlc-developer-agent.md");
+    writeFileSync(shippedAgent, `${readFileSync(shippedAgent, "utf-8")}\nmy own notes\n`);
+    writeFileSync(join(malformedMcp, ".mcp.json"), "{");
+    const mixed = run(INIT, mcpArgs, malformedMcp);
+    expect(mixed.status).toBe(4);
+    const mixedOut = mixed.stdout.replace(/\s+/g, " ");
+    expect(mixedOut).toContain("move ");
+    expect(mixedOut).toContain(".claude/agents/aidlc-developer-agent.md");
+    expect(mixedOut).toContain("(or fix .mcp.json in place instead of moving it), then run the same command again");
+    expect(mixedOut).not.toContain("--force");
+    renameSync(shippedAgent, join(malformedMcp, "my-developer-agent.md"));
+    renameSync(join(malformedMcp, ".mcp.json"), join(malformedMcp, "my-mcp.json"));
+    const moved = run(INIT, mcpArgs, malformedMcp);
+    expect(moved.status, moved.stdout + moved.stderr).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a whole-file integration is adopted by an exact legacy signature", () => {

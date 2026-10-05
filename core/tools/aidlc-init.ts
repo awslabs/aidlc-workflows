@@ -10697,18 +10697,27 @@ export async function main(
           actions.filter((item) => item.action === name).length,
         ]),
       );
-      // The refusal keeps the person's edits; the way forward is theirs: keep
-      // a copy, or take the shipped file over it.
-      const replaceable = conflicts.filter((item) =>
-        /locally modified|unowned|not a regular file|no ownership baseline/.test(item.detail ?? "")
-      );
-      const one = replaceable.length === 1;
-      const forward = replaceable.length === 0
-        ? configCommand("--dry-run --verbose")
-        : `to keep your version, move ${one ? replaceable[0].path : "those files"} somewhere else and run ` +
+      // The refusal keeps the person's edits; the way forward is theirs. Moving
+      // a cited file aside clears every kind of conflict; --force clears only
+      // an edit to a file AI-DLC owns, so it is named only when that is all.
+      const forceable = (detail: string | undefined): boolean =>
+        /^(?:managed path is not a regular file|locally modified or unowned|removed upstream but locally modified|root integration is not a regular file|managed block was locally modified|managed block has no ownership baseline|retired managed block was locally modified|retired JSON entry was locally modified|retired whole-file integration was locally modified)$/
+          .test(detail ?? "") || /is missing its shipped block copy/.test(detail ?? "");
+      const cited = [...new Set(conflicts.map((item) => item.path))];
+      const broken = [...new Set(conflicts.filter((item) => !forceable(item.detail)).map((item) => item.path))];
+      const one = cited.length === 1;
+      const listed = (paths: string[]): string => paths.length === 1 ? paths[0] : paths.join(", ");
+      const forward = broken.length === 0
+        ? `to keep your version, move ${one ? cited[0] : "those files"} somewhere else and run ` +
           `the same command again; to take the shipped ${one ? "version" : "versions"} over ` +
           `${one ? "it" : "them"}, run it again with --force. ` +
-          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`;
+          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`
+        : broken.length < cited.length
+        ? `move ${listed(cited)} somewhere else (or fix ${listed(broken)} in place instead of moving ` +
+          `${broken.length === 1 ? "it" : "them"}), then run the same command again. ` +
+          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`
+        : `fix ${listed(broken)} in place, or move ${one ? "it" : "them"} somewhere else, then run the same ` +
+          `command again. \`${configCommand("--dry-run --verbose")}\` lists every change first.`;
       emitResult({
         ...failure(
           `${conflicts.length} config conflict(s): ${conflicts.map((item) => `${item.path} (${item.detail})`).join(", ")}`,
