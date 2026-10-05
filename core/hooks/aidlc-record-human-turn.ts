@@ -76,6 +76,7 @@ import {
   humanTurnMintAllowed,
   isoTimestamp,
   markHumanTurn,
+  parseTypedGuardSwitchRequest,
   recordGateWords,
   recordPreWorkflowHeartbeat,
   resolveProjectDirFromHook,
@@ -100,7 +101,7 @@ import {
   recordPlanApprovalOverrideRequest,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import { notePlanApprovalAskReply } from "../tools/aidlc-plan-approval-ask.ts";
+import { notePlanApprovalAskReply, openPlanApprovalQuestion } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 
 // "/aidlc approve the code plan" is the person's reply: the engine reads the
@@ -113,6 +114,20 @@ async function aidlcEntryReply(prompt: string): Promise<string | null> {
   try {
     const { nextArgsAreOnlyWords } = await import("../tools/aidlc-orchestrate.ts");
     return nextArgsAreOnlyWords(splitKiroCommandArgs(words)) ? words : null;
+  } catch {
+    return null;
+  }
+}
+
+// Switch flags, then exactly one choice of the open code plan question
+// ("/aidlc --guard-policy off Approve Plan"): the switch is for the work open
+// now and the words answer the question. Null for anything else.
+function planAnswerAfterSwitch(projectDir: string, prompt: string): string | null {
+  try {
+    const parsed = parseTypedGuardSwitchRequest(prompt, { wordsAnswer: true });
+    if (parsed.words === undefined || parsed.error !== null || parsed.switches.length === 0) return null;
+    const question = openPlanApprovalQuestion(projectDir, parsed.words);
+    return question !== null && !question.answered && !question.editing && question.isChoice ? parsed.words : null;
   } catch {
     return null;
   }
@@ -381,9 +396,10 @@ try {
   }
   // Apply before the state-file gate so a first-use switch reports that the
   // person must create the piece of work, then type the switch again.
+  const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
   if (mintAllowed && sessionId && typedPrompt) {
     try {
-      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
+      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt, { wordsAnswer: switchAnswer !== null });
       if (outcome !== null) {
         notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
       }
@@ -421,8 +437,8 @@ try {
       // framework, not an answer to the pending Plan Approval question; a
       // question about a switch ("skip plan approval?") is for the agent.
       const switchQuestion = typedPrompt.length > 0 && isTypedGuardSwitchQuestion(typedPrompt);
-      const entryReply = typedPrompt.length > 0 ? await aidlcEntryReply(typedPrompt) : null;
-      const notAReply = typedPrompt.length > 0 && (
+      const entryReply = switchAnswer ?? (typedPrompt.length > 0 ? await aidlcEntryReply(typedPrompt) : null);
+      const notAReply = typedPrompt.length > 0 && switchAnswer === null && (
         (isAidlcCommandPrompt(typedPrompt) && entryReply === null) ||
         isTypedGuardSwitchPrompt(typedPrompt) ||
         switchQuestion ||

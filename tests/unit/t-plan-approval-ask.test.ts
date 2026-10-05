@@ -573,6 +573,36 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // The person's latest pick stands: a Request Changes after an exact approval
+  // is never reported as recorded while the approval builds.
+  test("a later Request Changes after an exact approval names the step that brings the plan back", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc 1");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    reply(proj, "/aidlc Request Changes");
+    const read = next(proj, ["Request", "Changes"]);
+    expect(read.kind, JSON.stringify(read)).toBe("print");
+    expect(read.message).not.toContain("it is recorded");
+    expect(read.message).toContain("--details 'Review the plan'");
+    const reviewed = answer(proj, "Review the plan");
+    expect(reviewed.code, reviewed.message).toBe(0);
+    const again = next(proj);
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(again.ask_type).toBe("plan-approval");
+  });
+
+  // Both halves of one message are done: the switch lands on this work, and
+  // the choice typed after it answers the plan question.
+  test("a switch typed before a plan choice applies to this work, and the choice is recorded", () => {
+    const proj = project("strict");
+    askFor(proj);
+    reply(proj, "/aidlc --guard-policy off Approve Plan");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain("- **Guard Policy**: off (set by you)");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
   test("a command typed after /aidlc is still no answer to the plan question", () => {
     const proj = project();
     askFor(proj);

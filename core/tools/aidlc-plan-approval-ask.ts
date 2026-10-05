@@ -981,21 +981,29 @@ function currentPlanApprovalAsk(
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, whether the person is editing the files,
- * and whether `words` are exactly one of its choices ("1", "Approve Plan").
+ * whether `words` are exactly one of its choices ("1", "Approve Plan"), and,
+ * when they are, the recorded answer they pick against ("approve" or
+ * "request-changes", or null when they pick what is recorded).
  * Null when it is not the open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
   words: string,
-): { answered: boolean; editing: boolean; isChoice: boolean } | null {
+): { answered: boolean; editing: boolean; isChoice: boolean; overrules: "approve" | "request-changes" | null } | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
     const { record } = open;
+    const pick = exactOptionPick(words, record.choices);
+    const picked = pick === 0 ? "approve" : pick === 1 ? "request-changes" : pick === 2 ? "edit" : null;
+    const recorded = record.mode === "editing" ? null
+      : (record.results ?? []).find((result) => (result.choice === "request-changes" ? "request-changes" : "approve") !== picked);
     return {
       answered: record.targets.every((target) => record.results?.some((result) => result.unit === target.unit)),
       editing: record.mode === "editing",
-      isChoice: exactOptionPick(words, record.choices) !== null,
+      isChoice: pick !== null,
+      overrules: picked === null || recorded === undefined || recorded === null ? null
+        : recorded.choice === "request-changes" ? "request-changes" : "approve",
     };
   } catch {
     return null;

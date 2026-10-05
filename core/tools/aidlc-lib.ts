@@ -36589,7 +36589,9 @@ const PLAN_APPROVAL_OFF_WORDS_RE = new RegExp(
 
 const GUARD_POLICY_WORDS_RE = /^(?:guard[- ]policy|change[- ]control)\s+(relaxed|off)$/i;
 
-export function parseTypedGuardSwitchRequest(prompt: string): {
+// With `wordsAnswer`, the words after the flags answer the question that is
+// open, so the flags are for the work open now rather than for new work.
+export function parseTypedGuardSwitchRequest(prompt: string, options: { wordsAnswer?: boolean } = {}): {
   switches: GuardSwitch[];
   settings: Array<{ key: string; value: string }>;
   space: string | null;
@@ -36602,6 +36604,8 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   newWorkGuardPolicy?: "relaxed" | "off";
   /** The plain-words switch asked as a question ("skip plan approval?"). */
   asked?: true;
+  /** The words typed after the flags, when there are any. */
+  words?: string;
 } {
   const trimmed = prompt.trim();
   const trailing = trimmed.match(/[.,;:!?]+$/)?.[0] ?? "";
@@ -36654,6 +36658,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   const error: string | null = null;
   let guardPolicySpelling: "guard-policy" | "change-control" | null = null;
   let described = false;
+  const words: string[] = [];
   let index = configForm ? 2 : 0;
   if (configForm && tokens.length < 4) {
     return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -36663,6 +36668,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     const token = tokens[index++];
     if (!configForm && token === "--") {
       described = index < tokens.length;
+      words.push(...tokens.slice(index));
       break;
     }
     const configKey = (
@@ -36675,6 +36681,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     if (configKey === null) {
       if (!configForm) {
         described = true;
+        words.push(token);
         continue;
       }
       return { switches: [], settings: [], space: null, intent: null, scope: null, error: null };
@@ -36749,9 +36756,10 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   // about the flag. Either way it is not the person's switch at prompt time.
   // Plan approval off typed for the new work is still the person's: creation
   // honors it for the piece of work this chat creates next.
-  const newWorkPlanApprovalOff = described && settings.get("plan-approval") === "off";
+  const forNewWork = described && options.wordsAnswer !== true;
+  const newWorkPlanApprovalOff = forNewWork && settings.get("plan-approval") === "off";
   for (const ceremony of ["summary-confirmation", "plan-approval"] as const) {
-    if (described && settings.get(ceremony) === "off") {
+    if (forNewWork && settings.get(ceremony) === "off") {
       switches.delete(ceremony);
       settings.delete(ceremony);
     }
@@ -36759,7 +36767,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
   // Guard Policy typed with the new work is for that work, never for the work
   // open now: creation honors it for the piece of work this chat creates next.
   const typedPolicy = settings.get("guard-policy");
-  const newWorkGuardPolicy = described && (typedPolicy === "relaxed" || typedPolicy === "off") ? typedPolicy : undefined;
+  const newWorkGuardPolicy = forNewWork && (typedPolicy === "relaxed" || typedPolicy === "off") ? typedPolicy : undefined;
   if (newWorkGuardPolicy !== undefined) {
     switches.delete("guard-policy");
     settings.delete("guard-policy");
@@ -36773,6 +36781,7 @@ export function parseTypedGuardSwitchRequest(prompt: string): {
     error,
     ...(newWorkPlanApprovalOff ? { newWorkPlanApprovalOff: true as const } : {}),
     ...(newWorkGuardPolicy ? { newWorkGuardPolicy } : {}),
+    ...(words.length > 0 ? { words: words.join(" ") } : {}),
   };
 }
 

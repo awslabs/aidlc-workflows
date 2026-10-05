@@ -2242,6 +2242,34 @@ function openStageQuestion(projectDir: string, stateContent: string): { stage: s
   }
 }
 
+// The stage whose approval gate is open in a solo walk: the current stage is
+// held at its gate. Null under autonomous Construction, or when unreadable.
+function openApprovalGateStage(stateContent: string): string | null {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
+    const stage = getField(stateContent, "Current Stage")?.trim() ?? "";
+    if (stage.length === 0) return null;
+    return parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state === "awaiting-approval" ? stage : null;
+  } catch {
+    return null;
+  }
+}
+
+// Words while a stage's approval gate is open: the conductor reads whether
+// they answer it, the same split as openQuestionReplyDirective.
+function openGateReplyDirective(stage: string, requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    `Stage "${stage}" is waiting for the person's approval, and their reply may answer it. Read it. If it ` +
+      `approves, run \`${orchestrate} report --stage ${shellArg(stage)} --result approved --user-input "Approve"\`; ` +
+      `if it asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected ` +
+      `--user-input "Request Changes"\`. Then follow what it returns. If it is about something else, such as new ` +
+      `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
+      "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
+      "person in one short question and follow their answer.",
+  );
+}
+
 // Prose while the current stage has a question the person has not answered
 // yet (the audit pairing the Stop hook reads) may be its answer, or something
 // else. Reading which is the conductor's job, so it gets a command for each:
@@ -7324,6 +7352,19 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // as its answer first, never asked about as new work.
     const planQuestion = openPlanApprovalQuestion(pd, flags.intent);
     if (planQuestion !== null) {
+      // A later pick against the one on record: their latest word stands.
+      if (planQuestion.answered && planQuestion.isChoice && planQuestion.overrules !== null) {
+        const log = aidlcToolInvocation("log");
+        emit(printDirective(planQuestion.overrules === "request-changes"
+          ? "The person asked for changes to the code plan earlier and now approves it. Run " +
+            `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Approve Plan'\`, then bare ` +
+            `\`${aidlcToolInvocation("orchestrate")} next\`: it builds the plan.`
+          : "The person approved the code plan earlier and now picks another choice, and nothing is built yet. Run " +
+            `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Review the plan'\`, then bare ` +
+            `\`${aidlcToolInvocation("orchestrate")} next\`: the plan question comes back before anything is built. ` +
+            "Ask what they want changed when they did not say."));
+        return;
+      }
       // Exactly one of its choices, already recorded from their reply.
       if (planQuestion.answered && planQuestion.isChoice) {
         emit(printDirective(
@@ -7349,6 +7390,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
       emit(openQuestionReplyDirective(open.stage, auditBlockField(open.block, "Checkpoint"), words.id));
+      return;
+    }
+    // Words at an approval gate the person is looking at ("approve") may be
+    // its answer, read the same way.
+    const gateStage = openApprovalGateStage(stateContent);
+    if (gateStage !== null) {
+      const words = saveQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carriedRoutingFlags(flags)),
+      );
+      emit(openGateReplyDirective(gateStage, words.id));
       return;
     }
   }

@@ -288,6 +288,23 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "Person Reply")).toBe(kept);
   });
 
+  // At an open stage gate, "/aidlc approve" reaches next as words: they are
+  // read as the gate's answer first, never asked about as new work.
+  test("/aidlc approve at an open gate is its answer, with no new-work question", () => {
+    says(proj, "/aidlc approve");
+    const r = run(ORCHESTRATE, ["next", "approve", "--project-dir", proj]);
+    const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
+    expect(line, r.out).toBeDefined();
+    const read = JSON.parse(line as string) as { kind: string; message?: string; ask_type?: string };
+    expect(read.kind, r.out).toBe("print");
+    expect(read.ask_type).toBeUndefined();
+    expect(read.message).toContain(`report --stage ${slug} --result approved --user-input "Approve"`);
+    expect(read.message).not.toContain("Work is already in progress");
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "Person Reply")).toBe("approve");
+  });
+
   // Only AIDLC's own commands are commands: a reply that starts with a path is
   // the person's words.
   test("a reply that starts with a slash path is a reply, kept as their words", () => {

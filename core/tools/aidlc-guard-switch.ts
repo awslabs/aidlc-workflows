@@ -655,12 +655,17 @@ export function applyTypedGuardSwitchPrompt(
   projectDir: string,
   sessionId: string,
   prompt: string,
+  options: { wordsAnswer?: boolean } = {},
 ): TypedGuardSwitchOutcome | null {
-  const parsed = parseTypedGuardSwitchRequest(prompt);
+  const parsed = parseTypedGuardSwitchRequest(prompt, options);
   if (process.env.AIDLC_UNATTENDED === "1") return null;
   // Plan approval back on, typed before the work exists, withdraws an earlier off.
   if (parsed.settings.some((setting) => setting.key === "plan-approval" && setting.value === "on")) {
     consumePlanApprovalCreationGrant(projectDir, sessionId);
+  }
+  // So does Guard Policy strict for an earlier relaxed or off: the latest word stands.
+  if (parsed.settings.some((setting) => setting.key === "guard-policy" && setting.value === "strict")) {
+    consumeGuardPolicyCreationGrant(projectDir, sessionId);
   }
   const forNewWork: TypedGuardSwitchOutcome[] = [];
   if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {

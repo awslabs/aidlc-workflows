@@ -978,6 +978,18 @@ describe("Guard Policy typed before or with the new work", () => {
     expect(createdPolicy(proj)).toBe("off (set by you)");
   });
 
+  test.each(["off", "relaxed"] as const)("%s, then strict, before the work: the new work starts strict", (lower) => {
+    const proj = emptyProject();
+    expect(reply(proj, `/aidlc --guard-policy ${lower}`)).toContain(
+      `Guard Policy ${lower} for the piece of work you start now (set by you).`,
+    );
+    reply(proj, "/aidlc --guard-policy strict");
+    const asked = requestFor(proj, "build the export");
+    const made = utility(proj, ["intent-create", "--request", asked.id]);
+    expect(made.status, made.stderr).toBe(0);
+    expect(createdPolicy(proj)).toBe("strict (from scope enterprise)");
+  });
+
   test("typed with the description, creation takes it with no refusal", () => {
     const proj = emptyProject();
     expect(reply(proj, "/aidlc --guard-policy relaxed --scope enterprise -- build the export")).toContain(
