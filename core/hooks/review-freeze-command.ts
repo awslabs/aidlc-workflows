@@ -757,8 +757,10 @@ interface CmdletWrite {
   paths: string[];
   // The parameter whose value names a child of each path (New-Item -Name).
   child?: string;
-  // A parameter whose set writes no file (Tee-Object -Variable): with it and
-  // no path named, the command writes nothing, and with a path it fails.
+  // A parameter whose set writes no file (Tee-Object -Variable). Bound with
+  // a value and no path named, the command writes nothing: with the quotes
+  // known that settles it; a dequoted reading also needs no positional,
+  // unknown, starved or -- word beside it (see cmdletWriteTargets).
   fileless?: string;
   // Other parameters that take a value.
   valued: string[];
@@ -887,11 +889,14 @@ function cmdletWriteTargets(
   const unknown: string[] = [];
   let unknownParameter = false;
   let endOfParameters = false;
+  // Parameters that take a value but met a word that looks like a parameter
+  // or nothing: in a dequoted reading each may have been a quoted value.
+  const starved: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (endOfParameters || arg.parameter === undefined) {
       // A bare -- ends the parameters: every later word is a value.
-      if (!endOfParameters && arg.values.length === 1 && arg.values[0] === "--") {
+      if (!endOfParameters && isEndOfParameters(arg)) {
         endOfParameters = true;
         continue;
       }
@@ -907,18 +912,33 @@ function cmdletWriteTargets(
       unknown.push(...arg.values);
       continue;
     }
-    if (switches.has(name)) continue;
+    if (switches.has(name)) {
+      // `-Switch: value` gives the switch the next word, whatever it is.
+      if (!arg.attached && arg.written?.endsWith(":") && index + 1 < args.length) {
+        index++;
+        if (!exact) starved.push(arg.written);
+      }
+      continue;
+    }
+    // Dequoted, '-Variable:x' may have been a quoted path on a drive named
+    // -Variable, so an attached fileless value leaves the binding in doubt.
+    if (!exact && arg.attached && name === spec.fileless) unknownParameter = true;
     let values = arg.values;
     if (!arg.attached) {
       const next = args[index + 1];
       values = next !== undefined && next.parameter === undefined ? next.values : [];
       if (next !== undefined && next.parameter === undefined) index++;
+      else if (!exact) starved.push(arg.written ?? `-${arg.parameter}`);
     }
     bound.set(name, [...(bound.get(name) ?? []), ...values]);
   }
+  const end = args.findIndex(isEndOfParameters);
+  // A dequoted reading knows the binding is fileless only when nothing in it
+  // is in doubt; with the quotes known, a bound -Variable settles it.
   if (
-    spec.fileless !== undefined && bound.has(spec.fileless) &&
-    !spec.paths.some((name) => bound.has(name))
+    spec.fileless !== undefined && (bound.get(spec.fileless)?.length ?? 0) > 0 &&
+    !spec.paths.some((name) => bound.has(name)) &&
+    (exact || (starved.length === 0 && !unknownParameter && positionals.length === 0 && end < 0))
   ) {
     return { targets: [], pathBound: false };
   }
@@ -938,9 +958,8 @@ function cmdletWriteTargets(
   targets.push(...positionals.flat());
   if (unknownParameter) targets.push(...unknown);
   if (!exact) {
-    targets.push(...args.flatMap((arg) => arg.values));
+    targets.push(...args.flatMap((arg) => arg.values), ...starved);
     // A -- the binding gave to a parameter still ends the parameters.
-    const end = args.findIndex((arg) => arg.parameter === undefined && arg.values.length === 1 && arg.values[0] === "--");
     if (end >= 0) {
       for (const arg of args.slice(end + 1)) {
         if (arg.parameter !== undefined) targets.push(arg.written ?? `-${arg.parameter}`);
@@ -948,6 +967,11 @@ function cmdletWriteTargets(
     }
   }
   return { targets, pathBound };
+}
+
+// A bare --: PowerShell reads every later word as a value.
+function isEndOfParameters(arg: CmdletArg): boolean {
+  return arg.parameter === undefined && arg.values.length === 1 && arg.values[0] === "--";
 }
 
 // POSIX shell words read as PowerShell arguments. A value is also read as

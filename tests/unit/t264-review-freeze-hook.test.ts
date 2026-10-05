@@ -533,6 +533,23 @@ describe("t264 (a) judgeFreeze decision table", () => {
     // the path and refuse the extra value, so nothing is written.
     expect(posix("'x' | Tee-Object '-Variable' aidlc/a.md")).toEqual([]);
     expect(posix("'x' | Tee-Object -Variable '-FilePath' aidlc/a.md")).toContain("/p/aidlc/a.md");
+    // A dequoted '-Variable' that was another parameter's value hides nothing.
+    for (const command of [
+      "'x' | Tee-Object -InputObject '-Variable' aidlc/a.md",
+      "Tee-Object aidlc/a.md -InputObject '-Variable'",
+      "'x' | Tee-Object -OutVariable '-Variable' aidlc/a.md",
+      "'x' | Tee-Object -Append: '-Variable' aidlc/a.md",
+    ]) {
+      expect(posix(command), command).toContain("/p/aidlc/a.md");
+      expect(powerShell(command), command).toContain("/p/aidlc/a.md");
+    }
+    expect(posix("'x' | Tee-Object -OutVariable -- -Variable:aidlc/a.md")).toContain("/p/aidlc/a.md");
+    // Dequoted, '-Variable:x' may be a quoted path on a drive named -Variable.
+    expect(posix("'x' | Tee-Object '-Variable:aidlc/a.md'")).toContain("/p/aidlc/a.md");
+    // A parameter-looking word left without a value may be a quoted path.
+    expect(posix("'x' | Tee-Object '-Variable'")).toContain("/p/-Variable");
+    // With the quotes known, a bound -Variable writes no file.
+    expect(powerShell("'x' | Tee-Object -Variable v aidlc/a.md")).toEqual([]);
     expect(powerShell("New-Item -Path aidlc -Name a.md -ItemType File")).toEqual(["/p/aidlc/a.md"]);
     expect(posix("New-Item -Path: aidlc -Name a.md")).toContain("/p/aidlc/a.md");
     // After --, a word that looks like a parameter is a value as written.
