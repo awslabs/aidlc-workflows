@@ -83,7 +83,7 @@ import {
   stripRecommendedDecorator,
   validSessionId,
   withAuditLock,
-  writeHookStatusFile,
+  writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
@@ -381,7 +381,7 @@ try {
     // or a turn with no pending question) is never mistaken for one that never
     // ran. Best-effort: a heartbeat failure never blocks the person's turn.
     try {
-      writeHookStatusFile(hooksHealthDir(projectDir), "record-human-turn.last", isoTimestamp());
+      writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), "record-human-turn.last", isoTimestamp());
     } catch {
       // A heartbeat write failure is lost telemetry, never a blocked turn.
     }

@@ -96,7 +96,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   with `agentStep`: when the person has switched the presence check off, so
   `next` does not stop, the engine adds that sentence to every directive's
   `change_notices` instead. Claude Code, Codex CLI, Kiro CLI and opencode
-  declare `recovery` and `agentStep`; Copilot also `notRunYet` and
+  declare `recovery`, `agentStep` and `notRunYet`; Copilot also
   `notRunInWorkflow`; Kiro IDE `recovery`,
   `missedReply` and `notRunYet`, and keeps its agent's step in its
   orchestrator skill, since in a folder Kiro has not been allowed to run

@@ -13,7 +13,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -380,6 +380,24 @@ describe("before any workflow, next stops when the person's message left no hear
     expect(prompt.code, prompt.stderr).toBe(0);
     expect(existsSync(join(hooksHealthDir(proj), "record-human-turn.last"))).toBe(true);
     expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  test("the heartbeat is never written through a linked aidlc folder", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-hooks-off-outside-"));
+    outsides.push(outside);
+    rmSync(join(proj, "aidlc"), { recursive: true, force: true });
+    symlinkSync(outside, join(proj, "aidlc"), DIR_LINK);
+    const prompt = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "/aidlc fix the flag parser" }),
+    );
+    expect(prompt.code, prompt.stderr).toBe(0);
+    const written = readdirSync(outside, { recursive: true }).map(String);
+    expect(written.filter((name) => name.endsWith(".last"))).toEqual([]);
   });
 
   test("unattended, or with the presence check switched off, the first next is not stopped", () => {

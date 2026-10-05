@@ -12235,6 +12235,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeProjectHookStatusFile",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeProtectedResponse",
       "minMechanism": "none",
       "coveredBy": [],

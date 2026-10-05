@@ -24717,7 +24717,7 @@ export function hookStatusPathLinked(projectDir: string, intent?: string, space?
 export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): void {
   try {
     if (recordDir(projectDir) !== null) return;
-    writeHookStatusFile(hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
+    writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
   } catch {
     // Advisory: without it doctor keeps its "not run yet" warning.
   }
@@ -35055,6 +35055,18 @@ function hookStatusTarget(healthDir: string, fileName: string, create: boolean):
   } catch {
     return null;
   }
+}
+
+// A heartbeat a hook writes from the person's message is written only when
+// nothing on the way from the project's own folder to it is a link, so a
+// linked aidlc/ folder never takes the write elsewhere. Never throws.
+export function writeProjectHookStatusFile(projectDir: string, healthDir: string, fileName: string, data: string): boolean {
+  try {
+    assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, join(healthDir, fileName)));
+  } catch {
+    return false;
+  }
+  return writeHookStatusFile(healthDir, fileName, data);
 }
 
 // "replace" rewrites the file, "append" adds to it. Never throws; returns
