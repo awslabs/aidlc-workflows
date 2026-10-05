@@ -350,7 +350,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 /** The relaxed human sentence for source drift after the plan was approved. */
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
-    `${describeSourceDrift(paths, unbound)} Continuing (Guard Policy: relaxed or off). ` +
+    `${describeSourceDrift(paths, unbound)} Carrying on. ` +
     "Say 'review the plan again' to reopen approval."
   );
 }

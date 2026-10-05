@@ -13109,8 +13109,8 @@ export function checkSummaryConfirmationEvidence(
               recorded: receiptAuthorization,
               current: stamps.join(", "),
               notice:
-                `${toPosix(relative(projectDir, artifactAbs))} was saved without the current ` +
-                "summary confirmation. Continuing (Guard Policy: relaxed or off).",
+                `${toPosix(relative(projectDir, artifactAbs))} was saved before you confirmed the current ` +
+                "summary; carrying on.",
             });
             continue;
           }
@@ -18459,8 +18459,10 @@ export function freshReviewReceipts(
   // matches the current bytes, and fed the produces[] paths written after it.
   const acceptedArtifactChanges = new Map<string, AcceptedChange>();
   const acceptedChanges: AcceptedChange[] = [];
-  const relaxedReviewNotice = (artifact: string): string =>
-    `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Guard Policy: relaxed or off).`;
+  // What changed, whose review it came after, and that the work carries on.
+  const reviewedStageName = findStageBySlug(stage.slug)?.name ?? stage.slug;
+  const relaxedReviewNotice = (what: string, unit: string | null): string =>
+    `${what} changed after ${unit ? `Unit ${unit}'s` : `the ${reviewedStageName}`} review; carrying on.`;
   // Under relaxed or off, source that cannot be checked against its review on
   // this machine is said once and the verdict stands.
   let uncheckedSourceNoticed = false;
@@ -18939,7 +18941,7 @@ export function freshReviewReceipts(
       changed: null,
       recorded: newestSourceFingerprint,
       current: currentSourceFingerprint,
-      notice: relaxedReviewNotice("Reviewed source"),
+      notice: relaxedReviewNotice("The project's code", newestSourceUnit),
     });
   }
 
@@ -19023,7 +19025,7 @@ export function freshReviewReceipts(
               changed: null,
               recorded: receipt.fingerprint,
               current: unitSourceFingerprint(currentSourceListing, claimModel, manifest.rawBytesSha256),
-              notice: relaxedReviewNotice(`Unit ${unit}'s source-manifest.json`),
+              notice: `Unit ${unit}'s list of files changed after its review; carrying on.`,
             });
           }
         } else {
@@ -19085,7 +19087,7 @@ export function freshReviewReceipts(
                   claimModel,
                   manifest.rawBytesSha256,
                 ),
-                notice: relaxedReviewNotice(renderChangedPaths(paths)),
+                notice: relaxedReviewNotice(renderChangedPaths(paths), unit),
               });
             } else {
               stale = true;
@@ -19262,7 +19264,8 @@ export function freshReviewReceipts(
         notice: relaxedReviewNotice(
           change.changed !== null && change.changed.length > 0
             ? renderChangedPaths(change.changed)
-            : stage.review_artifact ?? `The ${stage.slug} output`,
+            : stage.review_artifact ?? "Its documents",
+          change.unit ?? null,
         ),
       })),
       ...acceptedChanges,

@@ -157,6 +157,23 @@ function acceptedRows(dir: string): string[] {
     .filter((block) => auditBlockField(block, "Event") === "CHANGE_ACCEPTED");
 }
 
+// What the person hears says what changed and that the work carries on, in
+// their words; it never names the policy that let it through.
+describe("no line the person hears names the policy machinery", () => {
+  test("no shipped tool or hook says \"Guard Policy: relaxed or off\"", () => {
+    const roots = [join(import.meta.dir, "..", "..", "core"), join(import.meta.dir, "..", "..", "harness")];
+    const offenders: string[] = [];
+    for (const root of roots) {
+      for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+        const path = join(entry.parentPath, entry.name);
+        if (readFileSync(path, "utf-8").includes("Guard Policy: relaxed or off")) offenders.push(relative(root, path));
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("the one reader", () => {
   test("relaxed and off accept changes from any source; strict and an unreadable line do not", () => {
     for (const [line, accepts] of [
@@ -310,7 +327,7 @@ describe("a Unit's manifest claims a path after its review", () => {
     );
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
-    expect(done.out).toContain("Unit alpha's source-manifest.json changed after it was reviewed.");
+    expect(done.out).toContain("Unit alpha's list of files changed after its review; carrying on.");
     expect(done.out).not.toContain("changed outside any unit's work");
   });
 
