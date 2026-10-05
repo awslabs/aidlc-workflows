@@ -120,15 +120,17 @@ async function aidlcEntryReply(prompt: string): Promise<string | null> {
   }
 }
 
-// Switch flags, then exactly one choice of the open code plan question
-// ("/aidlc --guard-policy off Approve Plan"): the switch is for the work open
-// now and the words answer the question. Null for anything else.
+// Setting flags, then the person's reply to the open code plan question
+// ("/aidlc --guard-policy off approve the plan"): the setting is for the work
+// open now and the words are their reply, one of its choices or their own
+// words. Words after an explicit `--` describe new work. Null for anything else.
 function planAnswerAfterSwitch(projectDir: string, prompt: string): string | null {
   try {
+    if (/(?:^|\s)--(?:\s|$)/.test(prompt)) return null;
     const parsed = parseTypedGuardSwitchRequest(prompt, { wordsAnswer: true });
-    if (parsed.words === undefined || parsed.error !== null || parsed.switches.length === 0) return null;
+    if (parsed.words === undefined || parsed.error !== null || parsed.settings.length === 0) return null;
     const question = openPlanApprovalQuestion(projectDir, parsed.words);
-    return question !== null && !question.answered && !question.editing && question.isChoice ? parsed.words : null;
+    return question !== null && !question.answered && !question.editing ? parsed.words : null;
   } catch {
     return null;
   }

@@ -714,7 +714,9 @@ export function applyTypedGuardSwitchPrompt(
   if (forNewWork.length > 0 && parsed.switches.length === 0) {
     return { applied: forNewWork.every((outcome) => outcome.applied), lines: forNewWork.flatMap((outcome) => outcome.lines) };
   }
-  if (parsed.switches.length === 0) return null;
+  // A raise typed with the answer to the open code plan question is for this
+  // work too ("/aidlc --guard-policy strict Approve Plan").
+  if (parsed.switches.length === 0 && !(options.wordsAnswer === true && parsed.settings.length > 0)) return null;
   if (parsed.error !== null) return { applied: false, lines: [parsed.error] };
   if (parsed.scope !== null && !validScopes().has(parsed.scope)) {
     return { applied: false, lines: [`Unknown scope "${parsed.scope}".`] };
