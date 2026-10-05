@@ -15,11 +15,11 @@
 //           it. If it comes as a picker, they pick "Chat about this" to talk
 //           first. Then, while the plan waits:
 //             "skip plan approval?"            gets an answer, changes nothing;
+//             `/aidlc --skip deployment-execution`
+//                                              is done at once, and the plan
+//                                              still waits;
 //             "approve the plan, but let's stop there for today"
 //                                              approves it, as theirs, and stops.
-//           (A typed `/aidlc --skip build-and-test` while the plan waits is
-//           still refused; its case below is skipped until commands the
-//           engine names are allowed while a plan waits.)
 //   chat 2: `/aidlc --resume`. The build starts with no second question. The
 //           drive ends after the first plan step is ticked, as if the session
 //           closed mid-build.
@@ -70,6 +70,9 @@ const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 const ASKED = '"ask_type":"plan-approval"';
 const SKIP_QUESTION = "skip plan approval?";
+// A stage this bugfix can leave out: Build and Test's results feed the
+// deployment, so skipping it is refused for a reason of its own.
+const SKIP_DEPLOYMENT = "/aidlc --skip deployment-execution";
 const APPROVE_AND_STOP = "approve the plan, but let's stop there for today";
 const PICKING_UP = /Picking up the code at step (\d+) of (\d+)/;
 const SEP = "\u2014";
@@ -188,7 +191,7 @@ describe.skipIf(
     process.env.AIDLC_NO_LLM === "1" ||
     !Bun.which("claude"),
 )("t-journey-code-plan-approval (sdk, production guards): the code plan is asked once and the person's answers stand", () => {
-  productionTest("one question, a question about it, an approval with a stop, a resume, an interrupted build", async () => {
+  productionTest("one question, a question about it, a skip, an approval with a stop, a resume, an interrupted build", async () => {
     for (const key of GUARD_SWITCHES) {
       expect(process.env[key], `${key} disables the production contract`).not.toBe("1");
     }
@@ -200,7 +203,7 @@ describe.skipIf(
     try {
       const planPath = await seedBugfixAtCodeGeneration(proj);
       const turnEnds: Array<{ turn: number; approvals: number; parked: number; state: string }> = [];
-      const replies = [SKIP_QUESTION, APPROVE_AND_STOP];
+      const replies = [SKIP_QUESTION, SKIP_DEPLOYMENT, APPROVE_AND_STOP];
 
       // Chat 1: the plan is written and asked about; the person's two messages.
       const chat1 = await driveAidlc("/aidlc", {
@@ -225,15 +228,17 @@ describe.skipIf(
       expect(engineSaid(chat1, ASKED), "the plan question was never asked").toBe(true);
       expect(planSteps(planPath).length, "the plan has no steps").toBeGreaterThan(1);
       const pickers = chat1.askedQuestions.map((m) => m.questions.map((q) => q.question));
-      expect(turnEnds.length, `turns that ended: ${turnEnds.length}; pickers: ${JSON.stringify(pickers)}`).toBe(3);
-      const [asked, afterQuestion] = turnEnds;
+      expect(turnEnds.length, `turns that ended: ${turnEnds.length}; pickers: ${JSON.stringify(pickers)}`).toBe(4);
+      const [asked, afterQuestion, afterSkip] = turnEnds;
 
       // While the plan waited, nothing was approved, and the question about
       // plan approval changed nothing.
-      for (const end of [asked, afterQuestion]) expect(end.approvals).toBe(0);
+      for (const end of [asked, afterQuestion, afterSkip]) expect(end.approvals).toBe(0);
       expect(afterQuestion.state).toContain("- **Plan Approval**: on (from scope bugfix)");
       expect(rowsOf(proj, "CEREMONY_SET"), "plan approval was switched").toEqual([]);
       expect(stageMode(afterQuestion.state, "build-and-test")).toBe("EXECUTE");
+      // The skip the person typed was done at once, with the plan still waiting.
+      expect(stageMode(afterSkip.state, "deployment-execution"), "the typed skip was not done").toBe("SKIP");
 
       // "approve the plan, but let's stop there for today": approved as theirs, then stopped.
       const approvals = rowsOf(proj, "PLAN_APPROVAL_RECORDED");
@@ -273,10 +278,4 @@ describe.skipIf(
       cleanupTestProject(proj);
     }
   }, TEST_TIMEOUT_MS);
-
-  // Commands the engine names are not allowed yet while a plan waits, so a
-  // typed `/aidlc --skip build-and-test` there is still refused (unfiled
-  // draft: commands allowed while a plan waits). Build this case with that
-  // change: the skip is done at once and the plan still waits.
-  test.skip("a typed /aidlc --skip build-and-test while the plan waits is done at once", () => {});
 });
