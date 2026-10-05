@@ -604,6 +604,15 @@ describe("t344 a scope name that is not one is never written or run", () => {
       expect(refused.stdout).toBe("");
       expect(refused.stderr).toContain("is not a scope name, so no command was printed for it");
       expect(refused.stderr).not.toContain("USERNAME");
+      // New work named with a real scope is not taken as a switch of this one.
+      const newWork = tool("aidlc-orchestrate.ts", ["next", "--new-intent", "--scope", "feature", "add billing"]);
+      expect(newWork.stdout).not.toContain("scope change");
+      expect(readFileSync(state, "utf-8")).toContain("- **Scope**: x%USERNAME%");
+      // A switch with a plan change typed alongside carries both.
+      const withPlan = tool("aidlc-orchestrate.ts", ["next", "--scope", "feature", "--skip", "user-stories"]);
+      expect(withPlan.status, withPlan.stderr).toBe(0);
+      expect(JSON.parse(withPlan.stdout).message).toContain("scope change --scope feature");
+      expect(JSON.parse(withPlan.stdout).message).toContain("user-stories");
       // The way out the refusal names, /aidlc --scope <name>, switches to a
       // real scope, and the switch offers no way back to the bad one.
       const asked = tool("aidlc-orchestrate.ts", ["next", "--scope", "feature"]);

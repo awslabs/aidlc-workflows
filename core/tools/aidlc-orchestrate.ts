@@ -6720,11 +6720,17 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   }
   if (!validScopes().has(scope) && !retiredScopeOfFinishedWork) {
     // Naming a real scope for a workflow whose saved scope this install does
-    // not know switches the workflow to it, with any settings typed alongside.
-    if (stateContent && source === "state" && flags.scope && validScopes().has(flags.scope) && !flags.stage && !flags.phase && !flags.planChanges) {
+    // not know switches the workflow to it, with any settings and plan changes
+    // typed alongside, as Branch 5 does. New work is not a switch.
+    if (
+      stateContent && source === "state" && flags.scope && validScopes().has(flags.scope) &&
+      !flags.stage && !flags.phase && !startsNewWork && !composesInFlight && !flags.intent?.trim()
+    ) {
       const parts = [`--scope ${scopeArg(flags.scope)}`, ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(turnEndingPrint(`Run \`${command}\` to change scope, then print its output verbatim and stop.`));
+      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null) : turnEndingPrint(
+        `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
+      ));
       return;
     }
     const valid = [...validScopes()].join(", ");
