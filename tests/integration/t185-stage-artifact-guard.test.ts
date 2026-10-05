@@ -2078,11 +2078,12 @@ X. Other (please specify)
       expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
       expect(refused.out).toContain("choose Request Changes and say what is missing");
       expect(refused.out).not.toContain("--bypass");
-      // New source is reviewed again before the gate, as any code change is.
+      // The step it names clears this check. New source then goes back to its
+      // reviewer before the gate, as any code change does.
       writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
-      reviewCodeGen(proj, UNIT);
-      const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
-      expect(approved.rc, approved.out).toBe(0);
+      const retried = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(retried.out).not.toContain("no source work is evident");
+      expect(retried.out).toContain("review the current source once more");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // Uncommitted/untracked new source this session -> PASS.
