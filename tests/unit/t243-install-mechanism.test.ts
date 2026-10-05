@@ -4052,8 +4052,9 @@ describe("t243 project initialization", () => {
       const runtime = join(temp(`aidlc-t243-${distribution}-runtime-`), "runtime");
       const root = join(REPO_ROOT, "dist", distribution);
       const omitted = copyChannelOmits(projectionFiles(root).descriptor);
+      // walkFiles names files with the platform separator; the omit list uses "/".
       for (const rel of walkFiles(root)) {
-        if (omitted.has(rel)) continue;
+        if (omitted.has(rel.replaceAll("\\", "/"))) continue;
         const target = join(runtime, distribution, rel);
         mkdirSync(dirname(target), { recursive: true });
         cpSync(join(root, rel), target);
@@ -4062,7 +4063,7 @@ describe("t243 project initialization", () => {
       mkdirSync(join(project, ".git"));
       cpSync(join(runtime, distribution), project, { recursive: true });
       const runners = walkFiles(project).filter((rel) =>
-        rel.endsWith("/SKILL.md") && readFileSync(join(project, rel), "utf-8").includes("generated-by: aidlc-runner-gen")
+        rel.replaceAll("\\", "/").endsWith("/SKILL.md") && readFileSync(join(project, rel), "utf-8").includes("generated-by: aidlc-runner-gen")
       );
       expect(runners.length, distribution).toBeGreaterThan(0);
       const before = new Map(runners.map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
