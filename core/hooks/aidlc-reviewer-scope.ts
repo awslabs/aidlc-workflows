@@ -73,6 +73,7 @@ import {
   toPosix,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
 
@@ -983,18 +984,19 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
     unitScope &&
     ["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"].includes(toolName)
   ) {
-    let scopedVerdict: ScopeVerdict;
+    let scopedVerdict: ScopeVerdict = { block: false };
     try {
       const cwdField = (parsed as { cwd?: unknown }).cwd;
-      scopedVerdict = evaluateReviewerScope(
-        toolName,
-        toolInput,
-        { unit: unitScope.unit, exempt: [] },
-        {
-          recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
-          cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
-        },
-      );
+      const context = {
+        recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
+        cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+      };
+      // A shell call that writes nothing (a read, a listing, a search) is the
+      // checkout owner's own: only a command that writes is held to this Unit.
+      const writes = toolName !== "Bash" || writeTargets("Bash", toolInput, context.cwd).length > 0;
+      if (writes) {
+        scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
+      }
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
       return 0;
@@ -1015,7 +1017,9 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
       process.stderr.write(
-        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}.\n`,
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}. ` +
+          `This checkout changes only Unit "${unitScope.unit}"'s files: make that change from the project's main checkout, ` +
+          "or ask whoever claimed that Unit.\n",
       );
       return 2;
     }
