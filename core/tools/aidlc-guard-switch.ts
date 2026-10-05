@@ -524,8 +524,8 @@ export function applyIntentSettings(
         if (!saidAsAsked(`guard.${fence}`)) {
           lines.push(
             after[fence].value === "off"
-              ? `Fence ${fence} is off for this piece of work (logged; back on for the next one)`
-              : `Fence ${fence} is back on for this piece of work`,
+              ? `The ${checkLabel(fence)} is off for this piece of work (logged; back on for the next one)`
+              : `The ${checkLabel(fence)} is back on for this piece of work`,
           );
         }
       }
@@ -618,6 +618,11 @@ export function applyIntentSettings(
   return { content, audit, lines };
 }
 
+// A check as the person knows it: "review freeze check", "reviewer read scope check".
+function checkLabel(fence: string): string {
+  return `${fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
+}
+
 // What the person hears when the agent turned one of their checks off because
 // they asked in the chat: what is off, for this piece of work, in their words,
 // and the way back.
@@ -628,9 +633,7 @@ function askedSwitchLine(item: GuardSwitch, words: string | null, previousPolicy
     return `Guard Policy is ${item.value} for this piece of work, ${why}. ` +
       `Say "put Guard Policy back to ${previousPolicy}" to restore it (${entry} --guard-policy ${previousPolicy}).`;
   }
-  const label = item.key === "summary-confirmation"
-    ? "summary confirmation"
-    : `${item.key.slice("guard.".length).replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
+  const label = item.key === "summary-confirmation" ? "summary confirmation" : checkLabel(item.key.slice("guard.".length));
   return `The ${label} is off for this piece of work, ${why}. ` +
     `Say "turn it back on" to restore it (${entry} config set ${item.key} on).`;
 }

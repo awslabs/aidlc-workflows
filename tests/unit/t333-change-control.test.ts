@@ -1950,8 +1950,10 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(refused.status).not.toBe(0);
     expect(refused.stderr).toContain("They can also type `/aidlc config set guard.review-freeze off`.");
     expect(getField(readFileSync(state, "utf-8"), GUARDS_ON_FIELD)).toBe("review-freeze (set by you)");
-    // Typed by the person, it is done.
-    recordHumanPrompt(proj, "/aidlc --guard-policy off");
+    // Typed by the person, it is done, and the check is named in words.
+    const said = recordHumanPrompt(proj, "/aidlc --guard-policy off");
+    expect(said).toContain("The review freeze check is off for this piece of work (logged; back on for the next one)");
+    expect(said).not.toContain("Fence review-freeze");
     const after = readFileSync(state, "utf-8");
     expect(getField(after, GUARD_POLICY_FIELD)).toBe("off (set by you)");
     expect(getField(after, GUARDS_ON_FIELD)).toBe("none");
@@ -1970,7 +1972,8 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("state-transition (set by you)");
     const strict = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj, FENCE_ENV_CLEAR);
     expect(strict.status, strict.stderr).toBe(0);
-    expect(strict.stdout).toContain("Fence state-transition is back on for this piece of work");
+    expect(strict.stdout).toContain("The state transition check is back on for this piece of work");
+    expect(strict.stdout).not.toContain("Fence state-transition");
     expect(getField(readFileSync(state, "utf-8"), GUARDS_OFF_FIELD)).toBe("none");
     expect(run(UTILITY, ["config-get", "guard.state-transition"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
     const restored = rowsOf(proj, "GUARD_RESTORED");
