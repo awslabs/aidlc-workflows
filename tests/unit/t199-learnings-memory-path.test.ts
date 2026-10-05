@@ -30,7 +30,7 @@
 // the `orchestrate report --result awaiting-approval` that is the first such
 // command in a workflow, so the FIRST gated stage always found it absent and the
 // mandatory ritual was stranded behind a bare "not found". surface now recomputes
-// memory_path exactly as compile derives it, and warns. The absence cases below
+// memory_path exactly as compile derives it, quietly. The absence cases below
 // therefore deliberately skip compile; a malformed graph must still fail.
 //
 // Source under test (dist/claude/.claude/tools/):
@@ -326,10 +326,9 @@ describe("t199 per-intent memory path (write + read)", () => {
     const out = JSON.parse(s.stdout);
     expect(out.phase).toBe("inception");
     expect(out.candidates.length).toBe(1);
-    // The fallback is announced, and the message names the command that rebuilds
-    // the graph - a silent recompute would hide a dropped hook compile.
-    expect(s.stderr).toContain("no compiled memory_path");
-    expect(s.stderr).toContain("compile");
+    // The recompute is exact and leaves the person nothing to do, so it says
+    // nothing: Codex shows every stderr line, once per stage surfaced.
+    expect(s.stderr).toBe("");
     // Read-only: surface must not have written the graph it did without.
     expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(false);
   }, TIMEOUT);
@@ -338,14 +337,18 @@ describe("t199 per-intent memory path (write + read)", () => {
   // records, so the ritual reads the same diary either side of the first compile.
   test("the recomputed diary path is byte-identical to the compiled memory_path", () => {
     const pd = mkWorkspaceProject();
+    // A diary only at the path compile records: the recompute finds it, so the
+    // two paths are the same string.
+    const recomputed = `${RP}/inception/user-stories/memory.md`;
+    mkdirSync(dirname(join(pd, recomputed)), { recursive: true });
+    writeFileSync(join(pd, recomputed), memoryDiary());
     const s = spawnSync(
       BUN,
       [LEARNINGS_TS, "surface", "--slug", "user-stories", "--project-dir", pd],
       { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
     );
     expect(s.status, s.stderr).toBe(0);
-    const recomputed = `${RP}/inception/user-stories/memory.md`;
-    expect(s.stderr).toContain(recomputed);
+    expect(JSON.parse(s.stdout).candidates.length).toBe(1);
 
     expect(
       spawnSync(BUN, [RUNTIME_TS, "--project-dir", pd, "compile"], {
