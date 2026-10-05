@@ -54,8 +54,9 @@ function run(
   proj: string,
   tool: string,
   args: string[],
+  env: NodeJS.ProcessEnv = process.env,
 ): { status: number; out: string } {
-  const childEnv: Record<string, string | undefined> = { ...process.env };
+  const childEnv: Record<string, string | undefined> = { ...env };
   delete childEnv.AIDLC_SCOPE_MAPPING;
   const res = spawnSync(BUN, [toolIn(proj, tool), ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -527,6 +528,36 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(backward).toContain("--direction backward");
     expect(backward).toMatch(/` to perform the jump, then re-run `next` to continue from the jump target\.$/);
     expect(backward).not.toContain("notice");
+  });
+
+  // After "go back to Requirements Analysis", the person hears how to return,
+  // in the same chat, with the next step the agent speaks from (the backward
+  // instruction itself stays as the guard recovery knows it).
+  test("a backward jump says how to return, with the next step the agent speaks from", () => {
+    const chat = {
+      ...process.env,
+      AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000194",
+      AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+    const proj = createdProject("bugfix");
+    const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
+    expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"], chat).status).toBe(0);
+    const back = run(proj, "aidlc-jump.ts", ["execute", "--target", String(before), "--direction", "backward"], chat);
+    expect(back.status, back.out).toBe(0);
+    // The way back is not in the tool's own output, which no one reads aloud.
+    expect((JSON.parse(back.out) as { notice?: string }).notice).toBeUndefined();
+    const nextIn = () => JSON.parse(run(proj, "aidlc-orchestrate.ts", ["next"], chat).out.split("\n")
+      .find((line) => line.startsWith("{")) ?? "{}") as { kind?: string; narration?: string };
+    const said = nextIn();
+    expect(String(said.narration)).toContain(
+      "To return to Code Generation, type `/aidlc --stage code-generation`.",
+    );
+    expect(String(said.narration)).toMatch(/^Moved back to [A-Z][^.;`]*\. To return to Code Generation/);
+    // Said once.
+    expect(String(nextIn().narration ?? "")).not.toContain("To return to Code Generation");
+    // And the way back works: the jump it names goes through.
+    expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"], chat).status).toBe(0);
+    expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
