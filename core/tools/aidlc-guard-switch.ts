@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  guardPolicyAtLeast,
   latestPersonTurn,
   personSpokeSinceGate,
   assertChangeControlLedgerWritable,
@@ -339,8 +340,10 @@ export function applyIntentSettings(
       }
     }
   }
+  // Only a value below the one in force lowers anything: off to relaxed raises
+  // the checks, and needs no one's word.
   if (ccRequest?.source === "you" && (changeControl === "relaxed" || changeControl === "off") &&
-    (cc.rawStateValue !== formatGuardPolicy(changeControl, ccRequest.source) || cc.conflict !== undefined)) {
+    !guardPolicyAtLeast(changeControl, cc.value)) {
     lowering.push({ key: "guard-policy", value: changeControl });
   }
   // Summary confirmation off removes the person's `Looks correct` checkpoint,

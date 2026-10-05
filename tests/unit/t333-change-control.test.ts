@@ -1213,6 +1213,30 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(rowsOf(invalid.proj, "SCOPE_CHANGED")).toHaveLength(0);
     expect(guardPolicyRows(invalid.proj)).toHaveLength(0);
   });
+
+  // From a live run on classic (Guard Policy off): the person's "carry on" at
+  // a stuck question was spent by the answer the agent recorded, and the
+  // agent's `config set guard-policy relaxed` was then refused as a lowering.
+  // Relaxed is stricter than off: raising the checks needs no one's word.
+  test("off to relaxed raises the checks: the setter runs with no person turn left to spend", () => {
+    const { proj, state } = project("classic");
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
+    recordHumanPrompt(proj, "carry on");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: "requirements-analysis", Answer: "Carry on" }, proj);
+    const dispatcher = join(AIDLC_SRC, "tools", "aidlc.ts");
+    const raised = run(dispatcher, ["engine", "config", "set", "guard-policy", "relaxed"], proj, FENCE_ENV_CLEAR);
+    expect(raised.status, raised.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["relaxed"]);
+    // Going back down to off is a lowering, and still waits for their word.
+    const lowered = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    expect(lowered.status).not.toBe(0);
+    expect(refusalError(lowered.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
+    recordHumanPrompt(proj, "put the guards back off");
+    const asked = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
+    expect(asked.status, asked.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+  });
 });
 
 describe("t333 (5) an explicit workflow selection governs Guard Policy end to end", () => {
