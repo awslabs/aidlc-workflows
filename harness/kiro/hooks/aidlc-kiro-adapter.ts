@@ -316,29 +316,50 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // block API, so the conductor relays rather than is bypassed — measured to land
 // the command and leave the active intent untouched).
 //
-// WHY the args support BOTH payload shapes: expanded-body generations substitute
-// $ARGUMENTS into the forwarding-loop anchor
-// `aidlc-orchestrate.ts next <ARGS>`, so that anchor remains the first source.
-// The repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
-// #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
-// typed `/aidlc …` text. The fallback recovers argv directly from that raw shape.
+// WHY the args support BOTH payload shapes: kiro-cli delivers the expanded
+// skill body, with $ARGUMENTS substituted into the forwarding loop's step-1
+// anchor `... engine orchestrate next <ARGS>` bare (no shell capture, no pipe).
+// The body also holds prose examples of `next` (`next --stage <slug>`,
+// `next compose ...`) ahead of that anchor, so only the span followed by
+// "bare" is the person's dispatch. The repo's live kiro-cli 2.6.1 fixture
+// carries plain prompt text, while issue #776 measured Kiro IDE 1.0.309 and
+// kiro-cli 2.18.1 --v3 delivering the raw typed `/aidlc ...` text. The fallback
+// recovers argv directly from that raw shape.
 function extractNextInvocation(
-  expandedPrompt: string,
-): { raw: string; args: string[] } {
-  // Match the FIRST `… aidlc-orchestrate.ts next <ARGS>` occurrence (the loop's
-  // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
-  // inside a markdown code span, so the args end at the backtick.
-  // Accept the native dispatcher anchor and the legacy filename shape so the
-  // seam keeps working across both invocation channels.
-  const m = expandedPrompt.match(
-    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ([^`\n]*)`/,
+  prompt: string,
+): { raw: string; args: string[]; typed: string } {
+  // The args end at the anchor's closing backtick. Accept the native
+  // dispatcher anchor and the legacy filename shape.
+  const anchor = prompt.match(
+    /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)` bare\b/,
   );
-  const rawInvocation = m
-    ? m[1]
-    : expandedPrompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
-  if (rawInvocation === undefined) return { raw: "", args: [] };
-  const raw = rawInvocation.trim();
-  return { raw, args: splitKiroCommandArgs(raw) };
+  const rawInvocation = anchor
+    ? anchor[1]
+    : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
+  if (rawInvocation === undefined) return { raw: "", args: [], typed: prompt };
+  // An anchor Kiro left unexpanded carries no typed args.
+  const raw = rawInvocation.trim() === "$ARGUMENTS" ? "" : rawInvocation.trim();
+  // What the person typed: the prompt itself, or for an expanded body the
+  // `/aidlc` line the body was expanded from.
+  const typed = anchor ? `/aidlc${raw ? ` ${raw}` : ""}` : prompt;
+  return { raw, args: splitKiroCommandArgs(raw), typed };
+}
+
+/** The text of every context line a core hook printed, as plain stdout for Kiro. */
+function hookContextText(stdout: string): string {
+  const parts: string[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line) as {
+        additionalContext?: unknown;
+        hookSpecificOutput?: { additionalContext?: unknown };
+      };
+      const text = parsed.additionalContext ?? parsed.hookSpecificOutput?.additionalContext;
+      if (typeof text === "string" && text.trim()) parts.push(text.trim());
+    } catch { /* a line that is not hook JSON carries no context */ }
+  }
+  return parts.length > 0 ? `${sanitizeHarnessPlainText(parts.join("\n"))}\n\n` : "";
 }
 
 const PRE_DISPATCH_FLAGS = new Set([
@@ -379,6 +400,7 @@ if (target === "verb-intercept") {
   // fire ONLY when the latch's turn === the current counter (same turn) — truly
   // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
   let turn = 0;
+  let preface = "";
   try {
     const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
@@ -405,11 +427,16 @@ if (target === "verb-intercept") {
   // only the authority-bearing ledger event while retaining the conversational
   // marker. See the marker family in aidlc-lib.ts.
   try {
-    runCore("aidlc-record-human-turn.ts", {
+    // The person's own words, not the skill body Kiro expanded them into, so a
+    // typed switch (`/aidlc --guard-policy off`) is read as typed. Its lines
+    // (what the switch did) lead whatever this seam writes: plain stdout is
+    // Kiro's only context channel here.
+    const recorded = runCore("aidlc-record-human-turn.ts", {
       hook_event_name: "UserPromptSubmit",
       ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
-      prompt: kiro.prompt ?? "",
+      prompt: invocation.typed,
     });
+    preface = hookContextText(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
@@ -453,7 +480,7 @@ if (target === "verb-intercept") {
             parsed !== null && typeof parsed === "object" &&
             !Array.isArray(parsed) && "kind" in parsed &&
             typeof parsed.kind === "string" && parsed.kind !== "load-steering" &&
-            Buffer.byteLength(packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
+            Buffer.byteLength(preface + packet, "utf-8") <= PROMPT_HOOK_MAX_BYTES
           ) {
             rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
               force: true,
@@ -472,7 +499,7 @@ if (target === "verb-intercept") {
                 );
               } catch { /* config-alias latch is best-effort */ }
             }
-            process.stdout.write(packet);
+            process.stdout.write(preface + packet);
             return 0;
           }
         }
@@ -497,10 +524,13 @@ if (target === "verb-intercept") {
         );
       } catch { /* forwarding backstop best-effort */ }
       process.stdout.write(
+        preface +
         "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
           "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
           `{{INVOKE}} engine orchestrate next ${invocation.raw}\n`,
       );
+    } else if (preface) {
+      process.stdout.write(preface);
     }
     return 0; // non-terminal command — conductor handles the directive
   }
@@ -557,6 +587,7 @@ if (target === "verb-intercept") {
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
+    preface +
     `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
       fenceCommandOutput(out),
   );

@@ -35,6 +35,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -1042,7 +1043,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         });
         writeFileSync(join(dir, "next-response.txt"), response);
         const hook = runAdapter(dir, "verb-intercept", {
-          cwd: dir, prompt: `Step 1: run \`aidlc engine orchestrate next ${raw}\``,
+          cwd: dir, prompt: `1. directive = the JSON printed by running \`aidlc engine orchestrate next ${raw}\` bare (no shell capture, no pipe).`,
         });
         expect(hook.code).toBe(0);
         expect(hook.stdout).toContain(`engine orchestrate next ${raw}`);
@@ -2445,6 +2446,59 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
       ));
       expect(getField(readFileSync(sp, "utf-8"), "Construction Iteration")).toBe("unit-major");
       expect(guard(dir, toUnitMajor).code).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("t147 Kiro CLI reads what the person typed from the expanded skill body", () => {
+  // kiro-cli delivers `/aidlc <args>` as the skill body with $ARGUMENTS
+  // substituted, so the typed words exist only in the forwarding loop's step-1
+  // anchor. The body holds `next` examples ahead of it.
+  const SKILL = readFileSync(join(KIRO_TREE, "skills", "aidlc", "SKILL.md"), "utf-8");
+  const expanded = (args: string) => SKILL.replaceAll("$ARGUMENTS", args);
+  const session = "t147-typed-session";
+  const env = { AIDLC_SESSION_OVERRIDE: session, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0" };
+
+  test("the body this models: a prose `next` example comes before the step-1 anchor", () => {
+    const anchor = SKILL.indexOf("next $ARGUMENTS` bare");
+    expect(anchor).toBeGreaterThan(0);
+    expect(SKILL.indexOf("next $ARGUMENTS` bare", anchor + 1)).toBe(-1);
+    expect(SKILL.indexOf("next --stage <slug>`")).toBeGreaterThan(-1);
+    expect(SKILL.indexOf("next --stage <slug>`")).toBeLessThan(anchor);
+  });
+
+  test("`/aidlc --guard-policy off` sets Guard Policy off and the line reaches the conversation", () => {
+    const dir = scratchProject(false);
+    try {
+      const created = spawnSync("bun", [
+        join(dir, ".kiro", "tools", "aidlc-utility.ts"), "intent-create", "--scope", "enterprise",
+        "--arguments", "typed switch fixture", "--label", "typed-switch", "--project-dir", dir,
+      ], { cwd: dir, encoding: "utf-8", env: { ...process.env, ...env }, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(created.status, created.stderr).toBe(0);
+      const intents = join(dir, "aidlc", "spaces", "default", "intents");
+      const state = join(intents, readFileSync(join(intents, "active-intent"), "utf-8").trim(), "aidlc-state.md");
+      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toStartWith("strict");
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("--guard-policy off") }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(getField(readFileSync(state, "utf-8"), "Guard Policy")).toBe("off (set by you)");
+      const shards = join(dirname(state), "audit");
+      expect(readdirSync(shards).map((name) => readFileSync(join(shards, name), "utf-8")).join("\n")).toContain("GUARD_POLICY_SET");
+      expect(r.stdout).toContain("AIDLC Guard Policy:");
+      // The person's own dispatch, never a prose example.
+      expect(r.stdout).toContain("engine orchestrate next --guard-policy off");
+      expect(r.stdout).not.toContain("<slug>");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("a bare `/aidlc` dispatches nothing, and no `--stage <slug>`", () => {
+    const dir = scratchProject(true);
+    try {
+      const calls = stubNext(dir, JSON.stringify({ kind: "print", message: "" }));
+      const r = runAdapter(dir, "verb-intercept", { cwd: dir, session_id: session, prompt: expanded("") }, [], env);
+      expect(r.code, r.stderr).toBe(0);
+      expect(existsSync(calls)).toBe(false);
+      expect(r.stdout).not.toContain("<slug>");
+      expect(readAudit(dir)).not.toContain("Unknown stage");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
