@@ -426,7 +426,10 @@ if (kind === "done") {
 } else if (kind === "invoke-swarm") {
   console.log(JSON.stringify({ kind, stage, units }));
 } else {
-  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}), ...(wave ? { wave } : {}) }));
+  const policy = process.env.MOCK_OFFER_AUTONOMY === "1"
+    ? { construction_policy: { offer_autonomy: true } }
+    : process.env.MOCK_OFFER_AUTONOMY === "0" ? { construction_policy: { offer_autonomy: false } } : {};
+  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}), ...(wave ? { wave } : {}), ...policy }));
 }
 process.exit(0);
 `;
@@ -2251,6 +2254,27 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
     expect(r.rc).toBe(0);
     expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f3) the turn ends at the Construction autonomy question: the step still offers the choice", () => {
+    // On a host that asks in numbered prose, the agent asks "Continue
+    // automatically" or "Review each checkpoint" and ends its turn without
+    // logging a question (only set-autonomy records the answer). The hook
+    // blocked that stop and pushed the agent on right after asking.
+    const proj = makeProject();
+    seedActive(proj, "functional-design");
+    const offered = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "functional-design", "", false, {
+      MOCK_OFFER_AUTONOMY: "1",
+    });
+    expect(offered.rc, offered.diagnostic).toBe(0);
+    expect(offered.out).toBe("");
+    const trace = readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+    expect(trace).toContain("autonomy-question carve-out");
+    // Once a choice is on record the step stops offering it, and an ordinary quit is nudged again.
+    const chosen = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "functional-design", "", false, {
+      MOCK_OFFER_AUTONOMY: "0",
+    });
+    expect(chosen.out).toContain('"decision":"block"');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(f2) solo unit-major keeps Current Stage authority and the legacy trace message", () => {

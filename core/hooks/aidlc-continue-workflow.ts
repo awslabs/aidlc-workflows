@@ -45,7 +45,7 @@
 //      directive advances, the signature changes and the counter resets to 0,
 //      so a healthy loop is never throttled.
 //
-// Ten turn-stop carve-outs keep the hook from punishing a turn that ended
+// Eleven turn-stop carve-outs keep the hook from punishing a turn that ended
 // for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
@@ -127,6 +127,11 @@
 //      has not written since (turnEndIsOpen). The probe's own `next`, or
 //      Copilot's retained step,
 //      would hand back the work in progress, so this is read before either.
+//  11. The CONSTRUCTION AUTONOMY QUESTION: the probed run-stage still offers
+//      the choice between continuing automatically and reviewing each
+//      checkpoint (construction_policy.offer_autonomy), so no choice is on
+//      record. The protocol asks it without logging a question, so this is its
+//      only positive signal. Copilot's retained step does not carry the offer.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
 // skill, but we defend here too: with no active workflow (no aidlc-state.md
@@ -1291,6 +1296,9 @@ interface EngineDirective {
   // Copilot only: the retained run-stage's Unit has since recorded its work.
   finishedUnit?: string;
   rulesContent?: Array<{ path: string; text: string }>;
+  // The step offers the choice between continuing automatically and reviewing
+  // each checkpoint, which no choice on record has settled yet.
+  offerAutonomy?: boolean;
 }
 
 // Run `aidlc-orchestrate.ts next` and return the parsed directive fields the
@@ -1413,6 +1421,11 @@ function runEngineNextDirective(
           )
           ? rawRulesContent as Array<{ path: string; text: string }>
           : undefined;
+      const policy = "construction_policy" in parsed
+        ? (parsed as { construction_policy?: unknown }).construction_policy
+        : undefined;
+      const offerAutonomy = policy !== null && typeof policy === "object" &&
+        (policy as { offer_autonomy?: unknown }).offer_autonomy === true;
       return {
         kind,
         ...(stage.length > 0 ? { stage } : {}),
@@ -1426,6 +1439,7 @@ function runEngineNextDirective(
         ...(repo.length > 0 ? { repo } : {}),
         ...(wave !== undefined ? { wave } : {}),
         ...(rulesContent ? { rulesContent } : {}),
+        ...(offerAutonomy ? { offerAutonomy } : {}),
       };
     }
   } catch {
@@ -1985,6 +1999,21 @@ if (isPendingDecisionStop(projectDir, stateContent, activeStage, activeUnit)) {
     teamPending
       ? `active stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`
       : `current stage ${pendingStage} has an unanswered logged decision; allowing the stop (pending-decision carve-out)`,
+  );
+  return allowStop();
+}
+
+// Autonomy-question carve-out: the step still offers the choice between
+// continuing automatically and reviewing each checkpoint, so no choice is on
+// record (a recorded one stops the offer). The protocol asks it without logging
+// a question (only set-autonomy records the answer), so on a host that asks in
+// numbered prose nothing else shows the turn is waiting on the person.
+// Positive-confirmation only: the probed step itself carries the offer.
+if (kind === "run-stage" && directive.offerAutonomy === true) {
+  recordHookTrace(
+    projectDir,
+    HOOK_NAME,
+    "the step offers the Construction autonomy choice and none is on record; allowing the stop (autonomy-question carve-out)",
   );
   return allowStop();
 }
