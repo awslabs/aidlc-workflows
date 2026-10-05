@@ -149,6 +149,13 @@ import {
   quoteCommandArgument,
   runtimeHarnessDir,
 } from "./aidlc-runtime-paths.ts";
+// PROTOTYPE (issue #1575): absolute-path hook interpreter pinning.
+import {
+  absoluteHookInterpreter,
+  hookPathPinningEnabled,
+  pinSettingsHookInterpreters,
+} from "./aidlc-hook-interpreter-pin.ts";
+import { resolveExecutableOnPath } from "./aidlc-config-diagnostics.ts";
 import {
   applyKiroSessionPlan,
   hasLegacyKiroEffortMap,
@@ -5093,6 +5100,16 @@ function prepareRefreshSource(
   if (!projectProjection && entries && descriptor.distribution === "claude") {
     const rel = `${descriptor.harnessDir}/settings.json`;
     const settings = JSON.parse(readFileSync(join(sourceRoot, rel), "utf-8")) as Record<string, unknown>;
+    // PROTOTYPE: hash the SAME pinned shape the staged file is rewritten to
+    // below (same release content + same deterministic transform), so the
+    // baseline matches the written bytes and no spurious drift is recorded.
+    if (hookPathPinningEnabled()) {
+      pinSettingsHookInterpreters(settings, (interpreter) =>
+        absoluteHookInterpreter(interpreter, {
+          pathValue: process.env.PATH ?? "",
+          which: resolveExecutableOnPath,
+        }));
+    }
     entries[rel] = Object.fromEntries(
       CLAUDE_SHIPPED_KEYS.filter((key) => Object.hasOwn(settings, key))
         .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
@@ -5133,6 +5150,28 @@ function prepareRefreshSource(
   try {
   const root = join(cleanup, "projection");
   cpSync(sourceRoot, root, { recursive: true, preserveTimestamps: true });
+  // PROTOTYPE (issue #1575, off unless AIDLC_PIN_HOOK_PATHS=1): pin each hook
+  // command's interpreter to an absolute path in the STAGED settings.json, so a
+  // GUI-launched Windows host that lacks the launcher dir on its inherited PATH
+  // can still spawn the hooks. Done here, on the staged tree, so the baseline
+  // hash below reads the pinned bytes and the written file and its drift record
+  // stay consistent. OPEN DESIGN QUESTION for production: a pinned absolute path
+  // is machine-local, so a committed settings.json shared across machines would
+  // carry one machine's path — see the PR description. The release tree
+  // (`sourceRoot`) is never mutated.
+  if (hookPathPinningEnabled() && descriptor.distribution === "claude") {
+    const rel = `${descriptor.harnessDir}/settings.json`;
+    const stagedSettingsPath = join(root, rel);
+    if (regularFile(stagedSettingsPath)) {
+      const staged = JSON.parse(readFileSync(stagedSettingsPath, "utf-8")) as Record<string, unknown>;
+      pinSettingsHookInterpreters(staged, (interpreter) =>
+        absoluteHookInterpreter(interpreter, {
+          pathValue: process.env.PATH ?? "",
+          which: resolveExecutableOnPath,
+        }));
+      writeFileSync(stagedSettingsPath, `${JSON.stringify(staged, null, 2)}\n`);
+    }
+  }
   const regenerated = new Set<string>();
   const stagedHarness = join(root, descriptor.harnessDir);
   const beforeGeneratedWrites = new Map<string, string>();
