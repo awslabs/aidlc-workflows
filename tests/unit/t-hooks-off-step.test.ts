@@ -442,8 +442,7 @@ describe("the request the first next stopped with carries on after the restart",
     beat(proj, "record-human-turn");
     const picked = next(proj, OPENCODE) as Routed;
     expect(picked.kind, JSON.stringify(picked)).toBe("print");
-    expect(picked.message ?? "").toContain("intent-create");
-    expect(picked.message ?? "").toContain("bugfix");
+    expect(picked.message ?? "").toContain("intent create --scope bugfix");
   });
 
   test("their new words win: the earlier request is dropped and never comes back", () => {
