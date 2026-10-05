@@ -568,7 +568,7 @@ export function applyTypedGuardSwitchPrompt(
     consumePlanApprovalCreationGrant(projectDir, sessionId);
   }
   if (parsed.newWorkPlanApprovalOff === true && parsed.error === null) {
-    const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space);
+    const outcome = grantPlanApprovalOffAtCreation(projectDir, sessionId, parsed.space, true);
     if (parsed.switches.length === 0) return outcome;
   }
   if (parsed.switches.length === 0) return null;
@@ -738,6 +738,12 @@ interface PlanApprovalCreationGrant {
    */
   request: string | null;
   recordedAt: string;
+  /**
+   * Typed together with the description of the new work: the words answer the
+   * question that description becomes, whichever kind it is (the routing
+   * question beside open work included), never an older one.
+   */
+  withDescription?: true;
 }
 
 // A reply belongs to the question asked in this sitting, not to one left open for days.
@@ -752,6 +758,7 @@ function grantPlanApprovalOffAtCreation(
   projectDir: string,
   sessionId: string,
   space: string | null,
+  withDescription = false,
 ): TypedGuardSwitchOutcome {
   try {
     const memoryStrict = memoryGuardPolicyDeclarations(projectDir, { ...(space === null ? {} : { space }), sessionId })
@@ -759,7 +766,7 @@ function grantPlanApprovalOffAtCreation(
     if (memoryStrict !== undefined) {
       return { applied: false, lines: [planApprovalMemoryLockRefusal(memoryStrict.path)] };
     }
-    recordPlanApprovalCreationGrant(projectDir, sessionId);
+    recordPlanApprovalCreationGrant(projectDir, sessionId, withDescription);
   } catch (error) {
     return { applied: false, lines: [errorMessage(error)] };
   }
@@ -772,12 +779,13 @@ function grantPlanApprovalOffAtCreation(
   };
 }
 
-export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string): void {
+export function recordPlanApprovalCreationGrant(projectDir: string, sessionId: string, withDescription = false): void {
   const grant: PlanApprovalCreationGrant = {
     version: 1,
     session: sessionId,
-    request: latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
+    request: withDescription ? null : latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS),
     recordedAt: isoTimestamp(),
+    ...(withDescription ? { withDescription: true as const } : {}),
   };
   writePlanApprovalRuntimeRecord(projectDir, planApprovalCreationGrantPath(projectDir, sessionId), `${JSON.stringify(grant)}\n`);
 }
@@ -799,7 +807,7 @@ export function planApprovalCreationGranted(
     );
     if (grant?.version !== 1 || grant.session !== sessionId || request === null) return false;
     const answered = grant.request ??
-      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS);
+      firstFrontQuestionSince(projectDir, grant.recordedAt, OPEN_QUESTION_WINDOW_MS, { routing: grant.withDescription === true });
     // Words said at a report-only or task-less composition's gate answer that
     // composition, so they reach the request its approval described, and no other.
     return answered !== null &&

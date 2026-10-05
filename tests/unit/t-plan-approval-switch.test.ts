@@ -778,6 +778,58 @@ describe("asked before the piece of work exists", () => {
     }
   });
 
+  test("typed with new work beside open work, it reaches the new work the person picks", () => {
+    for (const olderRequest of [false, true]) {
+      const proj = emptyProject();
+      // An earlier request in this sitting must not take the words.
+      if (olderRequest) askedMinutesAgo(proj, requestOf(proj, "add a settings page").id, 5);
+      expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
+      expect(reply(proj, "/aidlc --plan-approval off fix the parser")).toContain(
+        "Plan approval will be off for the piece of work you start now (set by you)",
+      );
+      const routing = runOrchestrateNext(ORCHESTRATE, proj, ["--plan-approval", "off", "--", "fix the parser"], {
+        env: { ...process.env, ...CLEAR },
+      });
+      const ask = routing.directive as { ask_type?: string; new_intent_command?: string } | null;
+      expect(ask?.ask_type, routing.out).toBe("new-work-routing");
+      // The person picks new work.
+      const command = String(ask?.new_intent_command);
+      const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+        env: { ...process.env, ...CLEAR },
+      });
+      const message = String((routed.directive as { message?: unknown } | null)?.message);
+      // The creation line says what creation will do: no plan approval.
+      expect(message, routed.out).toMatch(/; no [^);]*plan approval[;)]/);
+      const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+      if (id === undefined) throw new Error(`no request in ${routed.out}`);
+      const made = utility(proj, ["intent-create", "--request", id]);
+      expect(made.status, made.stderr).toBe(0);
+      expect(createdPlanApproval(proj)).toBe("off (set by you)");
+    }
+  });
+
+  test("summary confirmation off typed with new work beside open work reaches the new work too", () => {
+    const proj = emptyProject();
+    expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
+    reply(proj, "/aidlc --summary-confirmation off fix the parser");
+    const routing = runOrchestrateNext(ORCHESTRATE, proj, ["--summary-confirmation", "off", "--", "fix the parser"], {
+      env: { ...process.env, ...CLEAR },
+    });
+    const command = String((routing.directive as { new_intent_command?: string } | null)?.new_intent_command);
+    expect(command, routing.out).toContain("--summary-confirmation off");
+    const routed = runOrchestrateNext(ORCHESTRATE, proj, command.slice(command.indexOf(" next ") + 6).split(" "), {
+      env: { ...process.env, ...CLEAR },
+    });
+    const message = String((routed.directive as { message?: unknown } | null)?.message);
+    expect(message, routed.out).toContain("--summary-confirmation off");
+    const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+    if (id === undefined) throw new Error(`no request in ${routed.out}`);
+    expect(utility(proj, ["intent-create", "--request", id, "--summary-confirmation", "off"]).status).toBe(0);
+    const intents = join(proj, "aidlc", "spaces", "default", "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(getField(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8"), "Summary Confirmation")).toStartWith("off");
+  });
+
   test("a compose entry is the open ask until a later request, and counts as asked after earlier words", () => {
     // Asked minutes apart, as a person's turns are, so no two share a timestamp.
     const proj = emptyProject();
