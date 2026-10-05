@@ -652,14 +652,13 @@ describe("t164 done-on-completed carries the new-work hint", () => {
 });
 
 // ============================================================
-// The creation directive has TWO tails: a fresh-start creation re-enters the loop in
-// the same session ("re-run `next` to continue"), while a --new-intent creation (a
-// 2nd, unrelated intent alongside an active/completed one) tells the conductor
-// to STOP and hand off to a fresh session so the new intent doesn't inherit the
-// prior intent's context.
+// New work started beside other work carries on in the same chat, like the
+// first piece of work: the creation directive re-enters the loop ("re-run
+// `next` to continue"), and its narration offers a clean chat once, in the
+// host's words, never as a stop.
 // ============================================================
-describe("t164 --new-intent creation directive hands off to a fresh session", () => {
-  test("next --new-intent emits a command-neutral creation print that STOPs for a fresh session", () => {
+describe("t164 --new-intent creation carries on in the same chat", () => {
+  test("next --new-intent emits a creation print that continues, and offers a clean chat once", () => {
     // Seed an active intent so this mirrors the real 'second intent while one is
     // live' path; Branch 4a fires before any continuation branch regardless.
     seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -668,18 +667,15 @@ describe("t164 --new-intent creation directive hands off to a fresh session", ()
     expect(d.kind).toBe("print");
     // Names the creation move for the CONFIRMED scope (not the active intent's scope).
     expect(d.message).toContain("intent create --scope bugfix");
-    // The shared engine names the handoff but leaves concrete entry/reset
-    // commands to each harness SKILL.
-    expect(d.message).toContain("STOP");
-    expect(d.message).toContain("fresh session");
-    expect(d.message).toContain("AI-DLC entry skill");
-    expect(d.message).not.toContain("/clear");
-    expect(d.message).not.toContain("run `/aidlc`");
-    expect(d.message).not.toContain("invoke `/aidlc`");
-    expect(d.message).not.toContain("$aidlc");
-    // It must NOT carry the fresh-start continuation tail (that would keep the
-    // new intent in the polluted session).
-    expect(d.message).not.toContain("re-run `next` to continue");
+    expect(d.message).toContain("then re-run `next` to continue");
+    // Never a stop, a restart, or a fresh-session hand-off.
+    for (const stale of ["STOP", "fresh session", "restart", "clean slate", "do NOT re-run"]) {
+      expect(d.message).not.toContain(stale);
+    }
+    // The clean chat is an option, said once, in the host's words.
+    expect(d.narration).toContain("To start this in a clean chat instead, ");
+    expect(d.narration.split("clean chat").length - 1).toBe(1);
+    expect(d.narration).not.toContain("restart");
     // next is read-only: naming the creation move mutates nothing.
     expect(readIntentRegistry(proj).length).toBe(0);
   });

@@ -187,6 +187,7 @@ import {
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
   isKillSwitchSource,
+  installedHarnessName,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -2322,7 +2323,7 @@ function printDirective(message: string): PrintDirective {
 }
 
 // A print the agent stops after: a read-only utility, a setting or a scope
-// change, new work that starts in a fresh session, or one line for the person.
+// change, or one line for the person.
 function turnEndingPrint(message: string): PrintDirective {
   const directive = printDirective(message);
   turnEndingPrints.add(directive);
@@ -3493,16 +3494,11 @@ function createPrintDirective(
   );
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
-  const directive = flags.newIntent
-    ? turnEndingPrint(
-      `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
-        `This is a NEW, unrelated intent, and the current session still carries the previous intent's context. ` +
-        `Tell the user to start a fresh session using this harness's reset or restart flow, then invoke its AI-DLC entry skill to begin the new intent with a clean slate. ` +
-        `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
-      )
-    : printDirective(
-      `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
-    );
+  // New work, like the first, carries on in this chat: the creation binds the
+  // chat to the new work, so the next `next` runs its first stage.
+  const directive = printDirective(
+    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
+  );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
   // counts the compiled grid already gave us.
@@ -3522,11 +3518,29 @@ function createPrintDirective(
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
+  // Beside other work the chat still holds that work's conversation: the
+  // person can start this one in a clean chat instead, said once, never as a stop.
+  if (flags.newIntent) directive.narration += ` ${cleanChatLine(projectDir)}`;
   // The agent runs the creation and goes on, so the line rides the first step
-  // it speaks from. A new, unrelated piece of work stops here instead (the
-  // person starts a fresh chat for it), so the agent speaks from this step.
-  if (!flags.newIntent) carriesNarration.add(directive);
+  // it speaks from.
+  carriesNarration.add(directive);
   return directive;
+}
+
+// The optional line offering a clean chat for new work, in the host's own words.
+function cleanChatLine(projectDir: string): string {
+  const skill = entrySkillInvocation();
+  let harness: string | null = null;
+  try {
+    harness = installedHarnessName(projectDir);
+  } catch {
+    harness = null;
+  }
+  const how = harness === "claude" ? `type /clear, then ${skill}`
+    : harness === "kiro-ide" ? `open a new chat, pick the aidlc agent, then type ${skill}`
+    : harness === "opencode" ? `start a new session, then type ${skill}`
+    : `open a new chat, then type ${skill}`;
+  return `To start this in a clean chat instead, ${how}.`;
 }
 
 // A new project leaves out Reverse Engineering when its plan runs it, and when
@@ -6864,10 +6878,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // start path (Branch 7b/9a) uses, so BOTH creation directives carry the --label
   // placeholder identically. The human-yes gate already happened conductor-side;
   // this is the
-  // creation print that performs it. Unlike the fresh-start tail, the new-intent
-  // directive tells the conductor to STOP after creation and hand off to a fresh
-  // session (createPrintDirective branches on flags.newIntent): a second, unrelated
-  // intent should not inherit the completed intent's session context. Precedes
+  // creation print that performs it. Like the fresh-start tail, the conductor
+  // carries on into the new work's first stage in this chat; the narration
+  // offers a clean chat once, never as a stop. Precedes
   // every continuation branch so an active intent's state never routes new-work
   // intent creation to "advance the current stage". The freeform new-work text
   // rides in flags.intent (the same slot Branch 9a threads as the description).

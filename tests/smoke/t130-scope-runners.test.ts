@@ -213,18 +213,18 @@ describe("t130 scope-runners — structural conformance of the shipped first-bat
       // adjacent lines.)
       const collapsed = body.replace(/\s+/g, " ");
       expect(collapsed).toContain(`baked \`${scope}\``);
-      // On confirm the runner hands off to a fresh session: a 2nd, unrelated
-      // intent shouldn't inherit the prior intent's context, so the prose names
-      // /clear and stopping rather than continuing in-session.
-      expect(body).toContain("/clear");
-      expect(collapsed.toLowerCase()).toContain("fresh session");
+      // On confirm the runner carries on into the new work in the same chat,
+      // with no stop and no restart.
+      expect(collapsed).toContain("carry on into the new work's first stage in this chat");
+      expect(collapsed.toLowerCase()).not.toContain("fresh session");
+      expect(collapsed).not.toContain("**STOP**");
       // STRONGER: the on-disk bytes match the generator's own render.
       const rendered = renderRunner(scope, DISCOVERED[scope]?.description ?? "");
       expect(rendered).toContain("next --new-intent --scope <the confirmed scope>");
       expect(rendered).toContain("`intent-create` command");
       expect(rendered).not.toContain(`\`${retiredIntentCommand}\``);
       expect(rendered.replace(/\s+/g, " ")).toContain(`baked \`${scope}\``);
-      expect(rendered).toContain("/clear");
+      expect(rendered).toContain("carry on into the new work's first stage in this chat");
     });
   }
 

@@ -24844,8 +24844,8 @@ export function engineTouchMarkerPath(projectDir: string, intent?: string, space
 }
 // The engine's last word to the agent ended the turn on purpose: a question for
 // the person (where new work goes, which plan to start it with) or a print the
-// agent stops after (status, a setting, a scope change, new work that starts
-// in a fresh session). `next` alone can still return the work in progress, so
+// agent stops after (status, a setting, a scope change). `next` alone can
+// still return the work in progress, so
 // this marker is how the Stop hook knows.
 export function turnEndMarkerPath(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "turn-end");

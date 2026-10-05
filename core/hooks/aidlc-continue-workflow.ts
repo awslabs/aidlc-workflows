@@ -123,9 +123,9 @@
 //      input. Once the response is ready, continuation is enforced again.
 //  10. A STEP THAT ENDS THE TURN: the last step the engine handed out was an
 //      `ask` (where new work goes, which plan to start it with) or a print the
-//      agent stops after (status, a setting, a scope change, new work that
-//      starts in a fresh session), and the person has not written since
-//      (turnEndIsOpen). The probe's own `next`, or Copilot's retained step,
+//      agent stops after (status, a setting, a scope change), and the person
+//      has not written since (turnEndIsOpen). The probe's own `next`, or
+//      Copilot's retained step,
 //      would hand back the work in progress, so this is read before either.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`

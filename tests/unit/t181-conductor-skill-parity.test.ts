@@ -182,16 +182,6 @@ const P3_EVIDENCE_DIR = join(
   "p3-kiro-routing",
 );
 
-const FRESH_SESSION_TOKENS: Record<string, string[]> = {
-  claude: ["/clear", "`/aidlc`"],
-  codex: ["restart Codex CLI", "`$aidlc`"],
-  kiro: ["restart Kiro CLI", "`/aidlc`"],
-  "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
-  opencode: ["restart OpenCode", "`/aidlc`"],
-  copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
-  cursor: ["new Cursor chat", "`/aidlc`"],
-};
-
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
   const start = lines.indexOf("## Stage Graph");
@@ -456,20 +446,28 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(failures).toEqual([]);
   });
 
-  test("every shipped conductor SKILL stops after new-intent creation and names its fresh-session flow", () => {
+  test("every shipped conductor SKILL carries new work on in the same chat, with no stop or restart", () => {
     const failures: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const token of [
-        "**run-then-stop**",
-        "Then **STOP and hand off to a fresh session** rather than re-running `next`",
-        ...(FRESH_SESSION_TOKENS[harness.name] ?? []),
+        "Then re-run `next` and carry on into the new work's first stage in this chat.",
+        "it is an option for the person, never a stop.",
       ]) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
       }
-      if (body.includes("run it, then re-run `next` to land on the new intent's first stage")) {
-        failures.push(`${rel}  still continues a new intent in the prior session`);
+      for (const stale of [
+        "**run-then-stop**",
+        "STOP and hand off to a fresh session",
+        "(or restart Claude Code)",
+        "restart Codex CLI",
+        "restart Kiro CLI",
+        "restart OpenCode",
+        "to begin the new intent with a clean slate",
+        "run it, then re-run `next` to land on the new intent's first stage",
+      ]) {
+        if (body.includes(stale)) failures.push(`${rel}  still says: ${stale}`);
       }
     }
     expect(failures).toEqual([]);
