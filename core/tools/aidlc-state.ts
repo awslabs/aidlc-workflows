@@ -201,7 +201,7 @@ import {
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -3943,7 +3943,11 @@ function verifyStageArtifacts(
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
-        `do not satisfy ${stage.name} - write the code to the workspace.`;
+        `do not satisfy ${stage.name} - write the code to the workspace. If the code ` +
+        `is already in an earlier commit, the person can turn the stage output check ` +
+        `off for this project (\`${aidlcInvocation()} config flags --bypass ` +
+        `AIDLC_SKIP_ARTIFACT_GUARD --local --yes\`) and approve again; saying "turn it ` +
+        `back on" restores it.`;
     refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
       code: "REQUIRED_SOURCE_WORK_MISSING",
       blockedAction: action,
