@@ -43,7 +43,7 @@ const SEPARATOR = "\u2014";
 // Classic, two Units, advisory reviews (one pass per stage), checkpoints on.
 // Stage-major runs each design stage for both Units as a wave, and those
 // stages are done when Code Generation starts.
-function fixture(policy: string, iteration: "unit-major" | "stage-major" = "unit-major") {
+function fixture(policy: string, iteration: "unit-major" | "stage-major" = "unit-major", review = "advisory") {
   const p = createTestProject();
   projects.push(p);
   seedAidlcMemory(p);
@@ -61,7 +61,7 @@ function fixture(policy: string, iteration: "unit-major" | "stage-major" = "unit
 - **Construction Checkpoints**: enabled
 - **Construction Execution**: serial
 - **Construction Autonomy Mode**: gated
-- **Review Override**: advisory
+- **Review Override**: ${review}
 - **Guard Policy**: ${policy}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -199,7 +199,7 @@ function review(stage: string, unit: string, iteration: number): string[] {
 // the logger, then its completion. Each document stage completes the way
 // `unit complete --wave` records it, with its outputs' fingerprint; the build
 // completes as one Unit. Returns every line the reviews said.
-function build(p: string, unit: string): string[] {
+function build(p: string, unit: string, reviewed = true, uncompleted: string | null = null): string[] {
   const notices: string[] = [];
   for (const slug of stages) {
     const stage = findStageBySlug(slug)!;
@@ -213,7 +213,8 @@ function build(p: string, unit: string): string[] {
         stage: slug, unit, version: 1, writes: [{ path: `src/${unit}.ts` }],
       }));
     }
-    notices.push(...reviewThroughLog(p, review(slug, unit, 1)).notices);
+    if (reviewed) notices.push(...reviewThroughLog(p, review(slug, unit, 1)).notices);
+    if (slug === uncompleted) continue;
     const floor = latestMainWorkflowStageRunFloorForProject(p, slug, true, unit);
     appendAuditEntry("UNIT_COMPLETED", stage.workspace_requires ? { Stage: slug, Unit: unit, "Run floor": floor } : {
       Stage: slug, Unit: unit, Mode: "wave", "Run floor": floor,
@@ -271,6 +272,24 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
       expect(readFileSync(alphaDocument(p), "utf-8")).toContain(EDIT);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // Each approval the person gives earns a fresh re-check: a second edit after
+  // the first re-check and approval is re-checked again, never stuck.
+  test("Guard Policy strict: a document edited again after its re-check and approval is re-checked again", () => {
+    const p = fixture("strict (set by you)");
+    build(p, "alpha");
+    approve(p, "alpha");
+    for (const iteration of [2, 3]) {
+      editAlphaDocument(p, "agent");
+      const beat = next(p);
+      expect(beat.construction_checkpoint?.rereview, JSON.stringify(beat)).toMatchObject({ stage: DOCUMENT_STAGE, iteration });
+      expect(reviewThroughLog(p, review(DOCUMENT_STAGE, "alpha", iteration)).recovery).toBe("stale-receipt");
+      expect(next(p).construction_checkpoint).toMatchObject({ unit: "alpha", ready: true, rechecked: { approved_before: true } });
+      approve(p, "alpha");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    }
+    expect(rejected(p)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const policy of ["relaxed (set by you)", "off (from scope classic)"]) {
     for (const by of ["agent", "hand"] as const) {
@@ -344,6 +363,45 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
       }
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // With reviews off, nothing re-checks the document: under relaxed and off the
+  // approval stands and the change is said once at the next Unit's checkpoint;
+  // before the first checkpoint the person is asked about it as it is now.
+  for (const policy of ["relaxed (set by you)", "off (from scope classic)"]) {
+    test(`reviews off, Guard Policy ${policy.split(" ")[0]}: the approval stands and the change is said once`, () => {
+      const p = fixture(policy, "unit-major", "none");
+      build(p, "alpha", false);
+      approve(p, "alpha");
+      editAlphaDocument(p, "hand");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+      expect(approved(p, "alpha")).toBe(true);
+      build(p, "beta", false);
+      expect(approve(p, "beta")).toEqual(["Unit alpha's files changed after you approved it; carrying on."]);
+      expect(acceptedFor(p, "alpha")).toHaveLength(1);
+      expect(approved(p, "alpha")).toBe(true);
+      expect(rejected(p)).toEqual([]);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    test(`reviews off, Guard Policy ${policy.split(" ")[0]}: a document edited before the checkpoint is asked about as it is`, () => {
+      const p = fixture(policy, "unit-major", "none");
+      build(p, "alpha", false);
+      editAlphaDocument(p, "hand");
+      expect(next(p).construction_checkpoint).toMatchObject({ unit: "alpha", ready: true });
+      approve(p, "alpha");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  // A stage the Unit never completed is still work to do under Guard Policy
+  // off: the walk hands it back and the checkpoint is not ready.
+  test("Guard Policy off: a Unit whose design stage never completed still blocks", () => {
+    const p = fixture("off (from scope classic)");
+    build(p, "alpha", true, DOCUMENT_STAGE);
+    expect(next(p)).toMatchObject({ kind: "run-stage", stage: DOCUMENT_STAGE, unit: "alpha" });
+    const status = checkpointStatus(p, "alpha");
+    expect(status.approved).toBe(false);
+    expect(status.errors).toContain(`${DOCUMENT_STAGE}: current Unit completion evidence is missing or stale.`);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A document that is gone is work still to do, under every Guard Policy.
   for (const policy of ["strict (set by you)", "off (from scope classic)"]) {
