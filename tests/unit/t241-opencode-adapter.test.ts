@@ -718,6 +718,9 @@ describe("t241 OpenCode adapter reviewer scope", () => {
   test("blocks a sibling-unit read and allows the dispatched unit", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-reviewer-scope.ts");
+    // The hook reads a shell command's write targets through the shared parser
+    // shipped beside it in every tree.
+    copyCore(root, "hooks/review-freeze-command.ts");
     copyCore(root, "tools/aidlc-audit.ts");
     copyCore(root, "tools/aidlc-lib.ts");
     copyCore(root, "tools/aidlc-artifact-vocabulary.ts");
