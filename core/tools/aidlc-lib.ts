@@ -10790,8 +10790,8 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
 // shard could not be read. With `replies`, a turn that was only a command to
 // AIDLC or a question about a switch (its HUMAN_TURN row says `Reply: command`
 // or `Reply: question`) is not a reply to the question, so it is left out.
-// With `requests`, only the question about a switch is left out: it asks for
-// nothing ("skip plan approval?").
+// With `requests`, a question about a switch ("skip plan approval?") asks for
+// nothing, and it ends the reach of the turns before it.
 export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
 
 // The HUMAN_TURN marks for a turn that was only a command to AIDLC, and for a
@@ -10897,13 +10897,16 @@ export function humanTurnState(projectDir: string, options: { replies?: boolean;
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
       if (options.replies && ev === "HUMAN_TURN" && !isReplyTurn({ event: ev, block: blocks[i] })) continue;
-      if (options.requests && ev === "HUMAN_TURN" && !isRequestTurn({ event: ev, block: blocks[i] })) continue;
+      // A question about a switch asks for nothing, and it ends the reach of
+      // the turns before it: the person's latest word was a question.
+      const questionTurn = options.requests === true && ev === "HUMAN_TURN" &&
+        !isRequestTurn({ event: ev, block: blocks[i] });
       events.push({
         ts: auditBlockField(blocks[i], "Timestamp") ?? "",
         shard: s,
         pos: i,
-        human: ev === "HUMAN_TURN",
-        event: ev,
+        human: ev === "HUMAN_TURN" && !questionTurn,
+        event: questionTurn ? "QUESTION_TURN" : ev,
       });
     }
   }

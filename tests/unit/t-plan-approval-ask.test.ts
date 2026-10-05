@@ -2201,6 +2201,29 @@ describe("a question about plan approval turns nothing off; a request does", () 
     const after = next(proj);
     expect(after.kind === "ask" && after.ask_type === "plan-approval", JSON.stringify(after)).toBe(false);
   });
+
+  // From a live run: the chat opened with `/aidlc`, the plan question came,
+  // and "skip plan approval?" turned the check off, because the opening
+  // command still read as a request. The person's latest word was a question.
+  test("after the chat's opening /aidlc, \"skip plan approval?\" still lowers nothing", () => {
+    const proj = project("off");
+    reply(proj, "/aidlc");
+    askFor(proj);
+    reply(proj, "skip plan approval?");
+    const refused = setter(proj);
+    expect(refused.code, refused.out).not.toBe(0);
+    expect(refused.out).toContain("asked a question about this check");
+    expect(offRows(proj)).toBe(0);
+    expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("after the chat's opening /aidlc, a request to skip plan approval is still done at once", () => {
+    const proj = project("off");
+    reply(proj, "/aidlc");
+    askFor(proj);
+    reply(proj, "skip plan approval for this work");
+    expect(offRows(proj)).toBeGreaterThan(0);
+  });
 });
 
 // The lockout reported in #1172: a Brownfield refactor (or bugfix) workflow
