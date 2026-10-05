@@ -32,7 +32,7 @@ interface Matrix {
   exclude?: string;
   family?: LiveFamily[];
   runner?: string[] | string;
-  suite?: Array<{ name: string; tier: string; shard?: string }>;
+  suite?: Array<{ name: string; tier: string; shard?: string; filter?: string }>;
 }
 interface Job {
   name?: string;
@@ -201,7 +201,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "ref", "retry-once", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "filter", "ref", "retry-once", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -274,13 +274,15 @@ describe("t345 complete nightly coverage", () => {
     expect(evaluateBackend({ diagnostic_backend: "bun" })).toBe("bun");
     expect(evaluateBackend({ diagnostic_backend: "tmux" })).toBe("tmux");
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
-    expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.diagnostic_filter || '' }}`);
+    expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.filter || inputs.diagnostic_filter || '' }}`);
     // Exercise the checked-in expression for callers that have no filter input.
     const expression = step.env!.TEST_FILTER.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
     const evaluate = new Function("inputs", `return (${expression});`);
     expect(evaluate({})).toBe("");
     expect(evaluate({ diagnostic_filter: "" })).toBe("");
     expect(evaluate({ diagnostic_filter: "^t-tui-runtime$" })).toBe("^t-tui-runtime$");
+    expect(evaluate({ filter: "" })).toBe("");
+    expect(evaluate({ filter: "^t-scope-run-" })).toBe("^t-scope-run-");
     expect(Object.keys(deterministic.jobs)).toEqual(["test"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     expect(deterministic.jobs.test.permissions).toBeUndefined();
@@ -351,16 +353,45 @@ describe("t345 complete nightly coverage", () => {
         );
       };
       const runners = evaluate(matrix.runner as string) as string[];
-      const excluded = evaluate(matrix.exclude!) as Array<{ suite: { name: string; tier: string } }>;
-      expect(excluded).toEqual(expanded ? [] : [{ suite: { name: "e2e", tier: "e2e" } }]);
-      const suites = matrix.suite!.filter((suite) =>
-        !excluded.some((row) => row.suite.name === suite.name && row.suite.tier === suite.tier));
+      const excluded = evaluate(matrix.exclude!) as Array<{ runner?: string; suite: { name: string; tier: string } }>;
+      // The scope runs stay on Linux in the queue; the nightly runs them on every OS.
+      const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" };
+      expect(excluded).toEqual(expanded
+        ? [{ runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns }]
+        : [{ suite: { name: "e2e", tier: "e2e" } }]);
+      const suitesOn = (runner: string) => matrix.suite!.filter((suite) =>
+        !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
+      const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", "integration", ...(expanded ? ["e2e"] : [])]);
       expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
-      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 45 : 14);
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 46 : 15);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
+    // One integration job runs everything but the scope runs; the other runs only them.
+    const integration = matrix.suite!.filter((suite) => suite.tier === "integration");
+    expect(integration.map(({ name, filter }) => [name, filter])).toEqual([
+      ["integration", "^(?!(integration-)?t-scope-run-)"],
+      ["scope-runs", "^t-scope-run-"],
+    ]);
+    // The runner matches a filter against a file's base name, stem and
+    // tier-qualified stem (run-tests.ts matchesE2eFilter): every integration
+    // file lands in exactly one of the two jobs.
+    const names = (file: string) => [file, file.replace(/\.test\.ts$/, ""), `integration-${file.replace(/\.test\.ts$/, "")}`];
+    const files = readdirSync(join(REPO_ROOT, "tests", "integration")).filter((file) => file.endsWith(".test.ts"));
+    const [rest, scoped] = integration.map(({ filter }) => new RegExp(filter!));
+    for (const file of files) {
+      const inRest = names(file).some((name) => rest.test(name));
+      const inScoped = names(file).some((name) => scoped.test(name));
+      expect([file, inRest !== inScoped], file).toEqual([file, true]);
+      expect([file, inScoped], file).toEqual([file, file.startsWith("t-scope-run-")]);
+    }
+    // An existing caller that names no filter runs its whole tier, as before.
+    expect(deterministic.on.workflow_call.inputs.filter).toMatchObject({ default: "", type: "string" });
+    expect(deterministic.on.workflow_call.inputs.filter.required).toBeUndefined();
+    expect(ci.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
+    expect(workflow.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
+    expect(matrixOf(workflow.jobs.deterministic).exclude).toBeUndefined();
     expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(ci.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
@@ -1539,7 +1570,11 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     const suites = matrix.suite!;
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
-    expect(suites.filter((suite) => suite.tier === "integration")).toEqual([{ name: "integration", tier: "integration" }]);
+    // Integration runs as two jobs: the scope runs, and everything else.
+    expect(suites.filter((suite) => suite.tier === "integration")).toEqual([
+      { name: "integration", tier: "integration", filter: "^(?!(integration-)?t-scope-run-)" },
+      { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" },
+    ]);
     expect(suites.filter((suite) => suite.tier === "e2e")).toEqual([{ name: "e2e", tier: "e2e" }]);
     expect(suites.some((suite) => suite.tier === "deep")).toBe(false);
     expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);

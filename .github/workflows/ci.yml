@@ -89,18 +89,25 @@ jobs:
           - {name: unit-10, tier: unit, shard: "10/12"}
           - {name: unit-11, tier: unit, shard: "11/12"}
           - {name: unit-12, tier: unit, shard: "12/12"}
-          - {name: integration, tier: integration}
+          # The scope runs (tests/integration/t-scope-run-*) drive whole scopes
+          # through the engine and take minutes each, so they run in their own
+          # integration job beside the rest.
+          - {name: integration, tier: integration, filter: '^(?!(integration-)?t-scope-run-)'}
+          - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: e2e, tier: e2e}
         # PR pushes and calls run Linux only and stop at integration. The merge
         # queue and a platform_regressions dispatch run every tier on all three
-        # OSes, with integration and isolated E2E in separate fresh jobs per OS.
-        exclude: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '[]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
+        # OSes, with integration and isolated E2E in separate fresh jobs per OS,
+        # except the scope runs: Linux only here, all three OSes in the nightly
+        # Full Suite.
+        exclude: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}}]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
       ref: ${{ github.sha }}
       runner: ${{ matrix.runner }}
       tier: ${{ matrix.suite.tier }}
       unit-shard: ${{ matrix.suite.shard || '' }}
+      filter: ${{ matrix.suite.filter || '' }}
       artifact-label: ci-deterministic-${{ matrix.suite.name }}
       # No workflow downloads CI evidence, so an upload timeout cannot drop a PR.
       evidence-optional: true

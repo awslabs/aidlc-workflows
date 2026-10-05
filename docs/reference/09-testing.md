@@ -221,8 +221,34 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - All 17 hook sources through copy/native dispatch, stage frontmatter, knowledge inventory (unit)
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
+- Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
 
 **Run:** `bun tests/run-tests.ts` (default, no flags needed). `bash tests/run-tests.sh` is a compatibility wrapper for existing POSIX commands.
+
+### Scope runs
+
+`tests/harness/scope-run.ts` drives a shipped scope through the real engine with
+no model. A scripted stand-in plays the agent: it runs the engine's commands as
+the Claude skill does and fires the hooks Claude Code would fire. A separate
+person script is the only part that answers a question or a gate, through the
+human-turn hook, and every engine call runs under the production guard profile.
+Each `t-scope-run-<scope>.test.ts` file checks state, audit records, directives
+and files, never prose:
+
+- the stages that run and the ones skipped match the stage files' `scopes:` lists;
+- every decision recorded as the person's is backed by a turn the person script
+  sent (`tests/harness/person-turns.ts`);
+- the scope file's switches show in state and directives;
+- the run ends done, with every output on disk.
+
+`t-scope-run-new-scopes.test.ts` drives any shipped scope that has no file of its
+own, so a new scope is covered the day it ships. `t-scope-run-moves-*` cover the
+person's own words, settings typed with new work, a switch mid-run, and a stop
+for the day then a resume. A stage with a new kind of step fails its run until
+the stand-in learns that step. A known engine block the runs exempt is listed in
+`KNOWN_STOP_BLOCKS` with a `test.todo` named after it. CI runs the scope runs as
+their own integration job: Linux on pull requests and in the merge queue, all
+three OSes in the nightly Full Suite.
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
@@ -604,10 +630,10 @@ from disk reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration, using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows, adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs in a job of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs on Linux only), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs on Linux | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts and bounded hosted live shards | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
@@ -686,9 +712,12 @@ called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard and artifact label. PR CI selects Linux smoke, twelve
-weighted unit shards, and integration; Full Suite selects smoke, the same twelve
-shards, integration, and isolated E2E on Linux/macOS/Windows. Integration and
+runner, tier, unit shard, an optional file `filter` (empty runs the whole tier)
+and artifact label. Both split integration in two jobs with that filter: the
+scope runs (`t-scope-run-*`) and everything else. PR CI selects Linux smoke,
+twelve weighted unit shards, and both integration jobs; Full Suite selects
+smoke, the same twelve shards, both integration jobs, and isolated E2E on
+Linux/macOS/Windows. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8

@@ -18,6 +18,10 @@ on:
         description: N/M selector for the unit tier only
         default: ""
         type: string
+      filter:
+        description: Test file name filter for the tier (run-tests.ts --filter); empty runs the whole tier
+        default: ""
+        type: string
       artifact-label:
         description: Artifact prefix; the actual runner OS is appended
         required: true
@@ -192,7 +196,7 @@ jobs:
         env:
           TEST_TIER: ${{ inputs.tier }}
           UNIT_SHARD: ${{ inputs.unit-shard }}
-          TEST_FILTER: ${{ inputs.diagnostic_filter || '' }}
+          TEST_FILTER: ${{ inputs.filter || inputs.diagnostic_filter || '' }}
           RETRY_ONCE: ${{ inputs.retry-once == true }}
         run: |
           set -euo pipefail

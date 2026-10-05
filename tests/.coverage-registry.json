@@ -111,6 +111,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-scope-run-moves-switch.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t338-ceremony-verb.test.ts",
           "mechanism": "cli"
         }
@@ -718,8 +722,13 @@
       "unitClass": "audit",
       "unitId": "SCOPE_CHANGED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-moves-switch.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -1257,6 +1266,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-scope-run-moves-switch.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
         }
@@ -1296,6 +1309,10 @@
       "unitId": "WORKFLOW_UNPARKED",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-moves-switch.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
@@ -13255,6 +13272,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
         },
@@ -13287,6 +13308,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/integration/t30-scope-stage-mapping.test.ts",
           "mechanism": "none"
         },
@@ -13307,6 +13332,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/integration/t141-enterprise-scope-routing.test.ts",
           "mechanism": "sdk"
         }
@@ -13321,6 +13350,18 @@
         {
           "file": "tests/e2e/t301-express-scope-routing.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-moves-switch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-moves-words.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/integration/t130-scope-runners.test.ts",
@@ -13343,6 +13384,10 @@
           "mechanism": "tui"
         },
         {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
         },
@@ -13359,6 +13404,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
         }
@@ -13370,6 +13419,10 @@
       "unitId": "mvp",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
@@ -13389,6 +13442,18 @@
         {
           "file": "tests/e2e/t-tui-t51-poc-scope.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t-scope-run-moves-switch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-moves-words.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -13401,6 +13466,10 @@
         {
           "file": "tests/e2e/t302-deployment-pipeline-skip-fallback.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/integration/t130-scope-runners.test.ts",
@@ -13419,6 +13488,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/integration/t130-scope-runners.test.ts",
           "mechanism": "cli"
         },
@@ -13434,6 +13507,10 @@
       "unitId": "workshop",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/integration/t339-classic-upgrade-inflight.test.ts",
           "mechanism": "cli"
@@ -13451,6 +13528,46 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/unit/t16-phase-rules-structure.test.ts",
           "mechanism": "none"
         }
@@ -13461,43 +13578,209 @@
       "unitClass": "stage",
       "unitId": "construction/ci-pipeline",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "construction/code-generation",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "construction/functional-design",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "construction/infrastructure-design",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "construction/nfr-design",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "construction/nfr-requirements",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -13511,6 +13794,14 @@
         {
           "file": "tests/e2e/t-tui-t24-stage-jump.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -13520,6 +13811,18 @@
       "unitId": "ideation/feasibility",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t16-phase-rules-structure.test.ts",
           "mechanism": "none"
@@ -13539,6 +13842,22 @@
         {
           "file": "tests/e2e/t-tui-t73-intent-capture.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -13547,35 +13866,99 @@
       "unitClass": "stage",
       "unitId": "ideation/market-research",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "ideation/rough-mockups",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "ideation/scope-definition",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "ideation/team-formation",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "inception/contract-design",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t280-contract-design-wiring.test.ts",
           "mechanism": "cli"
@@ -13587,14 +13970,55 @@
       "unitClass": "stage",
       "unitId": "inception/delivery-planning",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "inception/domain-design",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t116-directive-path-resolution.test.ts",
           "mechanism": "cli"
@@ -13606,15 +14030,61 @@
       "unitClass": "stage",
       "unitId": "inception/practices-discovery",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "inception/refined-mockups",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -13624,6 +14094,50 @@
         {
           "file": "tests/e2e/t-tui-t74-requirements-analysis.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
         },
         {
           "file": "tests/unit/t16-phase-rules-structure.test.ts",
@@ -13637,6 +14151,22 @@
       "unitId": "inception/reverse-engineering",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/integration/t183-codekb-placement-reverify.sdk.test.ts",
           "mechanism": "sdk"
@@ -13660,14 +14190,55 @@
       "unitClass": "stage",
       "unitId": "inception/units-generation",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "inception/user-stories",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/integration/t238-user-stories-mob.sdk.test.ts",
           "mechanism": "sdk"
@@ -13679,14 +14250,103 @@
       "unitClass": "stage",
       "unitId": "initialization/state-init",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "initialization/workspace-detection",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/integration/t70.test.ts",
           "mechanism": "sdk"
@@ -13706,14 +14366,91 @@
       "unitClass": "stage",
       "unitId": "initialization/workspace-scaffold",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-classic.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-mvp.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-poc.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "operation/deployment-execution",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t16-phase-rules-structure.test.ts",
           "mechanism": "none"
@@ -13725,43 +14462,153 @@
       "unitClass": "stage",
       "unitId": "operation/deployment-pipeline",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-bugfix.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-refactor.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-security-patch.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "operation/environment-provisioning",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "operation/feedback-optimization",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "operation/incident-response",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "operation/observability-setup",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-express.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-infra.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
       "unitId": "operation/performance-validation",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t-scope-run-enterprise.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-feature.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t-scope-run-workshop.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

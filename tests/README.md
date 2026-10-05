@@ -203,8 +203,10 @@ For a single deterministic reproduction, manually dispatch
 `deterministic-tests.yml` with an immutable `ref`, selected `runner` and `tier`,
 and optional `diagnostic_filter` filename regex. The unit tier requires
 `unit-shard=N/M`; `1/1` selects all unit files before filtering. For smoke,
-integration or e2e, omit `unit-shard`; its default is empty. The filter exists
-only for manual dispatch, not reusable CI callers.
+integration or e2e, omit `unit-shard`; its default is empty. That
+`diagnostic_filter` exists only for manual dispatch. Reusable callers pass
+`filter` instead, empty by default: `ci.yml` and `full-suite.yml` use it to run
+the scope runs (`t-scope-run-*`) as an integration job of their own.
 One fresh runner produces `ci-deterministic-probe-<OS>` diagnostics with all
 model gates closed; it cannot qualify full-suite or release coverage.
 

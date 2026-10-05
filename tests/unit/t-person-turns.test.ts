@@ -306,6 +306,32 @@ describe("person-turn check", () => {
     expect(drive.unbacked()[1]).toContain("GATE_APPROVED code-generation");
   });
 
+  test("once the person approves a Unit checkpoint, the engine settles the stage gates it covers; a rejected checkpoint takes that back", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    const stages = "functional-design, code-generation";
+    row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "core", Kind: "unit" });
+    drive.sent('{"Approve this completed core?":"Approve"}');
+    row(dir, "GATE_APPROVED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "core", "Gate Stages": stages });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "functional-design" });
+    row(dir, "GATE_APPROVED", { Stage: "functional-design" });
+    expect(drive.unbacked()).toEqual([]);
+    // A stage no approved checkpoint covers still needs the person.
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "build-and-test" });
+    row(dir, "GATE_APPROVED", { Stage: "build-and-test", "User Input": "Approve" });
+    expect(drive.unbacked()).toHaveLength(1);
+    expect(drive.unbacked()[0]).toContain("GATE_APPROVED build-and-test");
+    // After the person rejects the checkpoint, its stages are theirs to approve again.
+    row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: "core", Kind: "unit" });
+    drive.sent('{"Approve this completed core?":"Request Changes"}');
+    row(dir, "GATE_REJECTED", { Stage: "code-generation", Checkpoint: "construction-unit", Unit: "core", "Gate Stages": stages });
+    row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "functional-design" });
+    row(dir, "GATE_APPROVED", { Stage: "functional-design" });
+    expect(drive.unbacked()).toHaveLength(2);
+    expect(drive.unbacked()[1]).toContain("GATE_APPROVED functional-design");
+  });
+
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {
     const dir = project();
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "user-stories" });

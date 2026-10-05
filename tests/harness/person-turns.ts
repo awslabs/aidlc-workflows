@@ -118,7 +118,11 @@ const gateItem = (row: AuditShardEvent) =>
  * person's grant of autonomous Construction is in force (the latest
  * WORKFLOW_STARTED or AUTONOMY_MODE_SET is AUTONOMY_MODE_SET to autonomous)
  * and the stage is a Construction stage; a walking-skeleton checkpoint still
- * asks the person. That grant is itself the person's decision, backed by a
+ * asks the person. A Construction stage gate is also the engine's once a Unit
+ * checkpoint whose Gate Stages name the stage was approved (and not since
+ * rejected): the engine settles the stage gate from those approvals
+ * (isAutonomousConstructionGate), and each checkpoint approval is itself
+ * checked as the person's. That grant is itself the person's decision, backed by a
  * turn after the last gate resolution, as the engine requires. The rows an
  * approval backfills before it (a Recovered rejection and re-opening) leave
  * the gate's first opening in place, and the rejection is checked as usual.
@@ -137,6 +141,9 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     let workspace = -1;
     let autonomous = false;
     let resolved = -1;
+    // Construction stages a person-approved Unit checkpoint covers. With every
+    // covering checkpoint approved the engine approves the stage gate itself.
+    const covered = new Set<string>();
     for (let index = 0; index < events.length; index++) {
       const row = events[index];
       const stage = auditBlockField(row.block, "Stage") ?? "";
@@ -146,9 +153,11 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       // The engine writes Recovered only on the rows an approval backfills.
       const backfilled = auditBlockField(row.block, "Recovered") === "true" &&
         (row.event === "GATE_REJECTED" || row.event === "STAGE_AWAITING_APPROVAL");
-      const engineApproved = row.event === "GATE_APPROVED" && autonomous &&
-        audit().findStageBySlug(stage)?.phase === "construction" &&
-        auditBlockField(row.block, "Checkpoint") !== "walking-skeleton";
+      const construction = audit().findStageBySlug(stage)?.phase === "construction";
+      const checkpoint = auditBlockField(row.block, "Checkpoint");
+      const engineApproved = row.event === "GATE_APPROVED" && construction && (
+        (autonomous && checkpoint !== "walking-skeleton") || (checkpoint === null && covered.has(stage))
+      );
       let since: number | undefined;
       let reply = true;
       let answer = false;
@@ -194,7 +203,17 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       }
       if (row.event === "STAGE_AWAITING_APPROVAL" && !backfilled) gates.set(gateItem(row), index);
       if (row.event === "WORKSPACE_INITIALISED" || row.event === "WORKSPACE_RECLASSIFIED") workspace = index;
-      if (row.event === "WORKFLOW_STARTED") autonomous = false;
+      if (row.event === "WORKFLOW_STARTED") {
+        autonomous = false;
+        covered.clear();
+      }
+      if (gate && auditBlockField(row.block, "Checkpoint") !== null) {
+        for (const name of (auditBlockField(row.block, "Gate Stages") ?? "").split(",").map((part) => part.trim())) {
+          if (!name) continue;
+          if (row.event === "GATE_APPROVED") covered.add(name);
+          else covered.delete(name);
+        }
+      }
       if (row.event === "AUTONOMY_MODE_SET") autonomous = auditBlockField(row.block, "Mode") === "autonomous";
       if (gate) resolved = index;
     }
