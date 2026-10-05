@@ -13,22 +13,31 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import {
   assertNoSymlinkInChainOrThrow,
+  CEREMONY_ENV,
+  getField,
+  GUARD_FENCE_ENV,
+  readStateFile,
+  resolveCeremony,
+  resolveFences,
+  resolveGuardPolicy,
+  SWITCHABLE_GUARD_FENCES,
   delegatedWorktreeIntent,
   isoTimestamp,
   latestPersonTurn,
+  memoryGuardPolicyDeclarations,
   normalizeDriveLetter,
   personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
   sessionsDir,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { aidlcInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
+import { aidlcInvocation, entrySkillInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
 import {
   type AidlcSettingsFile,
+  bypassRecordedIn,
   PERSON_CHECK_SWITCH_LABELS,
   PERSON_CHECK_SWITCHES,
   type RecordableProjectBypass,
-  readSettingsTarget,
   resolveAidlcSettings,
   settingsPathForTarget,
   type SettingsTarget,
@@ -120,18 +129,7 @@ export function switchesOff(projectDir: string, env: NodeJS.ProcessEnv = process
     return [];
   }
   // The file a switch is turned back on in: the nearest one that records it.
-  const holder = (name: string): SettingsTarget | null => {
-    for (const target of ["local", "project", "global"] as const) {
-      try {
-        if ((readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass)) {
-          return target;
-        }
-      } catch {
-        // An unreadable file names no switch.
-      }
-    }
-    return null;
-  };
+  const holder = (name: string): SettingsTarget | null => bypassRecordedIn(projectDir, name)?.target ?? null;
   const record = readRecord(projectDir);
   return PERSON_CHECK_SWITCHES
     .filter((name) => bypasses.includes(name) && !Object.hasOwn(env, name))
@@ -165,7 +163,8 @@ function clock(iso: string, now: Date): string {
     : `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${time}`;
 }
 
-function quoted(words: string): string {
+/** The person's words as a switch line quotes them: one line, capped. */
+export function quoted(words: string): string {
   const flat = words.replace(/\s+/g, " ").trim().replaceAll('"', "'");
   return flat.length > QUOTE_MAX_CHARS ? `${flat.slice(0, QUOTE_MAX_CHARS).trimEnd()}...` : flat;
 }
@@ -308,8 +307,38 @@ export function recordSwitchChange(
           `Say "turn it back on" to restore it (${clearSwitchCommand(name, projectDir)}).`,
       );
     } else {
-      lines.push(`The ${label} is on again ${where(target)}.`);
+      const held = heldOffByWork(projectDir, name);
+      lines.push(held === null
+        ? `The ${label} is on again ${where(target)}.`
+        : `The ${label} switch is cleared ${where(target)}, but it stays off for this piece of work: ${held.source}. ` +
+          `Say "turn it on for this work" to restore it there (${entrySkillInvocation()} config set ${held.key} on).`);
     }
   }
   return lines;
+}
+
+// What still keeps a check off for the open piece of work once its switch is
+// cleared, in the words `config get` shows: its scope or its Guard Policy.
+// Null when nothing does, or nothing can be read: it only words a line.
+function heldOffByWork(projectDir: string, name: RecordableProjectBypass): { source: string; key: string } | null {
+  try {
+    const state = readStateFile(projectDir);
+    if (!state) return null;
+    const fence = SWITCHABLE_GUARD_FENCES.find((item) => GUARD_FENCE_ENV[item] === name);
+    if (fence !== undefined && fence !== "plan-approval") {
+      const resolved = resolveFences(resolveGuardPolicy(projectDir, state), state)[fence];
+      return resolved.value === "off" ? { source: resolved.source, key: `guard.${fence}` } : null;
+    }
+    for (const key of ["plan_approval", "summary_confirmation"] as const) {
+      if (CEREMONY_ENV[key] !== name) continue;
+      const resolved = resolveCeremony(key, getField(state, "Scope"), state);
+      if (resolved.value !== "off") return null;
+      // Guard Policy strict in memory keeps plan approval on whatever the work says.
+      if (key === "plan_approval" && memoryGuardPolicyDeclarations(projectDir).some((item) => item.value === "strict")) return null;
+      return { source: resolved.source, key: key.replace("_", "-") };
+    }
+  } catch {
+    // Unreadable work state keeps the plain line.
+  }
+  return null;
 }

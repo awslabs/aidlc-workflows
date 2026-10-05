@@ -766,9 +766,11 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
         toIntentUuid: createdUuid,
       });
 
+      // The new work carries on in this chat: the stop right after creation
+      // is pushed on into its first stage, and the receipt is spent.
       const stop = runIde(dir, "continue-workflow", null);
       expect(stop.code).toBe(0);
-      expect(stop.stdout.trim()).toBe("");
+      expect((JSON.parse(stop.stdout) as { decision?: string }).decision).toBe("block");
       expect(existsSync(handoffPath)).toBe(false);
 
       const before =
@@ -930,7 +932,9 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
           }),
         );
         expect(stop.code, entry.label).toBe(0);
-        expect(stop.stdout.trim(), entry.label).toBe("");
+        // Session one's new work carries on, so its stop is pushed on; the
+        // receipt it spent proves the hook read session one, not session two.
+        expect((JSON.parse(stop.stdout) as { decision?: string }).decision, entry.label).toBe("block");
         expect(existsSync(handoffPath), entry.label).toBe(false);
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -1282,7 +1286,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       // does not hold it back and picks it up at once.
       const bypass = run(named.split(" "));
       expect(bypass.status, bypass.stdout + bypass.stderr).toBe(0);
-      expect(summaryLine()).toBe("Summary Confirmation: off (from env AIDLC_DISABLE_SUMMARY_CONFIRMATION)");
+      expect(summaryLine()).toBe("Summary Confirmation: off (from AIDLC_DISABLE_SUMMARY_CONFIRMATION in aidlc.settings.local.json)");
       const cleared = run(named.replace("--bypass", "--clear-bypass").split(" "));
       expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
       expect(summaryLine()).toBe("Summary Confirmation: on (from scope feature)");
@@ -1318,7 +1322,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(before).toMatch(/^Plan Approval: on/);
       const bypass = run(named.split(" "));
       expect(bypass.status, bypass.stdout + bypass.stderr).toBe(0);
-      expect(planLine()).toBe("Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)");
+      // The switch is recorded in the settings file, so it is named by that file.
+      expect(planLine()).toBe("Plan Approval: off (from AIDLC_DISABLE_PLAN_APPROVAL_GUARD in aidlc.settings.local.json)");
       const cleared = run(named.replace("--bypass", "--clear-bypass").split(" "));
       expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
       expect(planLine()).toBe(before);
@@ -5895,15 +5900,16 @@ describe("t218 a chat message leaves a hook heartbeat before the first workflow"
     });
 
     // Inside an intent, heartbeats feed the Plan Approval staleness refusal, so
-    // the adapter leaves them to the core hooks.
-    test(`${target} inside an intent writes no ${hook}.last`, () => {
+    // the adapter leaves them to the core hooks: none outside the record, and
+    // only the core human-turn hook's own inside it.
+    test(`${target} inside an intent leaves ${hook}.last to the core hook`, () => {
       const dir = scratchProject(true);
       try {
         const r = runIde(dir, target, "hello");
         expect(r.code, r.stderr).toBe(0);
-        for (const root of [intentsDirOf(dir, DEFAULT_SPACE), seededRecordDir(dir)]) {
-          expect(existsSync(join(root, ".aidlc-engine", "hooks-health", `${hook}.last`)), root).toBe(false);
-        }
+        const health = (root: string) => join(root, ".aidlc-engine", "hooks-health", `${hook}.last`);
+        expect(existsSync(health(intentsDirOf(dir, DEFAULT_SPACE)))).toBe(false);
+        expect(existsSync(health(seededRecordDir(dir)))).toBe(hook === "record-human-turn");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

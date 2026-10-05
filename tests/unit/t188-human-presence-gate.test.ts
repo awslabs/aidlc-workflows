@@ -61,7 +61,7 @@ import {
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type Dirent, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   checkSummaryConfirmationEvidence,
   findStageBySlug,
@@ -126,9 +126,10 @@ function guardedLog(
 
 // Drive the public report surface with the same guard posture. NOTE the
 // contract difference from `guarded`: when aidlc-state.ts refuses the
-// transition, orchestrate relays the refusal as an error DIRECTIVE
-// ({"kind":"error",...}) on stdout and exits 0 — only a malformed directive
-// exits non-zero. Refusal assertions must read the directive, not the rc.
+// transition, orchestrate relays the refusal as a DIRECTIVE on stdout and exits
+// 0 (a decision the person has not made is the agent's next step, a `print`;
+// anything else an `error`). Only a malformed directive exits non-zero, so
+// refusal assertions must read the directive, not the rc.
 function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
@@ -704,6 +705,27 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
   // Spawned as a PROCESS (not the exported run()) because the env read is the
   // contract under test, and the flag is set by a parent for the whole child.
   describe("unattended prompt submit (AIDLC_UNATTENDED)", () => {
+    // Find the human-turn hook's heartbeat anywhere under the project, so the
+    // assertion does not couple to the exact record the cursor resolves to.
+    function recordHumanTurnHeartbeatExists(p: string): boolean {
+      const stack = [p];
+      while (stack.length > 0) {
+        const dir = stack.pop() as string;
+        let entries: Dirent[];
+        try {
+          entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+        for (const e of entries) {
+          const full = join(dir, e.name);
+          if (e.isDirectory()) stack.push(full);
+          else if (e.name === "record-human-turn.last" && existsSync(full)) return true;
+        }
+      }
+      return false;
+    }
+
     function fireMintHook(p: string, unattended: boolean): number {
       writeSessionPidEntry(p, process.pid, "01995000-0188-7000-8000-000000000001");
       const env = { ...process.env };
@@ -732,6 +754,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       // leaves the ledger's presence count untouched.
       expect(fireMintHook(proj, true)).toBe(0);
       expect(eventCount(proj, "HUMAN_TURN")).toBe(before);
+      // ...but the hook still leaves its heartbeat: a hook that ran and
+      // withheld its mint is not one that never ran.
+      expect(recordHumanTurnHeartbeatExists(proj)).toBe(true);
 
       // The flag is the ONLY difference — the same hook, same project, still
       // mints for a person. This is what keeps the test from passing for the
@@ -1353,7 +1378,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "fabricated approval",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
+      expect(approve.out).toContain('"kind":"print"');
       // The turn was spent on the interview answer: no reply is behind this approval.
       expect(approve.out).toContain("no new human reply");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
@@ -1388,7 +1413,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
           reply,
         ]);
         expect(approve.rc).toBe(0);
-        expect(approve.out).toContain('"kind":"error"');
+        expect(approve.out).toContain('"kind":"print"');
         expect(approve.out).toContain("no new human reply has been received");
         expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
         expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
@@ -1413,7 +1438,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "tighten the schema",
       ]);
       expect(reject.rc).toBe(0);
-      expect(reject.out).toContain('"kind":"error"');
+      expect(reject.out).toContain('"kind":"print"');
       expect(reject.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
       expect(field(proj, "Revision Count")).toBe("0");
@@ -1454,7 +1479,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "tighten the schema again",
       ]);
       expect(second.rc).toBe(0);
-      expect(second.out).toContain('"kind":"error"');
+      expect(second.out).toContain('"kind":"print"');
       expect(second.out).toContain("Cannot request changes");
       expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     });

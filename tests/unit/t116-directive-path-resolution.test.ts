@@ -673,6 +673,16 @@ describe("t116 inline context roster", () => {
     for (const path of customPaths) {
       expect(directive.inline_context_paths).toContain(path);
     }
+    // The project's own knowledge comes right after the personas, before any
+    // shipped knowledge, so it is read second and trimmed only after the
+    // shipped knowledge.
+    const roster: string[] = directive.inline_context_paths;
+    const lastPersona = Math.max(...roster.map((path, i) => (path.startsWith(".claude/agents/") ? i : -1)));
+    const firstShipped = roster.findIndex((path) => path.startsWith(".claude/knowledge/"));
+    for (const path of customPaths) {
+      expect(roster.indexOf(path), path).toBeGreaterThan(lastPersona);
+      expect(roster.indexOf(path), path).toBeLessThan(firstShipped);
+    }
     expect(new Set(directive.inline_context_paths).size).toBe(
       directive.inline_context_paths.length,
     );
@@ -706,6 +716,18 @@ describe("t116 inline context roster", () => {
         ),
       ).toBe(false);
     }
+  });
+
+  test("18b: a mob stage's lead reads its project knowledge right after its persona", () => {
+    const own = `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-product-agent/stories-conventions.md`;
+    const { directive } = emitForWithProject("state-construction.md", "user-stories", (proj) => {
+      const absolute = join(proj, ...own.split("/"));
+      mkdirSync(dirname(absolute), { recursive: true });
+      writeFileSync(absolute, "# Story conventions\n", "utf-8");
+    });
+    expect(directive.mode).toBe("mob");
+    expect(directive.inline_context_paths[0]).toBe(".claude/agents/aidlc-product-agent.md");
+    expect(directive.inline_context_paths[1]).toBe(own);
   });
 
   test("19: fully-dispatched modes carry no inline context", () => {

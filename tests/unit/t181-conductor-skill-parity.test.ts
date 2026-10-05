@@ -182,16 +182,6 @@ const P3_EVIDENCE_DIR = join(
   "p3-kiro-routing",
 );
 
-const FRESH_SESSION_TOKENS: Record<string, string[]> = {
-  claude: ["/clear", "`/aidlc`"],
-  codex: ["restart Codex CLI", "`$aidlc`"],
-  kiro: ["restart Kiro CLI", "`/aidlc`"],
-  "kiro-ide": ["new Kiro IDE chat", "`/aidlc`"],
-  opencode: ["restart OpenCode", "`/aidlc`"],
-  copilot: ["new Copilot CLI session", "new VS Code agent chat", "`/aidlc`"],
-  cursor: ["new Cursor chat", "`/aidlc`"],
-};
-
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
   const start = lines.indexOf("## Stage Graph");
@@ -317,6 +307,81 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every SKILL and the onboarding switch a check when the person asks, with no typing for them", () => {
+    // A live Claude chat followed the onboarding's old "name the exact command
+    // for them to type" over the SKILL's rule and refused a plain request.
+    const problems: string[] = [];
+    const prose = [
+      ...skills,
+      "core/templates/onboarding-harness.md",
+      ...HARNESS_MATRIX.map((harness) => `harness/${harness.name}/onboarding.fills.ts`),
+    ];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "**The person's checks, off or on when they ask.**",
+        "never refuse, never ask them to type it",
+      ]) {
+        if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    // A plain chat turn has only the onboarding, not the skill, so it carries
+    // the three places, both commands, and the skill's table, row for row.
+    const onboarding = readFileSync(join(REPO_ROOT, "core/templates/onboarding-harness.md"), "utf-8");
+    const table = (body: string) => {
+      const start = body.indexOf("| Check | This piece of work: key | This project or machine: switch |");
+      return start < 0 ? "" : body.slice(start, body.indexOf("\n\n", start));
+    };
+    for (const tok of [
+      "never refuse, never ask them to type it",
+      "Where it applies is what they say: this piece of work, this project, or this machine.",
+      "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
+      "`{{INVOKE}} engine config set <key> <on|off>`",
+    ]) {
+      if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
+    }
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (table(body) === "" || table(body) !== table(onboarding)) {
+        problems.push(`${rel}  check table differs from the onboarding's`);
+      }
+    }
+    for (const rel of prose) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const stale of [
+        "never the agent's",
+        "command for them to type",
+        "never turn it off yourself",
+        "never lower one yourself",
+      ]) {
+        if (body.includes(stale)) problems.push(`${rel}  still says: ${stale}`);
+      }
+    }
+    // The docs describe the same route: a chat request is the person's too.
+    for (const rel of [
+      "docs/guide/12-cli-commands.md",
+      "docs/guide/13-customization.md",
+      "docs/guide/glossary.md",
+      "docs/harness-engineering/05-rules-and-the-loop.md",
+      "docs/reference/06-hooks-and-tools.md",
+      "docs/reference/12-state-machine.md",
+    ]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const stale of [
+        "have the person type the switch",
+        "a person must type the exact policy switch",
+        "The key is the person's typed switch.",
+        "The CLI setters do not lower fences from chat",
+        "CLI setters do not lower from chat on their own",
+        "needs the person's typed switch, like a fence",
+        "refuse any\nexplicit lowering from `you` unless it is a no-op",
+      ]) {
+        if (body.includes(stale)) problems.push(`${rel}  still says: ${stale}`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
   test("every shipped conductor SKILL relays engine-authored narration", () => {
     const missing: string[] = [];
     for (const rel of skills) {
@@ -381,20 +446,28 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(failures).toEqual([]);
   });
 
-  test("every shipped conductor SKILL stops after new-intent creation and names its fresh-session flow", () => {
+  test("every shipped conductor SKILL carries new work on in the same chat, with no stop or restart", () => {
     const failures: string[] = [];
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       for (const token of [
-        "**run-then-stop**",
-        "Then **STOP and hand off to a fresh session** rather than re-running `next`",
-        ...(FRESH_SESSION_TOKENS[harness.name] ?? []),
+        "Then re-run `next` and carry on into the new work's first stage in this chat.",
+        "it is an option for the person, never a stop.",
       ]) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
       }
-      if (body.includes("run it, then re-run `next` to land on the new intent's first stage")) {
-        failures.push(`${rel}  still continues a new intent in the prior session`);
+      for (const stale of [
+        "**run-then-stop**",
+        "STOP and hand off to a fresh session",
+        "(or restart Claude Code)",
+        "restart Codex CLI",
+        "restart Kiro CLI",
+        "restart OpenCode",
+        "to begin the new intent with a clean slate",
+        "run it, then re-run `next` to land on the new intent's first stage",
+      ]) {
+        if (body.includes(stale)) failures.push(`${rel}  still says: ${stale}`);
       }
     }
     expect(failures).toEqual([]);
@@ -480,6 +553,37 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         missing.push(`${rel}  still sends a misread back through "Review the plan"`);
       }
     }
+    expect(missing).toEqual([]);
+  });
+
+  // A live mob lead read "the lead only on mob" as its persona only and never
+  // opened the project's knowledge file, so every copy names the knowledge too.
+  test("every shipped conductor SKILL and the protocol have a mob's lead read its knowledge, not only its persona", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (!/a mob must (?:explicitly read|load) its lead persona(?: path)? first,? (?:and )?then every knowledge path after it/i.test(body)) {
+        missing.push(`${rel}  missing: a mob reads its lead persona, then every knowledge path after it`);
+      }
+    }
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("the lead's persona and every knowledge path listed on `mob`")) {
+        missing.push(`${rel}  missing: the lead's persona and every knowledge path listed on mob`);
+      }
+    }
+    const stale = [/the lead only on `mob`/, /the roster contains the lead only/, /the lead only for `mob`/];
+    const walk = (rel: string): void => {
+      for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+        const child = `${rel}/${entry.name}`;
+        if (entry.isDirectory()) walk(child);
+        else if (/\.(md|ts)$/.test(entry.name)) {
+          const body = readFileSync(join(REPO_ROOT, child), "utf-8").replace(/(\s|\/\/|\*)+/g, " ");
+          for (const pattern of stale) if (pattern.test(body)) missing.push(`${child}  still says: ${pattern}`);
+        }
+      }
+    };
+    for (const root of ["core/aidlc-common", "core/tools", "core/templates", "docs", "harness"]) walk(root);
     expect(missing).toEqual([]);
   });
 

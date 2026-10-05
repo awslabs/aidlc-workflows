@@ -3149,6 +3149,32 @@ describe("t230 dispatcher hook routing", () => {
     ).toBe(true);
   });
 
+  // Claude Code shows a blocking hook's stderr behind "[<hook command>]: ";
+  // its deny decision shows only the reason. Exit 2 still blocks on its own.
+  test("a guard refusal on Claude Code also carries Claude's deny, with the same words", () => {
+    const projectDir = makeProject();
+    const input = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "t230-guard-deny",
+      cwd: projectDir,
+      tool_name: "Bash",
+      tool_input: { command: "bun .claude/tools/aidlc-state.ts approve intent-capture" },
+    });
+    const claude = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "claude" }, input);
+    expect(claude.exitCode, claude.stderr.toString("utf-8")).toBe(2);
+    const reason = claude.stderr.toString("utf-8").trim();
+    expect(reason).toContain("Stage status cannot be changed");
+    expect(JSON.parse(claude.stdout.toString("utf-8"))).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+    });
+
+    // Another tool's adapter reads stderr only: nothing changes there.
+    const kiro = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "kiro" }, input);
+    expect(kiro.exitCode).toBe(2);
+    expect(kiro.stdout.toString("utf-8")).toBe("");
+    expect(kiro.stderr.toString("utf-8")).toContain("Stage status cannot be changed");
+  });
+
   test("statusline dispatches to run(input) and renders a line", () => {
     const projectDir = makeProject();
     writeMinimalState(projectDir);

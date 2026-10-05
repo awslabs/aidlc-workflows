@@ -411,7 +411,10 @@ describe("t294 runtime diagnostics", () => {
       `Runtime hook PATH: bun is on this shell's PATH (${join(project, "interactive-bin", "bun")}) but not on the system-wide PATH`,
     );
     if (process.platform !== "win32") {
-      expect(row?.fix).toContain("A harness you start from a terminal normally hands that terminal's PATH to its hooks");
+      expect(row?.fix).toContain("Nothing needs changing when you start Claude Code from a terminal: it hands that terminal's PATH to AI-DLC's hooks.");
+      // The person's tool by name, never AI-DLC's own words for how it ships.
+      expect(row?.fix).not.toContain("harness");
+      expect(row?.fix).not.toContain("copy-channel");
       // The directory named is the one bun was found in, not a default.
       expect(row?.fix).toContain(`add ${join(project, "interactive-bin")} to `);
       expect(row?.fix).toContain("Editing .bashrc or .zshrc does not change this check.");
@@ -713,7 +716,7 @@ describe("t294 runtime diagnostics", () => {
       darwin: expect.stringMatching(/^(?!.*\/etc\/environment).*\/etc\/paths\.d/),
       linux: expect.stringMatching(/\/etc\/environment.*\/etc\/login\.defs.*environment\.d/),
       bun: expect.stringMatching(
-        /^This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead\. .*\/etc\/environment/,
+        /^Nothing needs changing when you start Claude Code from a terminal: .*\/etc\/environment/,
       ),
     });
   });
@@ -4045,6 +4048,94 @@ process.exit(0);
     }
   }, 60_000);
 
+  // Windows PowerShell 5.1's `Set-Content -Encoding utf8`, and some editors,
+  // start a file with a UTF-8 byte order mark.
+  test("a settings file saved with a byte order mark is read, and kept as the person saved it", () => {
+    const project = install("claude");
+    const env = runtimeEnv();
+    const settingsPath = join(project, ".claude", "settings.json");
+    const mcpPath = join(project, ".mcp.json");
+    const args = ["config", "--project-dir", project, "--from", join(DIST_RELEASE, "claude"), "--harness", "claude", "--yes"];
+    for (const path of [settingsPath, mcpPath]) writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    const saved = [readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")];
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const result = run(args, project, env);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).not.toContain("Note:");
+      expect([readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")]).toEqual(saved);
+    }
+
+    const doctorLabels = (): string[] => {
+      const doctor = spawnSync(BUN, [
+        join(project, ".claude", "tools", "aidlc.ts"), "--doctor", "--json", "--offline",
+      ], {
+        cwd: project,
+        env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+        encoding: "utf-8",
+        timeout: 60_000,
+      });
+      if (doctor.error) throw doctor.error;
+      return (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>).map((check) => check.label);
+    };
+    expect(doctorLabels().some((label) => label.includes("settings.json unreadable"))).toBe(false);
+    // A marked layer that switches hooks off is read as switching them off.
+    const localPath = join(project, ".claude", "settings.local.json");
+    writeFileSync(localPath, `\uFEFF${JSON.stringify({ disableAllHooks: true }, null, 2)}\n`);
+    expect(doctorLabels().some((label) =>
+      label.includes('Hooks DISABLED via "disableAllHooks": true in .claude/settings.local.json'))).toBe(true);
+    rmSync(localPath);
+
+    // A setting changed without --from reads the person's own copy too.
+    const providers = run(["config", "providers", "--provider", "current", "--project-dir", project, "--yes"], project, env);
+    expect(providers.status, providers.stdout + providers.stderr).toBe(0);
+    expect(readFileSync(settingsPath, "utf-8").startsWith("\uFEFF")).toBe(true);
+
+    // A refresh that adds AI-DLC's entries back keeps the person's own, and the mark.
+    const settings = JSON.parse(saved[0].slice(1));
+    settings.permissions = { deny: ["Bash(rm -rf:*)"] };
+    writeFileSync(settingsPath, `\uFEFF${JSON.stringify(settings, null, 2)}\n`);
+    const restored = run(args, project, env);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(restored.stdout).toContain("added the AI-DLC command allow entries that were missing from .claude/settings.json");
+    const after = readFileSync(settingsPath, "utf-8");
+    expect(after.startsWith("\uFEFF")).toBe(true);
+    expect(JSON.parse(after.slice(1)).permissions.deny).toEqual(["Bash(rm -rf:*)"]);
+    expect(JSON.parse(after.slice(1)).permissions.allow).toEqual(JSON.parse(saved[0].slice(1)).permissions.allow);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an opencode.json saved with a byte order mark refreshes as the person saved it", () => {
+    const project = install("opencode");
+    const path = join(project, "opencode.json");
+    writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    const saved = readFileSync(path, "utf-8");
+    const result = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
+    ], project, runtimeEnv());
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toBe(saved);
+
+    // Straight after the mark, a release that ships a different opencode.json
+    // takes the mark along.
+    const fresh = install("opencode");
+    const freshPath = join(fresh, "opencode.json");
+    writeFileSync(freshPath, `\uFEFF${readFileSync(freshPath, "utf-8")}`);
+    const source = temp("aidlc-t294-opencode-bom-source-");
+    cpSync(join(DIST_RELEASE, "opencode"), source, { recursive: true });
+    const shipped = JSON.parse(readFileSync(join(source, "opencode.json"), "utf-8"));
+    writeFileSync(join(source, "opencode.json"), `${JSON.stringify({ ...shipped, share: "disabled" }, null, 2)}\n`);
+    const upgraded = run([
+      "config", "--project-dir", fresh, "--from", source, "--harness", "opencode", "--yes",
+    ], fresh, runtimeEnv());
+    expect(upgraded.status, upgraded.stdout + upgraded.stderr).toBe(0);
+    expect(readFileSync(freshPath, "utf-8")).toBe(`\uFEFF${readFileSync(join(source, "opencode.json"), "utf-8")}`);
+    // Their own edit, mark or not, is still theirs.
+    writeFileSync(freshPath, `\uFEFF${JSON.stringify({ ...shipped, theme: "mine" }, null, 2)}\n`);
+    const edited = run([
+      "config", "--project-dir", fresh, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
+    ], fresh, runtimeEnv());
+    expect(edited.stdout + edited.stderr).toContain("opencode.json (unowned whole file)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
     const project = install("claude");
     const env = runtimeEnv();
@@ -5724,7 +5815,7 @@ process.exit(0);
     }
   });
 
-  test("a bun-requiring projection names the copy channel in its runtime remediation", () => {
+  test("a bun-requiring copy says why Bun is needed, in the person's words", () => {
     const project = temp("aidlc-t294-copy-runtime-");
     mkdirSync(join(project, ".git"));
     cpSync(join(DIST, "claude"), project, { recursive: true });
@@ -5744,8 +5835,9 @@ process.exit(0);
     }));
     const bunIssue = issues.find((issue) => issue.id.includes("bun"));
     expect(bunIssue, issues.map((issue) => issue.id).join(",")).toBeDefined();
-    expect(bunIssue?.remediation).toContain("copy-channel projection");
-    expect(bunIssue?.remediation).toContain("native install runs them through the aidlc command");
+    expect(bunIssue?.remediation).toContain("AI-DLC in this project runs on Bun (the installed aidlc command does not need it).");
+    expect(bunIssue?.remediation).not.toContain("copy-channel");
+    expect(bunIssue?.remediation).not.toContain("harness");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("OpenCode offer decline and acceptance are recorded and applied", () => {

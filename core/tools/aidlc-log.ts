@@ -1833,11 +1833,13 @@ function handleAnswer(args: string[]): void {
         stageNode !== undefined &&
         isPerUnitStage(stageNode) &&
         getField(content ?? "", "Construction Iteration")?.trim() === "unit-major";
+      const auditRows = readAuditShardEvents(pd);
       const floors = summaryAttemptFloors(
-        readAuditShardEvents(pd).filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event)),
+        auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event)),
         flags.stage,
         workflow,
         unitMajor,
+        stageNode !== undefined && isPerUnitStage(stageNode) ? auditRows : undefined,
       );
       const authorization: SummaryAuthorization = {
         version: 1,

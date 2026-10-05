@@ -1200,7 +1200,7 @@ describe("t278 engine-emitted wave contract", () => {
       "Request Changes: restart review after the invalidating write",
     );
     expect(rejected.status).toBe(0);
-    expect(rejected.out).toContain('"kind":"error"');
+    expect(rejected.out).toContain('"kind":"print"');
     expect(rejected.out).toContain("Cannot request changes");
     expect(rejected.out).toContain(
       "recovery review has already been used",

@@ -34,8 +34,8 @@
 //       Both paths require current Plan Approval or a protected continuation
 //       under a lowered plan-approval fence before dispatch.
 //   check <unit> [--check-cmd <cmd>] [--test-file <path>]
-//       Stateless single-unit verdict: the authorized Construction Verification
-//       Command under checkpoints; a required --check-cmd under legacy autonomy
+//       Single-unit verdict: the authorized Construction Verification Command,
+//       with or without checkpoints (a supplied --check-cmd must match it)
 //       (exit 0 = green,
 //       the AUTHORITATIVE signal — a worker's own success claim is never trusted)
 //       plus an anti-tamper compare of the protected file against its forked-git
@@ -95,7 +95,6 @@ import {
   auditShardDir,
   authorizedVerificationCommand,
   withdrawProtectedQuestions,
-  constructionCheckpointsApply,
   boltSlugForUnit,
   BoltIdentityError,
   filterProducesByKind,
@@ -272,7 +271,7 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
 // all three.
 //
 // Shell interpretation is intentional only after command authorization has been
-// resolved from the parent intent. Legacy autonomy retains its supplied command.
+// resolved from the parent intent.
 function checkConverged(cwd: string, checkCmd: string): boolean {
   const shell =
     process.platform !== "win32" && existsSync("/bin/bash")
@@ -287,14 +286,14 @@ function checkConverged(cwd: string, checkCmd: string): boolean {
   return result.status === 0;
 }
 
+// Every check runs the Construction Verification Command the person approved
+// for this workflow, with or without Construction checkpoints; the person is
+// asked once, through the consent procedure the refusal names.
 function swarmCheckCommand(projectDir: string, supplied: string | undefined, action: string): { command: string; sha256?: string } {
-  // Legacy stateless checks can run without a workflow. An existing unreadable
-  // state must still fail closed rather than silently selecting legacy policy.
-  const state = existsSync(stateFilePath(projectDir)) ? readStateFile(projectDir) : "";
-  if (!constructionCheckpointsApply(state)) {
-    if (!supplied) fail(`${action} requires --check-cmd <shell command; exit 0 = converged>`);
-    return { command: supplied };
+  if (!existsSync(stateFilePath(projectDir))) {
+    fail(`${action} needs an active workflow: it runs only the Construction Verification Command the person approved for it.`);
   }
+  const state = readStateFile(projectDir);
   const authorization = authorizedVerificationCommand(projectDir, state);
   if (!authorization) {
     fail(`${action} requires an authorized Construction Verification Command. ${VERIFICATION_COMMAND_RECOVERY}`);

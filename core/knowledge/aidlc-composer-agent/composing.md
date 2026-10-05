@@ -69,11 +69,15 @@ caution nor default economy is acceptable.
 
 ## Guard Policy
 
-Every proposal names ONE Guard Policy value with a 1-2 sentence rationale
-naming the fences it lowers and why an input change after approval should
-reopen it, or be recorded and continue. The value decides two things: what
-happens when an input changes after the human approved or confirmed something,
-and how far the automatic checks stand aside for the agents. `strict` lowers
+Every proposal names ONE Guard Policy value with a 1-2 sentence rationale the
+person reads on the gate row: in their words, what happens when an input
+changes after approval, what else the value lets go (off also stands aside the
+checks on how agents move the workflow and what a reviewer reads), and why that
+suits this work, never internal field or tool names such as `custom_start`; a
+team memory file that locks strict is named. The value decides
+two things: what happens when an input changes after the human approved or
+confirmed something, and how far the automatic checks stand aside for the
+agents. `strict` lowers
 no fences and reopens that approval; `relaxed`
 records the change once, tells the human in one line, continues, and stands the
 plan-approval and review-freeze checks aside; `off` does that and stands the
@@ -181,7 +185,8 @@ ceremony runs inside them. Every front/report proposal names all six in its
   `AIDLC_DISABLE_COLLABORATORS=1`) still forces its ceremony off
   whatever the scope says. The validator names one that forces an `on` value
   off on this machine; mark that value in the gate row, since the scope stores
-  `on` but the ceremony will not run until the switch is cleared.
+  `on` but the ceremony will not run until the switch is cleared. When none is
+  set, the proposal says nothing about kill switches.
 - The human sees the six values as one gate row, and whatever they ask for
   there is done. A change keeps the route and applies to this piece of work;
   only lowering a matched proposal's Guard Policy makes it custom. Plan

@@ -558,7 +558,7 @@ describe("t338 summary confirmation off is the person's switch", () => {
       via: "a pair after another setting", scope: "feature", tool: DISPATCHER,
       args: ["engine", "config", "set", "sensors", "on", "--summary-confirmation", "off"],
     },
-  ])("an untyped off through $via asks for the person and changes nothing", ({ scope, tool, args }) => {
+  ])("an off nobody asked for, through $via, changes nothing", ({ scope, tool, args }) => {
     const { proj, state } = project(scope);
     const before = readFileSync(state, "utf-8");
     const refused = run(tool, args, proj, SESSIONLESS);
@@ -566,6 +566,27 @@ describe("t338 summary confirmation off is the person's switch", () => {
     expect(JSON.parse(refused.stderr)).toEqual({ error: summaryRefusal });
     expect(readFileSync(state, "utf-8")).toBe(before);
     expect(settingRows(proj)).toHaveLength(0);
+  });
+
+  test("asked for in the chat, the agent's off says it in one line with their words and the way back", () => {
+    const { proj, state } = project("feature");
+    recordHumanPrompt(proj, "skip the looks correct check from now on");
+    const changed = run(DISPATCHER, ["engine", "config", "set", "summary-confirmation", "off"], proj, SESSIONLESS);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(state, "utf-8"), "Summary Confirmation")).toStartWith("off (");
+    const audit = rows(proj);
+    expect(auditBlockField(audit.at(-1)!.block, "Person Reply")).toBe("skip the looks correct check from now on");
+    // One line: the setter's own "changed" line is not said beside it.
+    expect(changed.stdout).not.toContain("Summary Confirmation changed:");
+    expect(changed.stdout).toContain(
+      'The summary confirmation is off for this piece of work, because you said: "skip the looks correct check from now on". ' +
+        'Say "turn it back on" to restore it (/aidlc config set summary-confirmation on).',
+    );
+    const unattended = project("feature");
+    recordHumanPrompt(unattended.proj, "skip the looks correct check from now on");
+    expect(run(UTILITY, ["config-change", "--summary-confirmation", "off"], unattended.proj, {
+      ...SESSIONLESS, AIDLC_UNATTENDED: "1",
+    }).status).toBe(1);
   });
 
   test("turning it on stays free for a command", () => {

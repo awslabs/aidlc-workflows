@@ -244,7 +244,9 @@ describe("Request Changes records the person's own words", () => {
     says(proj, "/aidlc --status");
     says(proj, "guard policy relaxed");
     const refused = rejectWith(proj, slug, ["--reason", PARAPHRASE]);
-    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    // The agent's next step, with the gate still theirs to answer.
+    expect(refused.kind, JSON.stringify(refused)).toBe("print");
+    expect(refused.message).toContain(`The question for "${slug}" is still open.`);
     expect(refused.message).toContain("a command to AIDLC, not a reply to this question");
     expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
     // A reply whose words the harness did not deliver.
@@ -325,7 +327,8 @@ describe("Request Changes records the person's own words", () => {
   test("a bare pick with nothing said, and no --reason, asks what should change", () => {
     says(proj, "Request Changes");
     const refused = rejectWith(proj, slug, []);
-    expect(refused.kind, JSON.stringify(refused)).toBe("error");
+    expect(refused.kind, JSON.stringify(refused)).toBe("print");
+    expect(refused.message).toContain(`The question for "${slug}" is still open.`);
     expect(refused.message).toContain("What should change?");
     expect(rows(proj, "GATE_REJECTED")).toHaveLength(0);
     const withReason = rejectWith(proj, slug, ["--reason", PARAPHRASE]);

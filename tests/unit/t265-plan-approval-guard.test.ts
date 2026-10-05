@@ -1,5 +1,5 @@
 // covers: hook:aidlc-plan-approval-guard, audit:PLAN_APPROVAL_BLOCKED
-// covers: function:parseGuardRestartContinuationCommand
+// covers: function:parseGuardRestartContinuationCommand, function:personAskedSinceGate, function:personCheckSwitchAllowed
 //
 // t265 - code-generation's plan-before-generation ordering, enforced
 // deterministically (issue: the plan was generated AFTER the code, beside
@@ -76,6 +76,7 @@ import {
   setActiveIntentCursor,
   stateDigest,
   workspaceSourceFingerprint,
+  personCheckSwitchAllowed,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, FIXTURE_CLONE_ID } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
@@ -1638,6 +1639,61 @@ describe("t265b hook lifecycle", () => {
         `aidlc ${off}; printf code > src/inline.ts`,
       ]) {
         expectCode(command, 2);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // A check for this piece of work asked for in the chat: while a plan waits,
+  // turning one on (or raising Guard Policy) always passes, and turning one off
+  // passes once a person has spoken since the last decision. The setter then
+  // records it as theirs. An unattended driver never turns one off.
+  test("a per-work check the person asks to switch passes while the plan waits", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "u1", { plan: true, answer: null });
+      const spellings = (args: string) => [`aidlc engine ${args}`, `bun .claude/tools/aidlc.ts engine ${args}`];
+      const code = (command: string, env: Record<string, string> = {}) => runHook(proj, BASH(command), env).code;
+      const on = [
+        "config set plan-approval on",
+        "config set guard.plan-approval on",
+        "config set guard.review-freeze on",
+        "config set summary-confirmation on",
+        "config set guard-policy strict",
+      ];
+      const off = [
+        "config set plan-approval off",
+        "config set summary-confirmation off",
+        "config set guard-policy relaxed",
+        "config set guard-policy off",
+      ];
+      // A fence switch is already the guard-recovery route: the setter decides it.
+      const fences = ["config set guard.review-freeze off", "config set guard.reviewer-scope off"];
+      for (const args of [...on, ...fences]) for (const command of spellings(args)) expect(code(command), command).toBe(0);
+      for (const args of off) for (const command of spellings(args)) expect(code(command), command).toBe(2);
+      appendAuditEntry("HUMAN_TURN", { Session: "t265-chat-switch" }, proj);
+      for (const args of off) for (const command of spellings(args)) expect(code(command), command).toBe(0);
+      // Plan approval off is admitted beside the plan-wait prerequisites; its
+      // setter refuses an unattended driver itself.
+      for (const args of off.filter((item) => !item.includes("plan-approval"))) {
+        for (const command of spellings(args)) expect(code(command, { AIDLC_UNATTENDED: "1" }), command).toBe(2);
+      }
+      // The shared rule hosts use for their own confirmation reads the same table.
+      expect(personCheckSwitchAllowed(proj, "guard.review-freeze", "off")).toBe(true);
+      expect(personCheckSwitchAllowed(proj, "plan-approval", "off")).toBe(true);
+      expect(personCheckSwitchAllowed(proj, "depth", "Minimal")).toBe(false);
+      expect(personCheckSwitchAllowed(proj, "guard.human-presence", "off")).toBe(false);
+      // Only the switch alone: another value, another key, or anything joined to it is not.
+      for (const command of [
+        "aidlc engine config set guard.review-freeze off --force",
+        "aidlc engine config set guard.human-presence off",
+        "aidlc engine config set depth Minimal",
+        "aidlc engine config set guard-policy lax",
+        "aidlc engine config set guard.review-freeze off; touch src/x.ts",
+      ]) {
+        expect(code(command), command).toBe(2);
       }
     } finally {
       rmSync(proj, { recursive: true, force: true });

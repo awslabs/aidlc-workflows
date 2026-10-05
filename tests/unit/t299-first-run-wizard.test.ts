@@ -2049,9 +2049,9 @@ describe("t299 first-run guidance helpers", () => {
       // The agent's own step needs a hook on its shell command that beats in
       // the record before the engine runs; Kiro IDE's does not.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "agentStep"), harness).toBe(harness !== "cursor" && !kiroIde);
-      // notRunYet needs a heartbeat on the first chat message; the Kiro IDE and
-      // Copilot adapters leave one.
-      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(kiroIde || copilot);
+      // notRunYet needs a heartbeat on the first chat message: the human-turn
+      // hook leaves one, and the Kiro IDE and Copilot adapters too.
+      expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunYet"), harness).toBe(harness !== "cursor");
       // notRunInWorkflow needs a guard heartbeat before each engine command;
       // only Copilot pins one.
       expect(Object.hasOwn(shipped.hookActivation ?? {}, "notRunInWorkflow"), harness).toBe(copilot);

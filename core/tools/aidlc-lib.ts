@@ -76,6 +76,7 @@ export {
 } from "./aidlc-reply-reader.ts";
 import {
   _resetSettingsCacheForTests,
+  bypassRecordedIn,
   LOCAL_SETTINGS_FILE,
   RECORDABLE_PROJECT_BYPASSES,
   resolveAidlcSettings,
@@ -676,6 +677,28 @@ export function resolveProjectFlag(
   if (typeof value === "boolean") return value ? "1" : "";
   if (typeof value === "number") return String(value);
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * How `config get` and status name a switch that keeps a check off: `env NAME`
+ * when the environment this process started with sets it (removed only by
+ * starting without it), or `NAME in <file>` when a settings file records it
+ * (`config flags --clear-bypass NAME` turns it back on).
+ */
+export function killSwitchSource(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  projectDir?: string,
+): string {
+  if (Object.hasOwn(env, name)) return `env ${name}`;
+  const recorded = bypassRecordedIn(resolveProjectDir(projectDir), name);
+  if (recorded === null) return `${name} in the AI-DLC settings`;
+  return `${name} in ${recorded.target === "global" ? recorded.path : basename(recorded.path)}`;
+}
+
+/** A source killSwitchSource wrote: a switch, not the work's own setting. */
+export function isKillSwitchSource(source: string): boolean {
+  return source.startsWith("env ") || /^AIDLC_[A-Z0-9_]+ in /.test(source);
 }
 
 export function runnerFrontmatterAdditions(): readonly string[] {
@@ -10975,6 +10998,36 @@ export function personSpokeSinceGate(projectDir: string, options: { replies?: bo
   }
 }
 
+// The person asked for what the agent runs now: their chat turn, which no
+// decision has used yet, stands behind it, and it is not only a question about
+// a switch. An unattended driver has no person behind it. Turning one of the
+// person's checks off from the agent's command needs this, wherever it is asked.
+export function personAskedSinceGate(projectDir: string): boolean {
+  return process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true });
+}
+
+// The person's checks a setter switches for this piece of work, and the values
+// that turn each one on (only adding a stop) or off (the person's call).
+const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[]; off: readonly string[] }>> = {
+  "plan-approval": { on: ["on"], off: ["off"] },
+  "guard.plan-approval": { on: ["on"], off: ["off"] },
+  "summary-confirmation": { on: ["on"], off: ["off"] },
+  "guard.review-freeze": { on: ["on"], off: ["off"] },
+  "guard.state-transition": { on: ["on"], off: ["off"] },
+  "guard.reviewer-scope": { on: ["on"], off: ["off"] },
+  "guard-policy": { on: ["strict"], off: ["relaxed", "off"] },
+};
+
+// Whether `config set <key> <value>` switches one of the person's checks the
+// way the setter would carry it out now: on always, off only once the person
+// asked since the last decision. Hosts that skip their own confirmation for it,
+// and the plan-wait admission, share this one rule.
+export function personCheckSwitchAllowed(projectDir: string, key: string, value: string): boolean {
+  const values = Object.hasOwn(PERSON_CHECK_SWITCH_VALUES, key) ? PERSON_CHECK_SWITCH_VALUES[key] : undefined;
+  if (values === undefined) return false;
+  return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
+}
+
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
@@ -11365,7 +11418,7 @@ export function presenceFloorHolds(
   if (humanActedSinceGate(projectDir)) return false;
   const setter = literalConstructionPolicySetter(command);
   try {
-    if (setter !== null && constructionPolicyReceiptApplies(projectDir, setter.field, setter.value)) {
+    if (setter !== null && constructionPolicyChangeAllowed(projectDir, setter.field, setter.value)) {
       return false;
     }
   } catch { /* an unreadable receipt authorizes nothing */ }
@@ -11505,25 +11558,36 @@ export function authorizedConstructionPolicyChange(
 }
 
 /**
- * True when the person's current unconsumed choice (a CONSTRUCTION_POLICY_RECORDED
- * receipt) authorizes setting `field` to `value` now: the same check the setter
- * makes, so a host that skips its own confirmation for it asks nothing twice.
+ * Why a Construction policy change during Construction is the person's, or
+ * null: their recorded choice from a policy question (`receipt`), or a message
+ * of theirs since the last decision (`asked`), which the conductor read as
+ * this request. An unattended run never changes it on its own. The setter and
+ * every host that skips its own confirmation for the setter share this check,
+ * so nothing is asked twice.
  */
-export function constructionPolicyReceiptApplies(projectDir: string, field: string, value: string): boolean {
+export function constructionPolicyChangeAuthority(
+  projectDir: string,
+  stateContent: string,
+  field: string,
+  value: string,
+): "receipt" | "asked" | null {
+  if (authorizedConstructionPolicyChange(projectDir, stateContent, field, value)) return "receipt";
+  return personAskedSinceGate(projectDir) ? "asked" : null;
+}
+
+/** Whether the setter would make this change now (constructionPolicyChangeAuthority on the current state). */
+export function constructionPolicyChangeAllowed(projectDir: string, field: string, value: string): boolean {
   try {
-    return authorizedConstructionPolicyChange(projectDir, readStateFile(projectDir), field, value);
+    return constructionPolicyChangeAuthority(projectDir, readStateFile(projectDir), field, value) !== null;
   } catch {
     return false;
   }
 }
 
 export const CONSTRUCTION_POLICY_RECOVERY =
-  'Record the requested field and value with aidlc-log.ts decision --stage "<stage>" --checkpoint construction-policy ' +
-  '--field "<Construction Checkpoints|Construction Execution|Construction Iteration>" --value "<value>" --session "<session ID>" ' +
-  '--decision "Change this Construction policy?" --options "Approve,Request Changes", then wait for the human\'s offered choice in that session. ' +
-  'Run aidlc-log.ts answer with the same --stage, --checkpoint construction-policy, --field, --value, and --session plus --details "Approve", ' +
-  'then apply that value with aidlc-state.ts set-construction-checkpoints, set-construction-execution, or set-construction-iteration. ' +
-  'Use the invoking SessionStart session ID.';
+  "When the person asks for this Construction change, run aidlc-state.ts set-construction-checkpoints, " +
+  "set-construction-execution, or set-construction-iteration with the value they asked for, then say its notice " +
+  "line to them. Do not ask them to confirm it, and never change it on your own.";
 
 // --- Consolidated-summary confirmation evidence ---
 //
@@ -11970,7 +12034,9 @@ function summaryFlowStartedInAttempt(
   const events = readAuditShardEvents(projectDir);
   const unitMajor = isPerUnitStage(stage) &&
     getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major";
-  const floors = summaryAttemptFloors(events, stage.slug, options.workflow, unitMajor);
+  const floors = summaryAttemptFloors(
+    events, stage.slug, options.workflow, unitMajor, isPerUnitStage(stage) ? events : undefined,
+  );
   return events.some((entry) => {
     if (entry.event !== "DECISION_RECORDED" && entry.event !== "SUMMARY_CONFIRMATION_RECORDED") return false;
     if (auditBlockField(entry.block, "Stage") !== stage.slug ||
@@ -12037,13 +12103,18 @@ function latestEventFrontier(candidates: AuditShardEvent[]): AuditShardEvent[] {
  * The attempt boundary the summary confirmation binds to: for an isolated run
  * its last STAGE_COMPLETED, otherwise the newest WORKFLOW_STARTED, STAGE_JUMPED,
  * or (stage-major) STAGE_STARTED for the stage. Empty when the ledger has none.
+ * With `policyRows` (every audit row, for a per-Unit stage), a stage start
+ * recorded while unit-major flooring was in force is no boundary after a switch
+ * back, so a Unit confirmed then is not asked again.
  */
 export function summaryAttemptFloors(
   events: AuditShardEvent[],
   stageSlug: string,
   workflow: string | undefined,
   unitMajor: boolean,
+  policyRows?: readonly AuditShardEvent[],
 ): AuditShardEvent[] {
+  const unitFloored = unitMajor || policyRows === undefined ? null : stageStartsUnderUnitFlooring(policyRows);
   const candidates = events.filter((entry) => {
     const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (workflow !== undefined) {
@@ -12060,7 +12131,7 @@ export function summaryAttemptFloors(
     return (
       auditBlockField(entry.block, "Stage") === stageSlug &&
       entry.event === "STAGE_STARTED" &&
-      !unitMajor
+      !unitMajor && !unitFloored?.has(entry)
     );
   });
   return latestEventFrontier(candidates);
@@ -12618,8 +12689,8 @@ export function checkSummaryConfirmationEvidence(
     );
   }
 
-  const events = readAuditShardEvents(projectDir)
-    .filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
+  const auditRows = readAuditShardEvents(projectDir);
+  const events = auditRows.filter((entry) => SUMMARY_EVIDENCE_EVENTS.has(entry.event));
   if (events.length === 0) {
     return failure(
       "SUMMARY_RECEIPT_MISSING",
@@ -12666,7 +12737,9 @@ export function checkSummaryConfirmationEvidence(
       getField(options.stateContent ?? "", "Construction Iteration")?.trim() === "unit-major" ||
       getField(options.stateContent ?? "", "Construction Checkpoints") === "enabled"
     );
-  const floors = summaryAttemptFloors(events, stage.slug, workflow, unitMajor);
+  const floors = summaryAttemptFloors(
+    events, stage.slug, workflow, unitMajor, isPerUnitStage(stage) ? auditRows : undefined,
+  );
   const afterFloor = (entry: AuditShardEvent): true | false | null => {
     if (floors.length === 0) return true;
     const relations = floors.map((floor): true | false | null => {
@@ -17086,6 +17159,9 @@ export function reviewAttemptWindow(
   // lifecycle floors are per Unit, solo unit-major included (#1411).
   const unitScopedRejections =
     artifactPerUnit && unitScopedLifecycleFloors(stateContent);
+  // A stage start recorded while unit-major flooring was in force is no
+  // boundary after a switch back, so a Unit reviewed then is not reviewed again.
+  const unitFloored = artifactPerUnit && !unitMajor ? stageStartsUnderUnitFlooring(allEvents) : null;
   let floorIdx = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
@@ -17096,7 +17172,7 @@ export function reviewAttemptWindow(
         (event.event === "GATE_REJECTED" &&
           !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
         (event.event === "STAGE_STARTED" &&
-          !unitMajor &&
+          !unitMajor && !unitFloored?.has(event) &&
           !auditBlockField(event.block, "Workflow")?.startsWith(
             "single-stage:",
           ));
@@ -17397,6 +17473,10 @@ export function reviewAttemptAccounting(
       getField(stateContent, "Construction Checkpoints") === "enabled");
   const unitScopedRejections =
     stage.for_each === "unit-of-work" && unitScopedLifecycleFloors(stateContent);
+  // As in reviewAttemptWindow: a start recorded under unit-major flooring is no
+  // boundary after a switch back.
+  const unitFloored = stage.for_each === "unit-of-work" && !unitMajor
+    ? stageStartsUnderUnitFlooring(attemptView.allEvents) : null;
   let floor = -1;
   let boltStarted = false;
   let boltBatch: string | null = null;
@@ -17504,7 +17584,7 @@ export function reviewAttemptAccounting(
     } else if (
       auditBlockField(entry.block, "Stage") === stage.slug &&
       entry.event === "STAGE_STARTED" &&
-      !unitMajor &&
+      !unitMajor && !unitFloored?.has(entry) &&
       !auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
     ) {
       const tied = tiedAcrossShards(i);
@@ -24689,9 +24769,10 @@ export function hookLiveness(
 // does not show that the hooks did not run.
 export function hookStatusPathLinked(projectDir: string, intent?: string, space?: string): boolean {
   try {
-    const record = docsRoot(projectDir, intent, space);
-    const anchorReal = realpathSync(record);
-    const parts = relative(record, hooksHealthDir(projectDir, intent, space))
+    // From the project's own folder, as the heartbeat writer checks: a linked
+    // aidlc/ on the way keeps every heartbeat from being written.
+    const anchorReal = realpathSync(projectDir);
+    const parts = relative(projectDir, hooksHealthDir(projectDir, intent, space))
       .split(/[\\/]/)
       .filter((part) => part.length > 0);
     for (let i = 1; i <= parts.length; i++) {
@@ -24717,7 +24798,7 @@ export function hookStatusPathLinked(projectDir: string, intent?: string, space?
 export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): void {
   try {
     if (recordDir(projectDir) !== null) return;
-    writeHookStatusFile(hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
+    writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), `${hook}.last`, isoTimestamp());
   } catch {
     // Advisory: without it doctor keeps its "not run yet" warning.
   }
@@ -24785,8 +24866,8 @@ export function engineTouchMarkerPath(projectDir: string, intent?: string, space
 }
 // The engine's last word to the agent ended the turn on purpose: a question for
 // the person (where new work goes, which plan to start it with) or a print the
-// agent stops after (status, a setting, a scope change, new work that starts
-// in a fresh session). `next` alone can still return the work in progress, so
+// agent stops after (status, a setting, a scope change). `next` alone can
+// still return the work in progress, so
 // this marker is how the Stop hook knows.
 export function turnEndMarkerPath(projectDir: string, intent?: string, space?: string): string {
   return join(engineDir(projectDir, intent, space), "turn-end");
@@ -32256,7 +32337,8 @@ function stageStartsUnderUnitFlooring(
       before(row, start) && !boundaries.some((boundary) => before(row, boundary) && before(boundary, start));
     const first = !rows.some((other) =>
       other !== start && other.event === "STAGE_STARTED" &&
-      auditBlockField(other.block, "Stage") === slug && opened(other));
+      auditBlockField(other.block, "Stage") === slug &&
+      !auditBlockField(other.block, "Workflow")?.startsWith("single-stage:") && opened(other));
     if (
       first &&
       changes.some((change) => before(change, start) && constructionPolicyFoundUnitMajor(change)) &&
@@ -35087,6 +35169,18 @@ function hookStatusTarget(healthDir: string, fileName: string, create: boolean):
   }
 }
 
+// A heartbeat a hook writes from the person's message is written only when
+// nothing on the way from the project's own folder to it is a link, so a
+// linked aidlc/ folder never takes the write elsewhere. Never throws.
+export function writeProjectHookStatusFile(projectDir: string, healthDir: string, fileName: string, data: string): boolean {
+  try {
+    assertNoSymlinkInChainOrThrow(realpathSync(projectDir), relative(projectDir, join(healthDir, fileName)));
+  } catch {
+    return false;
+  }
+  return writeHookStatusFile(healthDir, fileName, data);
+}
+
 // "replace" rewrites the file, "append" adds to it. Never throws; returns
 // whether it wrote.
 export function writeHookStatusFile(
@@ -35334,7 +35428,14 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
 // never holds a state file, so an unresolved selection also records nothing.
 // Refusals may need to name something outside the current project dir, such as
 // another checkout's path, on stderr while keeping the committed audit portable.
-export type EmitErrorMessage = string | { message: string; auditMessage: string };
+// `agentGuidance`: the message is the agent's next step, so callers hand it to
+// the agent instead of the person: the person's question is still open, or the
+// person already decided and the agent records what they chose.
+export type EmitErrorMessage = string | {
+  message: string;
+  auditMessage: string;
+  agentGuidance?: "question-open" | "person-decided";
+};
 
 export function emitError(
   projectDir: string,
@@ -35409,6 +35510,7 @@ export function emitError(
   console.error(JSON.stringify({
     error: changeNotices.length > 0 ? `${changeNotices.join("\n")}\n${message}` : message,
     ...(changeNotices.length > 0 ? { change_notices: changeNotices } : {}),
+    ...(typeof msg !== "string" && msg.agentGuidance ? { agent_guidance: msg.agentGuidance } : {}),
   }));
   process.exit(1);
 }
@@ -35761,6 +35863,8 @@ export function resolveCeremony(
   stateContent: string | null | undefined,
   // Plan approval passes an environment without an untrusted machine switch.
   env: NodeJS.ProcessEnv = process.env,
+  // An explicit project's recorded switch, named by its file.
+  projectDir?: string,
 ): CeremonyResolution {
   const scopeName = scope?.trim().toLowerCase();
   let declared: CeremonySetting | undefined;
@@ -35772,12 +35876,12 @@ export function resolveCeremony(
   const scopeDefault = declared ?? "on";
   const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
   const intent = parseCeremonyStateLine(rawStateValue);
-  const disabled = resolveProjectFlag(CEREMONY_ENV[key], env) === "1";
+  const disabled = resolveProjectFlag(CEREMONY_ENV[key], env, projectDir) === "1";
   return {
     key,
     value: disabled ? "off" : intent?.value ?? scopeDefault,
     source: disabled
-      ? `env ${CEREMONY_ENV[key]}`
+      ? killSwitchSource(CEREMONY_ENV[key], env, projectDir)
       : intent?.source ?? (declared === undefined ? "default" : `scope ${scopeName}`),
     scopeDefault,
     intent,
@@ -36393,7 +36497,7 @@ export function resolveFences(
   for (const fence of GUARD_FENCES) {
     const env = GUARD_FENCE_ENV[fence];
     if (env !== undefined && resolveProjectFlag(env) === "1") {
-      out[fence] = { fence, value: "off", source: `env ${env}` };
+      out[fence] = { fence, value: "off", source: killSwitchSource(env) };
     } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = { fence, value: "off", source: "you" };
     } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {

@@ -55,6 +55,7 @@ import {
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
   writeActiveDirectiveMarker,
+  readSessionIntentHandoff,
   writeSessionIntentHandoff,
   writeSessionIntentUuid,
   stateDigest,
@@ -383,12 +384,32 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("1a: stop forwards session identity and allows an exact post-create handoff", () => {
+  test("1a: stop forwards session identity and allows an exact switch handoff", () => {
     const dir = scratchProject(true);
     try {
       const original = readIntentRegistry(dir)[0];
       const created = createIntent(dir, "new-work", "default", "bugfix");
       const sessionId = "kiro-handoff-session";
+      writeSessionIntentUuid(dir, sessionId, created.uuid);
+      writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid, "switch");
+
+      const r = runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop as Record<string, unknown>,
+        session_id: sessionId,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("1a1: new work created beside other work carries on: the stop right after creation is pushed on", () => {
+    const dir = scratchProject(true);
+    try {
+      const original = readIntentRegistry(dir)[0];
+      const created = createIntent(dir, "new-work", "default", "bugfix");
+      const sessionId = "kiro-create-session";
       writeSessionIntentUuid(dir, sessionId, created.uuid);
       writeSessionIntentHandoff(dir, sessionId, original.uuid, created.uuid);
 
@@ -397,7 +418,9 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         session_id: sessionId,
       });
       expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe("");
+      expect((JSON.parse(r.stdout) as { decision?: string }).decision).toBe("block");
+      // The receipt is spent either way.
+      expect(readSessionIntentHandoff(dir, sessionId)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2278,6 +2301,7 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
   const guard = (dir: string, command: string) =>
     runAdapter(dir, "guard-tool-call", { cwd: dir, tool_name: "execute_bash", tool_input: { command } }, [], presence);
   const approveGate = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved";
+  const APPROVAL_WAITS = "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.";
   const toUnitMajor = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
 
   test("a gate the person must answer, with no turn of theirs since it opened, refuses the call", () => {
@@ -2286,7 +2310,11 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
       gateOpen(dir);
       const refused = guard(dir, approveGate);
       expect(refused.code, refused.stderr).toBe(2);
-      expect(refused.stderr).toContain("an approval gate is open and no human has acted since it opened");
+      // Plain words the person reads under Kiro's own prefix, the same as Kiro IDE's.
+      expect(refused.stderr).toContain(APPROVAL_WAITS);
+      const ideSource = readFileSync(join(REPO_ROOT, "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts"), "utf-8");
+      expect(ideSource.replace(/"\s*\+\s*"/g, "")).toContain(APPROVAL_WAITS);
+      expect(refused.stderr).not.toContain("no human has acted since it opened");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 

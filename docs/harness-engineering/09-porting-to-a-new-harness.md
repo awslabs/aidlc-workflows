@@ -74,10 +74,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `hookActivation` is for a host that may run no hooks until the person acts.
   Every text in it names only the person's own step, in the host's own words,
   never hooks, the engine, or why; `<entry>`, `<folder>` and `<next>` are
-  filled in for the install. `recovery` is doctor's fix. Set `agentStep` only
-  when a hook on the agent's own shell command leaves a heartbeat in the record
-  before the engine runs, even with its own check switched off: it says what
-  the agent does itself and quotes the exact line it then shows the person.
+  filled in for the install (`<next>` is the engine's `next` command; in
+  `next`'s stop it is fixed words saying to run the stopped command again, so
+  its request is kept). `recovery` is doctor's fix. Set
+  `agentStep` only when a hook on the agent's own shell command leaves a
+  heartbeat in the record before the engine runs, even with its own check
+  switched off: it says what the agent does itself and quotes the exact line it
+  then shows the person.
   `next` then stops with it as a `print` before any work once a stage has
   started with no heartbeat at all, and in that same state the attended "no
   new human reply" refusal carries it with "do not ask them to answer again".
@@ -85,12 +88,15 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   `missedReply` instead (an `AIDLC_UNATTENDED=1`
   run gets its own explanation), worded for a person who may not have replied
   yet ("If the person already replied, ..."). Set `notRunYet` only when the
-  harness's hooks leave a heartbeat on the first chat message; doctor then
-  warns with that text while no heartbeat exists. Set `notRunInWorkflow` only
+  harness's hooks leave a heartbeat on every chat message, the first one before
+  any workflow included (the human-turn hook does, and so do the Copilot and
+  Kiro IDE adapters); doctor then warns with that text while no heartbeat
+  exists, and with `agentStep` the first `next` stops with the agent's step
+  when the person's message left none, before any work. Set `notRunInWorkflow` only
   with `agentStep`: when the person has switched the presence check off, so
   `next` does not stop, the engine adds that sentence to every directive's
   `change_notices` instead. Claude Code, Codex CLI, Kiro CLI and opencode
-  declare `recovery` and `agentStep`; Copilot also `notRunYet` and
+  declare `recovery`, `agentStep` and `notRunYet`; Copilot also
   `notRunInWorkflow`; Kiro IDE `recovery`,
   `missedReply` and `notRunYet`, and keeps its agent's step in its
   orchestrator skill, since in a folder Kiro has not been allowed to run

@@ -133,7 +133,12 @@ import {
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, win32 } from "node:path";
-import { startPersonTurnSession, submittedToPersonTurnSession, typedIntoPersonTurnSession } from "./person-turns.ts";
+import {
+  nextPersonTurnCarriesPicks,
+  startPersonTurnSession,
+  submittedToPersonTurnSession,
+  typedIntoPersonTurnSession,
+} from "./person-turns.ts";
 import { stateFilePathFor } from "./sdk-drive.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
@@ -1715,6 +1720,26 @@ function gridIsSubmitScreen(grid: string): boolean {
   return grid.includes("Submit answers");
 }
 
+// The picks a form's review screen lists above Submit, one `→ <choice>` line
+// per answered question, read from the last review on screen up to its own
+// Submit. When the review is out of view, the tab strip's ticked tabs count
+// them instead; the strip's tabs cap what the review can count.
+export function reviewedPicks(grid: string): string[] {
+  const lines = grid.split("\n");
+  const strip = lines.findLast((line) => line.includes("←") && line.includes("Submit")) ?? "";
+  const tabs = (strip.match(/[☒☐]/g) ?? []).length;
+  const ticked = (strip.match(/☒/g) ?? []).length;
+  const review = lines.findLastIndex((line) => line.includes("Review your answers"));
+  if (review >= 0) {
+    const end = lines.findIndex((line, at) => at > review && /Ready to submit|Submit answers/.test(line));
+    const picks = lines.slice(review + 1, end === -1 ? undefined : end)
+      .map((line) => /^\s*│?\s*→\s+(.*\S)\s*$/.exec(line)?.[1])
+      .filter((pick): pick is string => pick !== undefined);
+    if (picks.length > 0) return tabs > 0 ? picks.slice(0, tabs) : picks;
+  }
+  return Array.from({ length: ticked }, () => "");
+}
+
 // Is the painted question a MULTI-SELECT ("select all that apply")? The AUQ key
 // model, confirmed from the claude bundle AND by live single-keystroke probing of
 // the real widget (2026-06-06):
@@ -2321,6 +2346,9 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "submit",
         screen: grid,
       });
+      // The Submit carries every pick on the form, one answer each.
+      const picks = reviewedPicks(grid);
+      nextPersonTurnCarriesPicks(session, Math.max(picks.length, 1), picks.filter(Boolean).join("; "));
       await backend.send(session, "Enter", false, true); // commit the whole form
       if (revisionFeedbackPending) {
         revisionFeedbackPending = false;
@@ -2341,6 +2369,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
+        nextPersonTurnCarriesPicks(session, 1);
         await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
@@ -2357,6 +2386,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       // Revision Count++). Consume the one-shot so every later gate is approved.
       await backend.send(session, "Down", false, true);
       await sleep(150);
+      nextPersonTurnCarriesPicks(session, requestChangesNeedsSubmit ? 0 : 1);
       await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
       process.stdout.write("answer-gate: rejected first approval gate (Request changes)\n");
@@ -2382,6 +2412,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         action: "single_select_default",
         screen: grid,
       });
+      // A pick on one tab of a form is counted with the form's Submit.
+      nextPersonTurnCarriesPicks(session, gridIsMultiTabForm(grid) ? 0 : 1);
       await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;

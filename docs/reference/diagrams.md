@@ -450,7 +450,7 @@ flowchart TD
 
 Each stage loads knowledge in a strict 6-step order. This ensures guardrails take precedence, followed by shared methodology, then agent-specific knowledge, then team customizations, and finally prior stage artifacts. The sequence diagram below shows the loading order for any stage activation.
 
-> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step. On inline stages and for the inline lead of a mob, `inline_context_paths` lists the team knowledge (steps 4-5) right after the personas and before the shared and agent methodology (steps 2-3), and the size cap trims methodology first; dispatched agents load in the order below.
 
 ```mermaid
 sequenceDiagram

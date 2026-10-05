@@ -242,9 +242,28 @@ export function aidlcHookRegistrationHashes(
   );
 }
 
+// A JSON file saved from Windows PowerShell 5.1 or some editors starts with a
+// UTF-8 byte order mark, which JSON.parse refuses. It is read past, and a file
+// AI-DLC writes back keeps it.
+const BOM = "\uFEFF";
+
+export function withoutBom(text: string): string {
+  return text.startsWith(BOM) ? text.slice(1) : text;
+}
+
+export function readJsonFile(path: string): unknown {
+  return JSON.parse(withoutBom(readFileSync(path, "utf-8")));
+}
+
+// The JSON text AI-DLC writes for a file, with the byte order mark the file
+// had (`like` is its text before the write).
+export function jsonFileText(value: unknown, like = ""): string {
+  return `${like.startsWith(BOM) ? BOM : ""}${JSON.stringify(value, null, 2)}\n`;
+}
+
 function parseJson<T>(path: string): T {
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
+    return readJsonFile(path) as T;
   } catch (error) {
     throw new Error(`${path}: invalid JSON (${error instanceof Error ? error.message : String(error)})`);
   }

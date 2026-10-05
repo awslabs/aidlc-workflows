@@ -72,14 +72,18 @@ import {
   consumeSharedDirectiveAsk,
   forgetGateWords,
   hookContextLine,
+  hooksHealthDir,
   humanTurnMintAllowed,
+  isoTimestamp,
   markHumanTurn,
   recordGateWords,
+  recordPreWorkflowHeartbeat,
   resolveProjectDirFromHook,
   stateFilePath,
   stripRecommendedDecorator,
   validSessionId,
   withAuditLock,
+  writeProjectHookStatusFile,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
@@ -349,6 +353,10 @@ try {
       // An unchanged retired field retains the normal migration notice.
     }
   }
+  // The heartbeat says the host ran this hook. Before any workflow it lands
+  // where doctor and `next` look then, so a tool that runs no hooks is known
+  // from the person's first message, before any work.
+  recordPreWorkflowHeartbeat(projectDir, "record-human-turn");
   const mintAllowed = humanTurnMintAllowed();
   if (!mintAllowed && typedPrompt && isTypedGuardSwitchPrompt(typedPrompt)) {
     notes.push(
@@ -368,6 +376,15 @@ try {
     }
   }
   if (existsSync(stateFilePath(projectDir))) {
+    // Inside a workflow it lands in the record, before the mint branch and
+    // apart from it, so a hook that ran but withheld its mint (AIDLC_UNATTENDED=1,
+    // or a turn with no pending question) is never mistaken for one that never
+    // ran. Best-effort: a heartbeat failure never blocks the person's turn.
+    try {
+      writeProjectHookStatusFile(projectDir, hooksHealthDir(projectDir), "record-human-turn.last", isoTimestamp());
+    } catch {
+      // A heartbeat write failure is lost telemetry, never a blocked turn.
+    }
     if (pickerUnanswered) {
       // No turn and no answer: the row spends any earlier turn, so a remark
       // typed before the box never carries an answer the person did not give.

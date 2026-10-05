@@ -123,9 +123,9 @@
 //      input. Once the response is ready, continuation is enforced again.
 //  10. A STEP THAT ENDS THE TURN: the last step the engine handed out was an
 //      `ask` (where new work goes, which plan to start it with) or a print the
-//      agent stops after (status, a setting, a scope change, new work that
-//      starts in a fresh session), and the person has not written since
-//      (turnEndIsOpen). The probe's own `next`, or Copilot's retained step,
+//      agent stops after (status, a setting, a scope change), and the person
+//      has not written since (turnEndIsOpen). The probe's own `next`, or
+//      Copilot's retained step,
 //      would hand back the work in progress, so this is read before either.
 //
 // No-op outside AIDLC. The frontmatter Stop matcher scopes this to the `aidlc`
@@ -1674,13 +1674,14 @@ if (transcriptPath && transcriptFormat === "claude") {
   }
 }
 
-// A confirmed second intent, or a switch to another intent or space, moves
-// this session to another intent before the turn ends. The step that moved it
-// (the PostToolUse hook after a create, the utility for a switch) writes an
-// exact per-session receipt for that transition. Allow only when the receipt
-// is fresh and the session now owns the destination intent. The shared cursor
-// is intentionally not evidence here: another session may move it before this
-// Stop event.
+// A switch to another intent or space moves this session to another intent
+// before the turn ends. The step that moved it (the utility for a switch, the
+// PostToolUse hook after a create) writes an exact per-session receipt for that
+// transition. Allow only a switch's receipt, when it is fresh and the session
+// now owns the destination intent. New work created beside other work carries
+// on into its first stage in this chat, so its receipt is spent here and the
+// turn goes on like any other. The shared cursor is intentionally not evidence
+// here: another session may move it before this Stop event.
 if (sessionId) {
   const handoff = readSessionIntentHandoff(projectDir, sessionId);
   if (handoff) {
@@ -1703,6 +1704,7 @@ if (sessionId) {
       ? stamp === null || (!!recordEntry?.uuid && stamp === recordEntry.uuid)
       : stamp === handoff.toIntentUuid;
     const exactBoundary =
+      handoff.via === "switch" &&
       fresh &&
       stampMatches &&
       target !== null &&
@@ -1714,11 +1716,11 @@ if (sessionId) {
       recordHookTrace(
         projectDir,
         HOOK_NAME,
-        "allowing stop at the exact intent handoff boundary (create or switch)",
+        "allowing stop at the exact intent switch boundary",
       );
       return allowStop();
     }
-    if (!fresh) clearSessionIntentHandoff(projectDir, sessionId);
+    if (!fresh || handoff.via !== "switch") clearSessionIntentHandoff(projectDir, sessionId);
   }
 }
 

@@ -3024,10 +3024,27 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:constructionPolicyReceiptApplies",
+      "unitId": "function:constructionPolicyChangeAllowed",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionPolicyChangeAuthority",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5422,6 +5439,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isKillSwitchSource",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-recorded-switch-notices.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isNonAnswer",
       "minMechanism": "none",
       "coveredBy": [
@@ -5744,6 +5773,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t349-composer-scope-settings.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:killSwitchSource",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-recorded-switch-notices.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -7302,6 +7343,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:personAskedSinceGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:personCheckSwitchAllowed",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t265-plan-approval-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:personLineHeard",
       "minMechanism": "none",
       "coveredBy": [
@@ -8458,6 +8523,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t-copilot-hook-health.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-hooks-off-step.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -12279,6 +12348,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeProjectHookStatusFile",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeProtectedResponse",
       "minMechanism": "none",
       "coveredBy": [],
@@ -12692,6 +12768,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t-journey-check-off-on.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t351-fresh-clone-participation.test.ts",
           "mechanism": "cli"
         },
@@ -12833,6 +12913,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t-hook-context-reaches-claude.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t-journey-check-off-on.sdk.test.ts",
           "mechanism": "sdk"
         },
         {

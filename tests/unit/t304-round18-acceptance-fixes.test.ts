@@ -1125,6 +1125,37 @@ describe("t304 copied projection configuration", () => {
     );
   }, 120_000);
 
+  // #1406: natively, a refresh that leaves another harness on an older release
+  // names it with `aidlc config --harness <name>`, which brings it along.
+  test("natively, a harness left on another release is named with the command that brings it along", () => {
+    const { project, machine } = configuredNativeProject();
+    const env = { ...machine, AIDLC_RUNTIME_ROOT: DIST_RELEASE };
+    const older = temp("aidlc-t304-native-codex-older-");
+    cpSync(join(DIST_RELEASE, "codex"), older, { recursive: true });
+    stampAs(older, ".codex", "2.9.0");
+    // The engine does not take 2.9.0 and these files hold only Codex CLI, so
+    // the pin that installs 2.9.0 is named.
+    const added = runCopied(project, ["config", "--harness", "codex", "--from", older, "--yes"], { env });
+    expect(added.status, added.stdout + added.stderr).toBe(0);
+    expect(added.stdout).toContain(
+      `Claude Code (.claude) is on ${AIDLC_VERSION}. To bring it to 2.9.0: \`aidlc config --pin 2.9.0 --yes\` ` +
+        "(this pins the version for everyone on the project), then `aidlc config --harness claude`.",
+    );
+    const workflow = startWorkflow(project);
+    const refreshed = runCopied(project, ["config", "--harness", "claude"], { env });
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).toContain(`Updated. Your open work (${workflow}) carries on.`);
+    expect(refreshed.stdout).toContain(
+      `Codex CLI (.codex) is still on 2.9.0. To bring it to ${AIDLC_VERSION}: \`aidlc config --harness codex\`.`,
+    );
+    const caughtUp = runCopied(project, ["config", "--harness", "codex"], { env });
+    expect(caughtUp.status, caughtUp.stdout + caughtUp.stderr).toBe(0);
+    expect(JSON.parse(
+      readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8"),
+    ).frameworkVersion).toBe(AIDLC_VERSION);
+    expect(caughtUp.stdout).not.toContain("To bring it to");
+  }, 120_000);
+
   test("natively, a missing pinned release is installed and registered, then the command finishes", async () => {
     const { project, machine } = configuredNativeProject();
     writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);

@@ -520,7 +520,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   test("SP7-invalid: a report that names no choice leaves the gate open; the agent's approval then records", () => {
     const { p, guardedEnv } = heldGate();
     const invalid = report(p, guardedEnv, ["--result", "approved"]);
-    expect(invalid.kind).toBe("error");
+    // The agent's next step, not an error for the person.
+    expect(invalid.kind, JSON.stringify(invalid)).toBe("print");
     expect(invalid.message).toContain("names no choice");
     // Their reply is on record: the agent reports the choice it read, and the
     // person is not asked again.
@@ -538,7 +539,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   test("SP7-reject: a change request needs what should change; with it, the gate is sent back", () => {
     const { p, guardedEnv } = heldGate();
     const bare = report(p, guardedEnv, ["--result", "rejected", "--user-input", "Request Changes"]);
-    expect(bare.kind).toBe("error");
+    expect(bare.kind, JSON.stringify(bare)).toBe("print");
     expect(bare.message).toContain("Request Changes requires nonblank revision feedback");
     expect(eventCount(p, "GATE_REJECTED")).toBe(0);
 

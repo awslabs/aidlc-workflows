@@ -2235,7 +2235,8 @@ describe("t242 state-transition ownership guard", () => {
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
-      expect(r.stdout, result).toContain('"kind":"error"');
+      // Either way it goes back to the agent as its next step.
+      expect(r.stdout, result).toContain('"kind":"print"');
       expect(r.stdout, result).toContain(
         result === "approved" ? "names no choice" : "Request Changes requires nonblank revision feedback",
       );

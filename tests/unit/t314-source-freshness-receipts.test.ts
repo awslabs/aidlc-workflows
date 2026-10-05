@@ -102,6 +102,7 @@ import {
   seedStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
 
 // The default also governs afterAll removal of a dozen-plus worktree fixtures,
 // which exceeds bun's 5s hook default under load; per-case literals stay.
@@ -3030,6 +3031,7 @@ describe("t314 swarm finalize source-fingerprint check (#646 review P1#3)", () =
         seedBoltDag(proj, args[unitsIndex + 1].split(","));
       }
     }
+    approveSuppliedCheckCommand(proj, args);
     const startedNs = process.hrtime.bigint();
     const wallStartedMs = Date.now();
     const r = spawnSync(BUN, [SWARM_TOOL, "--project-dir", proj, ...args], {

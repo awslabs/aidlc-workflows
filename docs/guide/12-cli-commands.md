@@ -738,7 +738,7 @@ AI-DLC doctor
 
 Machine
   warn  Runtime hook PATH: bun is on this shell's PATH (/home/user/.bun/bin/bun) but not on the system-wide PATH
-        fix: This project is a copy-channel projection, so its hooks run through Bun; a native install runs them through the aidlc command instead. A harness you start from a terminal normally hands that terminal's PATH to its hooks, so nothing needs changing for it. If you start the harness from a desktop icon, the dock, or a service and its hooks do not run, add /home/user/.bun/bin to the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf, then restart the harness. Editing .bashrc or .zshrc does not change this check.
+        fix: Nothing needs changing when you start Claude Code from a terminal: it hands that terminal's PATH to AI-DLC's hooks. If you start it from a desktop icon, the dock, or a service and AI-DLC's hooks do not run, add /home/user/.bun/bin to the PATH line in /etc/environment, ENV_PATH in /etc/login.defs, or a PATH= line in ~/.config/environment.d/*.conf, then restart Claude Code. Editing .bashrc or .zshrc does not change this check.
   warn  Update: update check unavailable while offline
         fix: run `bun .claude/tools/aidlc.ts update --check`
   ok    4 checks passed
@@ -1516,7 +1516,9 @@ project with several harnesses, and prints what it recorded or cleared with the
 command that undoes it. With no `--local`, `--project`, or `--global`, a
 `--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
 clears the switch from every file that records it. A switch is on while any of
-the files records it. A command that also changes
+the files records it. An unattended run (`AIDLC_UNATTENDED=1`) records no
+`--bypass`, since nobody is there to ask for it; a `--clear-bypass` is always
+done. A command that also changes
 another flag is a settings change too and is done the same way, with a line for
 each part, and so is a command that brings in other release files (a
 `--download`, or the update a project pinned to another release needs first).
@@ -1538,7 +1540,15 @@ session-start context), and `config flags --show` and the doctor Flags row (a
 warning, which does not change doctor's exit code) list it. Say "turn it back
 on" and the agent runs that command; if something else still keeps the check
 off (the environment variable, or another settings file), the command says so
-and names it. During a plan-approval lockout the agent's own `config flags
+and names it. When the switch is cleared but the open piece of work keeps the
+check off on its own (its scope or its Guard Policy), the line says so and names
+the way to turn it on for that work too, for example:
+
+> The review freeze check switch is cleared for this project, but it stays off for this piece of work: guard policy off (set by you). Say "turn it on for this work" to restore it there (/aidlc config set guard.review-freeze on).
+
+`config get` names where a switch keeps a check off: `off (AIDLC_DISABLE_REVIEW_FREEZE_HOOK in aidlc.settings.local.json)`
+when a settings file records it, or `off (env AIDLC_DISABLE_REVIEW_FREEZE_HOOK)`
+when the editor or CLI was started with the variable. During a plan-approval lockout the agent's own `config flags
 --bypass` passes once you have spoken since the last decision (never from an
 unattended run), and `--clear-bypass` always passes.
 
@@ -1565,7 +1575,9 @@ when the harness session started with it, when it is recorded with
 `config flags --bypass`, or when no harness session is recorded in the project;
 set inline on one command inside a session, it is ignored. Status then reads, for
 example, `Plan Approval: on (guard policy strict (from project.md))` or
-`Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)`.
+`Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)` when the
+session started with it, or `Plan Approval: off (from AIDLC_DISABLE_PLAN_APPROVAL_GUARD in aidlc.settings.local.json)`
+when `config flags --bypass` recorded it.
 
 It is the person's call: they type `/aidlc --plan-approval off` or
 `/aidlc config set plan-approval off` (the human-turn hook applies it), or say
@@ -1671,8 +1683,7 @@ through its applicable design stages and Code Generation before the next.
 Design-only and no-Unit workflows keep their existing stage flow; team-owned
 Units keep their own gate rhythm. Existing workflows and explicit iteration
 choices are preserved. To choose swarm execution explicitly, select stage-major
-first. During Construction, obtain the field/value consent described below
-before each setter; during Inception these setters need no policy receipt:
+first:
 
 ```bash
 aidlc engine state set-construction-iteration stage-major
@@ -1687,32 +1698,16 @@ runtime preferences. Generic `state set` refuses `Construction Checkpoints`,
 Command`; use `set-construction-checkpoints`, `set-construction-execution`,
 `set-construction-iteration`, or the receipt-bound
 `set-construction-verification-command`, respectively.
-During Construction, changing `Construction Checkpoints`, `Construction
-Execution`, or `Construction Iteration` requires an exact, session-bound human
-choice for that field and value, not merely a fresh human turn. An unattended
-run cannot disable checkpoints to get past a refusal. For example:
-
-```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
-```
-
-Present **Approve** and **Request Changes**, then wait for the human to choose
-in the invoking SessionStart session. Only after **Approve**, run:
-
-```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
-{{INVOKE}} engine state set-construction-checkpoints disabled
-```
-
-For **Request Changes**, record the same answer with `--details "Request Changes"`
-and keep the current policy. Use this flow separately for each field/value change,
-including execution and iteration. `CONSTRUCTION_POLICY_RECORDED` authorizes
-only the requested value on that field in the current workflow; a later proposal
-for the field supersedes it and applying it spends it. Another gate's answer,
-an unrelated prompt, or a response from another session cannot authorize the
-change. Reusing an answer is refused. If audit append fails, retry the same
-answer after repairing the failure; the one-shot response is retained until
-the append succeeds.
+During Construction you change any of these in your own words ("turn
+checkpoints off", "from here on, build one unit at a time", "run the Units in
+parallel"). The agent does it in that turn, with no question first, and says one
+line with what changed and the words that undo it, for example "Construction
+checkpoints are off for this work now (they were on). Say 'turn checkpoints back
+on' to undo." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
+The setter makes the change only when a message from you since the last decision
+is on record, so the agent cannot change these on its own, and an unattended run
+never changes them. A change that needs another first (parallel Units need
+stage-major and checkpoints on) makes both, and says both.
 
 Switching to `unit-major` or turning checkpoints on in the middle of a stage
 keeps the Units already finished: `/aidlc` carries on with the next Unit that
@@ -1916,26 +1911,26 @@ proofs are unverified after upgrading; authorize the recorded command and run
 
 ### `aidlc engine swarm check` / `finalize` - verify native worktrees
 
-With Construction Checkpoints enabled, both commands run the intent's recorded,
-human-authorized Construction Verification Command in each prepared Unit worktree:
+Both commands run the intent's recorded, human-authorized Construction
+Verification Command in each prepared Unit worktree, with or without Construction
+Checkpoints:
 
 ```bash
 aidlc engine swarm check <Unit> [--test-file <protected spec>]
 aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
 ```
 
-`--check-cmd` is optional under checkpoints; if supplied, its canonical digest
-must match the authorized command. A missing authorization refuses execution:
-complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
+`--check-cmd` is optional, with or without checkpoints; if supplied, its
+canonical digest must match the authorized command. A missing authorization
+refuses execution: complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
 and `set-construction-verification-command`, rather than substituting a passing
-command. Legacy autonomy without checkpoints still requires `--check-cmd` on
-both commands. `check` is advisory; `finalize` reruns the command and validates
+command. With no workflow, both commands refuse. `check` is advisory; `finalize` reruns the command and validates
 review evidence before merging each claimed Unit. Re-running `finalize` withdraws
 every open checkpoint question and captured checkpoint response for this intent,
 in any session; ask again only after fresh verification, source landing, and a
 batch status of `ready: true`. Only verified native passes
-receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` under
-checkpoints. Land their source through the native worktree merge before `next`.
+receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` (rows
+from an earlier release may lack it). Land their source through the native worktree merge before `next`.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 

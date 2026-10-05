@@ -41,8 +41,9 @@ import {
   withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
-  authorizedConstructionPolicyChange,
+  constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
+  latestPersonTurn,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -67,6 +68,7 @@ import {
   currentSwarmAttemptObligations,
   effectiveUnitGateRhythm,
   emitError,
+  type EmitErrorMessage,
   errorMessage,
   evaluateGuardRefusal,
   eventMatchesClaimAttempt,
@@ -741,6 +743,20 @@ class StateCommandError extends Error {}
 // the original refusal without waiting again on the same unavailable audit.
 class StateAuditUnavailableError extends StateCommandError {}
 
+// A decision refused because the person has not made it, or made another one.
+// The message is the agent's next step, not news for the person, so the error
+// JSON marks it and the router hands it to the agent: with the question still
+// open, or, when the person's own choice is on record, to record that choice.
+class DecisionNotMadeError extends StateCommandError {
+  constructor(msg: string, readonly personDecided: boolean) {
+    super(msg);
+  }
+}
+
+function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}): never {
+  throw new DecisionNotMadeError(msg, options.personDecided === true);
+}
+
 function assertWorkflowNotArchived(content: string, operation: string): void {
   if (getField(content, "Status") !== "Archived") return;
   error(
@@ -990,6 +1006,13 @@ export function main(argv: string[]): void {
         ),
       );
     }
+    if (e instanceof DecisionNotMadeError) {
+      exitWithError({
+        message: e.message,
+        auditMessage: e.message,
+        agentGuidance: e.personDecided ? "person-decided" : "question-open",
+      });
+    }
     exitWithError(errorMessage(e));
   }
 }
@@ -1119,12 +1142,56 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
     if (updated !== content) {
-      requireHumanConstructionPolicyChange(pd, content, field, args[0]);
-      emitConstructionPolicySet(pd, content, updated, field, args[0]);
+      const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+      emitConstructionPolicySet(pd, content, updated, field, args[0], words);
     }
     writeStateFile(pd, updated);
-    console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+    console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
+}
+
+// The one line the person hears for a Construction setting they asked for:
+// what it is now, what it was, and the words that bring the old value back, or
+// that it already was so. Each entry says the value as it is now, as it was,
+// how to ask for it, and that nothing changed.
+function constructionPolicyNotice(before: string, after: string, field: string): { notice?: string } {
+  const previous = getField(before, field)?.trim() ?? "";
+  const value = getField(after, field)?.trim() ?? "";
+  const lines: Record<string, { now: string; was: string; undo: string; already: string }> = {
+    enabled: {
+      now: "Construction checkpoints are on for this work now", was: "they were on", undo: "turn checkpoints back on",
+      already: "Construction checkpoints are already on for this work",
+    },
+    disabled: {
+      now: "Construction checkpoints are off for this work now", was: "they were off", undo: "turn checkpoints off",
+      already: "Construction checkpoints are already off for this work",
+    },
+    "unit-major": {
+      now: "Construction now builds one Unit at a time", was: "it built one Unit at a time", undo: "build one Unit at a time",
+      already: "Construction already builds one Unit at a time",
+    },
+    "stage-major": {
+      now: "Construction now goes stage by stage", was: "it went stage by stage", undo: "go stage by stage",
+      already: "Construction already goes stage by stage",
+    },
+    swarm: {
+      now: "Construction now builds the Units in parallel", was: "it built the Units in parallel", undo: "build the Units in parallel",
+      already: "Construction already builds the Units in parallel",
+    },
+    serial: {
+      now: "Construction now builds the Units one after another", was: "it built the Units one after another",
+      undo: "build the Units one after another", already: "Construction already builds the Units one after another",
+    },
+  };
+  const other: Record<string, string> = {
+    enabled: "disabled", disabled: "enabled", "unit-major": "stage-major", "stage-major": "unit-major",
+    swarm: "serial", serial: "swarm",
+  };
+  const line = lines[value];
+  if (previous === value) return { notice: line ? `${line.already}.` : `${field} is already ${value}.` };
+  if (!line) return { notice: `${field} is now ${value}.` };
+  const was = lines[previous];
+  return { notice: `${line.now}${was ? ` (${was.was})` : ""}. Say '${(was ?? lines[other[value]]).undo}' to undo.` };
 }
 
 // Every applied Construction policy change is in the audit with the value it
@@ -1132,7 +1199,9 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
 // floor reads them so switching to unit-major iteration or turning checkpoints
 // on keeps the Units already finished: a stage start recorded while stage
 // starts were attempt boundaries stays the boundary it was.
-function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
+function emitConstructionPolicySet(
+  pd: string, before: string, after: string, field: string, value: string, words: string | null = null,
+): void {
   const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
   emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
     Field: field,
@@ -1140,16 +1209,30 @@ function emitConstructionPolicySet(pd: string, before: string, after: string, fi
     "Previous Value": current(before, field),
     "Construction Iteration": current(after, "Construction Iteration"),
     "Construction Checkpoints": current(after, "Construction Checkpoints"),
+    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
   });
 }
 
-function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): void {
-  if (
-    getField(content, "Lifecycle Phase")?.toLowerCase() === "construction" &&
-    !humanPresenceGuardDisabled() && !authorizedConstructionPolicyChange(pd, content, field, value)
-  ) {
-    error(`No current unconsumed CONSTRUCTION_POLICY_RECORDED with Field: ${field}, Value: ${value}, and User Input: Approve authorizes this change. ` + CONSTRUCTION_POLICY_RECOVERY);
+// During Construction a policy change is the person's: they asked for it in
+// their own words since the last decision (the conductor read it), or chose it
+// at an older policy question. Returns the words of the turn that asked, for
+// the record, or null.
+function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): string | null {
+  if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
+  // An unattended run never changes it on its own, whatever presence bypass is
+  // in force: only a choice the person recorded earlier counts there.
+  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value) !== "receipt") {
+    error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
+  if (humanPresenceGuardDisabled()) return null;
+  const authority = constructionPolicyChangeAuthority(pd, content, field, value);
+  if (authority === null) {
+    error(
+      `No message from the person since the last decision asks to change ${field}. Change it only when they ask ` +
+        "for it, never to clear a refusal or on your own. " + CONSTRUCTION_POLICY_RECOVERY,
+    );
+  }
+  return authority === "asked" ? latestPersonTurn(pd)?.words ?? null : null;
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1243,11 +1326,13 @@ function handleSetConstructionIteration(args: string[]): void {
     value,
   );
   if (updated !== content) {
-    requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
-    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value);
+    const words = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
   }
   writeStateFile(pd, updated);
-  console.log(JSON.stringify({ updated: true, construction_iteration: value }));
+  console.log(JSON.stringify({
+    updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
+  }));
   });
 }
 
@@ -5782,7 +5867,7 @@ function verifyApprovalDecision(
       ? null
       : selfAttributedDecisionMarker(approvalInput, "approval");
   if (approvalAuthorship) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because --user-input says the choice came from the ` +
         `assistant (${approvalAuthorship.category}: "${approvalAuthorship.phrase}"). ` +
         "This check looks for explicit assistant provenance; it does not prove who wrote " +
@@ -5804,7 +5889,7 @@ function verifyApprovalDecision(
     // Host cancellation text is no reply, and a latest message that is exactly
     // Request Changes is their pick.
     if (approvalInput && isNonAnswer(approvalInput)) {
-      error(
+      refuseForAgent(
         `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
           "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
           "choice and wait for the human to choose one.",
@@ -5812,9 +5897,10 @@ function verifyApprovalDecision(
     }
     const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
     if (pick === "Request Changes") {
-      error(
+      refuseForAgent(
         `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
           "their words differently.",
+        { personDecided: true },
       );
     }
     // Their exact pick names which approval it is.
@@ -5825,19 +5911,21 @@ function verifyApprovalDecision(
     !humanPresenceGuardDisabled() &&
     !humanRepliedSinceGate(pd)
   ) {
-    error(
+    refuseForAgent(
       `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
         "this approval question. Wait for the human to type their choice, then retry the " +
         `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
     );
   }
   // The conductor reports the choice the person made; a report that names none
-  // records nothing.
+  // records nothing. They have replied by now (checked above), so the step is
+  // to report the choice their reply makes, not to ask them again.
   if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
-    error(
-      `Cannot approve "${stage.slug}" because no choice was passed. Re-present the original held gate with ` +
-        "every offered choice, wait for the person's reply, then report the choice they made with " +
-        '--user-input "Approve".',
+    refuseForAgent(
+      `Cannot approve "${stage.slug}" because no choice was passed. The person replied after the question ` +
+        'was shown: report the choice their reply makes with --user-input (for example "Approve"), or ask ' +
+        "them if their reply is unclear.",
+      { personDecided: true },
     );
   }
   return { approvalInput, autonomousDecision };
@@ -5949,7 +6037,7 @@ function handleApprove(args: string[]): void {
       !humanPresenceGuardDisabled() &&
       !humanRepliedSinceGate(pd)
     ) {
-      error(
+      refuseForAgent(
         `Refusing to approve unit "${teamGate.unit}" for "${slug}": a real human ` +
           `has not acted at this gate since it opened.${commandTurnHint(pd)}`,
       );
@@ -6273,14 +6361,15 @@ function handleReject(args: string[]): void {
       slug,
       teamGate?.unit,
     );
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
         (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
         " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
+      { personDecided: true },
     );
   }
   if (feedbackStatus === "awaiting-feedback") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
         `feedback. Ask "What should change?", end the turn, and wait for the ` +
         "human's separate response before retrying.",
@@ -6294,9 +6383,10 @@ function handleReject(args: string[]): void {
     ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
     : null;
   if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
         "read their words differently.",
+      { personDecided: true },
     );
   }
   // The person's own words. When this chat's human-turn hook recorded what they
@@ -6324,23 +6414,24 @@ function handleReject(args: string[]): void {
       : undefined;
   if (personsWords !== null) feedback = personsWords;
   if (!feedback) {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": Request Changes requires nonblank revision feedback in ` +
         "--feedback (or --reason through aidlc-orchestrate.ts report). Ask \"What should change?\", " +
         "end the turn, and pass their answer.",
     );
   }
   if (isNonAnswer(feedback)) {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": revision feedback ${formatReceivedReply(feedback)} is ` +
         "cancellation boilerplate. Re-present the original held gate with every offered choice " +
         "and wait for the human to choose one.",
     );
   }
   if (feedbackStatus === "mismatch") {
-    error(
+    refuseForAgent(
       `Refusing to reject "${slug}": --feedback does not exactly match the ` +
         "human's separate guard-recovery response. Pass their text unchanged.",
+      { personDecided: true },
     );
   }
 
@@ -6355,13 +6446,13 @@ function handleReject(args: string[]): void {
     !humanRepliedSinceGate(pd)
   ) {
     if (recoveryResetNeedsHuman) {
-      error(
+      refuseForAgent(
         `Cannot request changes for "${slug}" because its recovery review has already ` +
           `been used and only a new human choice can start another review attempt. Present ` +
           `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint(pd)}`,
       );
     }
-    error(
+    refuseForAgent(
       `Cannot request changes for "${slug}" because no new human reply has been received ` +
         `for this approval question. Wait for the human to type Request Changes and their ` +
         `feedback, then retry.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
@@ -6382,7 +6473,7 @@ function handleReject(args: string[]): void {
       ? null
       : selfAttributedDecisionMarker(conductorFeedback, "rejection");
   if (rejectionAuthorship) {
-    error(
+    refuseForAgent(
       `Cannot request changes for "${slug}" because --feedback says it was written by the ` +
         `assistant (${rejectionAuthorship.category}: "${rejectionAuthorship.phrase}"). ` +
         `Requesting changes is the human's decision. Explain why another review is needed at ` +
@@ -8125,7 +8216,7 @@ function error(msg: string): never {
   throw new StateCommandError(msg);
 }
 
-function exitWithError(msg: string): never {
+function exitWithError(msg: EmitErrorMessage): never {
   // Honor module-level projectDir (set from --project-dir in main) so test
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);

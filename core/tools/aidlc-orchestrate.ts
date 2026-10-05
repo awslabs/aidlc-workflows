@@ -186,6 +186,8 @@ import {
   latestReviewRecordRefs,
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
+  isKillSwitchSource,
+  installedHarnessName,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
   type SummaryConfirmationEvidence,
@@ -626,16 +628,18 @@ function engineWorkflow(projectDir: string): { intent?: string; space: string } 
 // run in the joined workflow: the harness declares the agent's step for that
 // only when a hook on the agent's own shell command leaves a heartbeat in the
 // record before the engine runs, and the workflow has a stage or gate event
-// but no heartbeat at all. Weaker signals stay warnings. There is no stop for
-// an unattended run, for a person who switched the presence check off (the
-// notice above still says it), in a delegated worktree, whose hooks beat in
-// the parent checkout, or where a link on the way to the status files keeps
-// any heartbeat from being written. A `next` that does not move the workflow
-// (status, doctor, help, config, the intent, space, plugin and knowledge
-// commands, park, team-board, a claim or release) runs as asked. The step
-// runs the stopped command again, so what it carried goes on.
+// but no heartbeat at all. Before any workflow, a harness whose hooks beat on
+// the person's every message stops at the first `next` when none has. Weaker
+// signals stay warnings. There is no stop for an unattended run, for a person
+// who switched the presence check off (the notice above still says it), in a
+// delegated worktree, whose hooks beat in the parent checkout, or where a link
+// on the way to the status files keeps any heartbeat from being written. A
+// `next` that does not move the workflow (status, doctor, help, config, the
+// intent, space, plugin and knowledge commands, park, team-board, a claim or
+// release) runs as asked. The step runs the stopped command again, so what it
+// carried goes on.
 function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs: string[]): string | null {
-  if (selection.intent === null || !humanTurnMintAllowed() || humanPresenceGuardDisabled(projectDir)) return null;
+  if (!humanTurnMintAllowed() || humanPresenceGuardDisabled(projectDir)) return null;
   const flags = parseNextFlags(nextArgs);
   if (
     flags.parseError || !nextEngagesWorkflow(nextArgs, flags) || flags.orchestratorVerb !== undefined ||
@@ -646,6 +650,15 @@ function hooksOffStop(projectDir: string, selection: WorkflowSelection, nextArgs
   if (step === null) return null;
   try {
     if (delegatedWorktreeIntent(projectDir) !== null) return null;
+    if (selection.intent === null) {
+      // Before any workflow, a harness whose hooks beat on every message of
+      // the person's (it declares notRunYet) knows from the message that led
+      // here: with no heartbeat at all, the hooks did not run for it.
+      if (!hookActivation()?.notRunYet) return null;
+      if (hookLiveness(projectDir, [], { space: selection.space }).hasHookFiredContent) return null;
+      if (hookStatusPathLinked(projectDir, undefined, selection.space)) return null;
+      return step;
+    }
     const workflow = { intent: selection.intent, space: selection.space };
     if (!hookLiveness(projectDir, undefined, workflow).neverFired) return null;
     if (hookStatusPathLinked(projectDir, workflow.intent, workflow.space)) return null;
@@ -2310,7 +2323,7 @@ function printDirective(message: string): PrintDirective {
 }
 
 // A print the agent stops after: a read-only utility, a setting or a scope
-// change, new work that starts in a fresh session, or one line for the person.
+// change, or one line for the person.
 function turnEndingPrint(message: string): PrintDirective {
   const directive = printDirective(message);
   turnEndingPrints.add(directive);
@@ -2878,9 +2891,9 @@ function effectiveScopeCostSummary(
   const policy = {} as CeremonyPolicy;
   for (const key of CEREMONY_KEYS) {
     const base = key === "plan_approval"
-      ? resolveCeremony(key, scope, null, planApprovalEnv(projectDir, null))
+      ? resolveCeremony(key, scope, null, planApprovalEnv(projectDir, null), projectDir)
       : resolveCeremony(key, scope, null);
-    policy[key] = base.source.startsWith("env ") ? "off" : overrides?.[key] ?? base.value;
+    policy[key] = isKillSwitchSource(base.source) ? "off" : overrides?.[key] ?? base.value;
   }
   // A review level set at creation replaces the scope's cap, so it decides
   // whether the preview says no reviewers.
@@ -3481,16 +3494,11 @@ function createPrintDirective(
   );
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
-  const directive = flags.newIntent
-    ? turnEndingPrint(
-      `${runCmd} to start the new intent${cost}.${labelHint} Then STOP, do NOT re-run \`next\` in this session. ` +
-        `This is a NEW, unrelated intent, and the current session still carries the previous intent's context. ` +
-        `Tell the user to start a fresh session using this harness's reset or restart flow, then invoke its AI-DLC entry skill to begin the new intent with a clean slate. ` +
-        `Nothing is lost: the intent is saved on disk and resumes on the next \`next\`.`,
-      )
-    : printDirective(
-      `${runCmd} to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
-    );
+  // New work, like the first, carries on in this chat: the creation binds the
+  // chat to the new work, so the next `next` runs its first stage.
+  const directive = printDirective(
+    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
+  );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
   // counts the compiled grid already gave us.
@@ -3510,11 +3518,29 @@ function createPrintDirective(
       " The folder has no code yet, so I'm starting this as a new project without Reverse Engineering. If the work is on existing code, tell me.";
   }
   if (routedGuardPolicyNote) directive.narration += ` ${routedGuardPolicyNote}`;
+  // Beside other work the chat still holds that work's conversation: the
+  // person can start this one in a clean chat instead, said once, never as a stop.
+  if (flags.newIntent) directive.narration += ` ${cleanChatLine(projectDir)}`;
   // The agent runs the creation and goes on, so the line rides the first step
-  // it speaks from. A new, unrelated piece of work stops here instead (the
-  // person starts a fresh chat for it), so the agent speaks from this step.
-  if (!flags.newIntent) carriesNarration.add(directive);
+  // it speaks from.
+  carriesNarration.add(directive);
   return directive;
+}
+
+// The optional line offering a clean chat for new work, in the host's own words.
+function cleanChatLine(projectDir: string): string {
+  const skill = entrySkillInvocation();
+  let harness: string | null = null;
+  try {
+    harness = installedHarnessName(projectDir);
+  } catch {
+    harness = null;
+  }
+  const how = harness === "claude" ? `type /clear, then ${skill}`
+    : harness === "kiro-ide" ? `open a new chat, pick the aidlc agent, then type ${skill}`
+    : harness === "opencode" ? `start a new session, then type ${skill}`
+    : `open a new chat, then type ${skill}`;
+  return `To start this in a clean chat instead, ${how}.`;
 }
 
 // A new project leaves out Reverse Engineering when its plan runs it, and when
@@ -3615,7 +3641,7 @@ function composeDispatchDirective(
       "This returned directive has selected the composer path. Stages the person names go through next --skip or --add only BEFORE calling next compose; now dispatch the composer even when the request names exact stage flips. Dispatch the composer subagent with this message as its task and use its validated proposal at the approval gate. Do not substitute your own state read and proposal for that dispatch.",
       "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
-      "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine (config get shows from env AIDLC_DISABLE_<NAME>), say in one line that it has to be removed outside the agent, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
+      "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine: if config get shows AIDLC_DISABLE_<NAME> in <file>, run config flags --clear-bypass AIDLC_DISABLE_<NAME> --yes when the person asks and say the line it prints; if it shows env AIDLC_DISABLE_<NAME>, say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write, then delete the marker (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
         `\`${aidlcDispatcherInvocation("config set summary-confirmation off")}\`` +
         " yourself, which carries out their approval); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.",
@@ -4874,7 +4900,14 @@ function inlineContextEntries(
   // knowledge context. The ladder falls back to the on-disk packaged
   // distribution the same way readConductorPersona resolves conductor.md.
   const harnessRoot = resolveHarnessRoot();
-  const entries = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
+  const shipped = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
+  // The project's own knowledge comes right after the personas, before the
+  // shipped knowledge: it is the team's word for this work, an agent reading
+  // the roster in order reaches it second, and the roster cap trims shipped
+  // knowledge before it.
+  let personas = 0;
+  while (personas < shipped.length && /\/agents\/[^/]+\.md$/.test(shipped[personas].rel)) personas++;
+  const entries: InlineContextEntry[] = shipped.slice(0, personas);
 
   if (codekbCtx) {
     const customRoot = join(
@@ -4902,6 +4935,7 @@ function inlineContextEntries(
       );
     }
   }
+  entries.push(...shipped.slice(personas));
 
   // De-duplicate on rel (first wins), matching the old Set-of-paths shape.
   const seen = new Set<string>();
@@ -6852,10 +6886,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // start path (Branch 7b/9a) uses, so BOTH creation directives carry the --label
   // placeholder identically. The human-yes gate already happened conductor-side;
   // this is the
-  // creation print that performs it. Unlike the fresh-start tail, the new-intent
-  // directive tells the conductor to STOP after creation and hand off to a fresh
-  // session (createPrintDirective branches on flags.newIntent): a second, unrelated
-  // intent should not inherit the completed intent's session context. Precedes
+  // creation print that performs it. Like the fresh-start tail, the conductor
+  // carries on into the new work's first stage in this chat; the narration
+  // offers a clean chat once, never as a stop. Precedes
   // every continuation branch so an active intent's state never routes new-work
   // intent creation to "advance the current stage". The freeform new-work text
   // rides in flags.intent (the same slot Branch 9a threads as the description).
@@ -11155,6 +11188,39 @@ function guardRecoveryAskFromToolOutput(
   return result.data;
 }
 
+// What `report` says when a state command it ran refuses. The tool's JSON
+// envelope is read, never shown. A decision the person has not made is the
+// agent's next step, handed to it with the question still open, so the turn
+// may end there; one the person already made (another pick, their own words)
+// is the agent's to record now. Anything else stops the workflow with the
+// tool's plain words.
+function stateRefusalDirective(lead: string, question: string, detail: string): PrintDirective | ErrorDirective {
+  let text = detail;
+  let agentGuidance: unknown = null;
+  try {
+    const parsed = JSON.parse(detail.split("\n").filter(Boolean).at(-1) ?? "") as {
+      error?: unknown;
+      agent_guidance?: unknown;
+    };
+    if (typeof parsed.error === "string") {
+      text = parsed.error.trim();
+      agentGuidance = parsed.agent_guidance;
+    }
+  } catch {
+    // Plain text already.
+  }
+  if (agentGuidance === "question-open") {
+    return turnEndingPrint(
+      `The question for ${question} is still open. ${text} ` +
+        "Show the question again if it is not on screen, and never answer it for the person.",
+    );
+  }
+  if (agentGuidance === "person-decided") return printDirective(text);
+  return errorDirective(
+    lead + (text ? `: ${text}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
+  );
+}
+
 type GuardPreflightOptions = {
   action: GuardPreflightAction;
   unit?: string;
@@ -12269,9 +12335,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         beat.unit,
       ]);
       if (res.exitCode !== 0) {
-        const detail = (res.stderr || res.stdout).trim();
-        emit(errorDirective(
-          `Could not skip "${slug}" for unit "${beat.unit}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
+        emit(stateRefusalDirective(
+          `Could not skip "${slug}" for unit "${beat.unit}"`,
+          `unit "${beat.unit}" of "${slug}"`,
+          (res.stderr || res.stdout).trim(),
         ));
         return;
       }
@@ -12349,10 +12416,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       "--route",
     ]);
     if (res.exitCode !== 0) {
-      const detail = (res.stderr || res.stdout).trim();
-      emit(errorDirective(
-        `Could not skip "${slug}"${detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`}`,
-      ));
+      emit(stateRefusalDirective(`Could not skip "${slug}"`, `"${slug}"`, (res.stderr || res.stdout).trim()));
       return;
     }
     // A stage skipped because it does not apply is said, in one line, with the
@@ -12510,9 +12574,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
             emit(guardAsk);
             return;
           }
-          emit(errorDirective(
-            `Transition rejected by aidlc-state.ts ${subArgs[0]} for unit "${unit}" of "${slug}"` +
-              (detail ? `: ${detail}` : "."),
+          emit(stateRefusalDirective(
+            `Could not update the approval status for unit "${unit}" of "${slug}"`,
+            `unit "${unit}" of "${slug}"`,
+            detail,
           ));
           return;
         }
@@ -12595,19 +12660,23 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // --park, which parks once the approval is recorded. With their reply on
   // record, the agent reports the choice it read from it; only with none does
   // the gate wait for one.
+  // Either way it is the agent's next step, never an error for the person.
   if (protectedHumanGate && FORWARD_RESULTS.has(flags.result ?? "") &&
     (!flags.userInput?.trim() || isNonAnswer(flags.userInput))) {
-    emit(errorDirective(
-      `report --result ${flags.result} for "${slug}" ` +
-        (flags.userInput?.trim()
-          ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
-          : "names no choice") +
-        (personSpokeSinceGate(pd, { replies: true })
-          ? ". The person has replied since the gate was shown: report the choice they made with --user-input " +
-            '("Approve", say), without asking them again.'
-          : ". No reply from the person is on record since the gate was shown: show the gate with every offered " +
-            'choice, end the turn, then report the choice they make with --user-input ("Approve", say).'),
-    ));
+    const refused = `report --result ${flags.result} for "${slug}" ` +
+      (flags.userInput?.trim()
+        ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
+        : "names no choice");
+    emit(personSpokeSinceGate(pd, { replies: true })
+      ? printDirective(
+        `${refused}. The person has replied since the gate was shown: report the choice they made with --user-input ` +
+          '("Approve", say), without asking them again.',
+      )
+      : turnEndingPrint(
+        `The question for "${slug}" is still open. ${refused}. No reply from the person is on record since the gate ` +
+          'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
+          '--user-input ("Approve", say).',
+      ));
     return;
   }
   const stopForNow = isGated && flags.result === "approved" && flags.park === true;
@@ -12721,10 +12790,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit(guardAsk);
         return;
       }
-      emit(errorDirective(
-        `Could not update the approval status for "${slug}"` +
-          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
-      ));
+      emit(stateRefusalDirective(`Could not update the approval status for "${slug}"`, `"${slug}"`, detail));
       return;
     }
     const gateReply = withChangeNotices(
@@ -12921,19 +12987,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const res = spawnState(pd, subArgs);
     if (res.exitCode !== 0) {
       // aidlc-state.ts rejected the transition (error() exits non-zero). Surface
-      // its message verbatim so the rejection is a clear signal, not a silent miss.
+      // its words so the rejection is a clear signal, not a silent miss.
       const detail = (res.stderr || res.stdout).trim();
       const guardAsk = guardRecoveryAskFromToolOutput(detail);
       if (guardAsk !== null) {
         emit(guardAsk);
         return;
       }
-      emit({
-        kind: "error",
-        message:
-          `Could not complete "${slug}"` +
-          (detail ? `: ${detail}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
-      });
+      emit(stateRefusalDirective(`Could not complete "${slug}"`, `"${slug}"`, detail));
       return;
     }
     committed.push(subArgs[0]);

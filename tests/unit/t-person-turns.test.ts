@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
 import {
+  nextPersonTurnCarriesPicks,
   PersonTurnLedger,
   startPersonTurnSession,
   submittedToPersonTurnSession,
@@ -14,6 +15,7 @@ import {
   unbackedFailure,
   unbackedTuiDecisions,
 } from "../harness/person-turns.ts";
+import { reviewedPicks } from "../harness/tui-drive.ts";
 
 const projects: string[] = [];
 const folders: string[] = [];
@@ -155,6 +157,55 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toHaveLength(1);
   });
 
+  test("one menu submission backs as many answers as it carried picks, and no more", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    // One menu asks two questions; the person picks on both and submits once.
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture", Decision: "Anything to add for next time?" });
+    drive.sent('{"Keep this note?":"Keep (project)","Anything to add for next time?":"Nothing to add"}', 2);
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Keep (project)" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Nothing to add" });
+    expect(drive.unbacked()).toEqual([]);
+    // A third answer has no pick behind it.
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Add a note" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Add a note"');
+  });
+
+  test("a typed reply backs one answer per question open when it arrived", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Q1-Q2: scale, auth" });
+    drive.sent("small, and Cognito");
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: small" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q2: Cognito" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Q2: Cognito"');
+  });
+
+  test("one typed reply answers every question open when it arrived; a question asked after it waits", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    for (const question of ["Way of working?", "Walking skeleton?", "How much testing?"]) {
+      row(dir, "DECISION_RECORDED", { Stage: "practices-discovery", Decision: question });
+    }
+    drive.sent("A, B, and A with CI");
+    for (const reply of ["A", "B", "A, with CI"]) {
+      row(dir, "QUESTION_ANSWERED", { Stage: "practices-discovery", Details: reply });
+    }
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "DECISION_RECORDED", { Stage: "practices-discovery", Decision: "Deploy anywhere?" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "practices-discovery", Details: "Deploy to staging" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Deploy to staging"');
+  });
+
   test("a later question supersedes an earlier one, as the engine pairs them", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
@@ -291,6 +342,58 @@ describe("person-turn check", () => {
     expect(unbackedTuiDecisions(dir)).toEqual([]);
     expect(unbackedFailure("The TUI drive", problems).message)
       .toStartWith("The TUI drive recorded 1 decision(s) as the person's that no turn from them backs:\n  GATE_APPROVED");
+  });
+
+  test("a TUI form's Submit backs one answer per pick on it; a pick on one of its tabs backs none", () => {
+    const folder = ledgerFolder();
+    const dir = project();
+    const session = `t-person-turns-form-${process.pid}`;
+    startPersonTurnSession(session, dir);
+    submittedToPersonTurnSession(session, "/aidlc --stage intent-capture");
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture", Decision: "Anything to add for next time?" });
+    // A pick on each of the form's two tabs, then Submit.
+    nextPersonTurnCarriesPicks(session, 0);
+    submittedToPersonTurnSession(session, "");
+    nextPersonTurnCarriesPicks(session, 0);
+    submittedToPersonTurnSession(session, "");
+    nextPersonTurnCarriesPicks(session, 2, "Keep (project); Nothing to add");
+    submittedToPersonTurnSession(session, "");
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Keep (project)" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Nothing to add" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "intent-capture", Details: "Add a note" });
+    const problems = unbackedTuiDecisions(dir);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('recorded words "Add a note"');
+    expect(problems[0]).toContain('"Keep (project); Nothing to add"');
+    expect(readdirSync(folder)).toEqual([]);
+  });
+
+  test("a form's picks are read off its review screen, or its ticked tabs when the review is out of view", () => {
+    const review = [
+      "────────────────────────────────────────",
+      "←  ☒ Learning  ☒ Add note  ✔ Submit  →",
+      "",
+      "Review your answers",
+      "",
+      " │ ● I jotted one note from this stage. Keep it as a practice for next time?",
+      " │   (a solo-owner personal task tracker)",
+      "   → Keep (project)",
+      " ● Anything to add for next time?",
+      "   → Nothing to add",
+      "",
+      "Ready to submit your answers?",
+      "",
+      "❯ 1. Submit answers",
+      "  2. Cancel",
+    ].join("\n");
+    expect(reviewedPicks(review)).toEqual(["Keep (project)", "Nothing to add"]);
+    // Only the last review counts, up to its own Submit, and never more picks
+    // than the form has tabs.
+    const earlier = ["Review your answers", "   → A", "   → B", "   → C", "", "Ready to submit your answers?"].join("\n");
+    expect(reviewedPicks(`${earlier}\n${review}\n   → Not a pick`)).toEqual(["Keep (project)", "Nothing to add"]);
+    const crowded = review.replace("   → Nothing to add", "   → Nothing to add\n   → An answer the agent wrote");
+    expect(reviewedPicks(crowded)).toEqual(["Keep (project)", "Nothing to add"]);
+    expect(reviewedPicks("←  ☒ Stakeholders  ☒ Comms  ☐ Scope  ✔ Submit  →\n\n❯ 1. Submit answers")).toEqual(["", ""]);
   });
 
   test.each([

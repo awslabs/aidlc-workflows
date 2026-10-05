@@ -1990,13 +1990,16 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
 
   // The person asks in their own words; the agent runs the setter, which their
   // reply on record backs. With no reply on record it refuses.
-  test.each<{ operation: string; args: string[]; refusal: string; field: string; lowered: string }>([
+  test.each<{ operation: string; args: string[]; refusal: string; field: string; lowered: string; event: string; line: string }>([
     {
       operation: "fence setter",
       args: ["config-change", "--guard.state-transition", "off"],
       refusal: fenceRefusal,
       field: GUARDS_OFF_FIELD,
       lowered: "state-transition (set by you)",
+      event: "GUARD_DISABLED",
+      line: 'The state transition check is off for this piece of work, because you said: "please relax the \'state\' checks for this piece of work". ' +
+        'Say "turn it back on" to restore it (/aidlc config set guard.state-transition on).',
     },
     {
       operation: "policy setter",
@@ -2004,18 +2007,26 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       refusal: policyRefusal,
       field: GUARD_POLICY_FIELD,
       lowered: "relaxed (set by you)",
+      event: "GUARD_POLICY_SET",
+      line: 'Guard Policy is relaxed for this piece of work, because you said: "please relax the \'state\' checks for this piece of work". ' +
+        'Say "put Guard Policy back to strict" to restore it (/aidlc --guard-policy strict).',
     },
-  ])("the CLI $operation the agent runs lowers fences after the person asked, and not before", ({ args, refusal, field, lowered }) => {
+  ])("the CLI $operation the agent runs lowers fences after the person asked, and not before", ({ args, refusal, field, lowered, event, line }) => {
     const { proj, state } = project("enterprise");
     const before = readFileSync(state, "utf-8");
     const refused = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(refused.status).toBe(1);
     expect(JSON.parse(refused.stderr)).toEqual({ error: refusal });
     expect(readFileSync(state, "utf-8")).toBe(before);
-    recordHumanPrompt(proj, "please relax the checks for this piece of work");
+    const asked = 'please relax the  "state" checks for this piece of work';
+    recordHumanPrompt(proj, asked);
     const changed = run(UTILITY, args, proj, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), field)).toBe(lowered);
+    // One line, in their words, with the way back; the record keeps the words as delivered.
+    expect(changed.stdout).toContain(line);
+    expect(changed.stdout).not.toMatch(/Fence state-transition is off|Guard Policy changed:/);
+    expect(auditBlockField(rowsOf(proj, event)[0].block, "Person Reply")).toBe(asked);
   });
 
   test.each<{ operation: string; args: string[]; refusal: string }>([
@@ -2297,11 +2308,15 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     seedAidlcMemory(proj);
     removeWorkspaceRecord(proj);
     const intents = join(proj, "aidlc", "spaces", "default", "intents");
-    const before = existsSync(intents) ? readdirSync(intents).sort() : null;
+    // No piece of work is created. The hook's own heartbeat, in the engine's
+    // directory, is not one.
+    const records = () =>
+      existsSync(intents) ? readdirSync(intents).filter((name) => name !== ".aidlc-engine").sort() : [];
+    const before = records();
     const context = JSON.parse(recordHumanPrompt(proj, prompt));
     expect(context.additionalContext).toContain(setting);
     expect(context.additionalContext).toContain("apply to a piece of work: create it, then type this again.");
-    expect(existsSync(intents) ? readdirSync(intents).sort() : null).toEqual(before);
+    expect(records()).toEqual(before);
     expect(readAuditShardEvents(proj)).toEqual([]);
   });
 

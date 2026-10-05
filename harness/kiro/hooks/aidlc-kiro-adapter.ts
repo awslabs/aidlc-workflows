@@ -659,7 +659,8 @@ if (target === "guard-tool-call") {
     // since it opened (see presenceFloorHolds).
     if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
       process.stderr.write(
-        "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
+        // The same words Kiro IDE's approval floor uses: Kiro shows them to the person too.
+        "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.\n",
       );
       return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
     }

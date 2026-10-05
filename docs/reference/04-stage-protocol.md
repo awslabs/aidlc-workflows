@@ -624,9 +624,10 @@ dynamic per workflow position.
 1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
    every substantive active-space rule as content and re-runs on every stage.
 2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
-   the lead only for `mob` because mob supports are dispatched. Persona and
-   knowledge remain path-loaded. Show any `context_warnings` verbatim and
-   continue with the readable roster. Agent names alone are not loaded context.
+   the lead's persona and knowledge for `mob` because mob supports are
+   dispatched. Persona and knowledge remain path-loaded. Show any
+   `context_warnings` verbatim and continue with the readable roster. Agent
+   names alone are not loaded context.
 3. Apply every loaded perspective during execution. Do not omit support-agent
    perspectives on `inline` or the lead's on `mob`.
 

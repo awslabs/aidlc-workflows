@@ -39,6 +39,7 @@ import {
   AIDLC_SRC, cleanupTestProject, createTestProject,
   fixtureIntentId8,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand, approveVerificationCommand } from "../harness/verification-command.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   boltName,
@@ -213,6 +214,7 @@ function runWorktree(proj: string, ...args: string[]): RunResult {
 
 /** Spawn aidlc-swarm `prepare` from the WORKSPACE root (the conductor's cwd). */
 function runSwarm(proj: string, ...args: string[]): RunResult {
+  approveSuppliedCheckCommand(proj, args);
   const r = spawnSync(BUN, [SWARM_TOOL, ...args, "--project-dir", proj], { encoding: "utf-8", cwd: proj });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
 }
@@ -505,6 +507,7 @@ function uncommittedSiblingRootSourceScenario(
     "repo-a",
   );
   if (created.status !== 0) throw new Error(created.out);
+  approveVerificationCommand(proj, "true");
   seedOneUnitDag(proj, unit);
   approvePlan(proj, unit);
   const prepared = runSwarm(

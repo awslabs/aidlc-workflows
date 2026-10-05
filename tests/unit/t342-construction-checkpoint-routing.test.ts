@@ -2,6 +2,7 @@
 // covers: function:constructionCheckpointGaps
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
+// covers: function:constructionPolicyChangeAuthority, function:constructionPolicyChangeAllowed
 // covers: function:hasPendingDecision, function:presenceFloorHolds
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
 import {
@@ -762,7 +763,9 @@ describe("t342 Construction checkpoint routing", () => {
       "--project-dir", p,
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(`${refused.stdout}${refused.stderr}`).toContain("human");
-    expect(JSON.parse(refused.stdout).kind).toBe("error");
+    // A change request nobody made goes back to the agent, the question open.
+    expect(JSON.parse(refused.stdout)).toMatchObject({ kind: "print" });
+    expect(JSON.parse(refused.stdout).message).toContain('The question for "functional-design" is still open.');
     for (const result of ["awaiting-approval", "approved"]) {
       const report = spawnSync(process.execPath, [
         join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), "report",
@@ -819,13 +822,69 @@ describe("t342 Construction checkpoint routing", () => {
     expect(state("set-construction-execution", "serial").status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("an unrelated human turn cannot disable checkpoints to clear a refusal", () => {
+  test("with no word from the person since the last decision, the agent cannot change checkpoints", () => {
     const p = fixture({ autonomy: "autonomous" });
     const before = readFileSync(seededStateFile(p));
-    policyHuman(p, "hello");
     const refused = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
     expect(refused.status).not.toBe(0);
-    expect(`${refused.stdout}${refused.stderr}`).toContain("CONSTRUCTION_POLICY_RECORDED");
+    expect(`${refused.stdout}${refused.stderr}`).toContain("only when they ask");
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+    // A turn already spent by an answer is no request for this change either.
+    expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Which name?", "--options", "A,B"]).status).toBe(0);
+    policyHuman(p, "A");
+    expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "A"]).status).toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the person's own request changes a Construction setting at once, with their words and one line", () => {
+    const p = fixture();
+    policyHuman(p, "from here on, turn checkpoints off");
+    const applied = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    expect(applied.status, `${applied.stdout}${applied.stderr}`).toBe(0);
+    expect(JSON.parse(applied.stdout).notice).toBe(
+      "Construction checkpoints are off for this work now (they were on). Say 'turn checkpoints back on' to undo.",
+    );
+    expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
+    const row = readAuditShardEvents(p).findLast((r) => r.event === "CONSTRUCTION_POLICY_SET")!;
+    expect(auditBlockField(row.block, "Person Reply")).toBe("from here on, turn checkpoints off");
+    expect(readAuditShardEvents(p).some((r) => r.event === "DECISION_RECORDED")).toBe(false);
+    // Several changes in one message each apply: a change does not spend the turn.
+    const iteration = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    expect(iteration.status, `${iteration.stdout}${iteration.stderr}`).toBe(0);
+    expect(JSON.parse(iteration.stdout).notice).toBe(
+      "Construction now goes stage by stage (it built one Unit at a time). Say 'build one Unit at a time' to undo.",
+    );
+    // Asking for what is already in force changes nothing and says so.
+    const rows = readAuditShardEvents(p).length;
+    const same = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    expect(same.status).toBe(0);
+    expect(JSON.parse(same.stdout).notice).toBe("Construction already goes stage by stage.");
+    const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    expect(JSON.parse(off.stdout).notice).toBe("Construction checkpoints are already off for this work.");
+    expect(readAuditShardEvents(p)).toHaveLength(rows);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an unattended run never changes a Construction setting, even after a person turn", () => {
+    const p = fixture();
+    const before = readFileSync(seededStateFile(p));
+    policyHuman(p, "turn checkpoints off");
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_UNATTENDED: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const refused = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), "set-construction-checkpoints", "disabled", "--project-dir", p,
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
+    expect(refused.status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p))).toEqual(before);
+    // A presence bypass skips the presence check, never the unattended rule.
+    const bypassed = spawnSync(process.execPath, [
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), "set-construction-checkpoints", "disabled", "--project-dir", p,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+      env: { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+    });
+    expect(bypassed.status).not.toBe(0);
+    expect(`${bypassed.stdout}${bypassed.stderr}`).toContain("An unattended run does not change");
     expect(readFileSync(seededStateFile(p))).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -853,7 +912,7 @@ describe("t342 Construction checkpoint routing", () => {
     expect(gateAnswer.status, `${gateAnswer.stdout}${gateAnswer.stderr}`).toBe(0);
     expect(JSON.parse(gateAnswer.stdout).reason).toBe("approval-gate-report-owned");
     expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
-    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(authorizedConstructionPolicyChange(p, readFileSync(file, "utf-8"), "Construction Checkpoints", "disabled")).toBe(false);
     expect(readFileSync(file)).toEqual(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -926,14 +985,13 @@ describe("t342 Construction checkpoint routing", () => {
     expect(readAuditShardEvents(p).some((row) => row.event === "CONSTRUCTION_POLICY_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("iteration consent is required even when checkpoints are disabled", () => {
+  test("an iteration change needs the person's request even when checkpoints are disabled", () => {
     const p = fixture();
     writeFileSync(seededStateFile(p), setField(readFileSync(seededStateFile(p), "utf-8"), "Construction Checkpoints", "disabled"));
     const before = readFileSync(seededStateFile(p));
-    policyHuman(p, "hello");
     expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-    recordPolicy(p, "Construction Iteration", "stage-major");
+    policyHuman(p, "let's do each stage for both units together");
     expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -998,18 +1056,45 @@ describe("t342 Construction checkpoint routing", () => {
       expect(readFileSync(file)).toEqual(before);
     };
     assertGenericRefused();
+    const unasked = policyCli(p, "state", [command, value]);
+    expect(unasked.status, `${unasked.stdout}${unasked.stderr}`).not.toBe(0);
+    expect(readFileSync(file)).toEqual(before);
     appendAuditEntry("HUMAN_TURN", {}, p);
     assertGenericRefused();
-    const unconsented = policyCli(p, "state", [command, value]);
-    expect(unconsented.status, `${unconsented.stdout}${unconsented.stderr}`).not.toBe(0);
-    expect(readFileSync(file)).toEqual(before);
-    recordPolicy(p, field, value);
+    // The typed setter is the person's route: their turn since the last decision applies it.
     const changed = spawnSync(process.execPath, [
       join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--project-dir", p,
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(readFileSync(file, "utf-8")).toContain(`- **${field}**: ${value}`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("no shipped guidance asks the person to confirm a Construction setting they asked for", () => {
+    const root = join(import.meta.dir, "..", "..");
+    const files = [
+      "core/aidlc-common/protocols/stage-protocol-construction.md",
+      "core/aidlc-common/stages/inception/delivery-planning.md",
+      "docs/guide/12-cli-commands.md",
+      "docs/guide/facilitator-guide.md",
+      "docs/guide/07-interaction-modes.md",
+      "core/tools/aidlc-lib.ts",
+    ];
+    const stale = [
+      "--checkpoint construction-policy",
+      "If the human approves changing iteration",
+      "explain that prerequisite and confirm switching",
+      "requires the human's exact choice for",
+      "Obtain a separate\nfield/value consent",
+      "not merely a fresh human turn",
+      "the change needs your explicit approval",
+      "--decision \"Change this Construction policy?\"",
+    ];
+    const hits = files.flatMap((rel) => {
+      const body = readFileSync(join(root, rel), "utf-8");
+      return stale.filter((phrase) => body.includes(phrase)).map((phrase) => `${rel}: ${phrase}`);
+    });
+    expect(hits).toEqual([]);
+  });
 
   test("generic set refuses a mixed policy batch without changing any state bytes", () => {
     const p = fixture({ autonomy: "autonomous" });
@@ -1467,6 +1552,33 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(reviewed().get("alpha")).toBe("READY");
     reopenFor(p, ["--stage", "nfr-design"]);
     expect(reviewed().get("alpha")).toBe("READY");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a Unit reviewed under one Unit at a time is not reviewed again after the person switches back", () => {
+    const p = fixture();
+    cover(p, "alpha");
+    reviewReady(p, "nfr-design", "alpha");
+    const nfr = findStageBySlug("nfr-design")!;
+    const reviewed = () => freshReviewReceipts(p, readFileSync(seededStateFile(p), "utf-8"), nfr).unitVerdicts;
+    expect(reviewed().get("alpha")).toBe("READY");
+    // The unit-major walk records the stage's start late; then the person says
+    // "turn checkpoints off and go stage by stage".
+    appendAuditEntry("STAGE_STARTED", { Stage: "nfr-design" }, p);
+    appendAuditEntry("CONSTRUCTION_POLICY_SET", {
+      Field: "Construction Checkpoints", Value: "disabled", "Previous Value": "enabled",
+      "Construction Iteration": "unit-major", "Construction Checkpoints": "disabled",
+    }, p);
+    appendAuditEntry("CONSTRUCTION_POLICY_SET", {
+      Field: "Construction Iteration", Value: "stage-major", "Previous Value": "unit-major",
+      "Construction Iteration": "stage-major", "Construction Checkpoints": "disabled",
+    }, p);
+    const file = seededStateFile(p);
+    writeFileSync(file, setField(setField(readFileSync(file, "utf-8"),
+      "Construction Checkpoints", "disabled"), "Construction Iteration", "stage-major"));
+    expect(reviewed().get("alpha")).toBe("READY");
+    // A start after the switch is a real restart of the stage.
+    appendAuditEntry("STAGE_STARTED", { Stage: "nfr-design" }, p);
+    expect(reviewed().get("alpha")).not.toBe("READY");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Every Unit built and approved, and the stage gates approved in order until

@@ -1,4 +1,4 @@
-// covers: function:hooksOffAgentStep, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, subcommand:aidlc-orchestrate:next
+// covers: function:hooksOffAgentStep, function:fillHookActivationText, function:hookStatusPathLinked, function:hookLiveness, function:unattendedHumanPresenceHint, function:recordPreWorkflowHeartbeat, subcommand:aidlc-orchestrate:next
 //
 // When the engine KNOWS a harness's hooks have never run in the joined
 // workflow, `next` does no work. It tells the agent what to do itself and the
@@ -13,7 +13,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -303,8 +303,10 @@ describe("next stops with the agent's step when the engine knows the hooks never
   test("a conversation that has not joined the workflow is not stopped", () => {
     const proj = installed(COPILOT);
     intentCreate(proj, COPILOT);
-    // A teammate's clone: the record is there, this machine never selected it.
+    // A teammate's clone: the record is there, this machine never selected it,
+    // and the person's message there left its heartbeat outside any record.
     rmSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), { force: true });
+    beat(proj, "record-human-turn");
     expect(isStop(next(proj, COPILOT))).toBe(false);
   });
 
@@ -329,10 +331,82 @@ describe("next stops with the agent's step when the engine knows the hooks never
     test(`${name} declares no step yet, so next never stops for this there`, () => {
       const h: Harness = { name, dir: name === "cursor" ? ".cursor" : ".kiro", lines: () => [] };
       const proj = installed(h);
+      expect(isStop(next(proj, h))).toBe(false);
       intentCreate(proj, h);
       expect(isStop(next(proj, h))).toBe(false);
     });
   }
+});
+
+// Before any workflow, a harness whose hooks beat on every message of the
+// person's knows from the message that led to `next`: no heartbeat at all
+// means the hooks did not run for it, so the line shows before any work.
+describe("before any workflow, next stops when the person's message left no heartbeat", () => {
+  for (const h of HARNESSES) {
+    test(`${h.name}: no heartbeat stops the first next with the step; the message's heartbeat lets it run`, () => {
+      const proj = installed(h);
+      const stopped = next(proj, h);
+      expect(isStop(stopped), JSON.stringify(stopped)).toBe(true);
+      for (const line of h.lines(proj)) expect(stopped.message ?? "").toContain(`"${line}"`);
+      beat(proj, "record-human-turn");
+      expect(isStop(next(proj, h))).toBe(false);
+    });
+  }
+
+  test("Claude's step runs the stopped command again, so the person's request goes on unquoted", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const r = run(
+      proj,
+      [join(proj, h.dir, "tools", "aidlc-orchestrate.ts"), "next", "--", "fix the flag parser"],
+      attendedEnv(),
+    );
+    expect(r.code, r.stderr).toBe(0);
+    const stopped = JSON.parse(r.stdout) as Printed;
+    expect(isStop(stopped), r.stdout).toBe(true);
+    expect(stopped.message).toContain(`Then run ${RERUN} and act on what it returns`);
+    expect(stopped.message).not.toContain("fix the flag parser");
+  });
+
+  test("the human-turn hook leaves that heartbeat on a message before any workflow", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const prompt = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "/aidlc fix the flag parser" }),
+    );
+    expect(prompt.code, prompt.stderr).toBe(0);
+    expect(existsSync(join(hooksHealthDir(proj), "record-human-turn.last"))).toBe(true);
+    expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  test("the heartbeat is never written through a linked aidlc folder", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const outside = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-hooks-off-outside-"));
+    outsides.push(outside);
+    rmSync(join(proj, "aidlc"), { recursive: true, force: true });
+    symlinkSync(outside, join(proj, "aidlc"), DIR_LINK);
+    const prompt = run(
+      proj,
+      [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+      attendedEnv({ CLAUDE_PROJECT_DIR: proj }),
+      JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt: "/aidlc fix the flag parser" }),
+    );
+    expect(prompt.code, prompt.stderr).toBe(0);
+    const written = readdirSync(outside, { recursive: true }).map(String);
+    expect(written.filter((name) => name.endsWith(".last"))).toEqual([]);
+    // With no heartbeat possible there, the missing one is not read as hooks off.
+    expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  test("unattended, or with the presence check switched off, the first next is not stopped", () => {
+    const proj = installed(COPILOT);
+    expect(isStop(next(proj, COPILOT, { AIDLC_UNATTENDED: "1" }))).toBe(false);
+    expect(isStop(next(proj, COPILOT, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" }))).toBe(false);
+  });
 });
 
 describe("a refusal for a reply that was not recorded carries the same step when the hooks never ran", () => {

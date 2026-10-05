@@ -1,6 +1,7 @@
 // covers: function:switchesOff, function:switchOffLine, function:switchesOffLines, function:switchOffNotices
 // covers: function:recordSwitchChange, function:clearSwitchCommand, function:latestPersonTurn, function:personSpokeSinceGate
 // covers: function:PERSON_CHECK_SWITCHES, function:PERSON_CHECK_SWITCH_LABELS
+// covers: function:killSwitchSource, function:isKillSwitchSource
 //
 // A recorded switch that takes a check away from the person counts the moment
 // it is recorded, however it got there: asked for in the chat, typed in a
@@ -32,6 +33,7 @@ import {
   personSpokeSinceGate,
   resolveProjectFlag,
   STOP_HOOK_PROBE_ENV,
+  stateFilePath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   clearSwitchCommand,
@@ -251,6 +253,22 @@ describe("a check switched off for the project is always said, never refused", (
     expect(said[0]).toContain(NOT_FROM_CHAT);
   });
 
+  test("an unattended run does not turn a check off for the project, and still turns one back on", () => {
+    const proj = installedProject();
+    says(proj, ASKED);
+    const unattended = { AIDLC_UNATTENDED: "1" };
+    const refused = dispatch(proj, ["config", "flags", "--project-dir", proj, "--bypass", NAME, "--local", "--yes"], undefined, unattended);
+    invalidateSettingsCache();
+    expect(refused.status).not.toBe(0);
+    expect(refused.stdout + refused.stderr).toContain("An unattended run does not turn a check off");
+    expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
+    writeLocal(proj, [NAME]);
+    const cleared = dispatch(proj, ["config", "flags", "--project-dir", proj, "--clear-bypass", NAME, "--yes"], undefined, unattended);
+    invalidateSettingsCache();
+    expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
+    expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
+  });
+
   test("a line written into the file, or kept from before this release, counts and is said once", () => {
     const proj = project();
     const path = writeLocal(proj, [NAME]);
@@ -303,6 +321,41 @@ describe("a check switched off for the project is always said, never refused", (
     expect(back.stdout).toContain("The review freeze check is on again for this project.");
     expect(back.stdout.match(/is on again/g)).toHaveLength(1);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBeUndefined();
+  });
+
+  test("config get names a recorded switch by its file, and a clear says when this work still keeps it off", () => {
+    const proj = installedProject();
+    expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
+    const got = dispatch(proj, ["engine", "config", "get", "guard.review-freeze"]);
+    expect(got.stdout.trim(), got.stderr).toBe(`off (${NAME} in aidlc.settings.local.json)`);
+    // This piece of work runs with Guard Policy off, which keeps the check off on its own.
+    const state = stateFilePath(proj);
+    writeFileSync(state, readFileSync(state, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"));
+    const cleared = flags(proj, "--clear-bypass", NAME, "--yes");
+    expect(cleared.status, cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain(
+      "The review freeze check switch is cleared for this project, but it stays off for this piece of work: " +
+        'guard policy off (set by you). Say "turn it on for this work" to restore it there (/aidlc config set guard.review-freeze on).',
+    );
+    expect(cleared.stdout).not.toContain("is on again");
+  });
+
+  test("a recorded plan approval switch is named by its file, and a strict memory lock makes the clear say it is on", () => {
+    const proj = installedProject();
+    const PLAN = "AIDLC_DISABLE_PLAN_APPROVAL_GUARD";
+    expect(flags(proj, "--bypass", PLAN, "--local", "--yes").status).toBe(0);
+    const got = dispatch(proj, ["engine", "config", "get", "plan-approval"]);
+    expect(got.stdout.trim(), got.stderr).toBe(`off (from ${PLAN} in aidlc.settings.local.json)`);
+    // The work says plan approval off, but Guard Policy strict in memory keeps it on.
+    const state = stateFilePath(proj);
+    writeFileSync(state, `${readFileSync(state, "utf-8").trimEnd()}\n- **Plan Approval**: off (set by you)\n`);
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    mkdirSync(memory, { recursive: true });
+    writeFileSync(join(memory, "project.md"), "# Project\n\n## Guard Policy\n\nMode: strict\n");
+    const cleared = flags(proj, "--clear-bypass", PLAN, "--yes");
+    expect(cleared.status, cleared.stderr).toBe(0);
+    expect(cleared.stdout).toContain("The plan approval check is on again for this project.");
+    expect(cleared.stdout).not.toContain("stays off for this piece of work");
   });
 
   test("off, on, and off again by editing the file is two changes, each said once", () => {

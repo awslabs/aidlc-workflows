@@ -339,6 +339,40 @@ describe("t343 completed swarm batch checkpoints", () => {
     expect(resolveSwarmCheckpoint(pd, 1, BATCH).ready).toBe(false);
   });
 
+  // Without Construction checkpoints, and without a workflow at all, a check
+  // still runs only the command the person approved: a supplied one never runs.
+  test("a legacy workflow or no workflow runs no supplied check command", () => {
+    const pd = fixture(false, [], false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace("- **Construction Checkpoints**: enabled", "- **Construction Checkpoints**: disabled"));
+    const marker = join(pd, "legacy-supplied-command-ran");
+    const supplied = `${JSON.stringify(process.execPath)} -e "require('fs').writeFileSync('${marker}','executed')"`;
+    const actions = [["check", "alpha"], ["finalize", "--batch", "1", "--units", BATCH.join(","), "--claimed", BATCH.join(",")]];
+    for (const action of actions) {
+      const legacy = tool(pd, "swarm", [...action, "--check-cmd", supplied]);
+      expect(legacy.code, legacy.out).not.toBe(0);
+      expect(legacy.out).toContain("set-construction-verification-command");
+    }
+    // The way on: the person approves a command once, and the check runs it.
+    recordCommand(pd, CHECK);
+    const approvedRun = tool(pd, "swarm", ["check", "alpha"]);
+    expect(approvedRun.out).not.toContain("set-construction-verification-command");
+    expect(approvedRun.out).toContain("no worktree for unit");
+    for (const action of actions) {
+      const substituted = tool(pd, "swarm", [...action, "--check-cmd", supplied]);
+      expect(substituted.code, substituted.out).not.toBe(0);
+      expect(substituted.out).toContain("does not match");
+    }
+    expect(readdirSync(pd)).not.toContain("legacy-supplied-command-ran");
+
+    const bare = createTestProject();
+    projects.push(bare);
+    const stateless = tool(bare, "swarm", ["finalize", "--batch", "1", "--units", "alpha", "--claimed", "alpha", "--check-cmd", supplied]);
+    expect(stateless.code, stateless.out).not.toBe(0);
+    expect(stateless.out).toContain("finalize needs an active workflow");
+  });
+
   test("older native convergence without its command digest cannot certify a batch", () => {
     const pd = fixture();
     converge(pd, 1, BATCH, "unchecked");

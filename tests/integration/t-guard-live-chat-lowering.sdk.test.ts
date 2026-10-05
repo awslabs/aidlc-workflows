@@ -2,8 +2,9 @@
 // subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:config-change,
 // subcommand:aidlc-utility:status, scope:enterprise
 //
-// Live customer journey: only a typed switch lowers production guards. The
-// shipped UserPromptSubmit hook, not a fixture or direct tool call, records it.
+// Live customer journey: the person lowers production guards by typing a
+// switch, which the shipped UserPromptSubmit hook applies, or by asking in
+// plain words, which the agent carries out as the person's request.
 // SPENDS TOKENS. Requires AIDLC_CLAUDE_SDK_LIVE=1 and --production-guards.
 // Like t-guard-recovery-production, the fixture profile skips rather than
 // restoring disabled guards. The runner explains an explicitly selected skip:
@@ -15,7 +16,7 @@ import {
   auditBlockField,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { assertResultOk, assertToolResultContains } from "../harness/assert.ts";
+import { assertToolResultContains } from "../harness/assert.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 import {
   type DriveOptions,
@@ -53,7 +54,7 @@ describe.skipIf(
     process.env.AIDLC_NO_LLM === "1" ||
     !Bun.which("claude"),
 )("production guards: lowering from a live Claude chat", () => {
-  productionTest("typed switches lower the active intent's guards; plain words do not", async () => {
+  productionTest("typed switches and plain words both lower the active intent's guards, as the person's", async () => {
     // Do not sanitize these: a fixture bypass must fail this production proof.
     for (const key of GUARD_SWITCHES) {
       expect(process.env[key], `${key} disables the production contract`).not.toBe("1");
@@ -122,20 +123,6 @@ describe.skipIf(
       expect(auditBlockField(policyRows[0].block, "Source")).toBe("you");
       assertToolResultContains(relaxed, "Bash", "Guard Policy");
 
-      const beforePlainPolicy = guardEvents("GUARD_POLICY_SET").length;
-      const beforePlainDisabled = guardEvents("GUARD_DISABLED").length;
-      const plain = await drive(
-        "please stop asking me to re-approve when files change, turn the guards off",
-        150_000,
-      );
-      expect(stateLines()).toContain(RELAXED_LINE);
-      expect(guardEvents("GUARD_POLICY_SET")).toHaveLength(beforePlainPolicy);
-      expect(guardEvents("GUARD_DISABLED")).toHaveLength(beforePlainDisabled);
-      assertResultOk(plain);
-      // Deliberately assert the final answer: the customer must be told the
-      // exact command to type. Do not pin the model's surrounding explanation.
-      expect(plain.resultEvent?.result).toContain("/aidlc --guard-policy off");
-
       const disabled = await drive("/aidlc config set guard.state-transition off", 90_000, {
         toolName: "Bash",
         resultIncludes: "Fence state-transition",
@@ -162,6 +149,21 @@ describe.skipIf(
         (result) => result.toolName === "Bash" && result.resultText.includes("Checks off:"),
       );
       expect(statusOutput?.resultText).toMatch(/^Checks off:.*\bstate-transition\b/m);
+
+      // Plain words are the person's request too: the agent runs the setter for
+      // them, the change is set by you with their words, and one line says how
+      // to put it back. No exact typing.
+      const asked = "please stop asking me to re-approve when files change, turn the guards off";
+      const plain = await drive(asked, 150_000, {
+        toolName: "Bash",
+        resultIncludes: "Guard Policy is off for this piece of work",
+      });
+      assertToolResultContains(plain, "Bash", `Guard Policy is off for this piece of work, because you said: "${asked}".`);
+      expect(stateLines()).toContain("- **Guard Policy**: off (set by you)");
+      const plainRows = readAuditShardEvents(projectDir).filter((entry) => entry.event === "GUARD_POLICY_SET");
+      expect(plainRows).toHaveLength(2);
+      expect(auditBlockField(plainRows[1].block, "Source")).toBe("you");
+      expect(auditBlockField(plainRows[1].block, "Person Reply")).toBe(asked);
     } finally {
       cleanupTestProject(projectDir);
     }

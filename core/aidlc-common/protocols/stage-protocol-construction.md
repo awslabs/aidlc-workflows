@@ -34,11 +34,12 @@ the team `unit_gate` and settled-swarm policies when those fields are present.
 3. **`directive.construction_checkpoint`** uses **Unit and skeleton checkpoints**
    below. The Unit body has already run; do not regenerate it or report the
    whole Code Generation stage complete for this Unit.
-4. **`directive.construction_policy.completion_only === true`** is bookkeeping
-   after recorded Unit approvals. It must also carry
+4. **`directive.construction_policy.completion_only === true`** closes the stage
+   after its Units were approved. It must also carry
    `human_completion_required: false`. Skip the body, questions, reviewer, and
-   learnings prompt. Report `awaiting-approval`, then `approved`, for the emitted
-   `directive.stage`, both without `--user-input`, and re-run `next`. If the
+   learnings prompt, and say nothing about this step. Report
+   `awaiting-approval`, then `approved`, for the emitted `directive.stage`,
+   both without `--user-input`, and re-run `next`. If the
    metadata contradicts itself or a report refuses, explain the error and stop;
    do not manufacture approval or retry generation.
 5. **`directive.construction_policy.offer_autonomy === true`** uses **Autonomy
@@ -68,10 +69,9 @@ human decisions. Preserve the existing isolated-run branch for `single: true`.
 ### Execution is separate from approval
 
 New workflows default to `Construction Execution: serial`. Setting autonomy
-never changes execution or iteration order. To select swarm explicitly, the
-human chooses stage-major first, then the execution setting. Obtain a separate
-field/value consent using **Changing Construction policy** below before each
-setter during Construction:
+never changes execution or iteration order. Swarm needs stage-major first,
+then the execution setting; when the person asks for parallel Units, run both
+setters as **Changing Construction policy** below describes:
 
 ```bash
 {{INVOKE}} engine state set-construction-iteration stage-major
@@ -92,32 +92,28 @@ Only one protected question may be open per session. Asking any new question
 protected questions one at a time and wait for the answer before anything else.
 A withdrawn question must be asked again.
 
-During Construction, changing `Construction Checkpoints`, `Construction
-Execution`, or `Construction Iteration` requires the human's exact choice for
-that field and value. A recent unrelated human turn, another gate's approval,
-or autonomy never authorizes a policy change. Do not disable checkpoints to
-clear an execution refusal. For example, if the human wants checkpoints disabled:
+When the person asks in their own words to change `Construction Checkpoints`,
+`Construction Execution`, or `Construction Iteration` ("turn checkpoints off",
+"from here on, build one unit at a time", "run the Units in parallel"), do it
+in that turn: run the typed setter, then say its `notice` line to them word for
+word. Do not ask them to confirm it. For example:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
-```
-
-Present **Approve** and **Request Changes** and wait for the human's offered
-choice in the invoking SessionStart session. After **Approve**, record and apply it:
-
-```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
 {{INVOKE}} engine state set-construction-checkpoints disabled
+{{INVOKE}} engine state set-construction-iteration unit-major
+{{INVOKE}} engine state set-construction-execution swarm
 ```
 
-After **Request Changes**, record the same answer with `--details "Request Changes"`
-and keep the existing policy. Substitute the exact field and value for execution
-or iteration changes, then use its typed setter. Each change needs its own
-current-workflow `CONSTRUCTION_POLICY_RECORDED` receipt. The setter spends the
-receipt by applying its value; another value, another session's response, a
-superseding proposal, or a consumed answer is refused. An audit append failure
-leaves the response retryable: fix the failure and retry the same answer.
-During Inception, the typed setters retain their receipt-free planning behavior.
+During Construction the setter makes the change only when a message from the
+person since the last decision is on record, and it keeps their words with the
+change. It is never yours to make on your own: not to clear a refusal, not
+because autonomy is on, not from another gate's answer. When a setter names a
+setting that has to change first (parallel needs stage-major and checkpoints
+on; one Unit at a time needs serial), run that setter first and say both lines.
+When one message asks for Construction changes and automatic approval
+together, run the Construction setters before `set-autonomy`. Several changes
+in one message each get their own setter and their own line. A request at an
+open gate with no approval in it leaves the gate open for their answer.
 
 ### Unit and skeleton checkpoints
 
@@ -305,10 +301,9 @@ options:
 ```
 
 Map **Continue automatically** to `autonomous` and **Review each checkpoint** to
-`gated`. Record the explicit answer with
-`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, then re-run
-`next`. Do not log this choice with `log decision`/`log answer`: `set-autonomy`
-owns its receipt, and logging an interview answer first consumes the human turn.
+`gated`. Record the explicit answer only with
+`{{INVOKE}} engine bolt set-autonomy --mode <autonomous|gated>`, never with
+`log decision` or `log answer` first, then re-run `next`.
 Escalation requires a fresh human turn; revocation to `gated` does not.
 
 Explicit on-demand requests remain valid at any point during Construction.

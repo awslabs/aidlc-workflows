@@ -53,7 +53,13 @@ orchestration engine is resolving the compiled scope grid" does not.
 for chat narration:** engine, directive, dispatch, conductor, harness, verb,
 scope grid, steering, forwarding loop, mint, swarm, entropy, and the
 ARS component names (IAE, CSU, VE, R, UA). The user's project has none of
-these things.
+these things. The same holds for the record-keeping words: receipt, pipeline
+link, store generation, source fingerprint, compare-and-swap, fence, stand
+aside, bookkeeping, ritual, ceremony, and grounding contract. A step that only
+records something and leaves the person nothing to do or know (a link, a
+receipt, publishing the knowledge base, closing a stage after its approvals)
+is silent: say nothing about it. A message this protocol gives you to say,
+such as what a saved snapshot keeps, is still said as written.
 
 Say this instead:
 
@@ -833,6 +839,10 @@ Each stage specifies its lead and supporting agents. To load a persona:
 5. `aidlc/spaces/<active-space>/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
 6. Prior stage artifacts as required by the current stage
 
+On inline stages and for the inline lead of a mob, `inline_context_paths` lists
+the team's knowledge (4 and 5) right after the personas and before the shipped
+methodology (2 and 3): read it in the order listed.
+
 ### For inline stages and the inline lead of a mob:
 1. Before `run-stage`, apply every `load-steering.rules_content` entry in order
    and follow each opaque continuation immediately. The sequence delivers every
@@ -841,17 +851,19 @@ Each stage specifies its lead and supporting agents. To load a persona:
    completed bundle.
 2. Read every path in `inline_context_paths`. On `inline`, the engine expands
    the lead and every support agent into exact persona + existing knowledge
-   files. On `mob`, the roster contains the lead only because supports are
-   dispatched. An agent name by itself is not loaded context. Knowledge remains
-   path-loaded until the retrieval layer lands. Show any `context_warnings`
-   verbatim and continue with the readable roster.
+   files. On `mob`, the roster holds the lead's persona and knowledge only,
+   because supports are dispatched: read all of it. An agent name by itself
+   is not loaded context. Knowledge remains path-loaded until the retrieval
+   layer lands. Show any `context_warnings` verbatim and continue with the
+   readable roster.
 3. This is a blocking precondition, not a manifest hint. The first tool calls
    after `run-stage` must read these paths only; do not batch them with stage or
    consume reads. A listed path is not delivered content: explicitly read it
    with the harness file-read tool and wait for the result. Do not read the
    stage file or consumes, initialize the diary, run the body, dispatch mob
    supports, or write artifacts until every required inline-context read has
-   completed. In particular, a mob must load its lead persona first.
+   completed. In particular, a mob must load its lead persona first, then every
+   knowledge path after it.
 4. Do not silently omit any listed path. Apply each loaded inline perspective
    when executing the stage.
 

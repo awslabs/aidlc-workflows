@@ -884,6 +884,7 @@ export const ROUTES: readonly Route[] = [
       "set sensors",
       "set learnings",
       "set summary-confirmation",
+      "set plan-approval",
       "set guard.plan-approval",
       "set guard.review-freeze",
       "set guard.state-transition",
@@ -904,6 +905,7 @@ export const ROUTES: readonly Route[] = [
       "set sensors": "config-change",
       "set learnings": "config-change",
       "set summary-confirmation": "config-change",
+      "set plan-approval": "config-change",
       "set guard.plan-approval": "config-change",
       "set guard.review-freeze": "config-change",
       "set guard.state-transition": "config-change",
@@ -2335,8 +2337,66 @@ async function runHook(action: Extract<Action, { type: "hook" }>): Promise<numbe
     text(2, `aidlc engine hook ${action.name}: hook does not export run(input)\n`);
     return 1;
   }
-  const code = await mod.run(await readStdin());
+  const code = await runHookModule(mod.run, await readStdin());
   hookTrace("hook-run-end", { code });
+  return code;
+}
+
+// Claude Code shows a blocking hook's stderr behind the hook's own command
+// ("[aidlc engine hook plan-approval-guard]: ..."), and a deny decision on
+// stdout with only its reason. So on Claude a PreToolUse refusal also prints
+// that decision, with the words it wrote to stderr. Exit 2 blocks on its own,
+// so the call stays refused if the JSON is ever not read. Adapters pin their
+// own harness name and read stderr, so nothing changes for them.
+async function runHookModule(
+  run: (input: string) => number | Promise<number>,
+  input: string,
+): Promise<number> {
+  let event: unknown;
+  try {
+    event = (JSON.parse(input) as { hook_event_name?: unknown }).hook_event_name;
+  } catch {
+    event = undefined;
+  }
+  let claude = false;
+  try {
+    claude = event === "PreToolUse" && runtimeHarnessName() === "claude";
+  } catch {
+    // No harness to name: the plain refusal stands.
+  }
+  if (!claude) return await run(input);
+  const written: string[] = [];
+  let wroteStdout = false;
+  const stderrWrite = process.stderr.write;
+  const stdoutWrite = process.stdout.write;
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
+  process.stderr.write = ((chunk: unknown, ...rest: unknown[]) => {
+    written.push(text(chunk));
+    return (stderrWrite as (...args: unknown[]) => boolean).call(process.stderr, chunk, ...rest);
+  }) as typeof process.stderr.write;
+  process.stdout.write = ((chunk: unknown, ...rest: unknown[]) => {
+    wroteStdout = true;
+    return (stdoutWrite as (...args: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+  }) as typeof process.stdout.write;
+  let code: number;
+  try {
+    code = await run(input);
+  } finally {
+    process.stderr.write = stderrWrite;
+    process.stdout.write = stdoutWrite;
+  }
+  const reason = written.join("").trim();
+  // A hook that already answered on stdout keeps its own answer.
+  if (code === 2 && reason && !wroteStdout) {
+    process.stdout.write(`${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason,
+      },
+    })}\n`);
+  }
   return code;
 }
 

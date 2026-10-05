@@ -63,8 +63,8 @@ that ship the neutral-only block. Keep those imports when merging project instru
     folder's value beats a user setting that is off. A skipped hook leaves
     no message in the chat; the Agent Debug Logs panel shows it.
   - `/aidlc --doctor` warns when the CLI list does not cover the folder. It
-    cannot see the VS Code switches, but once a stage has started with no
-    hook run, AI-DLC says so in the chat (see "AI-DLC says when its hooks
+    cannot see the VS Code switches, but when no hook has run for your
+    message, AI-DLC says so in the chat (see "AI-DLC says when its hooks
     have not run" below).
 - **A model provider** — nothing in this install pins a model. Signed-in
   Copilot works as-is; BYOK works with no GitHub auth at all (e.g. Amazon
@@ -171,8 +171,9 @@ then use the ignored local `dist/copilot/` output.
   plan first" refusal on both surfaces.
 - **AI-DLC says when its hooks have not run.** Both surfaces skip repo hooks
   without a word in the chat (see Folder trust above), so AI-DLC watches for
-  it. Once a stage has started in a workflow where no hook has ever run, the
-  next step does no work: in VS Code the agent turns Chat: Use Hooks on in
+  it. When no hook has run for your first message, or once a stage has
+  started in a workflow where no hook has ever run, the next step does no
+  work: in VS Code the agent turns Chat: Use Hooks on in
   the folder's `.vscode/settings.json` itself (VS Code asks you to allow the
   edit) and says "Fixed. Send your next message here to carry on."; your next
   message in the same chat runs with the hooks. If the setting was already
@@ -261,9 +262,11 @@ then use the ignored local `dist/copilot/` output.
     and `next config set`,
     `engine bolt set-autonomy`, the `engine state` status changes, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
-    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints` runs
-    without a click when it applies the checkpoints choice you just recorded
-    (its policy receipt for exactly that value);
+    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints`, and
+    `engine config set` for one of your checks (plan approval, summary
+    confirmation, a fence, or Guard Policy), run without a click when you
+    asked for that change in the chat since the last decision, and turning a
+    check back on always does;
   - commands that switch the work in progress: `engine intent switch` (or
     `engine intent <name>`) and `engine space switch` (or `engine space <name>`);
   - the team `unit` commands, which share claims and approvals through your

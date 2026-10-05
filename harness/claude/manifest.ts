@@ -38,6 +38,14 @@ const manifest: HarnessManifest = {
       "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
       "<entry>.",
     agentStepEdits: ".claude/settings.local.json",
+    // The human-turn hook leaves a heartbeat on every message, before the
+    // first workflow too.
+    notRunYet:
+      "This is expected before your first Claude Code chat in this folder. If you already started one, set " +
+      '"disableAllHooks": false in this project\'s .claude/settings.local.json (it works in the same chat). If ' +
+      "you started Claude Code with a setting that turns hooks off, start it again without that setting; if " +
+      "AI-DLC was set up while Claude Code was open, exit Claude Code and start it again in this folder. Then " +
+      "run doctor again.",
     agentStep:
       "Claude Code is not running AI-DLC's hooks in this project. First show the person this " +
       'line: "Choose Yes when Claude Code asks to change this project\'s settings, then answer ' +

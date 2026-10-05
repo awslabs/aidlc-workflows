@@ -40,6 +40,11 @@ const manifest: HarnessManifest = {
   hookActivation: {
     recovery:
       "Quit opencode and start it again with just `opencode` in <folder>, then type <entry> to carry on.",
+    // The plugin's human-turn hook leaves a heartbeat on every message, before
+    // the first workflow too.
+    notRunYet:
+      "This is expected before your first opencode chat in this folder. If you already started one, quit " +
+      "opencode and start it again with just `opencode` in <folder>, then run doctor again.",
     agentStep:
       "AI-DLC's opencode plugin is not loaded in this session. Do not retry and do not ask the " +
       "person to answer again. Show the person this line and end your turn: " +

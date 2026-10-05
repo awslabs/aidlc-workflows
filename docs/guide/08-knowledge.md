@@ -370,6 +370,7 @@ sequenceDiagram
 - Steps 1-5 load from files on disk
 - Step 6 is context added by the orchestrator at runtime based on the current stage's declared inputs
 - Steps 4-5 only load if the directories exist and contain files
+- On inline stages and for a mob stage's lead, the agent reads your team's knowledge (steps 4-5) right after its persona and before the shipped methodology (steps 2-3)
 - [Rules](09-rules-and-the-learning-loop.md) are behavioral constraints, not reference material — the resolved chain loads first and every applicable rule reaches the agent
 
 ---
