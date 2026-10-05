@@ -695,13 +695,13 @@ bracket the existing pipeline-deploy strategy lookup with
 `MERGE_DISPATCH_INVOKED` / `MERGE_DISPATCH_RETURNED` (or `_FALLBACK`), then
 present the returned pinned OID + evidence summary as one merge gate. Record the
 exact human answer with `aidlc unit gate <unit> --decision <approve|reject>
---user-input "<text>"`. On approval, `aidlc unit land <unit> --target <branch>`
+--user-input '<text>'`. On approval, `aidlc unit land <unit> --target <branch>`
 owns the transaction: pinned git content first with main-owned metadata retained,
 then one Unit-row fold under the intent lock, then audit/finalization. A moved
 claim ref requires re-pin, and an unavailable registry makes gate/land fail
 closed. If the exact attempt is released only after the git step landed, inspect
 the merge and continue explicitly with `aidlc unit land <unit>
---accept-released-attempt --user-input "<human acknowledgment>"`; a successor
+--accept-released-attempt --user-input '<human acknowledgment>'`; a successor
 claim is never accepted. Source conflicts abort before state folding. For
 crash recovery the same command accepts `--step git|state|audit`; each step is
 idempotent and `aidlc unit merge-status <unit>` reports the local journal.

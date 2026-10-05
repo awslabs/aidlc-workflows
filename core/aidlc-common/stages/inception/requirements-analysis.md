@@ -203,7 +203,7 @@ the turn and wait for the user's response. After they respond, fill the
 confirmation `[Answer]:` with their exact choice, then record the receipt:
 
 ```bash
-{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details "<Looks correct or Request changes>"
+{{INVOKE}} engine log answer --stage requirements-analysis --checkpoint summary-confirmation --questions-file "<this questions-file path>" --details '<Looks correct or Request changes>'
 ```
 
 If the user requests changes and their reply already says what should

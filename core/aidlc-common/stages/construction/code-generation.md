@@ -353,7 +353,7 @@ after `[Answer]:`, and record it (again `--stage-level` for zero-Unit work). On
 `Request Changes`, revise, blank the answer, and repeat from the fingerprint:
 
 ```bash
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --session "<same Runtime Session>" --questions-file "<code-generation-record>/code-generation-questions.md" --details "<exact choice>" --unit "<directive.unit>"
+bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage code-generation --checkpoint plan-approval --session "<same Runtime Session>" --questions-file "<code-generation-record>/code-generation-questions.md" --details '<exact choice>' --unit "<directive.unit>"
 ```
 
 ### Step 4: PART 2 — Generation

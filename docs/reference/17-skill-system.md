@@ -108,7 +108,7 @@ Before stage work, read the named `directive.protocol_modules`: `reviewer` → `
 Loop:
   1. directive = `aidlc engine orchestrate next $ARGUMENTS`
   2. act on directive.kind
-  3. After stage work, `aidlc engine orchestrate report --stage <directive.stage> --result <outcome> [--user-input "<text>"]`. Ask answers follow next/command/claim/execute-remedy instead; only a redo, jump, or start-fresh request on re-entry uses non-stage `report --result resumed`.
+  3. After stage work, `aidlc engine orchestrate report --stage <directive.stage> --result <outcome> [--user-input '<text>']`. Ask answers follow next/command/claim/execute-remedy instead; only a redo, jump, or start-fresh request on re-entry uses non-stage `report --result resumed`.
   4. Repeat only when the directive calls for continuation; otherwise stop or wait for the human as it directs.
 ```
 

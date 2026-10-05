@@ -2287,7 +2287,7 @@ function openQuestionReplyDirective(stage: string, checkpoint: string | null, re
     ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action approve\` ` +
       "or `--action reject` with the same Unit or batch and session you asked with, passing the person's reply " +
       "unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
-    : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details "<the person's exact reply>"\` ` +
+    : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
       "(with the checkpoint flags that question was logged with, when it has them)";
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +

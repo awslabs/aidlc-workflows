@@ -708,7 +708,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
       if (!/put them in single\s+quotes, never double quotes/.test(body)) missing.push(`${rel}  missing the quoting rule`);
       if (!body.includes("'\\''")) missing.push(`${rel}  missing the '\\'' escape`);
-      if (rel.endsWith("SKILL.md") && !body.includes("--details \"<the remedy's op>\"")) {
+      if (rel.endsWith("SKILL.md") && !body.includes("--details '<the remedy's op>'")) {
         missing.push(`${rel}  missing: the recovery pick passes the remedy's op`);
       }
       for (const stale of [
@@ -1521,10 +1521,16 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // In double quotes a shell runs a `$(...)`, a backtick or a `$NAME` inside
   // the text, and a choice's text can come from the project: answer text is
   // shown single-quoted, as the protocol's own rule for the person's words says.
-  test("the protocol never shows a double-quoted placeholder for answer text", () => {
+  test("no SKILL, annex, protocol, stage file or doc shows a double-quoted placeholder for answer text", () => {
     const doubleQuoted = /--(?:details|on-instruction|user-input|instruction|answer) "</;
     const found: string[] = [];
-    for (const rel of ["core/aidlc-common/protocols/stage-protocol.md", "docs/reference/04-stage-protocol.md"]) {
+    const prose = [
+      ...skills,
+      ...harnessQuestionAnnexes().filter((rel) => existsSync(join(REPO_ROOT, rel))),
+      ...[...new Bun.Glob("core/aidlc-common/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
+      ...[...new Bun.Glob("docs/**/*.md").scanSync({ cwd: REPO_ROOT })].sort(),
+    ];
+    for (const rel of prose) {
       readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").forEach((line, index) => {
         if (doubleQuoted.test(line)) found.push(`${rel}:${index + 1}  ${line.trim().slice(0, 120)}`);
       });
