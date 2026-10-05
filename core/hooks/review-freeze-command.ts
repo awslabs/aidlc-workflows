@@ -1589,7 +1589,8 @@ function withoutRedirections(segment: string): string {
  * dropped, never `cwd`, $HOME or the newest, so an absolute `cd` late in a
  * long command still counts. A command `shell` names as PowerShell is read
  * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
- * their -Path, -LiteralPath or first positional value, a `\` as a separator.
+ * their -Path, -LiteralPath or first positional value, a `\` as a separator,
+ * and a bare Set-Location names $HOME.
  */
 export function shellDirectoryRoots(
   command: string,

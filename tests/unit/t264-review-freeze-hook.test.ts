@@ -1244,7 +1244,7 @@ describe("t264 (d) Kiro IDE adapter route", () => {
       expect(r.stderr, command).toContain("review-freeze");
     }
     // An execute_pwsh command reaches the freeze marked as PowerShell, so a
-    // backslash path, Tee-Object and Set-Location read the way PowerShell runs them.
+    // backslash path (in Tee-Object too) and Set-Location read the way PowerShell runs them.
     const backslashed = reviewedDir.replaceAll("/", "\\");
     for (const command of [
       `Set-Content ${backslashed}\\requirements.md changed`,

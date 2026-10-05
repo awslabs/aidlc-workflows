@@ -1343,7 +1343,8 @@ write can also be read from a directory it never runs in
 (`echo x > hooks/y; cd .kiro`), and a write to a path that merely looks like
 a protected one under one of those directories is refused. A computed change
 (`cd $X`), `cd -`, stack operands, `~user`, a `HOME=` assignment on the same
-command, and a bare `pushd`, `popd`, or `Set-Location` add nothing, and a
+command, and a bare `pushd`, `popd`, or `Set-Location` add nothing (a
+command marked as PowerShell reads a bare `Set-Location` as `$HOME`), and a
 command run in a nested shell
 (`bash -c`, a heredoc body, `find -exec`) is still judged from the payload's
 `cwd`.

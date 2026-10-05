@@ -1178,10 +1178,10 @@ describe("t242 state-transition ownership guard", () => {
       ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
       // A bare cd goes to $HOME, here the project's parent.
       ["execute_bash", { command: `cd; echo x > '${basename(project)}/.kiro/hooks/y.json'` }, runtime],
-      // execute_pwsh reaches the guard marked as PowerShell: backslash paths,
-      // Tee-Object and Set-Location read the way PowerShell runs them.
+      // execute_pwsh reaches the guard marked as PowerShell: backslash paths
+      // and Set-Location read the way PowerShell runs them.
       ["execute_pwsh", { command: "Set-Content .kiro\\hooks\\y.json x" }, runtime],
-      ["execute_pwsh", { command: "'x' | Tee-Object .kiro/hooks/y.json" }, runtime],
+      ["execute_pwsh", { command: "'x' | Tee-Object .kiro\\hooks\\y.json" }, runtime],
       ["execute_pwsh", { command: "Set-Location .kiro\\hooks; Set-Content y.json x" }, runtime],
     ] as const) {
       const r = runIde(tool_name, tool_input);
