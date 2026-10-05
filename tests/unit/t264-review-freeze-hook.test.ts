@@ -615,6 +615,8 @@ describe("t264 (a) judgeFreeze decision table", () => {
     ]) {
       expect(targets(command), command).toContain("/p/.kiro/hooks/y.json");
     }
+    // A positional directory moves the reading once.
+    expect(targets("Set-Location .kiro; Set-Content -Path y.json -Value x").sort()).toEqual(["/p/.kiro/y.json", "/p/y.json"]);
     // The reading from the call's cwd stays; history and stack names add nothing.
     expect(targets("Set-Location -; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);
     expect(targets("Set-Location +; Set-Content -Path y.json -Value x")).toEqual(["/p/y.json"]);

@@ -2500,14 +2500,14 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
             [call({ tool_name: 7, tool_input: { path: file } }), "malformed (toolName)"],
             [call({ tool_input: { path: file } }), "names no tool"],
             ["{not json", "malformed (JSON)"],
-            ["", "names no tool"],
+            ["", "no hook payload arrived"],
           ] as const) {
             for (const env of [{}, { AIDLC_DISABLE_REVIEW_FREEZE_HOOK: "1" }]) {
               const r = runIdeStdin(dir, target, stdin, { AIDLC_COMPILED_EXECUTABLE: "", ...env });
               expect(r.code, `${target} ${why}`).toBe(2);
               expect(r.stderr, `${target} ${why}`).toContain("AI-DLC cannot check this Kiro tool call");
               expect(r.stderr, `${target} ${why}`).toContain(why);
-              expect(r.stderr).toContain("Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. Update Kiro");
+              expect(r.stderr).toContain("Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. If Kiro is older, update it");
             }
           }
           expect(existsSync(capture), target).toBe(false);

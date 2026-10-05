@@ -1619,7 +1619,8 @@ export function shellDirectoryRoots(
     }
     const reading = homeReading(operand);
     if (reading) next.add(resolve(reading));
-    for (const dir of next) add(dir);
+    const home = resolve(shellHome());
+    for (const dir of next) add(dir, dir === home);
   };
   if (shell === "powershell") {
     for (const operand of powerShellLocationChanges(command, 0)) {
@@ -1635,7 +1636,7 @@ export function shellDirectoryRoots(
     const end = args.indexOf("--");
     const operand = end >= 0
       ? args[end + 1]
-      : args.find((arg) => !arg.startsWith("-") && !arg.startsWith("+"));
+      : args.find((arg) => !arg.startsWith("-") && !/^\+\d+$/.test(arg));
     if (operand !== undefined) {
       change(operand);
       continue;
@@ -1677,8 +1678,9 @@ function powerShellLocationChanges(command: string, depth: number): Array<string
       ? null
       : POWERSHELL_LOCATION_COMMANDS[name];
     if (location === null) continue;
-    const { targets } = cmdletWriteTargets(LOCATION_CHANGE, args, true);
-    if (targets.length === 0 && location === "set-location") out.push(null);
+    // The binding lists a positional path twice (its slot, and every positional).
+    const targets = new Set(cmdletWriteTargets(LOCATION_CHANGE, args, true).targets);
+    if (targets.size === 0 && location === "set-location") out.push(null);
     for (const target of targets) {
       if (target !== "-" && target !== "+") out.push(target.replaceAll("\\", "/"));
     }
@@ -1702,13 +1704,11 @@ export function shellWriteTargets(
   rawWords?: string[],
   shell: CommandShell = "posix",
 ): string[] {
-  const out: string[] = [];
+  const out = new Set<string>();
   shellDirectoryRoots(command, cwd, shell).forEach((root, index) => {
-    for (const target of shellWriteTargetsFrom(command, root, index === 0 ? rawWords : undefined, shell)) {
-      if (!out.includes(target)) out.push(target);
-    }
+    for (const target of shellWriteTargetsFrom(command, root, index === 0 ? rawWords : undefined, shell)) out.add(target);
   });
-  return out;
+  return [...out];
 }
 
 function shellWriteTargetsFrom(

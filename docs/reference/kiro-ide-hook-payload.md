@@ -194,11 +194,11 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   (measured on IDE 1.2.4 over `invoke_sub_agent` with `fs_write`), so both
   guards judge a delegate's call as the conductor's. Every PreToolUse payload
   of the supported builds (Kiro IDE 1.1.70, Kiro CLI 2.24.1 and later) names
-  its tool and fills its input, so a call neither guard can read (malformed
-  fields, no tool name, a write tool with no path field the adapter reads, a
+  its tool and fills its input, so a call neither guard can read (no payload,
+  malformed fields, no tool name, a write tool with no path field the adapter reads, a
   shell tool with no command) is refused with exit 2 before either runs,
   whatever the workflow, Guard Policy or `AIDLC_DISABLE_REVIEW_FREEZE_HOOK`;
-  the refusal names those builds and says to update Kiro. A legacy
+  the refusal names those builds and says to update an older Kiro. A legacy
   argument-less payload is one such call. A readable command that writes
   nothing is still forwarded.
 - **plan-approval-guard** — populated PreToolUse arguments are forwarded to the

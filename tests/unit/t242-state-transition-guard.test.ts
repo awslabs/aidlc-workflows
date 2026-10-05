@@ -1098,6 +1098,11 @@ describe("t242 state-transition ownership guard", () => {
       // (.kiro and five doublings collect 63; one absolute cd makes the cap's 64.)
       [`cd .kiro; echo x > hooks/y.json; cd a; cd b; cd c; cd d; cd e; cd '${project}/z'; cd`, 2],
       [`cd ~ && echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      // $HOME from `cd ~` stays when six doublings pass the cap.
+      [`cd ~; echo x > '${name}/.kiro/hooks/y.json'; cd a; cd b; cd c; cd d; cd e; cd f`, 2],
+      // bash 5.3 runs `${ cmd; }` and `${| cmd; }` as commands.
+      ["echo $" + "{ rm -rf .kiro/hooks; }", 2],
+      ["echo $" + "{| rm -rf .kiro/hooks; }", 2],
       [`echo x > ~/'${name}/.kiro/hooks/y.json'`, 2],
       ["pushd .kiro && echo x > hooks/y.json", 2],
       ["cd .kiro && cd hooks && rm y.json", 2],

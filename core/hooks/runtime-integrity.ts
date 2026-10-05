@@ -937,7 +937,9 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
         }
       }
     }
-    if (!quote && ch === "{" && visible.endsWith("$")) {
+    // `${ cmd; }` and `${| cmd; }` (bash 5.3) run a command, as `$(...)` does,
+    // so their braces stay separators.
+    if (!quote && ch === "{" && visible.endsWith("$") && !/[\s|]/.test(command[index + 1] ?? "")) {
       parameter++;
       visible += ch;
       continue;

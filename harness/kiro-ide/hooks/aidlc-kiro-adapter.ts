@@ -1923,6 +1923,7 @@ function shellToolCwd(toolName: string, toolArgs: Record<string, unknown>): stri
 // so a call they cannot read is refused rather than judged as one with no
 // target. A readable command that writes nothing still goes to the guards.
 function unreadableGuardCall(): string | null {
+  if (Object.keys(ide).length === 0) return "no hook payload arrived";
   if ((ide.malformedFields?.length ?? 0) > 0) {
     return `its hook payload is malformed (${ide.malformedFields?.join(", ")})`;
   }
@@ -2002,7 +2003,7 @@ function buildForward(): Forward {
         input: {
           reason:
             `AI-DLC cannot check this Kiro tool call: ${unreadable}. ` +
-            "AI-DLC supports Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. Update Kiro, then try again.",
+            "AI-DLC supports Kiro IDE 1.1.70 or later and Kiro CLI 2.24.1 or later. If Kiro is older, update it; then try again.",
         },
       };
     }
