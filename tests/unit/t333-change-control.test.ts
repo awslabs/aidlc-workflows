@@ -977,6 +977,22 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(guardPolicyRows(proj)).toHaveLength(1);
   });
 
+  // The human-turn hook applied the typed switch as the message arrived, and
+  // its note says what changed: `next` names no setter, which would only tell
+  // the person it is "already" so.
+  test("after the hook applied a typed Guard Policy, next names no setter for it", () => {
+    const { proj, state } = project("classic");
+    recordHumanPrompt(proj, "/aidlc --guard-policy relaxed");
+    expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
+    const routed = run(ORCHESTRATE, ["next", "--guard-policy", "relaxed"], proj);
+    expect(routed.status, routed.stderr).toBe(0);
+    expect(routed.stdout).not.toContain("config set guard-policy");
+    expect(guardPolicyRows(proj)).toHaveLength(1);
+    // A value the state does not hold yet still names the setter.
+    const strict = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "strict"], proj).stdout);
+    expect(strict.message).toContain("engine config set guard-policy strict");
+  });
+
   test("the flag at creation writes the human as the source, under either spelling", () => {
     const { state } = project("classic", ["--guard-policy", "strict"]);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (set by you)");

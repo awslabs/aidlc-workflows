@@ -179,6 +179,7 @@ import {
   withWorkspaceSourceStateCache,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
+  parseGuardPolicyStateLine,
   SKELETON_STANCES,
   guardRefusalStreakView,
   type GuardRemedy,
@@ -1834,6 +1835,15 @@ function typedSettingModifiers(flags: ParsedFlags): string[] {
     }
   }
   return modifiers;
+}
+
+// A typed `guard-policy <value>` the state already holds as set by you.
+function typedPolicyApplied(modifier: string, stateContent: string): boolean {
+  const [key, value] = modifier.split(" ");
+  if (key !== "guard-policy") return false;
+  const field = guardPolicyStateField(stateContent);
+  const line = parseGuardPolicyStateLine(field === null ? null : getField(stateContent, field));
+  return line !== null && line.value === value && line.source === "you";
 }
 
 function configSetCommand(modifiers: string[]): string {
@@ -7103,7 +7113,10 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     // the person named the stages, so no approval re-asks it. Any scope or
     // setting change in the same command runs first.
     const planChanges = flags.planChanges;
-    const modifiers = typedSettingModifiers(flags);
+    // A Guard Policy typed with the command was applied by the human-turn
+    // hook as the message arrived, and its note says what changed; naming the
+    // setter again would only tell the person it is "already" so.
+    const modifiers = typedSettingModifiers(flags).filter((modifier) => !typedPolicyApplied(modifier, stateContent));
     // A scope-change requires a VALID --scope that DIFFERS from the active
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
