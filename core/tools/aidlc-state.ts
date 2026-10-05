@@ -56,6 +56,7 @@ import {
   checkSummaryConfirmationEvidence,
   type AcceptedChange,
   governedChangeControl,
+  guardPolicyAcceptsChanges,
   recordAcceptedChanges,
   resolveChangeControl,
   resolveCeremony,
@@ -3985,6 +3986,12 @@ function observeChangeControl(
   if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
 }
 
+// A change outside every unit's work that relaxed or off keeps: recorded once
+// and said once, the same way the receipt scan's accepted changes are.
+function acceptOutsideUnitChanges(pd: string, content: string, change: AcceptedChange): void {
+  observeChangeControl(pd, content, { changeControlRead: true, acceptedChanges: [change] });
+}
+
 function verifySummaryConfirmationPrecondition(
   pd: string,
   content: string,
@@ -4487,16 +4494,29 @@ function verifyReviewerPrecondition(
     stage.workspace_requires === true && !sourceFreshnessOff && !settledSwarm;
   if (!attributionApplies) return;
 
+  // Under relaxed or off, what changed outside the units is kept and said once;
+  // only strict holds completion on it.
+  const acceptsChanges = guardPolicyAcceptsChanges(pd, content);
   if (
     receipts.sourceBaseline.state === "unbindable" ||
     receipts.sourceBaseline.state === "invalid"
   ) {
+    if (acceptsChanges) {
+      acceptOutsideUnitChanges(pd, content, {
+        checkpoint: "review-receipt",
+        stage: stage.slug,
+        unit: null,
+        changed: null,
+        recorded: "(stage start unavailable)",
+        current: "(not checked)",
+        notice: `I could not check ${stage.name} for files changed outside the units on this machine; carrying on.`,
+      });
+      return;
+    }
     error(
-      `Refusing to complete "${stage.slug}": the stage's source baseline snapshot is missing, ` +
-        `inconsistent with other modern source-binding evidence, or does not match its recorded hash, ` +
-        `so unclaimed source changes cannot be verified. Re-enter the stage ` +
-        `(a stage jump records a fresh baseline) or set AIDLC_SKIP_SOURCE_FRESHNESS=1 to bypass ` +
-        `deterministically.`,
+      `Refusing to complete "${stage.slug}": the record of what this stage started from is missing or ` +
+        `does not match on this machine, so changes outside the units cannot be checked. Restart the ` +
+        `stage with \`${entrySkillInvocation()} --stage ${stage.slug}\` to check again from here.`,
     );
   }
   if (
@@ -4511,7 +4531,21 @@ function verifyReviewerPrecondition(
         const path = key.slice(separator + 1);
         return repo ? `${repo}/${path}` : path;
       });
-      const more = unclaimed.length > 10 ? ` … and ${unclaimed.length - 10} more` : "";
+      const more = unclaimed.length > 10 ? ` and ${unclaimed.length - 10} more` : "";
+      if (acceptsChanges) {
+        const listing = receipts.currentSourceListing;
+        const entries = unclaimed.map((key) => `${key}\t${listing.get(key) ?? "-"}`).join("\n");
+        acceptOutsideUnitChanges(pd, content, {
+          checkpoint: "review-receipt",
+          stage: stage.slug,
+          unit: null,
+          changed: rendered,
+          recorded: "(outside the units)",
+          current: `sha256:${createHash("sha256").update(entries).digest("hex")}`,
+          notice: `These files changed outside any unit's work in ${stage.name}: ${rendered.join(", ")}${more}. Kept them.`,
+        });
+        return;
+      }
       error(
         `Refusing to complete "${stage.slug}": ${unclaimed.length} application-source path(s) changed during this stage run ` +
           `that no reviewed unit's source manifest claims (${rendered.join(", ")}${more}). Add each path to the owning ` +

@@ -380,8 +380,10 @@ recovery unspent again), so every later edit is re-checked and asked about once.
 `WORKFLOW_STARTED`, `STAGE_JUMPED`, and a `workspace_requires`
 `STAGE_STARTED` record content-addressed source-listing baselines. After every
 applicable unit has fresh modern evidence, completion compares baseline to the
-current listing and refuses any changed application-source path outside the
-fresh claims union. Unit-major Construction always uses the workflow/jump
+current listing. Under Guard Policy strict it refuses any changed
+application-source path outside the fresh claims union; under relaxed or off it
+records those paths once as `CHANGE_ACCEPTED` (checkpoint `review-receipt`) and
+names them to the person in one line. Unit-major Construction always uses the workflow/jump
 boundary because source work can precede its late `STAGE_STARTED`. Equal-second
 cross-shard rows that would decide a boundary or newest claimant fail closed
 instead of trusting shard filename order.
@@ -433,7 +435,8 @@ over-budget, or malformed boundaries remain `unbindable` and fail closed.
 Migration is deliberate: a pre-upgrade workflow with no baseline skips the
 unclaimed check, and a fieldless per-unit receipt retains the #629 global
 policy. A present but `unbindable`, missing, or corrupt modern baseline/unit
-snapshot fails closed. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
+snapshot fails closed under strict; under relaxed or off a missing or corrupt
+stage-entry baseline skips the unclaimed check with one line. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
 per-unit checks; missing/invalid-manifest receipts explicitly record
 `Unit Source Binding Bypass: true`, so the switch must be present again at
 completion. In a modern Bolt, finalize also verifies the attested base-to-

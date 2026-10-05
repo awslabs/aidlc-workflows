@@ -204,9 +204,13 @@ reviewed unit's strict `source-manifest.json` lists created, modified, or delete
 source paths; `Unit Source Fingerprint` binds those claims and manifest bytes.
 At completion the engine validates each unit newest-first (a newer reviewed
 claim can own an intentional shared-file integration), then compares the union
-of fresh claims with the stage-entry source baseline. An uncovered change or a
-stale unit blocks all four completion routes and offers that unit's one bounded
-stale-receipt recovery.
+of fresh claims with the stage-entry source baseline. Under Guard Policy
+strict, an uncovered change or a stale unit blocks all four completion routes
+and offers that unit's one bounded stale-receipt recovery. Under relaxed or
+off, an uncovered change is kept: completion records it once as
+`CHANGE_ACCEPTED` and names the files in one line ("These files changed outside
+any unit's work in Code Generation: ... Kept them."), and a stage-entry baseline
+that is missing on this machine skips the check with one line.
 
 The workspace-global `Source Fingerprint` is normally the outer post-review
 mutation boundary. One narrow reconciliation makes the documented “revert”

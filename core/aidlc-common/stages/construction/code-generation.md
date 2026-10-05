@@ -444,8 +444,9 @@ including files written by shell commands, scaffolding, or generators. Use a
 trailing `/` directory claim for generated trees. In the main workspace,
 multi-repo entries name their recorded `repo`; inside the worktree hosting the Bolt, paths are
 relative to its single selected repo and MUST omit `repo`. The engine refuses
-to record the unit review without this manifest, and unclaimed changed paths
-block stage completion.
+to record the unit review without this manifest. Under Guard Policy strict,
+unclaimed changed paths block stage completion; under relaxed or off they are
+kept, and the person is told once which files changed outside the units.
 
 A zero-Unit directive (`directive.unit` absent) writes no
 `source-manifest.json` and creates no Unit directory for one: the engine reads
