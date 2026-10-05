@@ -585,8 +585,8 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const refused = p.reviewVerdict(pending);
     expect(refused.code).not.toBe(0);
     const failure = JSON.parse(refused.stderr.trim().split("\n").at(-1)!) as Json;
-    expect(failure.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
-    expect(String(failure.error)).toContain("Guard Policy: relaxed");
+    expect(failure.change_notices).toEqual([expect.stringContaining("was saved before you confirmed the current summary; carrying on.")]);
+    expect(String(failure.error)).toContain("was saved before you confirmed the current summary; carrying on.");
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
     expect(p.events("REVIEW_COMPLETED", STAGE)).toHaveLength(0);
     p.writeReview(pending);
@@ -615,7 +615,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
     const completed = json(p.reviewVerdict(pending));
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
-    expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
+    expect(completed.change_notices).toEqual([expect.stringContaining("was saved before you confirmed the current summary; carrying on.")]);
     const accepted = p.events("CHANGE_ACCEPTED", STAGE);
     expect(accepted).toHaveLength(1);
     expect(auditBlockField(accepted[0].block, "Checkpoint")).toBe("summary-confirmation");
@@ -648,7 +648,7 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     expect(p.events("CHANGE_ACCEPTED")).toHaveLength(0);
     const completed = json(p.reviewVerdict(pending));
     expect(completed.emitted).toBe("REVIEW_COMPLETED");
-    expect(completed.change_notices).toEqual([expect.stringContaining("Guard Policy: relaxed")]);
+    expect(completed.change_notices).toEqual([expect.stringContaining("was saved before you confirmed the current summary; carrying on.")]);
     expect(p.events("CHANGE_ACCEPTED", STAGE)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
