@@ -844,6 +844,29 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).kind).toBe("ask");
   });
 
+  // With Guard Policy off or relaxed a changed file is not a new question: a
+  // note added to the answered questions file, or a checkout that rewrote its
+  // line endings, keeps the person's approval. Strict still asks.
+  test.each(["relaxed", "off"] as const)("under %s, a note or new line endings in the answered questions file keep the approval", (policy) => {
+    const proj = project(policy);
+    askFor(proj);
+    reply(proj, "1");
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    writeFileSync(path, `${readFileSync(path, "utf-8").replace(/\n/g, "\r\n")}\r\nNote: checked with the team.\r\n`, "utf-8");
+    const build = next(proj);
+    expect(build.kind, JSON.stringify(build)).toBe("run-stage");
+    expect(build.plan_approval).toEqual({ status: "approved" });
+  });
+
+  test("under strict, a note added to the answered questions file is asked about again", () => {
+    const proj = project("strict");
+    askFor(proj);
+    reply(proj, "1");
+    const path = join(stageDir(proj), "code-generation-questions.md");
+    writeFileSync(path, `${readFileSync(path, "utf-8")}\nNote: checked with the team.\n`, "utf-8");
+    expect(next(proj).kind).toBe("ask");
+  });
+
   test("'review the plan' after approval asks again before anything is built", () => {
     const proj = project();
     askFor(proj);

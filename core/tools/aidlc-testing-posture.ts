@@ -2331,7 +2331,8 @@ function earlierPlanApproval(
 ): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
   const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
-  const questions = readFileSync(questionsPath, "utf-8");
+  // A checkout that changed its line endings has not changed the answer.
+  const questions = readFileSync(questionsPath, "utf-8").replace(/\r\n/g, "\n");
   const fingerprint = questionsFileApprovalFingerprint(questions);
   if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
   const promptSha256 = createHash("sha256")
@@ -2346,7 +2347,13 @@ function earlierPlanApproval(
     promptSha256,
   };
   const receipt = readPlanApprovalReceipt(projectDir, identity);
-  if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+  // A lowered fence continues past a changed questions file too (a note, a
+  // reformat): the approval is of the plan content and attempt the receipt
+  // names, and only this machine's own receipt counts.
+  if (
+    receipt?.choice !== "Approve Plan" ||
+    !runtimeIdentityMatches(receipt, { ...identity, promptSha256: receipt.promptSha256 })
+  ) return null;
   const violation = readPlanApprovalViolation(projectDir);
   if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
   return { authority, receipt };
