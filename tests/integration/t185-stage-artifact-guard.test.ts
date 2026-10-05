@@ -103,6 +103,7 @@ function reviewStage(
   stage: string,
   reviewer: string,
   unit?: string,
+  iteration = 1,
 ): void {
   const artifact =
     stage === "intent-capture"
@@ -170,7 +171,7 @@ function reviewStage(
     "--reviewer",
     reviewer,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
@@ -199,7 +200,7 @@ function reviewStage(
       "**Verdict:** READY",
       `**Reviewer:** ${reviewer}`,
       "**Date:** 2026-08-26T00:00:00Z",
-      "**Iteration:** 1",
+      `**Iteration:** ${iteration}`,
       "",
     ].join("\n"),
   );
@@ -214,12 +215,13 @@ function reviewStage(
   }
 }
 
-function reviewCodeGen(proj: string, unit?: string): void {
+function reviewCodeGen(proj: string, unit?: string, iteration = 1): void {
   reviewStage(
     proj,
     "code-generation",
     "aidlc-architecture-reviewer-agent",
     unit,
+    iteration,
   );
 }
 
@@ -2078,12 +2080,12 @@ X. Other (please specify)
       expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
       expect(refused.out).toContain("choose Request Changes and say what is missing");
       expect(refused.out).not.toContain("--bypass");
-      // The step it names clears this check. New source then goes back to its
-      // reviewer before the gate, as any code change does.
+      // The step it names: new source, reviewed again as any change is, and
+      // the same approve goes through.
       writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
-      const retried = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
-      expect(retried.out).not.toContain("no source work is evident");
-      expect(retried.out).toContain("review the current source once more");
+      reviewCodeGen(proj, UNIT, 2);
+      const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(approved.rc, approved.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // Uncommitted/untracked new source this session -> PASS.
