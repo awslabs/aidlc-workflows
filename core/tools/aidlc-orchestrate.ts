@@ -3032,7 +3032,15 @@ type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 // read-only utility flag. Any leading non-flag token is the freeform intent
 // (mirrors `/aidlc <freeform description>`). Mirrors the prose orchestrator's
 // flag extraction — the value of a valued flag is the following argv token.
+// The entry word the person typed (`/aidlc`, Codex's `$aidlc`) is how they
+// reach AI-DLC, never part of what they asked for. An agent can pass it on as
+// an argument, or at the front of the description; either way the work is
+// never named after it.
+const ENTRY_WORD_ARG = /^[/$]aidlc$/i;
+const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
+
 function parseNextFlags(args: string[]): ParsedFlags {
+  if (args.length > 0 && ENTRY_WORD_ARG.test(args[0])) args = args.slice(1);
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently
@@ -3353,7 +3361,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
   ) {
     flags.positionalScope = intentWords.shift();
   }
-  if (intentWords.length > 0) flags.intent = intentWords.join(" ");
+  if (intentWords.length > 0) flags.intent = intentWords.join(" ").replace(ENTRY_WORD_PREFIX, "");
   if (!flags.claim && (flags.claimTeam || flags.claimRhythm)) {
     flags.parseError = "--team and --rhythm require --claim <unit>.";
   }

@@ -1445,6 +1445,21 @@ describe("t114 retired flags are consumed, not description text", () => {
     return JSON.parse(readFileSync(file, "utf-8")).text;
   };
 
+  // The entry word is how the person reaches AI-DLC, never part of the work's
+  // name: an agent that passes `/aidlc` or Codex's `$aidlc` on as an argument
+  // still records only what the person asked for.
+  test.each([
+    [["/aidlc", "--new-intent", "--scope", "poc", "build auth across both repos"]],
+    [["$aidlc", "--new-intent", "--scope", "poc", "build auth across both repos"]],
+    [["--new-intent", "--scope", "poc", "/aidlc build auth across both repos"]],
+  ])("the entry word never becomes part of the work's description: %j", (args) => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, args).out;
+    expect(out).toContain("intent create");
+    expect(pendingDescription(proj, out)).toBe("build auth across both repos");
+  });
+
   test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
