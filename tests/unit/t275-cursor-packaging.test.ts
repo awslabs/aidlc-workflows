@@ -50,7 +50,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools } from "../../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools, resolveAction } from "../../core/tools/aidlc.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -348,6 +348,18 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           `ok    rules/aidlc-phase-${phase.toLowerCase()}.mdc present (${phase} phase rule (agent-decided read instruction))`,
         );
       }
+      // When Cursor refuses every tool call because the hooks cannot start,
+      // the always-applied rule sends the person here: this doctor run prints
+      // the Runtime hook PATH line the rule names, and `aidlc doctor` routes.
+      expect(r.stdout).toContain("Runtime hook PATH");
+      for (const tree of [CURSOR_ROOT, CURSOR_RELEASE_ROOT]) {
+        const standing = readFileSync(join(tree, ".cursor", "rules", "aidlc.mdc"), "utf-8");
+        expect(standing, tree).toContain("If every tool call here is refused before it runs");
+        expect(standing, tree).toContain("run `aidlc doctor`,\nwhose Runtime hook PATH line names what to fix");
+        expect(standing, tree).toContain("`bun --version`");
+        expect(standing, tree).toContain("quit Cursor fully and open this folder again");
+      }
+      expect(resolveAction(["doctor"]).type).not.toBe("error");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
