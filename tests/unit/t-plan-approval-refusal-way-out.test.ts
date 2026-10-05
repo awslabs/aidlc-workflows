@@ -425,7 +425,8 @@ describe("the person already answered: the refusal does not send the agent back 
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     const write = said(writeSource(proj));
-    expect(write).toContain("The plan is waiting for the person to approve it.");
+    expect(write).toContain("Nothing is built or changed while the plan waits for approval.");
+    expect(write).not.toContain("`log answer`");
     expect(write).toContain("when they reply, record the choice they made");
     expect(write).toContain(`then run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}`);
   });

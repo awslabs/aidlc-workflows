@@ -350,7 +350,15 @@ describe("the engine asks for Plan Approval", () => {
     // While the question is open, nothing is built and the plan stays as shown.
     const blocked = guardWrite(proj, join(stageDir(proj), "code-generation-plan.md"));
     expect(blocked.code).toBe(2);
-    expect(blocked.stderr).toContain("The plan is waiting for the person to approve it");
+    // One plain sentence the person can read on their screen (some hosts show a
+    // hook's refusal as written), then the agent's short instruction: no lead,
+    // no setting note, no engine step names.
+    expect(blocked.stderr.trim()).toBe(
+      "Nothing is built or changed while the plan waits for approval. Show the plan question again and end " +
+        "the turn; when they reply, record the choice they made, then run " +
+        "`bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own " +
+        "(no `cd` before it, no pipe or second command after it).",
+    );
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     // A person's answer text for `log answer --details-file` is written in the
     // record's own answer-text folder, so no shell reads it; that alone passes.
