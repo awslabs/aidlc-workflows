@@ -17,6 +17,8 @@ import {
   hasUnsafeSingleLineCharacter,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  changeRequestWords,
+  readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
   mintProtectedQuestion,
@@ -43,7 +45,6 @@ import {
   workspaceSourceListing,
   type AuditShardEvent,
 } from "./aidlc-lib.ts";
-import { formatReceivedReply, readApprovalGateReply } from "./aidlc-reply-reader.ts";
 
 export interface SwarmCheckpoint {
   batch: number;
@@ -304,17 +305,18 @@ function recheck(
 export function approveSwarmCheckpoint(
   pd: string, batch: number, units: string[], reply?: string, session = "",
 ): SwarmCheckpoint {
-  // The person's reply in their own words; the receipt records the choice.
-  const userInput = reply === undefined ? undefined : readApprovalGateReply(reply, { bound: true }).choice ?? reply;
+  // The conductor read the person's reply and reports their approval; the
+  // receipt records it beside the person's own words from the human-turn hook.
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.result.ready) throw new Error(`Swarm checkpoint is not ready: ${current.result.errors.join(" ")}`);
-    const humanRequired = current.result.human_required || userInput !== undefined;
+    const humanRequired = current.result.human_required || reply !== undefined;
+    let words: string | undefined;
     if (humanRequired) {
-      if (userInput !== "Approve") throw new Error(`Swarm checkpoint approval needs a reply that approves; ${formatReceivedReply(reply)} does not.`);
       requireProtectedResponse(pd, session, {
-        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Approve",
       });
+      words = readProtectedResponse(pd, session)?.words;
     } else if (current.result.approved) {
       return current.result;
     }
@@ -322,7 +324,8 @@ export function approveSwarmCheckpoint(
     appendAuditEntryUnlocked("GATE_APPROVED", {
       ...fields(after),
       ...(humanRequired ? { Session: session } : {}),
-      ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
+      ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
+      ...(words ? { "Person Reply": words } : {}),
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
     return snapshot(pd, batch, units).result;
@@ -330,24 +333,23 @@ export function approveSwarmCheckpoint(
 }
 
 export function rejectSwarmCheckpoint(
-  pd: string, batch: number, units: string[], reply: string, givenReason: string, session = "",
+  pd: string, batch: number, units: string[], _reply: string, givenReason: string, session = "",
 ): SwarmCheckpoint {
-  // The person's reply in their own words; what it says to change is the
-  // reason when none was passed.
-  const read = readApprovalGateReply(reply, { bound: true });
-  const userInput = read.choice ?? reply;
-  const reason = givenReason.trim() || read.feedback || givenReason;
-  if (userInput !== "Request Changes") throw new Error(`Swarm checkpoint Request Changes needs a reply that asks for changes; ${formatReceivedReply(reply)} does not.`);
-  if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-    selfAttributedDecisionMarker(reason, "rejection")) {
-    throw new Error("Swarm rejection requires a nonblank human reason on one line.");
-  }
+  // The conductor read the person's reply as a change request. The reason is
+  // the conductor's --reason when given, otherwise the person's own words.
   return locked(pd, (selection) => {
     const current = snapshot(pd, batch, units);
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
     requireProtectedResponse(pd, session, {
-      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: userInput,
+      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Request Changes",
     });
+    const words = readProtectedResponse(pd, session)?.words;
+    const reason = givenReason.trim() || changeRequestWords(words);
+    const userInput = "Request Changes";
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
+      selfAttributedDecisionMarker(reason, "rejection")) {
+      throw new Error("Swarm Request Changes needs what the person asked to change, on one line, in --reason.");
+    }
     const after = recheck(pd, batch, units, current, selection.root, false);
     appendAuditEntries(after.result.units.map((unit) => ({
       eventType: "GATE_REJECTED",
@@ -355,6 +357,7 @@ export function rejectSwarmCheckpoint(
         ...fields(after), Unit: unit, ...claimAttemptFields(pd, unit),
         Session: session,
         "User Input": userInput, Reason: reason, Feedback: reason,
+        ...(words ? { "Person Reply": words } : {}),
       },
     })), pd, selection.intent, selection.space);
     consumeProtectedQuestion(pd, session);

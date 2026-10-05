@@ -100,9 +100,10 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
   approving a front composition. In-flight, the row is read-only: a
-  recompose lands only stage skips and adds, so the proposal names the routes
-  (raise or lower by typing `/aidlc --guard-policy <value>`, with `$aidlc` on
-  Codex). Changing scope alone never lowers the running policy.
+  recompose lands only stage skips and adds, so the proposal names the route
+  (when the person asks to raise or lower it, the conductor runs
+  `{{INVOKE}} engine config set guard-policy <value>`). Changing scope alone
+  never lowers the running policy.
   A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.

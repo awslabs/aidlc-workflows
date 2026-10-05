@@ -1,7 +1,7 @@
 // t147-kiro-hook-adapter: the Kiro stdin shim normalizes live-captured
 // payloads into the core hooks' contract.
 //
-// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv
+// covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-sync-workflow-state.ts, file:hooks/aidlc-log-subagent.ts, hook:aidlc-plan-approval-guard, function:splitKiroCommandArgs, function:sanitizeHarnessPlainText, function:decodeHarnessPlainText, function:terminalDispatcherArgv, function:relayAsTextBlock
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/kiro-hook-payloads/
 // (field-verbatim captures off kiro-cli 2.6.1 — findings.md §0.2) into
@@ -50,6 +50,7 @@ import {
   readAuditShardEvents,
   readIntentRegistry,
   readSessionBinding,
+  relayAsTextBlock,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
   subagentInflightMarkerPath,
@@ -812,9 +813,21 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.stdout).not.toContain("\u001b");
       expect(r.stdout).not.toContain("\u0008");
       expect(r.stdout).not.toContain("Cwd=C:\\shell\\noise");
+      // Kiro renders the reply as Markdown, which joins single line breaks; a
+      // fenced text block keeps doctor and help on their own lines.
+      expect(r.stdout).toContain(`relay that output to the user ${relayAsTextBlock("")}, then STOP.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("the relay fence is longer than any backtick run in the output", () => {
+    expect(relayAsTextBlock("Machine  ok\n")).toContain("(```text on its own line before it, ``` after it)");
+    // A document's own code fence stays inside the block.
+    expect(relayAsTextBlock("# Notes\n```ts\nconst a = 1;\n```\n")).toContain("(````text on its own line before it, ```` after it)");
+    expect(relayAsTextBlock("````md\n````\n")).toContain("(`````text on its own line before it, ````` after it)");
+    // A long record with many short runs is read in one pass.
+    expect(relayAsTextBlock("`a".repeat(200_000))).toContain("(```text on its own line before it, ``` after it)");
   });
 
   test("3b: plain-text sanitizer drops unterminated 7-bit and 8-bit controls", () => {
@@ -2241,5 +2254,94 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
       // The respawn seam names process.execPath.
       expect(src).toContain("process.execPath");
     }
+  });
+});
+
+describe("t147 Kiro CLI presence floor holds only at a gate the person must answer", () => {
+  const presence = { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
+  let clock = Date.parse("2026-02-01T00:00:00Z");
+  const row = (event: string, fields: string) => {
+    clock += 1000;
+    return `\n## ${event}\n**Timestamp**: ${new Date(clock).toISOString().replace(/\.\d{3}Z$/, "Z")}\n**Event**: ${event}\n${fields}\n---\n`;
+  };
+  // requirements-analysis waits at its gate, opened after the workflow began.
+  function gateOpen(dir: string, extra = ""): void {
+    const sp = seededStateFile(dir);
+    writeFileSync(sp, readFileSync(sp, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"));
+    appendFileSync(
+      join(seededAuditDir(dir), pinnedShardName()),
+      row("WORKFLOW_STARTED", "**Scope**: feature\n") + extra +
+        row("STAGE_AWAITING_APPROVAL", "**Stage**: requirements-analysis\n"),
+      "utf-8",
+    );
+  }
+  const guard = (dir: string, command: string) =>
+    runAdapter(dir, "guard-tool-call", { cwd: dir, tool_name: "execute_bash", tool_input: { command } }, [], presence);
+  const approveGate = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved";
+  const toUnitMajor = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
+
+  test("a gate the person must answer, with no turn of theirs since it opened, refuses the call", () => {
+    const dir = scratchProject(true);
+    try {
+      gateOpen(dir);
+      const refused = guard(dir, approveGate);
+      expect(refused.code, refused.stderr).toBe(2);
+      expect(refused.stderr).toContain("an approval gate is open and no human has acted since it opened");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("the Construction setting the person just chose runs while the gate stays open", () => {
+    const dir = scratchProject(true);
+    try {
+      // The person's turn went to recording their choice, which used it up.
+      gateOpen(dir, row("HUMAN_TURN", "**Session**: kiro-person\n") + row(
+        "CONSTRUCTION_POLICY_RECORDED",
+        "**Stage**: requirements-analysis\n**Checkpoint**: Construction Policy\n**Field**: Construction Iteration\n" +
+          "**Value**: unit-major\n**Session**: kiro-person\n**User Input**: Approve\n",
+      ));
+      const applied = guard(dir, toUnitMajor);
+      expect(applied.code, applied.stderr).toBe(0);
+      // Each form the engine issues for it runs; any other spelling waits, so
+      // nothing but the state tool itself can run on that choice.
+      for (const issued of [
+        "aidlc engine state set-construction-iteration unit-major",
+        "bun .kiro/tools/aidlc-state.ts set-construction-iteration unit-major",
+      ]) {
+        expect(guard(dir, issued).code, issued).toBe(0);
+      }
+      for (const altered of [
+        `PATH=./bin ${toUnitMajor}`,
+        `env FOO=1 ${toUnitMajor}`,
+        `command ${toUnitMajor}`,
+        `exec ${toUnitMajor}`,
+        `cd ${dir} && ${toUnitMajor}`,
+        "./bin/bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "bun --preload ./x.ts .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "bun ./other/tools/aidlc.ts engine state set-construction-iteration unit-major",
+        "/tmp/aidlc engine state set-construction-iteration unit-major",
+        `${toUnitMajor} --project-dir /tmp`,
+        "bun .kiro/tools/aidlc.ts engine state set-construction-iteration 'unit-major'",
+      ]) {
+        expect(guard(dir, altered).code, altered).toBe(2);
+      }
+      // Nothing else rides on that choice: another value, a command chained to
+      // the setter, and the gate's own approval still wait for the person.
+      for (const command of [
+        "bun .kiro/tools/aidlc.ts engine state set-construction-iteration stage-major",
+        `${toUnitMajor} && ${approveGate}`,
+        approveGate,
+      ]) {
+        const refused = guard(dir, command);
+        expect(refused.code, command).toBe(2);
+      }
+      // Once the setting holds that value, the spent choice opens nothing.
+      const sp = seededStateFile(dir);
+      writeFileSync(sp, readFileSync(sp, "utf-8").replace(
+        "- **Current Stage**:",
+        "- **Construction Iteration**: unit-major\n- **Current Stage**:",
+      ));
+      expect(getField(readFileSync(sp, "utf-8"), "Construction Iteration")).toBe("unit-major");
+      expect(guard(dir, toUnitMajor).code).toBe(2);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

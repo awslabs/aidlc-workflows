@@ -180,9 +180,10 @@ verification or an unverified checkpoint approval question.
 
 Plan Approval remains individually bound even when its presentation is grouped.
 When several Units' plans are ready together, `next` asks about them in one
-engine question, and the human-turn hook records one approval per Unit, bound
-to that Unit's own plan: "approve all" approves every Unit, and a change naming
-one Unit sends only that Unit back. See the
+engine question, and the agent records the person's choice per Unit (`log answer
+--checkpoint plan-approval --units`), each approval bound to that Unit's own
+plan: "approve all" approves every Unit, and a change naming one Unit sends only
+that Unit back. See the
 [CLI reference](../guide/12-cli-commands.md#grouped-code-generation-plan-approval).
 
 After a partial landing, `next` names the remaining Units and valid prepared

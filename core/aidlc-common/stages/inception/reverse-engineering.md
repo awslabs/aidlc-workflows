@@ -378,10 +378,10 @@ directory for a merge, but do not write the candidate there directly.
 
 **Coverage backstop - run BEFORE writing (the compare needs the prior store
 unchanged).** When the Step 1 guard found an existing store (any verdict but
-NO_STORE), write the new or merged timestamp content to
-`<record>/inception/reverse-engineering/scope-draft-<repo>.md` (one draft per
-repo; NOT the timestamp filename - record-dir placement checks key on the
-artifact stems) and run
+NO_STORE), write the new or merged timestamp content with your file-write
+tool to `<record>/inception/reverse-engineering/scope-draft-<repo>.md` (one
+draft per repo; NOT the timestamp filename - record-dir placement checks key on
+the artifact stems) and run, as a command of its own,
 
 ```
 {{INVOKE}} engine workspace codekb-scope-diff --repo <repo> --compare <record>/inception/reverse-engineering/scope-draft-<repo>.md
@@ -391,9 +391,10 @@ Keep the output keyed by `<repo>` for Step 5's completion summary. This is the
 deterministic backstop for the requested breadth and the focused-merge rules:
 COVERS means the incoming block preserved the prior verified coverage;
 NARROWER identifies coverage that was demoted or lost. A focused run after a
-"Full rescan" choice also surfaces here as NARROWER, before approval. Delete
-that repo's `scope-draft-<repo>.md` immediately after preserving the compare
-output; scope drafts are temporary and MUST NOT remain in the intent record.
+"Full rescan" choice also surfaces here as NARROWER, before approval. The
+compare removes that repo's `scope-draft-<repo>.md` once it has read it ("The
+scope draft has been removed."); scope drafts are temporary and never stay in
+the intent record, so do not delete one yourself.
 
 Publish the complete candidate through the compare-and-swap utility, using the
 exact snapshot values captured immediately before Step 2:

@@ -24,7 +24,9 @@ less.
    `Setup check - N of M sections need you.` table and offers to walk you
    through what it flagged.
    - Pass: the `Runtime` row reads `[ok]` and `hook PATH ready`, and the
-     `Trust` row reads `[ok]`. On Copilot the `Trust` row reads `[needs]` when
+     `Trust` row reads `[ok]`. A `Runtime` row that reads
+     `on this shell's PATH only` passes too when the tool is started from
+     that terminal. On Copilot the `Trust` row reads `[needs]` when
      the Copilot CLI has not trusted the folder, and it cannot see VS Code's
      own switches, so check those by hand; see
      [GitHub Copilot on Windows](#github-copilot-on-windows).

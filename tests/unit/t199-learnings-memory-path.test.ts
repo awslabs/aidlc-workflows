@@ -420,6 +420,25 @@ describe("t199 per-intent memory path (write + read)", () => {
     expect(existsSync(join(seededRecordDir(pd), "runtime-graph.json"))).toBe(true);
   }, TIMEOUT);
 
+  // Built one Unit at a time, Current Stage waits on the first per-Unit stage.
+  // A later stage is the one that just ran only at a Unit's checkpoint (t342);
+  // with no checkpoint at its approval it is refused.
+  test("built one Unit at a time, a later stage with no checkpoint at its approval is refused", () => {
+    const pd = mkWorkspaceProject();
+    writeFileSync(
+      seededStateFile(pd),
+      "# AI-DLC State Tracking\n- **Current Stage**: functional-design\n- **Scope**: classic\n" +
+        "- **Construction Checkpoints**: enabled\n- **Construction Iteration**: unit-major\n",
+    );
+    const surfaced = spawnSync(
+      BUN,
+      [LEARNINGS_TS, "surface", "--slug", "nfr-requirements", "--project-dir", pd],
+      { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" },
+    );
+    expect(surfaced.status).toBe(1);
+    expect(surfaced.stderr).toContain('slug mismatch: requested "nfr-requirements" but Current Stage is "functional-design"');
+  }, TIMEOUT);
+
   // The ritual's two commands, run the way an agent got them wrong live: the
   // refusal names the value to pass, so the next attempt is the right one.
   test("a wrong --slug or a learnings --checkpoint is refused with the way to run it", () => {

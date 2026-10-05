@@ -17,6 +17,8 @@ import type { HarnessManifest } from "../../scripts/manifest-types.ts";
 import {
   copyChannelDelegateShellDeny,
   nativeDelegateShellDeny,
+  RISKY_SHELL_FORMS,
+  riskyFormDenyLines,
   shellDenyLines,
 } from "./delegate-shell-deny.ts";
 import onboardingFills from "./onboarding.fills.ts";
@@ -47,10 +49,26 @@ const spacePaths = ["aidlc/spaces/**"];
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
 
-// Each persona's shell deny admits what the guard admits that persona.
+// Each persona's shell deny admits what the guard admits that persona, and
+// refuses a risky shell form on any AI-DLC command or `date -u`.
 const copyShellDeny = new Map<string, string[]>(
-  DELEGATION_AGENTS.map((agent) => [agent, shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent))]),
+  DELEGATION_AGENTS.map((agent) => [agent, [
+    ...shellDenyLines(copyChannelDelegateShellDeny(".kiro", agent)),
+    ...riskyFormDenyLines(["bun .kiro/tools/aidlc", "date -u"]),
+  ]]),
 );
+
+// Shell forms that can run, expand, or redirect more than the one command a
+// rule names. Kiro judges each part of a chain or substitution on its own
+// (delegate-shell-deny.ts), but a variable, a redirect, or a PowerShell array
+// or hashtable stays inside its part; the rest are listed too, so the rule
+// does not rest on how a Kiro build splits a command. A bare PowerShell
+// grouping is the terminal guard's (aidlcCodeArgumentHazard in the Kiro IDE
+// adapter).
+// Ask beats every allow, so a command holding one asks the person whatever it
+// starts with. The conductor (agents/aidlc.md) carries the same list; t148
+// checks every agent.
+const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `*${form}*`);
 
 // A persona's own tools and permissions are enforced only when the conductor
 // dispatches through invoke_sub_agent (IDE) or orchestrate_subagent (CLI); the
@@ -70,10 +88,22 @@ function personaFrontmatter(agent: string): string[] {
     "      effect: allow",
     "      match:",
     `        - "bun .kiro/tools/aidlc-*"`,
+    // Every engine command goes through the dispatcher, which the hyphen
+    // pattern above does not reach. Its engine namespace only: the public
+    // verbs that change the machine's install keep asking, as on native.
+    `        - "bun .kiro/tools/aidlc.ts engine *"`,
     `        - "date -u *"`,
     // A read-only version check the personas run before a project's tests;
     // the tests themselves keep asking.
     `        - "bun --version"`,
+    // The conductor's asks: changing a setting and running a hook adapter
+    // stay the person's to approve, whichever agent runs them.
+    "    - capability: shell",
+    "      effect: ask",
+    "      match:",
+    `        - "bun .kiro/tools/aidlc.ts engine config set *"`,
+    `        - "bun .kiro/tools/aidlc.ts engine adapter *"`,
+    ...quoted(SHELL_FORM_ASKS),
     ...(copyShellDeny.get(agent) ?? []),
     "    - capability: fs_read",
     "      effect: allow",
@@ -286,7 +316,13 @@ const manifest: HarnessManifest = {
   // routes its conductor allow covers (delegate-shell-deny.ts), one rule per
   // distinct persona deny.
   nativeReplacements: [...new Map([...copyShellDeny].map(([agent, lines]) => [lines.join("\n"), agent])).entries()]
-    .map(([from, agent]) => ({ from, to: shellDenyLines(nativeDelegateShellDeny(agent)).join("\n") })),
+    .map(([from, agent]) => ({
+      from,
+      to: [
+        ...shellDenyLines(nativeDelegateShellDeny(agent)),
+        ...riskyFormDenyLines(["aidlc", "date -u"]),
+      ].join("\n"),
+    })),
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, harnessDst: "steering/aidlc-onboarding.md", fills: onboardingFills },
 

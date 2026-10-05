@@ -611,9 +611,10 @@ export interface GuardRecoveryAskDirective extends AskDirectiveBase {
 }
 
 // plan-approval: the engine asks the person to approve a Code Generation plan
-// (or several ready Unit plans at once). The human-turn hook records the reply
-// in the person's own words and takes the fingerprint itself; the conductor
-// shows the question, ends the turn, and runs `next` after the reply.
+// (or several ready Unit plans at once). The human-turn hook keeps the reply in
+// the person's own words and records an exact pick; the conductor shows the
+// question, ends the turn, records the choice the person made with `log answer
+// --checkpoint plan-approval`, and runs `next`.
 export interface PlanApprovalAskDirective extends AskDirectiveBase {
   ask_type: "plan-approval";
   response_route: "next";
@@ -649,6 +650,11 @@ export interface PrintDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   message: string;
+  // next_stage: on the reply that opens (or re-opens) a stage's approval gate,
+  // the stage the Approve option continues to, computed when the gate opens so
+  // a plan change made during the stage is in it. null = the final in-scope
+  // stage. Same meaning as run-stage's next_stage.
+  next_stage?: string | null;
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -876,7 +882,7 @@ const ASK_FIELDS = [
   "existing_code_command",
   "new_project_command",
 ] as const;
-const PRINT_FIELDS = ["kind", "message"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
@@ -1261,6 +1267,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     }
     case "print":
       checkString(o, "message", kind, errors);
+      checkOptionalNullableString(o, "next_stage", kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);

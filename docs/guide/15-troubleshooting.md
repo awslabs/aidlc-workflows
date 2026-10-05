@@ -561,12 +561,14 @@ anything more is built.
 **Symptom**: you answered the Plan Approval question, but AI-DLC shows it again.
 
 Your answer counts from any chat on this piece of work, in your own words ("1",
-"approve", "looks good", "rename the handler"). It is shown again when your reply
-was a question, was unclear, approved and asked for a change in the same
-breath, or was a bare "yes" that came after other conversation rather than
-right after the question; the assistant says which and asks once more. Answer
-the question it shows. A long chat that compacts its context while the question
-waits keeps the question open, so your answer still counts.
+"approve", "looks good", "rename the handler"): the agent records the choice
+you made, with your words beside it. The question comes back only when the
+agent could not record a choice, most often because the reply arrived before
+the question was shown, or in a chat where the harness did not pass it to
+AI-DLC. Answer the question it shows. If it keeps coming back, run
+`/aidlc --doctor`: a harness whose prompt hook does not run cannot record any
+reply. A long chat that compacts its context while the question waits keeps
+the question open, so your answer still counts.
 
 If AI-DLC says the workspace source cannot be read, the plan cannot be approved
 yet, because nothing could say what the build starts from. Repair the source

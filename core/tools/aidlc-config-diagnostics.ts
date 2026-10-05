@@ -2632,6 +2632,20 @@ export type ConfigOutstandingAction = {
   command: string;
 };
 
+// The runtimes this shell finds that the system-wide PATH does not. A harness
+// started from this terminal hands them to its hooks, so setup lists no step
+// for them and says where to start the harness instead.
+export function shellOnlyRuntimes(
+  projectDir: string,
+  harnessDir: string,
+  harness: ModelHarness,
+  options: RuntimeProbeOptions = {},
+): string[] {
+  return probeRuntime(projectDir, harnessDir, harness, { ...options, includeHarnessCli: false }).binaries
+    .filter((binary) => binary.status === "interactive-only")
+    .map((binary) => binary.name);
+}
+
 export function postApplyOutstandingActions(
   projectDir: string,
   harnessDir: string,
@@ -2650,7 +2664,13 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    actions.push(...runtimeIssues(diagnostics).map((issue) => ({
+    // A runtime found on this shell's PATH needs nothing from a harness started
+    // from a terminal; the doctor says what to do if its hooks never run.
+    const needed = {
+      ...diagnostics,
+      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+    };
+    actions.push(...runtimeIssues(needed).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,

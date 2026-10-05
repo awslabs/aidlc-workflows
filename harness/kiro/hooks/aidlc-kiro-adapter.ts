@@ -53,9 +53,9 @@ import {
   classifyTerminalCommand,
   decodeHarnessPlainText,
   fenceCommandOutput,
-  hasOpenGate,
+  relayAsTextBlock,
+  presenceFloorHolds,
   hookDebug,
-  humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAidlcAgentFile,
   isAutonomousMode,
@@ -525,7 +525,7 @@ if (target === "verb-intercept") {
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness: it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user ${relayAsTextBlock(out)}, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n` +
       fenceCommandOutput(out),
   );
   return 0;
@@ -654,9 +654,10 @@ if (target === "guard-tool-call") {
       : null;
     if (isAutonomousMode(content)) return 0; // autonomous: never block
     if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
-    if (!hasOpenGate(content)) return 0; // no gate awaits approval
 
-    if (!humanActedSinceGate(cwd)) {
+    // The shared rule: a gate the person must answer, and no turn of theirs
+    // since it opened (see presenceFloorHolds).
+    if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
       process.stderr.write(
         "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
       );

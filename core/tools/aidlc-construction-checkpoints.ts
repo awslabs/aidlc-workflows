@@ -11,6 +11,7 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
+  constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
   VERIFICATION_COMMAND_RECOVERY,
@@ -26,6 +27,8 @@ import {
   hasUnsafeSingleLineCharacter,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
+  changeRequestWords,
+  readProtectedResponse,
   requireProtectedResponse,
   protectedTargetDigest,
   mintProtectedQuestion,
@@ -66,9 +69,19 @@ import {
   type WorkspaceSourceListing,
   type WorkspaceSourceState,
 } from "./aidlc-lib.ts";
-import { formatReceivedReply, readApprovalGateReply } from "./aidlc-reply-reader.ts";
+
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
+
+// The walking skeleton's first Unit stops at the skeleton checkpoint; every
+// other Unit, and every Unit without the skeleton, at its own Unit checkpoint.
+export function constructionCheckpointKind(
+  stateContent: string,
+  unit: string,
+  allUnits: readonly string[],
+): ConstructionCheckpointKind {
+  return constructionSkeletonOn(stateContent) && unit === allUnits[0] ? "skeleton" : "unit";
+}
 
 export interface ConstructionCheckpointProof {
   version: 4;
@@ -691,20 +704,22 @@ export function approveConstructionCheckpoint(
   reply?: string,
   session = "",
 ): ConstructionCheckpoint {
-  // The person's reply in their own words; the receipt records the choice.
-  const userInput = reply === undefined ? undefined : readApprovalGateReply(reply, { bound: true }).choice ?? reply;
+  // The conductor read the person's reply and reports their approval. The
+  // receipt records it beside the person's own words, kept by the human-turn
+  // hook; nothing here second-guesses the conductor's reading.
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     requireReady(current.result);
     if (!current.result.verified) {
       throw new Error(`Verify the current Construction checkpoint before approval: a matching CHECKPOINT_VERIFICATION_RECORDED receipt and passing proof are required. Run aidlc-bolt.ts checkpoint --unit "${unit}" --kind ${kind} --action verify.`);
     }
-    const humanRequired = current.result.human_required || userInput !== undefined;
+    const humanRequired = current.result.human_required || reply !== undefined;
+    let words: string | undefined;
     if (humanRequired) {
-      if (userInput !== "Approve") throw new Error(`Construction checkpoint approval needs a reply that approves; ${formatReceivedReply(reply)} does not.`);
       requireProtectedResponse(projectDir, session, {
-        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: userInput,
+        kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
       });
+      words = readProtectedResponse(projectDir, session)?.words;
     } else if (current.result.approved) {
       return current.result;
     }
@@ -720,7 +735,8 @@ export function approveConstructionCheckpoint(
       ...gateFields(projectDir, rechecked.result, rechecked.state),
       "Verification Id": rechecked.result.verification!.id,
       ...(humanRequired ? { Session: session } : {}),
-      ...(userInput === "Approve" ? { "User Input": userInput } : { Autonomous: "true" }),
+      ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
+      ...(words ? { "Person Reply": words } : {}),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);
@@ -731,28 +747,28 @@ export function rejectConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  reply: string,
+  _reply: string,
   givenReason: string,
   session = "",
 ): ConstructionCheckpoint {
-  // The person's reply in their own words; what it says to change is the
-  // reason when none was passed.
-  const read = readApprovalGateReply(reply, { bound: true });
-  const userInput = read.choice ?? reply;
-  const reason = givenReason.trim() || read.feedback || givenReason;
-  if (userInput !== "Request Changes") throw new Error(`Construction checkpoint Request Changes needs a reply that asks for changes; ${formatReceivedReply(reply)} does not.`);
-  if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-    selfAttributedDecisionMarker(reason, "rejection")) {
-    throw new Error("Request Changes requires a nonblank human reason on one line.");
-  }
+  // The conductor read the person's reply as a change request. What they said
+  // to change is the reason: the conductor's --reason when given, otherwise the
+  // person's own words, which the receipt keeps verbatim either way.
   return locked(projectDir, () => {
     const current = snapshot(projectDir, unit, kind);
     if (!current.result.enabled || current.result.stages.length === 0) {
       throw new Error("Construction checkpoints are not enabled or have no applicable stages.");
     }
     requireProtectedResponse(projectDir, session, {
-      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: userInput,
+      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Request Changes",
     });
+    const words = readProtectedResponse(projectDir, session)?.words;
+    const reason = givenReason.trim() || changeRequestWords(words);
+    const userInput = "Request Changes";
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
+      selfAttributedDecisionMarker(reason, "rejection")) {
+      throw new Error("Request Changes needs what the person asked to change, on one line, in --reason.");
+    }
     const rechecked = snapshot(projectDir, unit, kind);
     if (current.root !== rechecked.root || current.result.fingerprint !== rechecked.result.fingerprint) {
       throw new Error("Construction checkpoint evidence changed before rejection.");
@@ -761,6 +777,7 @@ export function rejectConstructionCheckpoint(
       ...gateFields(projectDir, rechecked.result, rechecked.state),
       Session: session,
       "User Input": userInput, Feedback: reason, Reason: reason,
+      ...(words ? { "Person Reply": words } : {}),
     }, projectDir);
     consumeProtectedQuestion(projectDir, session);
     return resolveConstructionCheckpoint(projectDir, unit, kind);

@@ -258,9 +258,10 @@ options:
   - label: Add User Stories
     description: Include User Stories stage (currently skipped)
 ```
-Render `[next stage]` verbatim from the run-stage directive's `next_stage`
-field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
-when it is null. Never guess the next stage name.
+Render `[next stage]` verbatim from the `next_stage` field of the reply that
+opened the gate, else the run-stage directive's (per the stage-protocol.md
+approval-gate binding), or `Complete workflow` when it is null. Never guess the
+next stage name.
 If "Add User Stories" is selected, run
 `{{INVOKE}} engine recompose --add user-stories`
 before re-entering the approval flow.

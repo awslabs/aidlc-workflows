@@ -1035,12 +1035,18 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
   for (const file of walk(agentsDir)) {
     if (file.endsWith(".md")) {
       // Kiro IDE persona surfaces carry a YAML shell allowlist; the native
-      // channel replaces the bun tool glob with the aidlc command prefix.
+      // channel replaces the bun tool glob with the aidlc command prefix. The
+      // copy channel's dispatcher line (`{{INVOKE}} engine *` on the conductor,
+      // `bun <dir>/tools/aidlc.ts engine *` on a persona, which the tool
+      // rewrite above turned into `aidlc engine engine *`) is that same
+      // prefix, so the pair collapses to one entry. A persona's ask lines get
+      // the same doubled prefix and lose it the same way.
       const value = readFileSync(file, "utf-8");
-      const rewritten = value.replaceAll(
-        `- "bun ${m.harnessDir}/tools/aidlc-*"`,
-        `- "${trustedCommand("*")}"`,
-      );
+      const trusted = `- "${trustedCommand("*")}"`;
+      const rewritten = value
+        .replaceAll(`- "bun ${m.harnessDir}/tools/aidlc-*"`, trusted)
+        .replaceAll(`- "${trustedCommand("engine ")}`, `- "${trustedCommand("")} `)
+        .replaceAll(`${trusted}\n        ${trusted}`, trusted);
       if (rewritten !== value) writeFileSync(file, rewritten);
       continue;
     }

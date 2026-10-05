@@ -451,6 +451,36 @@ describe("t304 copied projection configuration", () => {
     expect(harness.trust.reviewed).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A setup question with its input closed gets no answer: config says it
+  // stopped and what to run again, never an empty error.
+  test("a setup question with no possible answer says so plainly", () => {
+    const project = readmeCopyProject();
+    const result = runCopied(project, ["config"], {
+      input: "",
+      env: { AIDLC_TEST_CONFIG_TTY: "1" },
+    });
+    expect(result.stdout).toMatch(/Fix the \d+ sections? that needs? you now\? \[Y\/n\]:/);
+    expect(result.stdout).toContain(
+      "Stopped: this needs an answer, and the input is closed. Run bun .claude/tools/aidlc.ts config again where you can answer.",
+    );
+    expect(result.stdout + result.stderr).not.toContain('{"error"');
+  });
+
+  // A --from folder with no release files in it is named, with the files
+  // config needs and the command that fetches them, never a placeholder.
+  test("a --from folder without release files says what config needs", () => {
+    const project = readmeCopyProject();
+    const empty = join(project, "notes");
+    mkdirSync(empty, { recursive: true });
+    const result = runCopied(project, ["config", "--from", empty, "--harness", "claude", "--yes"]);
+    expect(result.status).toBe(4);
+    expect(result.stdout).toContain(`error: ${JSON.stringify(empty)} holds no AI-DLC release files\n`);
+    expect(fixLine(result.stdout)).toBe(
+      "pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/claude/; or fetch them with bun .claude/tools/aidlc.ts config --harness claude --yes --download",
+    );
+    expect(result.stdout).not.toContain("valid-release-data");
+  });
+
   test("bare config announces and uses the recognized copied-projection walk", () => {
     const project = readmeCopyProject();
     const result = runCopied(project, ["config"], {
@@ -1414,7 +1444,7 @@ describe("t304 first-run prompt and detection safety", () => {
   test("EOF at a no-default harness prompt cancels with bounded output", () => {
     const result = runWizard("");
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toContain("Nothing written.");
+    expect(result.stdout).toContain("Nothing written: this needs an answer, and the input is closed.");
     expect(result.stdout.length).toBeLessThan(20_000);
     expect(existsSync(join(result.project, ".claude"))).toBe(false);
   });
@@ -1422,7 +1452,7 @@ describe("t304 first-run prompt and detection safety", () => {
   test("EOF mid-customize cancels with bounded output", () => {
     const result = runWizard("1\n2");
     expect(result.status).not.toBe(0);
-    expect(result.stdout).toContain("Nothing written.");
+    expect(result.stdout).toContain("Nothing written: this needs an answer, and the input is closed.");
     expect(result.stdout.length).toBeLessThan(20_000);
   });
 

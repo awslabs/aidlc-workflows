@@ -211,6 +211,7 @@ import {
   ownedModelAccessFact,
   pendingProviderIssues,
   postApplyOutstandingActions,
+  shellOnlyRuntimes,
   preserveKiroMcpRegion,
   probeHarnessCli,
   probeRuntime,
@@ -2358,6 +2359,7 @@ function setupMapRows(
     modelHarness(distribution),
   );
   const runtime = outstanding.filter((action) => action.section === "runtime");
+  const shellOnly = runtime.length > 0 ? [] : shellOnlyRuntimes(projectDir, harnessDir, modelHarness(distribution));
   const trust = outstanding.filter((action) => action.section === "trust");
   const providers = outstanding.filter((action) => action.section === "providers");
   const workspace = outstanding.filter((action) => action.section === "workspace");
@@ -2437,6 +2439,8 @@ function setupMapRows(
       label: "Runtime",
       detail: runtime.length > 0
         ? runtime[0].message
+        : shellOnly.length > 0
+        ? `${shellOnly.join(" and ")} on this shell's PATH only: start ${projectionProductName(root, distribution)} from a terminal`
         : "hook PATH ready",
       section: "runtime",
       needs: runtime.length > 0,
@@ -2648,10 +2652,18 @@ async function runSetupWalk(
     }
     return;
   }
-  const answer = promptYesDefault(
-    `\n  Fix the ${flagged.length} sections that need you now?`,
-    true,
-  );
+  let answer: boolean;
+  try {
+    answer = promptYesDefault(
+      `\n  Fix the ${flagged.length} sections that need you now?`,
+      true,
+    );
+  } catch (error) {
+    if (!(error instanceof FirstRunCancelled)) throw error;
+    process.stdout.write(noAnswerLines(error, configCommand(projectTarget(projectDir))));
+    process.exitCode = EXIT.usage;
+    return;
+  }
   if (!answer) {
     renderSetupLedger(initialLedger);
     return;
@@ -5997,13 +6009,29 @@ type FirstRunKiroSession = {
   models?: KiroModelList;
 };
 
-class FirstRunCancelled extends Error {}
+// A question config asked got no answer: the person cancelled it, or the
+// input closed (EOF) so no answer can come.
+class FirstRunCancelled extends Error {
+  constructor(readonly inputClosed = false) {
+    super(inputClosed ? "the input closed before the question was answered" : "the question was cancelled");
+  }
+}
 
 function firstRunPromptValue(value: string | null): string {
-  if (value === null) throw new FirstRunCancelled();
+  if (value === null) throw new FirstRunCancelled(true);
   const normalized = value.trim();
   if (normalized.includes("\u0003")) throw new FirstRunCancelled();
   return normalized;
+}
+
+// What the person reads when a question got no answer: that config stopped
+// (the first-run wizard writes nothing before its last answer, so it says
+// nothing was written; elsewhere part of the work may already be done), and,
+// when no answer could come, the command to run again where they can answer.
+function noAnswerLines(error: FirstRunCancelled, rerun: string, nothingWritten = false): string {
+  const stopped = nothingWritten ? "Nothing written" : "Stopped";
+  if (!error.inputClosed) return `\n  ${stopped}.\n`;
+  return `\n  ${stopped}: this needs an answer, and the input is closed. Run ${rerun} again where you can answer.\n`;
 }
 
 // First-run rows are a lead (the number and label, or the spaces under them)
@@ -7445,7 +7473,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   return true;
   } catch (error) {
     if (error instanceof FirstRunCancelled) {
-      process.stdout.write("\n  Nothing written.\n");
+      process.stdout.write(noAnswerLines(error, configCommand(projectTarget(projectDir)), true));
       process.exitCode = EXIT.usage;
       return true;
     }
@@ -10915,6 +10943,12 @@ export async function main(
       );
     }
   } catch (error) {
+    // A question with no answer is not a failure to report as one.
+    if (error instanceof FirstRunCancelled) {
+      process.stdout.write(noAnswerLines(error, configRerunWith(input, projectDir, []) ?? configCommand(projectTarget(projectDir))));
+      process.exitCode = EXIT.usage;
+      return;
+    }
     const rawMessage = error instanceof Error ? error.message : String(error);
     const copyChannel = aidlcInvocation() !== "aidlc";
     // A pin refusing the files named by --from wants the pinned release itself,
@@ -11016,8 +11050,16 @@ export async function main(
     const copiedHarness = discoverProjectHarnesses(projectDir).find((candidate) =>
       candidate.distribution === selected?.stamp.distribution
     );
+    // A --from folder with no AI-DLC harness in it (or several) is said in the
+    // person's words, with the files it needs.
+    const harnessCount = from ? /expected exactly one projected harness directory, found (\d+)/.exec(rawMessage)?.[1] : undefined;
+    const fromMessage = harnessCount === undefined
+      ? rawMessage
+      : harnessCount === "0"
+      ? `${JSON.stringify(from)} holds no AI-DLC release files`
+      : `${JSON.stringify(from)} holds ${harnessCount} AI-DLC harness folders, and config needs the one for this project`;
     emitResult(failure(
-      rawMessage,
+      fromMessage,
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
@@ -11040,7 +11082,9 @@ export async function main(
             error.remedy.harness
           }${projectTarget(projectDir)}`
         : from
-        ? configCommand("--from <valid-release-data>")
+        ? `pass --from the release files: aidlc-copy-runtime-X.Y.Z.tar.gz, the runtime/ folder inside it, or one harness folder such as runtime/${requestedHarness ?? copiedHarness?.distribution ?? "claude"}/; or fetch them with ${
+          configRerunWith(input, projectDir, ["--download"], ["--from"]) ?? configCommand(`--download${projectTarget(projectDir)}`)
+        }`
         : selected?.projectProjection && copiedHarness
         ? `re-copy the complete runtime/${copiedHarness.distribution}/ root from aidlc-copy-runtime-X.Y.Z.tar.gz (or a checkout's dist/${copiedHarness.distribution}/ tree) over the project, or install the native aidlc command`
         : configCommand("--harness <name>"),

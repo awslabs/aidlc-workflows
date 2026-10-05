@@ -533,7 +533,7 @@ describe("t338 atomic per-intent settings", () => {
 });
 
 describe("t338 summary confirmation off is the person's switch", () => {
-  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so only they can do it. Ask the user to type `/aidlc config set summary-confirmation off` themselves; this command does not turn it off on its own.";
+  const summaryRefusal = "Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set summary-confirmation off`.";
   /** No resolved session and no presence bypass, so only a typed turn can lower. */
   const SESSIONLESS = { ...FENCE_ENV_CLEAR, AIDLC_SESSION_OVERRIDE: undefined, AIDLC_SESSION_OVERRIDE_SOURCE: undefined };
 

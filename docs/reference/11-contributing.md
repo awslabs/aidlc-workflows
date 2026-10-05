@@ -283,7 +283,9 @@ The `codekb-path`, `codekb-snapshot`, `codekb-publish`, and
 `bun <harness-dir>/tools/aidlc-utility.ts <verb>`, not `/aidlc <verb>`
 (`codekb-path` is also reachable through the dispatcher as
 `aidlc engine workspace codekb`).
-`codekb-path` and `codekb-scope-diff` are read-only. `codekb-snapshot` may
+`codekb-path` is read-only, and so is `codekb-scope-diff` except that a
+`--compare` removes the repo's own `scope-draft-<repo>.md` from the active
+intent record's `inception/reverse-engineering/`. `codekb-snapshot` may
 recover an interrupted prior CodeKB directory swap before returning the
 source/store generations. `codekb-publish` is the sole shared-store writer: it
 validates a complete nine-file candidate and commits it under a space+repo
@@ -487,9 +489,12 @@ When adding, removing, or renaming files, directories, commands, or flags:
 Plan Approval, review, gate, and Unit lifecycle receipts bind to content and stage
 attempt, never to the identity of the directive that issued a prompt and never to
 event order. Plan Approval is held by the engine, not the conductor: `next`
-publishes the question and records what was asked, never an answer, and only the
-human-turn hook records the answer, taking the fingerprint of the plan files as
-they are when the person answers. No conductor-run command writes a Plan Approval
+publishes the question and records what was asked, never an answer. An answer
+is recorded only from the person's reply: the human-turn hook records an exact
+pick, and the conductor's `log answer --checkpoint plan-approval` records the
+choice it read, accepted only after a reply since the question was shown. Either
+way the engine takes the fingerprint of the plan files as they are when the
+answer is recorded. No other conductor-run command writes a Plan Approval
 answer, receipt, or fingerprint tag in that flow. The two rules are stated in
 [`12-state-machine.md`](12-state-machine.md#authority-invariants). Before
 submitting, answer these:

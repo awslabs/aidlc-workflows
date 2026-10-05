@@ -1184,18 +1184,18 @@ plus `state-transition` and `reviewer-scope`. `human-presence` is never lowered
 by the policy word.
 
 Setting `guard-policy relaxed` or `guard-policy off` from chat is the person's
-move: they type `/aidlc --guard-policy relaxed` or the confirmation words
-`guard policy relaxed` (use `off` for that value), and the human-turn hook applies
+move. When they type `/aidlc --guard-policy relaxed` or the confirmation words
+`guard policy relaxed` (use `off` for that value), the human-turn hook applies
 the switch when the prompt arrives, writes the state line and audit row, and
-reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
-The conductor runs `next` and relays the stand-aside line or harness note; it
-does not run the lowering setter itself.
-For `guard policy strict` or another plain-words request for strict, the conductor
-runs `config-change --guard-policy <strict|relaxed|off>` with `strict` at once,
+reports `AIDLC Guard Policy: ...` as hook context on harnesses that inject it;
+the conductor runs `next` and relays the stand-aside line or harness note.
+When they ask in plain words, the conductor runs
+`config-change --guard-policy <strict|relaxed|off>` with the value they asked
+for, which lowers when a reply from them is on record since the last decision,
 prints its output verbatim, and stops.
 If the harness has said this Kiro IDE build delivers no prompt text, say that
-active work cannot be lowered on that build; update Kiro IDE or start new work
-from a lower-default scope instead of inviting the confirmation words.
+active work cannot be lowered on that build (its adapter refuses the lowering
+setter too); update Kiro IDE or start new work from a lower-default scope.
 In either the config or flags-first form, `--intent <name>` and `--space <name>`
 select the piece of work; omitted selectors use the hook payload session's
 workflow selection.
@@ -1230,24 +1230,25 @@ Use flags-first syntax for combined settings. See
 [Customization](13-customization.md#the-five-fences) for the accepted grammar.
 Codex uses `$aidlc`, and its refusals name `$aidlc` instead of `/aidlc`.
 
-A CLI setter that would change the policy to `relaxed` refuses with:
+A setter that would change the policy to `relaxed`, run when no reply from the
+person has arrived since the last decision, refuses with:
 
-> Setting Guard Policy relaxed lowers fences and is the person's move: they type `/aidlc --guard-policy relaxed` and the harness applies it as they say it. This command does not lower fences on its own.
+> Setting Guard Policy relaxed lowers fences, which is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc --guard-policy relaxed`.
 
 Direct `scope change --guard-policy relaxed|off` uses the same rule. Direct
 `intent create --guard-policy relaxed|off` from chat is refused when the value
 is below that default (`relaxed` on an `off` scope is a raise and applies):
-create the piece of work, then have the person type the switch. Naming the scope's own default at creation records the scope's
+create the piece of work, and the agent runs the setter when the person asks for the lower value. Naming the scope's own default at creation records the scope's
 value without another prompt. A running workflow preserves its stricter policy
 when moving to a scope with a lower default. Creation that would lower the
 policy to `relaxed` refuses with:
 
-> Creating this intent with Guard Policy relaxed would lower fences. Create it, then have the person type `/aidlc --guard-policy relaxed`; the harness applies it as they say it. A scope default applies without asking.
+> Creating this intent with Guard Policy relaxed would lower fences, which is the person's call. Create it, then, when they ask for it in their own words, run `aidlc engine config set guard-policy relaxed` yourself and say in one line what changed. A scope default applies without asking.
 
 The `off` refusals use `off` in place of `relaxed`; unattended runs also receive
-the driver guidance. A guard-recovery `lower-fence` choice is human-input guidance,
-not an operation or command: selecting it executes nothing and only tells the
-person to type `/aidlc config set guard.<fence> off` with that fence's name.
+the driver guidance. When the person picks a guard-recovery `lower-fence`
+choice, the agent runs `config set guard.<fence> off` for them and says in one
+line what changed; they never have to type it.
 
 Compose creation reads Guard Policy from the scope the plan runs on, and no
 scope file is written: a matched plan keeps its stock scope's default or a
@@ -1282,12 +1283,12 @@ announced on every `/aidlc` run; re-affirm with
 `/aidlc config set guard-policy strict` to raise the fences and stop the notice.
 Displaying this notice does not rewrite the line, and a retired strict line alone gets no notice. The value is
 committed with the intent, survives sessions, and is visible to teammates. The
-same setter repairs an invalid line and records the old text. A plain-chat request
-for strict runs directly. A request to lower the policy, such as "stop asking me
-to re-approve when files change", is not a switch: the conductor names the exact
-command for you to type (`/aidlc --guard-policy relaxed` or
-`/aidlc --guard-policy off`) and ends the turn. When your next message is that
-command, the human-turn hook applies the switch before the conductor runs `next`.
+same setter repairs an invalid line and records the old text. A plain-chat
+request for a policy, such as "stop asking me to re-approve when files change",
+is carried out by the conductor: it runs the setter with the value you asked
+for, which lowers when a reply from you is on record since the last decision.
+The typed switch (`/aidlc --guard-policy relaxed`, say) remains a shortcut the
+human-turn hook applies before the conductor runs `next`.
 For configuration and scope changes, the row's `Old Value` is the previously
 saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
@@ -1349,14 +1350,15 @@ To set `guard.<fence> off` from chat, the person types
 `/aidlc config set guard.<fence> off` or `/aidlc --guard.<fence> off`, and the
 human-turn hook applies it at prompt time, records the audit row, and reports
 `AIDLC Guard Policy: ...` as hook context on harnesses that inject it.
-A `lower-fence` human-input choice executes nothing and only tells the person
-the exact command to type for that fence.
+Asking in your own words, or picking a guard's `lower-fence` choice, works too:
+the agent runs the setter for that fence and says in one line what changed.
 Both forms accept `--intent <name>` and `--space <name>`; omitted selectors use
 the hook payload session's workflow selection.
 A nonexistent named intent is refused, and a selection without a state file
 must be created before the person types the switch again.
-The CLI setters do not lower fences from chat on their own; an already-off
-fence is a no-op and needs no key.
+The CLI setters lower a fence when a person's turn is on record since the last
+decision (an empty ledger does not count); an already-off fence is a no-op and
+needs no key.
 Hooks run on Windows too, so every harness that forwards the prompt supports
 the typed switch without a setter-side session lookup.
 `AIDLC_UNATTENDED=1` suppresses prompt-time application and refuses CLI lowering.
@@ -1368,9 +1370,10 @@ Memory-held strict refuses first and overrides a fence lowered earlier, which
 machine-wide kill switch takes precedence. Its persisted `Guards Off` entry
 remains and takes effect again only after the memory line no longer holds strict.
 
-A CLI setter that would turn the review-freeze fence off refuses with:
+A setter that would turn the review-freeze fence off, run when no reply from the
+person has arrived since the last decision, refuses with:
 
-> Turning the review-freeze check off is the person's move: they type `/aidlc config set guard.review-freeze off` and the harness applies it as they say it. This command does not lower a fence on its own.
+> Turning the review-freeze check off is the person's call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set guard.review-freeze off`.
 
 The other fence refusals substitute that fence's name; unattended runs also
 receive the driver guidance. This command controls the three switchable fences,
@@ -1453,11 +1456,11 @@ off`, and the human-turn hook applies it at prompt time. The message must carry
 settings alone: beside a description (`/aidlc --summary-confirmation off build
 the export`) or in a question about the flag, the hook applies nothing, so the
 work already under way keeps its checkpoint and new work gets the flag only
-when it is created. A CLI setter
-(`config set`, `config-change`, or `scope-change`) run without that typed turn
-refuses with:
+when it is created. When the person asks in their own words, the agent runs the setter (`config
+set`, `config-change`, or `scope-change`); run when no reply from the person has
+arrived since the last decision, it refuses with:
 
-> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so only they can do it. Ask the user to type `/aidlc config set summary-confirmation off` themselves; this command does not turn it off on its own.
+> Turning summary confirmation off skips the person's `Looks correct` check before a stage writes its output, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set summary-confirmation off`.
 
 An off already saved as an explicit choice is a no-op. A scope-owned off (for
 example `off (from scope classic)`) still needs the person, because saving it
@@ -1562,12 +1565,13 @@ set inline on one command inside a session, it is ignored. Status then reads, fo
 example, `Plan Approval: on (guard policy strict (from project.md))` or
 `Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)`.
 
-Only the person turns it off: they type `/aidlc --plan-approval off` or
-`/aidlc config set plan-approval off`, or say so in their own words ("skip plan
-approval for this work"), and the human-turn hook applies it. A CLI setter run
-without that turn refuses with:
+It is the person's call: they type `/aidlc --plan-approval off` or
+`/aidlc config set plan-approval off` (the human-turn hook applies it), or say
+so in their own words ("skip plan approval for this work") and the agent runs
+the setter. A setter run when no reply from the person has arrived since the
+last decision refuses with:
 
-> Turning plan approval off lets code generation start without the person approving the plan, so only they can do it. Ask the user to type `/aidlc config set plan-approval off` themselves, or to say so in their own words; this command does not turn it off on its own.
+> Turning plan approval off lets code generation start without the person approving the plan, so it is their call. No reply from the person has arrived since the last decision: run it when they ask for it. They can also type `/aidlc config set plan-approval off`.
 
 With memory holding strict, the refusal names the memory file instead. Said
 before the work exists (at the compose gate or the scope confirmation), the
@@ -1799,9 +1803,10 @@ multiline checks in a script and record its invocation.
 Command` and `Command SHA-256`. Its JSON output includes the full canonical
 `command` and `command_sha256` alongside `challengeId` and `challengeFile`;
 `answer` also prints `command_sha256`. `answer` requires a matching pending
-decision and the human-turn hook's response bound to that command and session's current
-challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`, with the choice matching the
-one `--details` names (the person's reply, read in their own words); a later `HUMAN_TURN` alone is insufficient. Recording a new decision
+decision and the human-turn hook's record that the person replied to that command and
+session's current challenge, even with `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`; `--details`
+names the choice the agent read from their reply, and the receipt carries their exact
+words. A later `HUMAN_TURN` alone is insufficient. Recording a new decision
 replaces the session's prior challenge and response; a successful answer appends
 the audit event before consuming both. An append failure leaves the same response
 retryable; stale, mismatched, and successfully consumed responses are refused.
@@ -2007,9 +2012,13 @@ approved starting point must be reconciled and approved before work resumes.
 When several Units of a swarm batch have plans ready at once, `next` asks about
 them in one question: each Unit's summary and plan path, then **Approve all**,
 **Request Changes**, and **I'll edit the files**. The person answers in their own
-words and the human-turn hook records the answer: "approve all" approves every
-Unit, and a change that names a Unit ("change billing: use Stripe") sends just
-that Unit back with those words and approves the rest. Every Unit still gets its
+words and the agent records the choice they made with `aidlc engine log answer
+--stage code-generation --checkpoint plan-approval --details "Approve Plan"` (or
+`"Request Changes"`, or `"I'll edit the files"`), adding `--units
+"<unit>,<unit>"` for some of the Units and then recording the rest: "approve
+all" approves every Unit, and a change that names a Unit ("change billing: use
+Stripe") sends just that Unit back with those words and approves the rest. An
+exact "Approve all" is recorded as soon as it is typed. Every Unit still gets its
 own approval record bound to its own plan. The older recorded-batch commands
 (`aidlc engine log decision|answer --stage code-generation --checkpoint
 plan-approval --batch-file <manifest>`) remain only so a grouped approval
@@ -2324,7 +2333,12 @@ new knowledge into it cumulatively, so the stage checks first:
   needs no store, so a first scan can check its candidate before publishing.
 
 Add `--json` for the structured shape. Always exits 0 with the verdict in the
-output (except usage errors); writes nothing, no audit event. The fingerprint
+output (except usage errors); writes nothing and records no audit event, with
+one exception: when the compared file is the stage's own
+`scope-draft-<repo>.md` for the compared repo in the active intent record's
+`inception/reverse-engineering/`, the compare removes it, whatever the verdict,
+and says so ("The scope draft has been removed.", or `"draft_removed": true`
+with `--json`). The fingerprint
 is a `git write-tree` over a temporary index restricted to the analyzed paths.
 When the workspace root is the repository root it leaves out AI-DLC's own
 files, which the scan never reads: the `aidlc/` workspace, the harness
