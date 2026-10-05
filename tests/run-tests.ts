@@ -1228,13 +1228,15 @@ function pluginTestFiles(): string[] {
 function levelFiles(level: Level, excludes: string[] = []): string[] {
   const dir = join(SCRIPT_DIR, level);
   const excludeSet = new Set(excludes);
+  // --exclude applies after shard selection, so a shard is the same set of
+  // files with or without it.
+  const kept = (f: string) => excludeRegex === null || !matchesE2eFilter(f, excludeRegex);
   const files = existsSync(dir)
     ? readdirSync(dir)
         .filter((f) => f.endsWith(".test.ts"))
         .filter((f) => !excludeSet.has(f))
         .sort()
         .map((f) => join(dir, f))
-        .filter((f) => excludeRegex === null || !matchesE2eFilter(f, excludeRegex))
     : [];
   // Fold plugin content tests into the integration tier. Exclusion is keyed by
   // the plugin-dir-qualified name (`plugin-<plugin>-<stem>`), NOT the bare
@@ -1244,7 +1246,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     files.push(...pluginTestFiles().filter((f) => {
       const m = f.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
       const qualified = m ? `plugin-${m[1]}-${basename(f).replace(/\.test\.ts$/, "")}` : basename(f);
-      return !excludeSet.has(qualified) && (excludeRegex === null || !matchesE2eFilter(f, excludeRegex));
+      return !excludeSet.has(qualified);
     }));
   }
   if (level === "unit" && args.shard) {
@@ -1252,7 +1254,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     const names = files.map((file) => basename(file));
     try {
       const selected = new Set(selectShard(names, args.shard, config));
-      return files.filter((file) => selected.has(basename(file)));
+      return files.filter((file) => selected.has(basename(file)) && kept(file));
     } catch (error) {
       process.stderr.write(
         `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -1260,7 +1262,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
       process.exit(2);
     }
   }
-  return files;
+  return files.filter(kept);
 }
 
 function remainingRunMs(): number {

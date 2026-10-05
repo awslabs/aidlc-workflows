@@ -418,6 +418,21 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("--exclude leaves a weighted file out of its unit shard and the rest of the shard runs", () => {
+    const fixture = runnerFixture({
+      "unit/t-weighted.test.ts": PASSING_CASE,
+      "unit/t-sibling.test.ts": PASSING_CASE,
+      "unit-shard-weights.json": JSON.stringify({
+        defaultSeconds: 1, weights: { "t-weighted.test.ts": 5, "t-sibling.test.ts": 5 }, affinityGroups: [],
+      }),
+    });
+    const run = fixture.run(["--unit", "--no-llm", "--shard", "1/1", "--exclude", "^t-weighted"]);
+    expect(run.status).toBe(0);
+    expect(run.out).toContain("=== DONE t-sibling.test.ts (PASS) ===");
+    expect(run.out).not.toContain("t-weighted.test.ts");
+    expect(run.summary).toContain("Test files: 1");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("partially skipped files pass when a case really executes, without requiring expect calls", () => {
     const fixture = runnerFixture({
       "unit/t-mixed.test.ts": `${PASSING_CASE}test.skip("optional", () => {});\n`,

@@ -967,7 +967,8 @@ explicitly to keep those files on their in-test SKIP path.
 
 `--exclude` matches the same names but selects nothing: the files it matches
 are left out of the tier, and the rest keep their ordinary, unfiltered rules
-below. CI uses it to run the scope runs as a job of their own.
+below. With `--shard`, the shard is chosen first and then the files it matches
+are left out of it. CI uses it to run the scope runs as a job of their own.
 
 An explicit **`--filter` requires execution in each selected file**. A file
 whose cases are all skipped (or which declares no cases) fails the run even
