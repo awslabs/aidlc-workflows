@@ -392,6 +392,41 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // The review saw the document as it was, an edit changed it before the wave
+  // completed, and the person then put it back: what the review saw is what is
+  // there now, so the Unit's checkpoint opens under every Guard Policy.
+  for (const policy of ["strict (set by you)", "relaxed (set by you)", "off (from scope classic)"]) {
+    test(`Guard Policy ${policy.split(" ")[0]}: a document changed before its completion and then put back is ready`, () => {
+      const p = fixture(policy);
+      const document = alphaDocument(p);
+      for (const slug of stages) {
+        const stage = findStageBySlug(slug)!;
+        const output = join(seededRecordDir(p), "construction", "alpha", slug);
+        mkdirSync(output, { recursive: true });
+        for (const name of stage.produces ?? []) writeFileSync(join(output, artifactFilename(name)), `# alpha ${name}\n`);
+        if (stage.workspace_requires) {
+          writeFileSync(join(output, "source-manifest.json"), JSON.stringify({
+            stage: slug, unit: "alpha", version: 1, writes: [{ path: "src/alpha.ts" }],
+          }));
+        }
+        reviewThroughLog(p, review(slug, "alpha", 1));
+        const reviewed = slug === DOCUMENT_STAGE ? readFileSync(document, "utf-8") : "";
+        if (slug === DOCUMENT_STAGE) writeFileSync(document, `${reviewed}\n${EDIT}\n`);
+        const floor = latestMainWorkflowStageRunFloorForProject(p, slug, true, "alpha");
+        appendAuditEntry("UNIT_COMPLETED", stage.workspace_requires ? { Stage: slug, Unit: "alpha", "Run floor": floor } : {
+          Stage: slug, Unit: "alpha", Mode: "wave", "Run floor": floor,
+          "Artifact Fingerprint": reviewArtifactFingerprint(p, stage, "alpha", { requireRequiredArtifacts: true })!,
+        }, p);
+        if (slug === DOCUMENT_STAGE) writeFileSync(document, reviewed);
+      }
+      const beat = next(p);
+      expect(beat.construction_checkpoint, JSON.stringify(beat)).toMatchObject({ unit: "alpha", ready: true });
+      expect(beat.construction_checkpoint?.rereview).toBeUndefined();
+      approve(p, "alpha");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
   // A stage the Unit never completed is still work to do under Guard Policy
   // off: the walk hands it back and the checkpoint is not ready.
   test("Guard Policy off: a Unit whose design stage never completed still blocks", () => {
