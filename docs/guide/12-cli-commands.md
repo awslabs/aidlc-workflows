@@ -2313,9 +2313,13 @@ The staged directory must contain exactly the nine CodeKB artifacts.
 Publication acquires the same space+repo lock, rechecks both snapshot values,
 validates the timestamp's final scope fingerprint, and swaps the complete
 candidate into the shared store with rollback and crash recovery. A concurrent
-CodeKB publication returns `CODEKB_STORE_CHANGED`; source movement returns
-`CODEKB_SOURCE_CHANGED`. Both publish nothing and require a fresh re-merge or
-scan rather than a last-writer-wins overwrite.
+CodeKB publication returns `CODEKB_STORE_CHANGED`, publishes nothing, and
+requires a fresh re-merge rather than a last-writer-wins overwrite. Source
+movement under a strict Guard Policy returns `CODEKB_SOURCE_CHANGED` (or
+`CODEKB_CANDIDATE_STALE`) and publishes nothing until a fresh scan. Under
+`relaxed` or `off` the scan is published as captured, with one line
+(`change_notices` in `--json`) that names "redo reverse engineering" to scan
+again.
 
 After a successful publication the utility renames the staged directory aside
 in one step, then checks each of the nine files against the bytes it just
