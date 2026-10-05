@@ -1120,8 +1120,10 @@ describe("t242 state-transition ownership guard", () => {
       // Order is not modelled: a cd after a write also counts for it, which
       // only refuses more, and only for a protected path.
       ["echo x > hooks/y.json; cd .kiro", 2],
-      // `pushd -n` adds to the stack and stays in the directory.
+      // `pushd -n` adds to the stack and stays in the directory, for the
+      // audit-trail reading too.
       ["pushd -n .kiro; echo x > hooks/y.json", 0],
+      ["pushd -n aidlc/spaces/s/intents/i/audit; echo x > notes.md", 0],
       ["cd docs && echo x > README.md", 0],
       ["cd src && echo x > hooks/y.json", 0],
     ] as Array<[string, number]>) {
@@ -1149,7 +1151,8 @@ describe("t242 state-transition ownership guard", () => {
   });
 
   // bash's cd takes +1 as a directory name (only pushd reads it as a stack
-  // entry), here a link to .kiro. Windows cannot create the link unprivileged.
+  // entry), here a link to .kiro. Skipped on Windows, where creating the link
+  // can need privileges.
   test.skipIf(process.platform === "win32")("runtime integrity reads `cd +1` as the directory +1", () => {
     const project = createTestProject();
     projects.push(project);

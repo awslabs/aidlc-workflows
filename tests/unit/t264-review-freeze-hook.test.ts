@@ -1228,11 +1228,13 @@ function runKiroIde(
   p: string,
   target: string,
   payload: Record<string, unknown>,
+  envOverrides: NodeJS.ProcessEnv = {},
 ): { code: number; stderr: string } {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CLAUDE_PROJECT_DIR: p,
     AIDLC_COMPILED_EXECUTABLE: "",
+    ...envOverrides,
   };
   delete env.USER_PROMPT;
   const r = spawnSync(BUN, [join(p, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target], {
@@ -1298,6 +1300,16 @@ describe("t264 (d) Kiro IDE adapter route", () => {
       tool_name: "execute_pwsh",
       tool_input: { command: `Set-Location ${backslashed}; Set-Content notes.md x`, cwd: p },
     }).code).toBe(0);
+    // A home-relative backslash path, with the project as PowerShell's home.
+    const home = { HOME: p, USERPROFILE: p };
+    for (const command of [
+      `Set-Content $HOME\\${backslashed}\\requirements.md changed`,
+      `Set-Content ~\\${backslashed}\\requirements.md changed`,
+    ]) {
+      const r = runKiroIde(p, "review-freeze", { tool_name: "execute_pwsh", tool_input: { command, cwd: p } }, home);
+      expect(r.code, command).toBe(2);
+      expect(r.stderr, command).toContain("review-freeze");
+    }
     expect(runKiroIde(p, "review-freeze", { tool_name: "read_file", tool_input: { path: file } }).code).toBe(0);
     expect(runKiroIde(p, "review-freeze", {
       tool_name: "fs_write",

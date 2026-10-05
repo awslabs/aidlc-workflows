@@ -1127,8 +1127,13 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   let computedRoot = false;
   for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
     if (!SHELL_DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
+    // As in shellDirectoryRoots: `pushd -n` stays put, and pushd's +N is a stack
+    // entry, a directory this command cannot see.
+    const pushd = name.toLowerCase() === "pushd";
+    if (pushd && args.includes("-n")) continue;
     const target = args.find((arg) => !arg.startsWith("-"));
-    const expansions = target === undefined ? [null] : expandWord(target, values);
+    const stack = pushd && target !== undefined && /^\+\d*$/.test(target);
+    const expansions = target === undefined || stack ? [null] : expandWord(target, values);
     for (const expanded of expansions) {
       if (expanded === null || roots.length > MAX_ROOTS) computedRoot = true;
       else roots.push(...roots.map((root) => resolve(root, expanded)));
