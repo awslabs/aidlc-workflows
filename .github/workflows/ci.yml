@@ -530,6 +530,34 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
 
+  # Coverage only grows. The registry is never committed: this builds it fresh
+  # for this commit and for its first parent (the PR's base, or the queue entry
+  # ahead), and fails naming each unit the parent covers that this commit still
+  # has but no longer covers. A new unit with no claim is listed, not failed.
+  coverage_ratchet:
+    name: Coverage ratchet
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The first parent is the base the ratchet compares against.
+          fetch-depth: 2
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Package the tree the registry reads
+        run: bun scripts/package.ts claude
+
+      - name: Fail if a unit lost coverage against the first parent
+        run: bun tests/gen-coverage-registry.ts --check --base HEAD^1
+
   # Preserve the existing required-check name while the work runs in isolated
   # jobs. Any deterministic matrix failure collapses its result to failure.
   test:
@@ -537,19 +565,21 @@ jobs:
     # Still collect failures, but let a superseded run release its concurrency
     # slot instead of waiting for this summary job to obtain another runner.
     if: ${{ !cancelled() }}
-    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation]
+    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation, coverage_ratchet]
     runs-on: ubuntu-latest
     steps:
-      - name: Require smoke, unit shards, integration, production guards, and the cross-OS jobs outside PR pushes
+      - name: Require smoke, unit shards, integration, production guards, the coverage ratchet, and the cross-OS jobs outside PR pushes
         env:
           EVENT_NAME: ${{ github.event_name }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
           NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
           GUARD_RESULT: ${{ needs.test_guards.result }}
           ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
+          COVERAGE_RESULT: ${{ needs.coverage_ratchet.result }}
         run: |
           test "$DETERMINISTIC_RESULT" = "success"
           test "$GUARD_RESULT" = "success"
+          test "$COVERAGE_RESULT" = "success"
           # PR pushes skip the cross-OS jobs; every other trigger requires them.
           cross_os=success
           if [ "$EVENT_NAME" = pull_request ]; then cross_os=skipped; fi

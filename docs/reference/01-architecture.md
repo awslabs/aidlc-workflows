@@ -940,8 +940,8 @@ readers read the rows they share once (`copiedAuditBlocks` in
 tests/
 +-- run-tests.ts              # Native Bun test runner (all levels, flag-selectable)
 +-- run-tests.sh              # POSIX compatibility wrapper for run-tests.ts
-+-- gen-coverage-registry.ts  # Generates .coverage-registry.json from covers: headers
-+-- .coverage-registry.json   # Machine-checked coverage index (units x test files); also the ratchet baseline
++-- gen-coverage-registry.ts  # Builds the coverage registry fresh from covers: headers; --check --base is CI's ratchet
++-- .coverage-registry.json   # Local only (gitignored): the registry a plain generator run writes
 +-- README.md                 # Discoverable suite index + quick reference
 +-- lib/
 |   +-- bun-junit-to-meta.ts  # Bun JUnit -> runner metadata glue
