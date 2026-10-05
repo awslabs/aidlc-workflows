@@ -1029,10 +1029,13 @@ This stage has a **two-part structure**: planning followed by generation.
      postapproval edits, use the current brief without calling the edits approved
    - When a build of the same approved plan was interrupted, that output also
      carries a `## Progress before the interruption` section after its marker
-     lines: the steps the plan file ticks, any ticked step to redo because a
-     file it names in a code span is missing, and the first unticked step to
-     continue at. It appears only when the build already started under the
-     approval that is current now (the receipt for this target, stage attempt,
+     lines: the steps the plan file ticks (or, with none ticked, the steps
+     whose named files changed since the build started), each file a done step
+     names in a code span that is not in the project (a bare file name counts
+     when a file of that name is anywhere in it), stated as a fact for the
+     worker to judge, and the step to continue at. It appears only when the
+     build already started under the approval that is current now (the
+     receipt for this target, stage attempt,
      and approved content is at `generation`); a Redo, a rejected gate, a new
      approval, or an edited plan starts the steps fresh. When a build starts
      under a new approval, the engine sets the plan file's task markers back to

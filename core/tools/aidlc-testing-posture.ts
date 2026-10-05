@@ -11,7 +11,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AcceptedChange,
   authorityFor,
@@ -65,6 +65,7 @@ import {
   recordGuardStoodAside,
   recordHookDrop,
   renderChangedPaths,
+  renderSourcePathKeys,
   governedChangeControl,
   intentRepos,
   resolveBoltDag,
@@ -1544,8 +1545,14 @@ export function workerBrief(
 // again from step 1 by the next worker. When the brief is for a build that
 // already started under the approval that is current now, the plan file's ticks
 // are that build's progress, and the brief says so: which steps are ticked,
-// which of those name files that are no longer there (those are redone), and
-// the step to continue at. The person hears one line saying the same.
+// which files they name are not in the project, and the step to continue at.
+// Whether a named file that is not there means the step must be redone is the
+// worker's call: a step can name a file it says not to add. The person hears
+// one line saying only what is certain: what is done and where it picks up.
+//
+// A worker that built steps without ticking them leaves no ticks. Then the
+// files the steps name are the record: the furthest step whose named files all
+// changed since the build started is where the build got to.
 //
 // "Started under the approval that is current now" is the receipt the approval
 // check validates, at status `generation`. Its key binds the target, the stage
@@ -1579,11 +1586,13 @@ export interface PlanStep {
 
 export interface CodeGenerationResume {
   steps: PlanStep[];
-  /** 1-based numbers of the ticked steps. */
+  /** 1-based numbers of the steps done: ticked, or (with none ticked) whose named files were written. */
   ticked: number[];
-  /** Ticked steps with named files missing on disk, which are redone. */
-  redo: Array<{ step: number; missing: string[] }>;
-  /** The first unticked step, or null when every step is ticked. */
+  /** How the done steps are known: the plan file's ticks, or the files the steps name. */
+  from: "ticks" | "files";
+  /** Done steps naming files that are not in the project: a fact for the worker to judge. */
+  missing: Array<{ step: number; paths: string[] }>;
+  /** The first step not done, or null when every step is done. */
   next: number | null;
 }
 
@@ -1639,12 +1648,15 @@ export function planSteps(plan: string): PlanStep[] {
 export function codeGenerationResume(
   projectDir: string,
   target: CodeGenerationTarget,
-  known: { plan?: string; approval?: CodeGenerationApproval } = {},
+  known: { plan?: string; approval?: CodeGenerationApproval; issued?: CodeGenerationIssuance } = {},
 ): CodeGenerationResume | null {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    if (readActiveDirectiveMarker(projectDir, state)?.kind === "invoke-swarm") return null;
-    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    // While `next` issues a run-stage, that directive, not the one on disk
+    // (a pause, an error, a question), says which build this is.
+    const kind = known.issued?.kind ?? readActiveDirectiveMarker(projectDir, state)?.kind;
+    if (kind === "invoke-swarm") return null;
+    const authority = resolveCodeGenerationAuthority(projectDir, target, known.issued);
     const questionsPath = join(authority.stageDir, "code-generation-questions.md");
     const fingerprint = existsSync(questionsPath)
       ? questionsFileApprovalFingerprint(readFileSync(questionsPath, "utf-8")) : null;
@@ -1652,23 +1664,61 @@ export function codeGenerationResume(
       ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint })
       : null;
     if (receipt?.status !== "generation" || receipt.delegation !== undefined) return null;
-    const approval = known.approval ?? evaluateCodeGenerationApproval(projectDir, target);
+    const approval = known.approval ?? evaluateCodeGenerationApproval(projectDir, target, known.issued);
     if (!approval.ok || approval.approvalFingerprint !== fingerprint) return null;
     const steps = planSteps(known.plan ?? readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"));
-    const ticked = steps.flatMap((step, index) => step.ticked ? [index + 1] : []);
-    if (ticked.length === 0) return null;
+    let ticked = steps.flatMap((step, index) => step.ticked ? [index + 1] : []);
+    let next: number | null = steps.findIndex((step) => !step.ticked) + 1 || null;
+    let from: CodeGenerationResume["from"] = "ticks";
+    if (ticked.length === 0) {
+      const written = stepsWithWrittenFiles(projectDir, receipt.certifiedSourceSha256, steps);
+      if (written === 0) return null;
+      ticked = Array.from({ length: written }, (_, index) => index + 1);
+      next = written < steps.length ? written + 1 : null;
+      from = "files";
+    }
     // A multi-repo intent's plan may name paths inside a repository, and a step
-    // may name one of this stage's own record files.
+    // may name one of this stage's own record files. A bare file name (no
+    // folder) is in the project when a file of that name is anywhere in it.
     const roots = [projectDir, ...intentRepos(projectDir).map((repo) => join(projectDir, repo)), authority.stageDir];
-    const redo = ticked.flatMap((step) => {
-      const missing = steps[step - 1].paths.filter((path) => !roots.some((root) => existsSync(join(root, path))));
-      return missing.length > 0 ? [{ step, missing }] : [];
+    let names: Set<string> | null = null;
+    const anywhere = (name: string): boolean => {
+      names ??= new Set(renderSourcePathKeys(workspaceSourceState(projectDir)?.listing.keys() ?? []).map((path) => basename(path)));
+      return names.has(name);
+    };
+    const present = (path: string): boolean =>
+      roots.some((root) => existsSync(join(root, path))) || (!path.includes("/") && anywhere(path));
+    const missing = ticked.flatMap((step) => {
+      const paths = steps[step - 1].paths.filter((path) => !present(path));
+      return paths.length > 0 ? [{ step, paths }] : [];
     });
-    const next = steps.findIndex((step) => !step.ticked);
-    return { steps, ticked, redo, next: next < 0 ? null : next + 1 };
+    return { steps, ticked, from, missing, next };
   } catch {
     return null;
   }
+}
+
+/**
+ * With no step ticked: the furthest step whose named files all changed since
+ * the build started (the source its receipt certified at generation start), or
+ * 0 when none did or the start's file listing was not kept. A bare file name
+ * matches a changed file of that name in any folder.
+ */
+function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps: PlanStep[]): number {
+  const current = workspaceSourceState(projectDir);
+  const changed = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, startedSource, current);
+  if (changed === null || changed.length === 0) return 0;
+  const names = new Set(changed.map((path) => basename(path)));
+  const wrote = (path: string): boolean => path.endsWith("/")
+    ? changed.some((file) => file.startsWith(path) || file.includes(`/${path}`))
+    : path.includes("/")
+      ? changed.some((file) => file === path || file.endsWith(`/${path}`))
+      : names.has(path);
+  let furthest = 0;
+  steps.forEach((step, index) => {
+    if (step.paths.length > 0 && step.paths.every(wrote)) furthest = index + 1;
+  });
+  return furthest;
 }
 
 /**
@@ -1748,7 +1798,16 @@ function progressSection(resume: CodeGenerationResume): string {
   const total = resume.steps.length;
   const lines = ["", "## Progress before the interruption", ""];
   const unticked = "the approved plan below shows none ticked, because ticks are not part of the approval";
-  if (resume.next === null) {
+  if (resume.from === "files") {
+    lines.push(
+      `This plan's build stopped part way. The plan file ticks none of its ${total} steps, but the files ` +
+        `${resume.next === null ? "every step names" : `steps ${stepRanges(resume.ticked)} name`} changed since the build started:`,
+      "",
+      ...resume.ticked.map((step) => `${step}. ${resume.steps[step - 1].text}`),
+      "",
+      "Check each of those steps and tick the box of each one that is done.",
+    );
+  } else if (resume.next === null) {
     lines.push(`This plan's build stopped part way. All ${total} steps are ticked in the plan file (${unticked}).`, "");
   } else {
     lines.push(
@@ -1758,21 +1817,25 @@ function progressSection(resume: CodeGenerationResume): string {
       "",
     );
   }
-  // The plan runs in order: a ticked step before the resume point is redone
-  // first, one after it when the worker reaches it.
-  const files = (missing: string[]): string =>
-    `${missing.map((path) => `\`${path}\``).join(", ")} ${missing.length === 1 ? "is" : "are"} missing`;
-  const before = resume.redo.filter(({ step }) => resume.next === null || step < resume.next);
-  const after = resume.redo.filter(({ step }) => resume.next !== null && step > resume.next);
-  for (const { step, missing } of before) lines.push(`Redo step ${step}: ${files(missing)}.`);
+  // The plan runs in order: a done step before the resume point is looked at
+  // first, one after it when the worker reaches it. A named file that is not in
+  // the project is a fact; the worker reads the step and decides.
+  const names = (paths: string[]): string =>
+    `names ${paths.map((path) => `\`${path}\``).join(", ")}, which ${paths.length === 1 ? "is" : "are"} not in the project`;
+  const it = (paths: string[]): string => paths.length === 1 ? "that file" : "those files";
+  const before = resume.missing.filter(({ step }) => resume.next === null || step < resume.next);
+  const after = resume.missing.filter(({ step }) => resume.next !== null && step > resume.next);
+  for (const { step, paths } of before) {
+    lines.push(`Step ${step} ${names(paths)}: redo step ${step} first if it should have made ${it(paths)}.`);
+  }
   if (resume.next !== null) {
     lines.push(
       `${before.length > 0 ? "Then continue" : "Continue"} at step ${resume.next} of ${total}: ` +
         `"${resume.steps[resume.next - 1].text}".`,
     );
   }
-  for (const { step, missing } of after) {
-    lines.push(`Step ${step} is ticked, but ${files(missing)}: redo it when you reach it.`);
+  for (const { step, paths } of after) {
+    lines.push(`Step ${step} is ticked and ${names(paths)}: when you reach it, redo it if it should have made ${it(paths)}.`);
   }
   lines.push(
     "Before you skip any other ticked step, check that the files it names exist; redo any ticked step whose files are missing." +
@@ -1783,22 +1846,24 @@ function progressSection(resume: CodeGenerationResume): string {
 
 /**
  * The one line the person hears when an interrupted build is picked up, or null
- * when there is nothing to pick up. Says where it picks up, what is done, and
- * which steps are redone because their files are missing.
+ * when there is nothing to pick up. Says only what is certain: where it picks
+ * up and what is done. Whether a step is redone is the worker's call, said by
+ * the agent when it redoes one.
  */
-export function codeGenerationResumeNarration(projectDir: string, unit: string | null): string | null {
-  const resume = codeGenerationResume(projectDir, { unit });
+export function codeGenerationResumeNarration(
+  projectDir: string,
+  unit: string | null,
+  issued?: CodeGenerationIssuance,
+): string | null {
+  const resume = codeGenerationResume(projectDir, { unit }, issued ? { issued } : {});
   if (resume === null) return null;
   const whose = unit === null ? "the code" : `${unit}'s code`;
-  const redone = resume.redo.map(({ step }) => step);
-  const redo = redone.length === 0
-    ? ""
-    : `redoing ${stepRanges(redone)}, ${redone.length === 1 ? "its" : "their"} files were missing`;
   const total = resume.steps.length;
+  const written = resume.from === "files";
   if (resume.next === null) {
-    return `Picking up ${whose}: all ${total} steps are done${redo ? `; ${redo}` : ", checking their files"}.`;
+    return `Picking up ${whose}: all ${total} steps ${written ? "wrote their files, checking them" : "are done, checking their files"}.`;
   }
-  return `Picking up ${whose} at step ${resume.next} of ${total} (${stepRanges(resume.ticked)} done${redo ? `; ${redo}` : ""}).`;
+  return `Picking up ${whose} at step ${resume.next} of ${total} (${stepRanges(resume.ticked)} ${written ? "wrote their files" : "done"}).`;
 }
 
 function isPlanApprovalLabel(value: string): boolean {

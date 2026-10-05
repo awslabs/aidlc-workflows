@@ -798,9 +798,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // A Code Generation build cut off part way and picked up again: the person
   // hears where it picks up instead of the stage starting over. Nothing ticked,
   // or a build that has not started under the current approval, says nothing new.
+  // The line is about the run-stage being issued, not the directive on disk,
+  // so a repeated `next` or a `continue` of its rules says the same line.
   if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
     const projectDir = emissionProjectDir(directive);
-    const line = projectDir ? codeGenerationResumeNarration(projectDir, directive.unit ?? null) : null;
+    const unit = directive.unit ?? null;
+    const issued = { kind: "run-stage" as const, ...(unit !== null ? { unit } : {}) };
+    const line = projectDir ? codeGenerationResumeNarration(projectDir, unit, issued) : null;
     if (line !== null) directive.narration = line;
   }
   // A route check asks one question: which Unit would the engine route now? It
