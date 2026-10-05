@@ -1,4 +1,4 @@
-// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:isScopeName, function:SCOPE_NAME_RULE
+// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:isScopeName, function:SCOPE_NAME_RULE, function:scopeArg
 //
 // t344 - the durable composed-scope RECORD contract.
 //
@@ -27,10 +27,12 @@
 //      scope, and resurrecting it would re-create the phantom).
 //
 // Mechanism = in-process: all three functions are pure, so they are called
-// directly against literal inputs. No temp project, no env seams needed.
+// directly against literal inputs. No temp project, no env seams needed. The
+// last block also runs an installed engine once, to pin what a redo prints.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +45,9 @@ import {
   type ComposedScopeRecord,
 } from "../../core/tools/aidlc-graph.ts";
 import { discoverScopes } from "../../core/tools/aidlc-runner-gen.ts";
-import { loadScopeMetadataAll } from "../../core/tools/aidlc-lib.ts";
+import { loadScopeMetadataAll, scopeArg } from "../../core/tools/aidlc-lib.ts";
+import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 const IDENTITY = [
   "---",
@@ -554,5 +558,54 @@ describe("t344 a scope name that is not one is never written or run", () => {
       writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", "name: x;id\nrunner: true"));
       expect(() => discoverScopes()).toThrow(/has a name a scope cannot have/);
     });
+  });
+
+  test("a scope read back from the workflow's files is printed into a command only when it is a scope name", () => {
+    for (const name of ["bugfix", "Lean_Feature.v2", "team@2"]) expect(scopeArg(name)).toBe(name);
+    for (const name of ["x%USERNAME%", "x;id", "x id", "../x"]) {
+      let message = "";
+      try {
+        scopeArg(name);
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message, name).toContain("is not a scope name, so no command was printed for it");
+      expect(message, name).not.toContain(name);
+    }
+  });
+
+  // cmd.exe fills in %NAME% inside a command before AI-DLC sees it, so a
+  // printed command must never carry a scope like this one.
+  test("a redo on a workflow whose saved scope is not a scope name prints no command", () => {
+    const proj = mkdtempSync(join(tmpdir(), "t344-resume-"));
+    try {
+      cpSync(join(REPO_ROOT, "dist", "claude"), proj, { recursive: true });
+      spawnSync("git", ["init", "-q"], { cwd: proj });
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      for (const key of ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "AIDLC_SESSION_OVERRIDE"]) delete env[key];
+      const tool = (name: string, args: string[]) => spawnSync(process.execPath, [join(proj, ".claude", "tools", name), ...args], {
+        cwd: proj,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const created = tool("aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--label", "redo", "--arguments", "fix the parser"]);
+      expect(created.status, created.stderr).toBe(0);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const intent = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md")));
+      const state = join(intents, String(intent), "aidlc-state.md");
+      const redo = () => tool("aidlc-orchestrate.ts", ["report", "--result", "resumed", "--user-input", "2"]);
+      const kept = redo();
+      expect(kept.status, kept.stderr).toBe(0);
+      expect(kept.stdout).toContain("--direction redo --scope bugfix");
+      writeFileSync(state, readFileSync(state, "utf-8").replace("- **Scope**: bugfix", "- **Scope**: x%USERNAME%"));
+      const refused = redo();
+      expect(refused.status).not.toBe(0);
+      expect(refused.stdout).toBe("");
+      expect(refused.stderr).toContain("is not a scope name, so no command was printed for it");
+      expect(refused.stderr).not.toContain("USERNAME");
+    } finally {
+      cleanupTestProject(proj);
+    }
   });
 });

@@ -2929,7 +2929,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5573,7 +5573,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -6892,7 +6892,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -8708,7 +8708,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9743,7 +9743,7 @@
       "coveredBy": [
         {
           "file": "tests/unit/t344-composed-scope-record.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -9754,6 +9754,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:scopeArg",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t344-composed-scope-record.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

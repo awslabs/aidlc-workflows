@@ -10037,7 +10037,7 @@ function copilotGuardRestartPrintHashes(
     return ["aidlc engine jump", `bun ${runtimeHarnessDir()}/tools/aidlc-jump.ts`].map(
       (invocation) => contentSha256(JSON.stringify({
         kind: "print",
-        message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${shellArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+        message: `Run \`${invocation} execute --target ${operation.stage} --direction ${direction} --scope ${scopeArg(scope)}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
       })),
     );
   } catch {
@@ -33399,6 +33399,17 @@ export function isScopeName(name: string): boolean {
 
 export const SCOPE_NAME_RULE =
   "letters, digits, and . _ - + @ only, starting with a letter or digit";
+
+// A scope the engine prints into a command may come from the workflow's own
+// files (state, audit), so it is checked again before it is printed.
+export function scopeArg(scope: string): string {
+  if (scope !== "" && !isScopeName(scope)) {
+    throw new Error(
+      `This workflow's scope is not a scope name, so no command was printed for it. A scope name uses ${SCOPE_NAME_RULE}.`,
+    );
+  }
+  return shellArg(scope);
+}
 
 export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
   if (_scopeMetadataAll !== null) return _scopeMetadataAll;
