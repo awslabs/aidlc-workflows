@@ -293,6 +293,9 @@ describe("next stops with the agent's step when the engine knows the hooks never
       expect(isStop(stop), h.name).toBe(true);
       expect(stop.message, h.name).toContain("is a link, so do not change it");
       expect(stop.message, h.name).not.toContain(edit);
+      // The person is not sent to change it through the link either.
+      expect(stop.message, h.name).not.toContain("chat.useHooks");
+      expect(stop.message, h.name).toContain("Make it a plain file in this project");
     }
     expect(readFileSync(target, "utf-8")).toBe("{}\n");
   });

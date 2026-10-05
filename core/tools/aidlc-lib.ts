@@ -24566,7 +24566,8 @@ export function hooksOffAgentStep(projectDir?: string, next?: string): string | 
   const edits = activation.agentStepEdits;
   if (edits && !plainProjectFile(resolveProjectDir(projectDir), edits)) {
     return `${HOOKS_OFF_AGENT_RULES} \`${edits}\` in this project is a link, so do not change it. Show the person ` +
-      `this line and end your turn: "${fillHookActivationText(activation.recovery, projectDir, next)}"`;
+      `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
+      `file in this project, then send your next message."`;
   }
   return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
 }
