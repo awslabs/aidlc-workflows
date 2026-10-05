@@ -73,6 +73,7 @@ import {
   seedStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand } from "../harness/verification-command.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -1202,6 +1203,7 @@ function runSwarm(
   project: string,
   args: string[],
 ): { rc: number; out: string } {
+  approveSuppliedCheckCommand(project, args);
   const result = spawnSync(
     process.execPath,
     [SWARM, "--project-dir", project, ...args],

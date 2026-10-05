@@ -1917,20 +1917,20 @@ proofs are unverified after upgrading; authorize the recorded command and run
 
 ### `aidlc engine swarm check` / `finalize` - verify native worktrees
 
-With Construction Checkpoints enabled, both commands run the intent's recorded,
-human-authorized Construction Verification Command in each prepared Unit worktree:
+Both commands run the intent's recorded, human-authorized Construction
+Verification Command in each prepared Unit worktree, with or without Construction
+Checkpoints:
 
 ```bash
 aidlc engine swarm check <Unit> [--test-file <protected spec>]
 aidlc engine swarm finalize --batch <N> --units "<all Units>" --claimed "<converged Units>"
 ```
 
-`--check-cmd` is optional under checkpoints; if supplied, its canonical digest
-must match the authorized command. A missing authorization refuses execution:
-complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
+`--check-cmd` is optional, with or without checkpoints; if supplied, its
+canonical digest must match the authorized command. A missing authorization
+refuses execution: complete the [recorded-command flow](#construction-verification-command-record-human-authorization)
 and `set-construction-verification-command`, rather than substituting a passing
-command. Legacy autonomy without checkpoints still requires `--check-cmd` on
-both commands. `check` is advisory; `finalize` reruns the command and validates
+command. With no workflow, both commands refuse. `check` is advisory; `finalize` reruns the command and validates
 review evidence before merging each claimed Unit. Re-running `finalize` withdraws
 every open checkpoint question and captured checkpoint response for this intent,
 in any session; ask again only after fresh verification, source landing, and a
