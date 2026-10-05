@@ -976,8 +976,10 @@ describe("t299 first-run setup wizard", () => {
   // Both Kiro rows probe `kiro-cli`. The kiro-ide row counts it only from
   // 2.24.1, the oldest Kiro CLI it has been checked on; below that, down to the
   // kiro row's 2.6, the kiro row is the one detected, so setup takes it
-  // without asking.
-  test("a Kiro CLI below the kiro-ide floor detects only the kiro row", () => {
+  // without asking. The real probe runs the stub `kiro-cli`, a POSIX shell
+  // script Windows does not resolve as an executable; t294 covers the floor
+  // itself on every platform.
+  test.skipIf(process.platform === "win32")("a Kiro CLI below the kiro-ide floor detects only the kiro row", () => {
     const old = runWizard("\n", {
       harnesses: { claude: { found: false }, kiro: { found: true, version: "kiro-cli 2.24.0" } },
       probed: ["kiro", "kiro-ide"],
