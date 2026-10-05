@@ -27,7 +27,20 @@ AI-DLC is open-world. Plugins under `plugins/<name>/` contribute additional stag
 
 ## Guards
 
-The guards are the person's switches, never the agent's. When someone asks in plain words to relax or turn off the guards ("stop asking me to re-approve when files change", "turn the guards off"), do it for them without investigating: run `{{INVOKE}} engine config set guard-policy relaxed` or `{{INVOKE}} engine config set guard-policy off` (one fence: `{{INVOKE}} engine config set guard.<fence> off`), then say in one line what changed and that they can ask you to turn it back on. The setter carries it out because their reply is on record; when the team holds Guard Policy strict in memory, it refuses with one line naming the file, and you say that line. Typing `{{SKILL_INVOKE}} --guard-policy relaxed` themselves works too. A plain-words request to make the guards strict runs `{{INVOKE}} engine config set guard-policy strict` at once; print its output and stop. Never edit `aidlc-state.md`, run a hook, or run a setter to lower a guard on your own initiative. `{{SKILL_INVOKE}} --status` shows the current Guard Policy and every fence with where its setting came from.
+The guards are the person's checks. When the person asks in their own words to turn one of their checks off or back on, or to change the Guard Policy ("turn the review freeze check off for this project", "stop asking me to re-approve when files change", "relax the change checks", "turn it back on"), do it for them in the same turn and say the line the command prints, word for word: never refuse, never ask them to type it, and never investigate first. Turning a check on, or Guard Policy `strict`, is always fine; turning one off, or Guard Policy `relaxed` or `off`, happens only when they ask, never on your own and never as a suggestion. Where it applies is what they say: this piece of work, this project, or this machine. When they say neither, use this piece of work while one is open, otherwise this project; the line names where it applied, and say in one sentence how to widen it. For this piece of work run `{{INVOKE}} engine config set <key> <on|off>` with the key from the table. For this project run `{{INVOKE}} config flags --bypass <switch> --local --yes` (`--global` for this machine). To turn it back on, `{{INVOKE}} config flags --clear-bypass <switch> --yes` clears it everywhere it is recorded, so the check is really on; when they name a place, add `--local` or `--global` to clear only there. A `none` in the table means that place has no switch for the check: when they named no place, use the place it has; when they named a place it does not have, say in one sentence that it cannot be set there and offer the other place, and change it only when they agree. Guard Policy is set for a piece of work only; with none open, say so in one line. For Guard Policy run `{{INVOKE}} engine config set guard-policy <strict|relaxed|off>`; when the team holds Guard Policy strict in memory, it refuses with one line naming the file, and you say that line. A typed `{{SKILL_INVOKE}} --guard-policy off` or `{{SKILL_INVOKE}} config set guard.<fence> off` was applied when the message arrived. Never edit `aidlc-state.md` or run a hook to change a guard. `{{SKILL_INVOKE}} --status` shows the current Guard Policy and every fence with where its setting came from.
+
+| Check | This piece of work: key | This project or machine: switch |
+|---|---|---|
+| plan approval | `plan-approval` | `AIDLC_DISABLE_PLAN_APPROVAL_GUARD` |
+| review freeze | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK` |
+| reviewer read scope | `guard.reviewer-scope` | `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK` |
+| state transition | `guard.state-transition` | none |
+| summary confirmation | `summary-confirmation` | `AIDLC_DISABLE_SUMMARY_CONFIRMATION` |
+| summary confirmation check | none | `AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD` |
+| human presence | none | `AIDLC_SKIP_HUMAN_PRESENCE_GUARD` |
+| stage output | none | `AIDLC_SKIP_ARTIFACT_GUARD` |
+| revision backstop | none | `AIDLC_SKIP_REVISION_BACKSTOP` |
+| pipeline handoff | none | `AIDLC_DISABLE_ENSEMBLE_EVIDENCE` |
 
 ## Models and effort
 

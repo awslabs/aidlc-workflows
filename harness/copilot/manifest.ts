@@ -156,6 +156,9 @@ const manifest: HarnessManifest = {
           // The pre-person-drives shipped variant (its Guards section named a
           // command for the person to type; now the agent runs the setter).
           "sha256:33c0f4b7fc213c3bddcc81d33de244e07a05659d1fc8ac474da63f4b4d19b2d6",
+          // The variant whose Guards section had no checks table and no
+          // per-project route for a check the person asks to switch.
+          "sha256:1aa11fdd7d49c9d390e9ef99004b76eef31541da5f20d52e311f633120f3579b",
         ],
       },
     },

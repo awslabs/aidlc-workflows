@@ -1538,7 +1538,15 @@ session-start context), and `config flags --show` and the doctor Flags row (a
 warning, which does not change doctor's exit code) list it. Say "turn it back
 on" and the agent runs that command; if something else still keeps the check
 off (the environment variable, or another settings file), the command says so
-and names it. During a plan-approval lockout the agent's own `config flags
+and names it. When the switch is cleared but the open piece of work keeps the
+check off on its own (its scope or its Guard Policy), the line says so and names
+the way to turn it on for that work too, for example:
+
+> The review freeze check switch is cleared for this project, but it stays off for this piece of work: guard policy off (set by you). Say "turn it on for this work" to restore it there (/aidlc config set guard.review-freeze on).
+
+`config get` names where a switch keeps a check off: `off (AIDLC_DISABLE_REVIEW_FREEZE_HOOK in aidlc.settings.local.json)`
+when a settings file records it, or `off (env AIDLC_DISABLE_REVIEW_FREEZE_HOOK)`
+when the editor or CLI was started with the variable. During a plan-approval lockout the agent's own `config flags
 --bypass` passes once you have spoken since the last decision (never from an
 unattended run), and `--clear-bypass` always passes.
 
@@ -1565,7 +1573,9 @@ when the harness session started with it, when it is recorded with
 `config flags --bypass`, or when no harness session is recorded in the project;
 set inline on one command inside a session, it is ignored. Status then reads, for
 example, `Plan Approval: on (guard policy strict (from project.md))` or
-`Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)`.
+`Plan Approval: off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)` when the
+session started with it, or `Plan Approval: off (from AIDLC_DISABLE_PLAN_APPROVAL_GUARD in aidlc.settings.local.json)`
+when `config flags --bypass` recorded it.
 
 It is the person's call: they type `/aidlc --plan-approval off` or
 `/aidlc config set plan-approval off` (the human-turn hook applies it), or say

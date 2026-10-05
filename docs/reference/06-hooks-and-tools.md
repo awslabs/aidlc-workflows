@@ -643,11 +643,12 @@ MINT a grant for itself.
 | fence, key on | hold | hold | hold |
 | fence, lowered | stand aside | stand aside | stand aside |
 
-**The key is the person's typed switch.** Neither row reads
+**The key is the recorded switch.** Neither row reads
 conversational authority: a fence stands aside exactly when the policy word,
-per-work switch, or environment kill switch lowered it.
-The human-turn hook applies the exact switch at prompt time; a selected remedy
-or generic grant changes nothing.
+per-work switch, or kill switch lowered it.
+The human-turn hook applies a typed switch at prompt time, and the setter applies
+one the person asked for in their own words; a selected remedy or generic grant
+changes nothing by itself.
 A reply such as "write the code now" or "yes, option 2" to an unrelated question
 does not lower a fence, even if it arrived after the engine's last directive.
 

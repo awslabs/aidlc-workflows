@@ -76,6 +76,7 @@ export {
 } from "./aidlc-reply-reader.ts";
 import {
   _resetSettingsCacheForTests,
+  bypassRecordedIn,
   LOCAL_SETTINGS_FILE,
   RECORDABLE_PROJECT_BYPASSES,
   resolveAidlcSettings,
@@ -676,6 +677,28 @@ export function resolveProjectFlag(
   if (typeof value === "boolean") return value ? "1" : "";
   if (typeof value === "number") return String(value);
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * How `config get` and status name a switch that keeps a check off: `env NAME`
+ * when the environment this process started with sets it (removed only by
+ * starting without it), or `NAME in <file>` when a settings file records it
+ * (`config flags --clear-bypass NAME` turns it back on).
+ */
+export function killSwitchSource(
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+  projectDir?: string,
+): string {
+  if (Object.hasOwn(env, name)) return `env ${name}`;
+  const recorded = bypassRecordedIn(resolveProjectDir(projectDir), name);
+  if (recorded === null) return `${name} in the AI-DLC settings`;
+  return `${name} in ${recorded.target === "global" ? recorded.path : basename(recorded.path)}`;
+}
+
+/** A source killSwitchSource wrote: a switch, not the work's own setting. */
+export function isKillSwitchSource(source: string): boolean {
+  return source.startsWith("env ") || /^AIDLC_[A-Z0-9_]+ in /.test(source);
 }
 
 export function runnerFrontmatterAdditions(): readonly string[] {
@@ -10975,6 +10998,14 @@ export function personSpokeSinceGate(projectDir: string, options: { replies?: bo
   }
 }
 
+// The person asked for what the agent runs now: their chat turn, which no
+// decision has used yet, stands behind it, and it is not only a question about
+// a switch. An unattended driver has no person behind it. Turning one of the
+// person's checks off from the agent's command needs this, wherever it is asked.
+export function personAskedSinceGate(projectDir: string): boolean {
+  return process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true });
+}
+
 // The gate's "Request Changes" choice, matched the way a person types it: any
 // case, an optional option prefix ("B." or "2)"), surrounding quotes, and
 // trailing punctuation are all the same choice, as is the "(Recommended)" label
@@ -11519,7 +11550,7 @@ export function constructionPolicyChangeAuthority(
   value: string,
 ): "receipt" | "asked" | null {
   if (authorizedConstructionPolicyChange(projectDir, stateContent, field, value)) return "receipt";
-  return process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true }) ? "asked" : null;
+  return personAskedSinceGate(projectDir) ? "asked" : null;
 }
 
 /** Whether the setter would make this change now (constructionPolicyChangeAuthority on the current state). */
@@ -35810,6 +35841,8 @@ export function resolveCeremony(
   stateContent: string | null | undefined,
   // Plan approval passes an environment without an untrusted machine switch.
   env: NodeJS.ProcessEnv = process.env,
+  // An explicit project's recorded switch, named by its file.
+  projectDir?: string,
 ): CeremonyResolution {
   const scopeName = scope?.trim().toLowerCase();
   let declared: CeremonySetting | undefined;
@@ -35821,12 +35854,12 @@ export function resolveCeremony(
   const scopeDefault = declared ?? "on";
   const rawStateValue = getField(stateContent ?? "", CEREMONY_FIELDS[key]);
   const intent = parseCeremonyStateLine(rawStateValue);
-  const disabled = resolveProjectFlag(CEREMONY_ENV[key], env) === "1";
+  const disabled = resolveProjectFlag(CEREMONY_ENV[key], env, projectDir) === "1";
   return {
     key,
     value: disabled ? "off" : intent?.value ?? scopeDefault,
     source: disabled
-      ? `env ${CEREMONY_ENV[key]}`
+      ? killSwitchSource(CEREMONY_ENV[key], env, projectDir)
       : intent?.source ?? (declared === undefined ? "default" : `scope ${scopeName}`),
     scopeDefault,
     intent,
@@ -36442,7 +36475,7 @@ export function resolveFences(
   for (const fence of GUARD_FENCES) {
     const env = GUARD_FENCE_ENV[fence];
     if (env !== undefined && resolveProjectFlag(env) === "1") {
-      out[fence] = { fence, value: "off", source: `env ${env}` };
+      out[fence] = { fence, value: "off", source: killSwitchSource(env) };
     } else if (policy.memoryStrict === null && isSwitchableGuardFence(fence) && perRunOff.includes(fence)) {
       out[fence] = { fence, value: "off", source: "you" };
     } else if (isSwitchableGuardFence(fence) && perRunOn.includes(fence)) {

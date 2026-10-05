@@ -825,9 +825,9 @@ capped scope, and no stage changes; the scope's own level (for example
 `"advisory"` on bugfix) returns it to the scope's normal reviews. Before returning an `on` switch, read the
 effective value with `{{INVOKE}} engine config get
 <sensors|learnings|summary-confirmation|collaborators>`: when it reports `from env
-AIDLC_DISABLE_<NAME>`, a kill switch set on this machine overrides every
-setting, so return no change for it and say in one line that it has to be
-removed outside the agent. Never look for where it is set: do not open shell
+AIDLC_DISABLE_<NAME>` or `from AIDLC_DISABLE_<NAME> in <file>`, a kill switch
+overrides every setting, so return no change for it and say in one line which
+switch keeps it off. Never look for where it is set: do not open shell
 startup files, environment listings, or harness settings files, which can
 hold credentials; `config get` is the only reading you take.
 Never put command text in either object: only those six keys and their

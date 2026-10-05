@@ -553,7 +553,24 @@ describe("only the person turns plan approval off", () => {
     expect(guardBash(proj, "aidlc engine config set plan-approval on; touch src/x.ts")).toBe(2);
   });
 
-  test("a command cannot turn it off, and anyone can turn it back on", () => {
+  test("config set plan-approval, the spelling the refusals name, is the same switch", () => {
+    const proj = project("on");
+    // Plain words the switch grammar does not read: the agent understands them.
+    reply(proj, "I trust these plans, let it build them without me");
+    const off = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", "plan-approval", "off", "--project-dir", proj], {
+      cwd: proj, env: { ...process.env, ...CLEAR, CLAUDE_PROJECT_DIR: proj }, encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
+    expect(planApprovalLine(proj)).toStartWith("off (");
+    expect(off.stdout).toContain("Say 'review the plan first' to look at one before it is built.");
+    // The way back runs as written.
+    const back = utility(proj, ["config-change", "--plan-approval", "on"]);
+    expect(back.status, back.stderr).toBe(0);
+    expect(planApprovalLine(proj)).toBe("on (set by a command)");
+  });
+
+  test("a command nobody asked for cannot turn it off, and anyone can turn it back on", () => {
     const proj = project("on");
     const refused = utility(proj, ["config-change", "--plan-approval", "off"]);
     expect(refused.status).toBe(1);

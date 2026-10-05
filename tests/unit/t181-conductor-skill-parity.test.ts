@@ -317,6 +317,81 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every SKILL and the onboarding switch a check when the person asks, with no typing for them", () => {
+    // A live Claude chat followed the onboarding's old "name the exact command
+    // for them to type" over the SKILL's rule and refused a plain request.
+    const problems: string[] = [];
+    const prose = [
+      ...skills,
+      "core/templates/onboarding-harness.md",
+      ...HARNESS_MATRIX.map((harness) => `harness/${harness.name}/onboarding.fills.ts`),
+    ];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const tok of [
+        "**The person's checks, off or on when they ask.**",
+        "never refuse, never ask them to type it",
+      ]) {
+        if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
+      }
+    }
+    // A plain chat turn has only the onboarding, not the skill, so it carries
+    // the three places, both commands, and the skill's table, row for row.
+    const onboarding = readFileSync(join(REPO_ROOT, "core/templates/onboarding-harness.md"), "utf-8");
+    const table = (body: string) => {
+      const start = body.indexOf("| Check | This piece of work: key | This project or machine: switch |");
+      return start < 0 ? "" : body.slice(start, body.indexOf("\n\n", start));
+    };
+    for (const tok of [
+      "never refuse, never ask them to type it",
+      "Where it applies is what they say: this piece of work, this project, or this machine.",
+      "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
+      "`{{INVOKE}} engine config set <key> <on|off>`",
+    ]) {
+      if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
+    }
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (table(body) === "" || table(body) !== table(onboarding)) {
+        problems.push(`${rel}  check table differs from the onboarding's`);
+      }
+    }
+    for (const rel of prose) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const stale of [
+        "never the agent's",
+        "command for them to type",
+        "never turn it off yourself",
+        "never lower one yourself",
+      ]) {
+        if (body.includes(stale)) problems.push(`${rel}  still says: ${stale}`);
+      }
+    }
+    // The docs describe the same route: a chat request is the person's too.
+    for (const rel of [
+      "docs/guide/12-cli-commands.md",
+      "docs/guide/13-customization.md",
+      "docs/guide/glossary.md",
+      "docs/harness-engineering/05-rules-and-the-loop.md",
+      "docs/reference/06-hooks-and-tools.md",
+      "docs/reference/12-state-machine.md",
+    ]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      for (const stale of [
+        "have the person type the switch",
+        "a person must type the exact policy switch",
+        "The key is the person's typed switch.",
+        "The CLI setters do not lower fences from chat",
+        "CLI setters do not lower from chat on their own",
+        "needs the person's typed switch, like a fence",
+        "refuse any\nexplicit lowering from `you` unless it is a no-op",
+      ]) {
+        if (body.includes(stale)) problems.push(`${rel}  still says: ${stale}`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
   test("every shipped conductor SKILL relays engine-authored narration", () => {
     const missing: string[] = [];
     for (const rel of skills) {
