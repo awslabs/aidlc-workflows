@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hooksHealthDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -92,8 +93,7 @@ describe("next --request-file: the person's words arrive exactly, through no she
     writeRequest(proj, WORDS);
     const directive = next(proj, ["bugfix", "--request-file", FILE.replaceAll("/", "\\")]);
     expect(directive.kind, JSON.stringify(directive)).toBe("print");
-    expect(directive.message ?? "").toContain("intent-create");
-    expect(directive.message ?? "").toContain("bugfix");
+    expect(directive.message ?? "").toContain("intent create --scope bugfix");
     expect(keptRequests(proj)).toEqual([WORDS]);
     expect(existsSync(join(proj, FILE))).toBe(false);
   });
@@ -128,6 +128,21 @@ describe("next --request-file: the person's words arrive exactly, through no she
     expect(empty.kind).toBe("error");
     expect(empty.message ?? "").toContain("Send your request again.");
     expect(keptRequests(proj)).toEqual([]);
+  });
+
+  test("a next stopped before any work keeps the file, so the same command runs again", () => {
+    const proj = installed();
+    writeRequest(proj, WORDS);
+    const stopped = next(proj, ["--request-file", FILE], { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+    expect(stopped.kind, JSON.stringify(stopped)).toBe("print");
+    expect(stopped.message ?? "").toContain("Quit opencode and start it again");
+    expect(existsSync(join(proj, FILE))).toBe(true);
+    mkdirSync(hooksHealthDir(proj), { recursive: true });
+    writeFileSync(join(hooksHealthDir(proj), "record-human-turn.last"), new Date().toISOString(), "utf-8");
+    const asked = next(proj, ["--request-file", FILE], { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(keptRequests(proj)).toEqual([WORDS]);
+    expect(existsSync(join(proj, FILE))).toBe(false);
   });
 
   test("a linked folder is not read through, and what it points at stays", () => {

@@ -12,6 +12,7 @@ aidlc/.aidlc-unit-releases/
 aidlc/.aidlc-unit-merges/
 aidlc/.aidlc-active-space-*.tmp
 aidlc/.aidlc-sessions/
+aidlc/.aidlc-request-text/
 aidlc/spaces/*/intents/.aidlc-*
 **/aidlc/spaces/*/intents/**/.aidlc-engine/
 **/aidlc/spaces/*/intents/**/.aidlc-sensors/

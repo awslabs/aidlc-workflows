@@ -164,6 +164,9 @@ import {
   constructionCheckpointGaps,
   effectivePlanAction,
   errorMessage,
+  readRegularFileNoFollowOrThrow,
+  recordFileTargetOrThrow,
+  removeRecordFileNoFollow,
   evaluateGuardRefusal,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -13964,6 +13967,67 @@ function engineWorkflowSelection(projectDir: string): WorkflowSelection {
   }
 }
 
+// The folder where the agent writes a person's request for `next
+// --request-file`, so the words reach AI-DLC with no shell on the way: on
+// Windows, cmd.exe ends a command at a line break and replaces a %NAME% pair
+// even inside quotes, and the aidlc launcher is read by cmd.exe again.
+const REQUEST_TEXT_DIR = "aidlc/.aidlc-request-text";
+const REQUEST_TEXT_MAX_BYTES = 64 * 1024;
+
+// The file's words take the flag's place as one argument after `--`, so none
+// of them is read as a flag. Only a plain file directly inside the folder,
+// reached through no link, is read. It is removed once the command goes ahead
+// (a probe leaves it), so a command stopped before any work runs again exactly
+// as it was written. A string is the refusal.
+function nextArgsWithRequestFile(
+  args: readonly string[],
+  projectDir: string,
+): { args: string[]; spend(): void } | string {
+  const at = args.indexOf("--request-file");
+  if (at < 0) return { args: [...args], spend: () => {} };
+  const usage =
+    `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
+    `${REQUEST_TEXT_DIR}/request.txt.`;
+  const file = args[at + 1];
+  const rest = [...args.slice(0, at), ...args.slice(at + 2)];
+  if (file === undefined || file.startsWith("--")) return usage;
+  if (rest.includes("--request-file")) return "Pass --request-file once.";
+  if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
+  const relativePath = file.replaceAll("\\", "/");
+  const parts = relativePath.split("/");
+  const folder = REQUEST_TEXT_DIR.split("/");
+  const name = parts[parts.length - 1];
+  if (
+    isAbsolute(file) || parts.length !== folder.length + 1 ||
+    folder.some((part, i) => parts[i] !== part) || name === "" || name === "." || name === ".."
+  ) {
+    return usage;
+  }
+  const unread = `AI-DLC could not read the request in ${relativePath}. Send your request again.`;
+  let text: string;
+  try {
+    text = readRegularFileNoFollowOrThrow(
+      recordFileTargetOrThrow(projectDir, relativePath),
+      "The request file",
+      REQUEST_TEXT_MAX_BYTES,
+    ).toString("utf-8").replace(/\r?\n$/, "");
+  } catch {
+    return unread;
+  }
+  if (text.trim() === "") return `The request in ${relativePath} is empty. Send your request again.`;
+  return {
+    args: [...rest, "--", text],
+    spend: () => {
+      if (isReadOnlyEngineProbe()) return;
+      try {
+        removeRecordFileNoFollow(projectDir, relativePath);
+      } catch {
+        // Left in its gitignored folder; the next request replaces it.
+      }
+    },
+  };
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -13995,9 +14059,20 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
-  const subArgs = filteredArgs.slice(1);
+  let subArgs = filteredArgs.slice(1);
   if (engineInvocation !== null) throw new Error("Nested aidlc-orchestrate dispatch is not supported");
   const resolvedProjectDir = resolveProjectDir(projectDir);
+  let spendRequestFile = (): void => {};
+  if (subcommand === "next") {
+    // Read once, before anything reads the request.
+    const withRequest = nextArgsWithRequestFile(subArgs, resolvedProjectDir);
+    if (typeof withRequest === "string") {
+      emit(errorDirective(withRequest));
+      return;
+    }
+    subArgs = withRequest.args;
+    spendRequestFile = withRequest.spend;
+  }
   const resolvedSelection = engineWorkflowSelection(resolvedProjectDir);
   engineProjectDir = resolvedProjectDir;
   engineSessionId = resolvedSelection.sessionId ?? undefined;
@@ -14034,6 +14109,7 @@ export function main(argv: string[]): void {
       return;
     }
   }
+  spendRequestFile();
   if (commandKind) engineInvocation = {
     commandKind,
     commandSha256: sha256(

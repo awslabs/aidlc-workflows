@@ -195,6 +195,16 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 > This looks like "bugfix" work, so I'd run the "bugfix" plan for: "Fix the ProfileSerializer null pointer" - 8 of 33 stages, 5 approval gates; no learnings ritual or summary confirmation; lead agent only. Say go ahead, name a different plan, or say "compose" and I'll tailor one to this task.
 ```
 
+**A request no shell can carry.** On Windows, cmd.exe ends a command at a line
+break and replaces a `%NAME%` or `!NAME!` pair even inside quotes, and the aidlc
+launcher is read by cmd.exe again. A request holding one of those reaches the
+engine through a file instead of the command line: the agent writes it to
+`aidlc/.aidlc-request-text/request.txt` and runs `aidlc engine orchestrate next
+--request-file aidlc/.aidlc-request-text/request.txt` with any other flags. The
+engine reads only a plain file directly inside `aidlc/.aidlc-request-text/`,
+through no link, up to 64 KiB, uses its words exactly as written, and removes
+the file once read. The folder is in AI-DLC's `.gitignore` lines.
+
 ---
 
 ### `/aidlc compose` - The adaptive composer
