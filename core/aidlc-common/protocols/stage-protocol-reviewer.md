@@ -254,12 +254,21 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    brief below with `Why now: Re-check after the artifact changed.` If that
    recovery receipt is invalidated again, request no further review. On an
    interactive stage, present the recovery-spent refusal to the human; only
-   Request Changes (`GATE_REJECTED`) resets the attempt. A review the person
-   asks for is never refused for want of passes: when they asked for one since
-   the last decision, request it, past the cap or a spent recovery. The cap and
-   the one recovery bound only the reviews you start on your own. Under `relaxed` or
-   `off`, the receipt stays valid and no recovery review is requested: the gate or
-   completion records one `CHANGE_ACCEPTED` row, the engine's `report`
+   Request Changes (`GATE_REJECTED`) resets the attempt.
+
+   **A review the person asks for.** When the person asks for a review of a
+   stage, or of a Unit they already approved, record it through AI-DLC the
+   first time they ask, under every Guard Policy (`strict`, `relaxed`, and
+   `off` alike): run step 1's `{{INVOKE}} engine log review` request for that
+   stage (and `--unit`) at the next iteration, dispatch the reviewer, and
+   record its verdict as in step 3. The engine never refuses it for want of
+   passes, past the cap or a spent recovery; the cap and the one recovery
+   bound only the reviews you start on your own. Never write a review file by
+   hand, and never offer to change the Guard Policy to get a review.
+
+   Under `relaxed` or `off`, the receipt stays valid and the engine asks for no
+   recovery review on its own (a review the person asks for still runs, as
+   above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
    changed paths. The reviewer's verdict is never altered, and the freeze

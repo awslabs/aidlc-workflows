@@ -1218,7 +1218,8 @@ code or documents changed after their review gets that recovery again each
 time the person approves the Unit, and under `relaxed` and `off`, where such a
 change is accepted, a review of that Unit is the same one recovery. A review
 the person asked for (they spoke since the last decision and since that review
-was last requested) is never refused: the budget and the recovery bound only
+was last requested) is never refused, under every Guard Policy: the conductor
+records it the first time they ask, and the budget and the recovery bound only
 the passes the conductor starts on its own.
 Autonomous Units halt before `finalize` and
 restart their Bolt attempt only after a human decision. The reviewer
