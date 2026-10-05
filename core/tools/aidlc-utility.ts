@@ -362,6 +362,8 @@ import {
   legacyParkedRefPrefix,
   parkedRefPrefix,
   normalizeDriveLetter,
+  humanPresenceGuardDisabled,
+  personSpokeSinceGate,
   recordDir,
   removeRecordFileNoFollow,
   toPosix,
@@ -10220,17 +10222,33 @@ const STARTED_STATES: ReadonlySet<string> = new Set(["in-progress", "awaiting-ap
 // True once a Construction or Operation stage has started. From then on the
 // folder holds code AI-DLC wrote, so the scan no longer tells new from
 // existing, and the workflow is not moved back into Inception.
-export function constructionHasStarted(content: string): boolean {
+export function constructionHasStarted(content: string, workRecordDir?: string | null): boolean {
   const states = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
-  return loadStageGraph().some((stage) =>
+  const started = loadStageGraph().filter((stage) =>
     (stage.phase === "construction" || stage.phase === "operation") &&
     STARTED_STATES.has(states.get(stage.slug) ?? "pending"));
+  if (started.length !== 1 || !workRecordDir) return started.length > 0;
+  // Only just entered: an approval moved the cursor onto the first
+  // Construction stage and nothing of it is written yet, so nothing was built
+  // for a new project.
+  const [only] = started;
+  return !(
+    only.slug === getField(content, "Current Stage") &&
+    states.get(only.slug) === "in-progress" &&
+    !holdsAnyFile(join(workRecordDir, "construction"))
+  );
+}
+
+function holdsAnyFile(dir: string): boolean {
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir, { withFileTypes: true })
+    .some((entry) => entry.isDirectory() ? holdsAnyFile(join(dir, entry.name)) : true);
 }
 
 // Reverse Engineering is on the plan and has not run, the workflow is past it,
 // and Construction has not started: it runs now and the workflow then returns
 // to the stage the person was on (`next` names that move; reclassify says so).
-export function reverseEngineeringOwedBehindCursor(content: string): boolean {
+export function reverseEngineeringOwedBehindCursor(content: string, workRecordDir?: string | null): boolean {
   const graph = loadStageGraph();
   const reIndex = graph.findIndex((stage) => stage.slug === "reverse-engineering");
   const currentIndex = graph.findIndex((stage) => stage.slug === getField(content, "Current Stage"));
@@ -10240,7 +10258,7 @@ export function reverseEngineeringOwedBehindCursor(content: string): boolean {
     loadScopeMapping()[scope]?.stages["reverse-engineering"];
   return action === "EXECUTE" &&
     parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state === "pending" &&
-    !constructionHasStarted(content);
+    !constructionHasStarted(content, workRecordDir);
 }
 
 // The state already holds this type as the person's word, so a request that
@@ -10256,7 +10274,7 @@ export function projectTypeRecordedAsPersons(content: string, type: string): boo
 export function greenfieldWorkspaceGainedCode(projectDir: string, content: string): ScanResult | null {
   if (declaredProjectType(getField(content, "Project Type") ?? "") !== "Greenfield") return null;
   if (getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON) return null;
-  if (constructionHasStarted(content)) return null;
+  if (constructionHasStarted(content, recordDir(projectDir))) return null;
   const scan = detectWorkspace(projectDir);
   return scan.projectType === "Brownfield" ? scan : null;
 }
@@ -10340,6 +10358,15 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         `to the request that starts it (${entrySkillInvocation()} --project-type ${declared.toLowerCase()} "<what to build>").`,
     );
   }
+  // What the folder is, is the person's word: it is recorded as theirs only
+  // once they have said something since the last decision (an answer to the
+  // question, or the command they typed).
+  if (!humanPresenceGuardDisabled() && !personSpokeSinceGate(projectDir, { requests: true })) {
+    die(
+      "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
+        "end the turn, and run this command after they answer.",
+    );
+  }
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
@@ -10365,7 +10392,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     // Existing code puts back a Reverse Engineering that has not run, unless
     // the plan leaves it out for another reason; a new project skips one that
     // has not finished. Construction under way keeps the plan as it is.
-    const started = finished || constructionHasStarted(content);
+    const started = finished || constructionHasStarted(content, recordDir(projectDir, intent, space));
     const reState = parseCheckboxes(content).find((c) => c.slug === "reverse-engineering")?.state;
     const reAction = parseStateStageSuffixes(content).get("reverse-engineering") ?? scopeDef.stages["reverse-engineering"];
     const skippedAsNew = (getField(content, "Stages to Skip") ?? "").includes(GREENFIELD_RE_SKIP_LABEL);
@@ -10446,7 +10473,7 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
     if (finished) {
       lines.push("This piece of work is finished, so its plan stays as it is; I'll check the folder again for the next piece of work.");
     } else if (declared === "Brownfield") {
-      if (reverseEngineeringOwedBehindCursor(content)) {
+      if (reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space))) {
         lines.push(`Next I'll document the code, then we're back at ${stageNames([getField(content, "Current Stage") ?? ""])}.`);
         const doneWithoutCode = parseCheckboxes(content)
           .filter((c) => c.state === "completed")

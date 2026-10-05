@@ -41,7 +41,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -111,6 +111,23 @@ function reply(r: RunResult): string {
 }
 
 function run(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
+  // What the folder is, is the person's word: here they have just said it.
+  if (tool === UTIL && args[0] === "reclassify" && hasWork(proj)) appendAuditEntry("HUMAN_TURN", {}, proj);
+  return spawnTool(tool, proj, args, env);
+}
+
+function hasWork(proj: string): boolean {
+  return existsSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"));
+}
+
+// Reclassify with nothing more said, under the production presence check.
+function reclassifyUnsaid(proj: string, type: string): RunResult {
+  return spawnTool(UTIL, proj, ["reclassify", "--project-type", type], {
+    ...process.env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0", AIDLC_UNATTENDED: "0",
+  });
+}
+
+function spawnTool(tool: string, proj: string, args: string[], env?: NodeJS.ProcessEnv): RunResult {
   const r = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -410,6 +427,91 @@ describe("t352 a folder set up as new gains code", () => {
     edit(proj, (s) => mark(s, "functional-design", "x"));
     expect(constructionHasStarted(state(proj))).toBe(true);
     expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
+  });
+});
+
+// From a live run: the code arrived while a gate was open, the person typed
+// "approve", and the agent answered the engine's existing-code question itself;
+// the record said "Brownfield (you)". Now only the person's word records it.
+describe("t352 what the folder is, is the person's word", () => {
+  test("the agent's own answer is refused, and the person's answer goes through", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    // The person's "approve" was used by the gate it answered.
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: "practices-discovery" }, proj);
+    expect(next(proj).ask_type).toBe("project-type");
+    const before = state(proj);
+    const agents = reclassifyUnsaid(proj, "brownfield");
+    expect(agents.status).not.toBe(0);
+    expect(said(agents)).toContain(
+      "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
+        "end the turn, and run this command after they answer.",
+    );
+    expect(state(proj)).toBe(before);
+    expect(auditText(proj)).not.toContain("WORKSPACE_RECLASSIFIED");
+    // Their answer, in their next message.
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const theirs = reclassifyUnsaid(proj, "brownfield");
+    expect(theirs.status, said(theirs)).toBe(0);
+    expect(field(state(proj), "Project Type Source")).toBe("you");
+  });
+
+  test("a typed /aidlc --project-type is their word too", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    addRepo(proj);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    appendAuditEntry("GATE_APPROVED", { Stage: "practices-discovery" }, proj);
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    const r = reclassifyUnsaid(proj, "greenfield");
+    expect(r.status, said(r)).toBe(0);
+    expect(field(state(proj), "Project Type Source")).toBe("you");
+  });
+});
+
+// From a live run on a short plan: the code arrived while Requirements
+// Analysis waited for approval; approving started Code Generation the same
+// second, so the question never came and a new app was built beside the code.
+describe("t352 code that arrives as Construction starts", () => {
+  function atCodeGeneration(proj: string): void {
+    const graph = loadGraph();
+    const cg = graph.findIndex((stage) => stage.slug === "code-generation");
+    edit(proj, (s) => {
+      let out = s;
+      for (const stage of graph.slice(0, cg)) {
+        if (stageLine(out, stage.slug)?.endsWith("EXECUTE")) out = mark(out, stage.slug, "x");
+      }
+      return mark(out, "code-generation", "-").replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation");
+    });
+  }
+
+  test("the question comes before anything is built, and yes runs the scan first", () => {
+    const proj = project();
+    expect(create(proj, "poc").status).toBe(0);
+    atCodeGeneration(proj);
+    addRepo(proj);
+    const ask = next(proj);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("project-type");
+    expect(String(ask.question)).toContain("then we continue at Code Generation");
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield"]);
+    expect(r.status, said(r)).toBe(0);
+    expect(stageLine(state(proj), "reverse-engineering")).toBe(`- [ ] reverse-engineering ${SEP} EXECUTE`);
+    expect(String(next(proj).message)).toContain("execute --target reverse-engineering --direction redo");
+  });
+
+  test("once the code plan is written, the work has started and nothing is asked", () => {
+    const proj = project();
+    expect(create(proj, "poc").status).toBe(0);
+    atCodeGeneration(proj);
+    const stageDir = join(recordDir(proj), "construction", "code-generation");
+    mkdirSync(stageDir, { recursive: true });
+    writeFileSync(join(stageDir, "code-generation-plan.md"), "# Code Generation Plan\n");
+    addRepo(proj);
+    expect(constructionHasStarted(state(proj), recordDir(proj))).toBe(true);
+    expect(greenfieldWorkspaceGainedCode(proj, state(proj))).toBeNull();
+    expect(next(proj).ask_type).not.toBe("project-type");
   });
 });
 

@@ -233,6 +233,7 @@ import {
   humanPresenceGuardDisabled,
   isNonAnswer,
   personSpokeSinceGate,
+  recordDir,
   engineDir,
   isPlainObject,
   parseCeremonySetting,
@@ -7386,7 +7387,7 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   // Reverse Engineering went back on the plan behind the cursor (the person
   // said this is existing code): run it now with a redo jump, which leaves the
   // finished stages alone; once it is approved the walk returns here.
-  if (reverseEngineeringOwedBehindCursor(stateContent)) {
+  if (reverseEngineeringOwedBehindCursor(stateContent, recordDir(pd))) {
     emit(printDirective(
       `Reverse Engineering is on the plan and has not run. Run \`${aidlcToolInvocation("jump")} execute --target reverse-engineering --direction redo --scope ${scopeArg(scope)}\` ` +
         `to run it now (finished stages stay finished, and the workflow returns to ${currentSlug} after it), then re-run \`next\` to continue.`,
