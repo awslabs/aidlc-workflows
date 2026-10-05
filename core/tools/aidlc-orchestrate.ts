@@ -4877,7 +4877,8 @@ function inlineContextEntries(
   const shipped = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
   // The project's own knowledge comes right after the personas, before the
   // shipped knowledge: it is the team's word for this work, an agent reading
-  // the roster in order reaches it second, and the roster cap never drops it.
+  // the roster in order reaches it second, and the roster cap trims shipped
+  // knowledge before it.
   let personas = 0;
   while (personas < shipped.length && /\/agents\/[^/]+\.md$/.test(shipped[personas].rel)) personas++;
   const entries: InlineContextEntry[] = shipped.slice(0, personas);

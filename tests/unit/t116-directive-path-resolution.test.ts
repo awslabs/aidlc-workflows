@@ -674,7 +674,8 @@ describe("t116 inline context roster", () => {
       expect(directive.inline_context_paths).toContain(path);
     }
     // The project's own knowledge comes right after the personas, before any
-    // shipped knowledge, so it is read second and never trimmed off the end.
+    // shipped knowledge, so it is read second and trimmed only after the
+    // shipped knowledge.
     const roster: string[] = directive.inline_context_paths;
     const lastPersona = Math.max(...roster.map((path, i) => (path.startsWith(".claude/agents/") ? i : -1)));
     const firstShipped = roster.findIndex((path) => path.startsWith(".claude/knowledge/"));

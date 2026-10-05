@@ -483,6 +483,37 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // A live mob lead read "the lead only on mob" as its persona only and never
+  // opened the project's knowledge file, so every copy names the knowledge too.
+  test("every shipped conductor SKILL and the protocol have a mob's lead read its knowledge, not only its persona", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (!/a mob must (?:explicitly read|load) its lead persona(?: path)? first,? (?:and )?then every knowledge path after it/i.test(body)) {
+        missing.push(`${rel}  missing: a mob reads its lead persona, then every knowledge path after it`);
+      }
+    }
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("the lead's persona and every knowledge path listed on `mob`")) {
+        missing.push(`${rel}  missing: the lead's persona and every knowledge path listed on mob`);
+      }
+    }
+    const stale = [/the lead only on `mob`/, /the roster contains the lead only/, /the lead only for `mob`/];
+    const walk = (rel: string): void => {
+      for (const entry of readdirSync(join(REPO_ROOT, rel), { withFileTypes: true })) {
+        const child = `${rel}/${entry.name}`;
+        if (entry.isDirectory()) walk(child);
+        else if (/\.(md|ts)$/.test(entry.name)) {
+          const body = readFileSync(join(REPO_ROOT, child), "utf-8").replace(/(\s|\/\/|\*)+/g, " ");
+          for (const pattern of stale) if (pattern.test(body)) missing.push(`${child}  still says: ${pattern}`);
+        }
+      }
+    };
+    for (const root of ["core/aidlc-common", "core/tools", "core/templates", "docs", "harness"]) walk(root);
+    expect(missing).toEqual([]);
+  });
+
   // The human-turn hook keeps a Plan Approval reply and records only an exact
   // pick; the agent records the choice it read. A copy that still says the hook
   // reads the reply sends the agent to `next` with nothing recorded, and the
