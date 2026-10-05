@@ -1186,6 +1186,8 @@ describe("t242 state-transition ownership guard", () => {
         CLAUDE_PROJECT_DIR: project,
         AIDLC_COMPILED_EXECUTABLE: "",
         HOME: dirname(project),
+        // PowerShell's ~ and $HOME on Windows.
+        USERPROFILE: dirname(project),
       };
       delete env.USER_PROMPT;
       return spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"], {
@@ -1213,6 +1215,7 @@ describe("t242 state-transition ownership guard", () => {
       ["execute_pwsh", { command: `Set-Content $HOME\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
       ["execute_pwsh", { command: "Set-Content $" + `{home}\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
       ["execute_pwsh", { command: `Set-Content ~\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: `Set-Content $env:USERPROFILE\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
     ] as const) {
       const r = runIde(tool_name, tool_input);
       expect(r.status, tool_name).toBe(2);

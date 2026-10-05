@@ -1521,14 +1521,23 @@ function shellHome(): string {
 // not expanded, so callers keep the literal reading of a `~` word beside this
 // one; a `$HOME` word has no literal reading (a word with `$` resolves to none).
 function homeReading(word: string, powerShell = false): string | null {
-  // PowerShell takes \ as a separator and its variable names ignore case.
+  // PowerShell takes \ as a separator and its variable names ignore case. Its
+  // `~` and $HOME are the user profile, which on Windows is USERPROFILE.
   const text = powerShell ? word.replaceAll("\\", "/") : word;
-  const braced = "$" + "{HOME}";
-  for (const prefix of ["~", "$HOME", braced]) {
+  const braced = (name: string) => "$" + `{${name}}`;
+  const profile = process.platform === "win32" ? process.env.USERPROFILE || homedir() : shellHome();
+  const homes: Array<[string, string | undefined]> = powerShell
+    ? [
+      ["~", profile], ["$HOME", profile], [braced("HOME"), profile],
+      ["$env:HOME", process.env.HOME], [braced("env:HOME"), process.env.HOME],
+      ["$env:USERPROFILE", process.env.USERPROFILE], [braced("env:USERPROFILE"), process.env.USERPROFILE],
+    ]
+    : [["~", shellHome()], ["$HOME", shellHome()], [braced("HOME"), shellHome()]];
+  for (const [prefix, home] of homes) {
     const head = text.slice(0, prefix.length);
-    if (!(powerShell ? head.toUpperCase() === prefix.toUpperCase() : head === prefix)) continue;
+    if (!home || !(powerShell ? head.toUpperCase() === prefix.toUpperCase() : head === prefix)) continue;
     const rest = text.slice(prefix.length);
-    if (rest === "" || rest.startsWith("/")) return join(shellHome(), rest);
+    if (rest === "" || rest.startsWith("/")) return join(home, rest);
   }
   return null;
 }
@@ -1590,13 +1599,13 @@ function withoutRedirections(segment: string): string {
  * name $HOME. The order of the segments, loops, functions, subshells and
  * pipelines is not modelled, so a write can also be read from a directory it
  * never runs in. A computed target ($VAR, glob), `cd -`, `pushd`'s stack
- * operands (`+1`; `cd +1` names a directory) and `pushd -n` add nothing. Past the cap the oldest collected directories are
+ * operands (`+1`; bash's `cd +1` names a directory) and `pushd -n` add nothing. Past the cap the oldest collected directories are
  * dropped, never `cwd`, $HOME or the newest, so an absolute `cd` late in a
  * long command still counts. A command `shell` names as PowerShell is read
  * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
  * their -Path, -LiteralPath or first positional value, a `\` as a separator,
- * and a bare Set-Location names $HOME; `~`, `$HOME` and `${HOME}` there take
- * either separator and any case.
+ * and a bare Set-Location names $HOME; `~`, `$HOME`, `${HOME}`, `$env:HOME`
+ * and `$env:USERPROFILE` there take either separator and any case.
  */
 export function shellDirectoryRoots(
   command: string,
@@ -1641,8 +1650,9 @@ export function shellDirectoryRoots(
     if (!invocation || !SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) continue;
     const { name, args } = invocation;
     const end = args.indexOf("--");
-    // Only pushd reads +N as a stack entry (bash's cd takes it as a directory),
-    // and `pushd -n` adds to the stack without changing directory.
+    // Only pushd reads +N as a stack entry in bash, whose cd takes it as a
+    // directory (zsh's cd reads its stack: the directory reading then only adds
+    // a candidate), and `pushd -n` adds to the stack without changing directory.
     const pushd = name.toLowerCase() === "pushd";
     if (pushd && (end >= 0 ? args.slice(0, end) : args).includes("-n")) continue;
     const operand = end >= 0
@@ -1652,7 +1662,7 @@ export function shellDirectoryRoots(
       change(operand);
       continue;
     }
-    // `cd -` and stack operands name a directory this command cannot see.
+    // `cd -` and pushd's stack operands name a directory this command cannot see.
     const previous = args.some((arg) => /^[+-]\d*$/.test(arg));
     if (!previous && ["cd", "chdir"].includes(name.toLowerCase())) add(home, true);
   }

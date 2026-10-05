@@ -625,7 +625,9 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(writeTargets("Bash", { command: "pushd +; echo x > y" }, "/p")
       .map((path) => path.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""))).toEqual(["/p/y"]);
     // ~, $HOME and ${HOME} take a backslash and any case, as PowerShell reads them.
-    const home = (process.env.HOME || homedir()).replaceAll("\\", "/").replace(/^[A-Za-z]:/, "");
+    // PowerShell's ~ and $HOME are the user profile: USERPROFILE on Windows.
+    const profile = process.platform === "win32" ? process.env.USERPROFILE || homedir() : process.env.HOME || homedir();
+    const home = profile.replaceAll("\\", "/").replace(/^[A-Za-z]:/, "");
     for (const command of [
       "Set-Content -Path ~\\r\\x -Value v",
       "Set-Content -Path $HOME\\r\\x -Value v",
@@ -634,6 +636,18 @@ describe("t264 (a) judgeFreeze decision table", () => {
       "Set-Location ~\\r; Set-Content -Path x -Value v",
     ]) {
       expect(targets(command), command).toContain(`${home}/r/x`);
+    }
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    try {
+      process.env.HOME = "/ph";
+      process.env.USERPROFILE = "/pu";
+      expect(targets("Set-Content -Path $env:HOME\\r\\x -Value v")).toContain("/ph/r/x");
+      expect(targets("Set-Content -Path $" + "{env:userprofile}\\r\\x -Value v")).toContain("/pu/r/x");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
     // POSIX: bash's cd takes +1 as a directory; pushd's +1 and pushd -n stay put.
     const posix = (command: string): string[] =>
