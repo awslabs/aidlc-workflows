@@ -871,6 +871,7 @@ export async function run(
     let prefixCursor = 0;
     const prefixFirst = prefix[prefixCursor++] ?? "";
     let directPrefix = false;
+    let prefixDispatcher = false;
     // Another AI-DLC tool script: allowed when simple, otherwise no decision
     // (never a deny, so its shell forms keep their earlier answer).
     let toolPrefix = false;
@@ -881,7 +882,8 @@ export async function run(
       const dispatcherPath = join(projectDir, ".aidlc", "tools", "aidlc.ts");
       try {
         const resolved = realpathSync(resolve(projectDir, terminalPath(script)));
-        directPrefix = resolved === realpathSync(directPath) || resolved === realpathSync(dispatcherPath);
+        prefixDispatcher = resolved === realpathSync(dispatcherPath);
+        directPrefix = resolved === realpathSync(directPath) || prefixDispatcher;
         toolPrefix = !directPrefix && ownToolScript(resolved) !== null;
       } catch {
         const typed = resolve(projectDir, terminalPath(script));
@@ -910,7 +912,26 @@ export async function run(
     if (toolPrefix) return toolScriptCommand(command);
     if (!directPrefix) return { status: "unrelated" };
     const parsed = simpleCommand(command);
-    if (!parsed) return { status: "unsupported" };
+    if (!parsed) {
+      // A workflow step refused for its shell form names the form that runs,
+      // built from parts and never from the typed text. Every other AI-DLC
+      // command keeps the general refusal.
+      const bunLed = prefixFirst === "bun" || prefixFirst === process.execPath;
+      let verbs = prefix.slice(bunLed ? prefixCursor + 1 : 1);
+      const routed = verbs[0] === "engine" && verbs[1] === "orchestrate";
+      if (routed) verbs = verbs.slice(2);
+      const verb = verbs[0] === "--resume" ? "next" : verbs[0] ?? "";
+      if (!(["next", "continue", "report", "park"] as string[]).includes(verb)) return { status: "unsupported" };
+      const start = !bunLed ? "aidlc"
+        : `bun ${[".aidlc", "tools", prefixDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
+      const orchestrate = (!bunLed || prefixDispatcher) && (routed || !bunLed) ? " engine orchestrate" : "";
+      return {
+        status: "unsupported",
+        reason: "Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, " +
+          `or redirection other than one terminal \`2>&1\`. Run \`${start}${orchestrate} ${verb}\` as a command of its own, ` +
+          "with its own arguments.",
+      };
+    }
     if (parsed.expansionActive) return { status: "unrelated" };
     const words = parsed.words;
     let cursor = 0;

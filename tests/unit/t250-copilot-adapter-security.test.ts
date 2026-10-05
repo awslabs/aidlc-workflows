@@ -943,6 +943,39 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("12e: a workflow step refused for its shell form names the form that runs", () => {
+    // An agent that chained or piped `park` was told only to avoid chaining,
+    // six times in one live run, before it found the plain command.
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decide = (command: string) => shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+      for (const [command, form] of [
+        ["aidlc engine orchestrate next; rm -rf build", "aidlc engine orchestrate next"],
+        ["aidlc engine orchestrate park 2>&1 | Out-String", "aidlc engine orchestrate park"],
+        ["bun .aidlc/tools/aidlc.ts engine orchestrate report --stage x --result completed | tee out.txt", "bun .aidlc/tools/aidlc.ts engine orchestrate report"],
+        ["bun .aidlc/tools/aidlc-orchestrate.ts next && echo done", "bun .aidlc/tools/aidlc-orchestrate.ts next"],
+      ]) {
+        const out = decide(command);
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+        const text = out.hookSpecificOutput?.permissionDecisionReason ?? "";
+        expect(text, command).toContain("chaining");
+        expect(text, command).toContain(`Run \`${form}\``);
+        // The named form is accepted on its own.
+        const named = decide(form.endsWith("report") ? `${form} --stage x --result completed` : form);
+        expect(named.hookSpecificOutput?.permissionDecision, form).not.toBe("deny");
+      }
+      // Any other chained AI-DLC command keeps the general refusal unchanged.
+      for (const command of ["aidlc doctor > doctor.txt", "aidlc --status | head -20"]) {
+        const out = decide(command);
+        expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
+        expect(out.hookSpecificOutput?.permissionDecisionReason, command).not.toContain("Run `");
+      }
+    } finally {
+      s.cleanup();
+    }
+  });
+
   // --- Deliberate block (core exit 2) → deny projection, later hooks skipped --
 
   test("13: a core-hook exit 2 becomes a deny-JSON projection (exit 0); reviewer-scope is skipped", () => {
