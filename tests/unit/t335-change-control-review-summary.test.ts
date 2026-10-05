@@ -47,6 +47,7 @@ import {
   sessionsDir,
   setGuardsOffLine,
   stateDigest,
+  unitPlainName,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -951,11 +952,14 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(gate.status, gate.stderr).toBe(0);
     const relativeArtifact = relative(proj, reviewedUnitArtifact(proj)).replaceAll("\\", "/");
     expect(printedNotices(gate.stdout)).toEqual([
-      `${relativeArtifact} changed after Unit alpha's review; carrying on.`,
+      `${relativeArtifact} changed after the alpha Unit was reviewed; carrying on.`,
     ]);
     const rows = acceptedRows(proj);
     expect(rows).toHaveLength(1);
     expect(auditBlockField(rows[0].block, "Unit")).toBe(UNIT);
+    // The line names the Unit in plain words, never its numbered id.
+    expect(unitPlainName("u1-note-store")).toBe("note store");
+    expect(unitPlainName("payments_api")).toBe("payments api");
     expect(auditBlockField(rows[0].block, "Checkpoint")).toBe("review-receipt");
     // The verdict stands as recorded; the gate presented again writes nothing more.
     expect(reviewCompletedRows(proj)).toHaveLength(1);

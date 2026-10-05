@@ -2321,7 +2321,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   }
 
   const ALPHA_EDIT_LINE =
-    "src/alpha.ts changed after Unit alpha's review; carrying on.";
+    "src/alpha.ts changed after the alpha Unit was reviewed; carrying on.";
 
   // The Guard Policy line as the work recorded it, on the scope it runs on,
   // with the scope's own review level unless `review` overrides it.
@@ -2487,7 +2487,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const verified = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
       expect(verified.status, verified.out).toBe(0);
       expect(JSON.parse(verified.stdout)).toMatchObject({ errors: [], change_notices: [
-        `${relativeDocument} changed after Unit alpha's review; carrying on.`,
+        `${relativeDocument} changed after the alpha Unit was reviewed; carrying on.`,
       ] });
       expect(readFileSync(join(p, relativeDocument), "utf-8")).toContain("Tests use a temporary notes file.");
       approve(p, "alpha");

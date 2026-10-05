@@ -360,7 +360,7 @@ describe("a Unit's manifest claims a path after its review", () => {
     );
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
-    expect(done.out).toContain("Unit alpha's list of files changed after its review; carrying on.");
+    expect(done.out).toContain("The alpha Unit's list of files changed after it was reviewed; carrying on.");
     expect(done.out).not.toContain("changed outside any unit's work");
   });
 
