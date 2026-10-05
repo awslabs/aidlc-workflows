@@ -1935,8 +1935,8 @@ review evidence before merging each claimed Unit. Re-running `finalize` withdraw
 every open checkpoint question and captured checkpoint response for this intent,
 in any session; ask again only after fresh verification, source landing, and a
 batch status of `ready: true`. Only verified native passes
-receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` under
-checkpoints. Land their source through the native worktree merge before `next`.
+receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` (rows
+from an earlier release may lack it). Land their source through the native worktree merge before `next`.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
