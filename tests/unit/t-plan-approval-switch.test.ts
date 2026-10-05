@@ -801,6 +801,10 @@ describe("asked before the piece of work exists", () => {
       // An earlier request in this sitting must not take the words.
       if (olderRequest) askedMinutesAgo(proj, requestOf(proj, "add a settings page").id, 5);
       expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
+      // The open work's session runs AI-DLC's hooks, which left a heartbeat in its record.
+      const health = hooksHealthDir(proj);
+      mkdirSync(health, { recursive: true });
+      writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
       expect(reply(proj, "/aidlc --plan-approval off fix the parser")).toContain(
         "Plan approval will be off for the piece of work you start now (set by you)",
       );
@@ -828,6 +832,10 @@ describe("asked before the piece of work exists", () => {
   test("summary confirmation off typed with new work beside open work reaches the new work too", () => {
     const proj = emptyProject();
     expect(utility(proj, ["intent-create", "--scope", "poc"]).status).toBe(0);
+    // The open work's session runs AI-DLC's hooks, which left a heartbeat in its record.
+    const health = hooksHealthDir(proj);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), new Date().toISOString());
     reply(proj, "/aidlc --summary-confirmation off fix the parser");
     const routing = runOrchestrateNext(ORCHESTRATE, proj, ["--summary-confirmation", "off", "--", "fix the parser"], {
       env: { ...process.env, ...CLEAR },
