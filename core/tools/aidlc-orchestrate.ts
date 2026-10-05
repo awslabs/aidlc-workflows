@@ -12155,6 +12155,8 @@ function emitTypedResumeChoice(
   let named = flags.target;
   // The Unit step a "redo <stage>" named, kept so the redo is of that exact step.
   let unitStep: string | undefined;
+  // The stage a "redo <stage>" named, so a redo for named Units reopens it.
+  let redoStage: string | undefined;
   // "Redo <stage>": the current stage is a plain redo, a stage that already
   // ran is the jump back to it, and a stage that has not run yet has nothing
   // to redo.
@@ -12163,10 +12165,13 @@ function emitTypedResumeChoice(
     // Unit-by-Unit Construction keeps Current Stage on the block's first stage
     // while the Unit works through later ones: the step it is on is current too.
     const unitStage = getField(stateContent, "Unit Stage")?.trim();
-    if (wanted === slug) named = undefined;
-    else if (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined) {
+    if (wanted === slug) {
+      named = undefined;
+      redoStage = slug;
+    } else if (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined) {
       named = undefined;
       unitStep = unitStage;
+      redoStage = unitStage;
     }
     else if (parseCheckboxes(stateContent).some((box) => box.slug === wanted && box.state === "completed")) choice = "jump";
     else {
@@ -12209,9 +12214,10 @@ function emitTypedResumeChoice(
     : flags.everyUnit ? " --every-unit" : "";
   if (choice === "redo" && units !== "") {
     // Redoing a step for named Units is reopening that step for them: the
-    // step the walk is on, as a jump back to it would.
+    // stage the person named, else the step the walk is on, as a jump back to
+    // it would.
     const unitStage = getField(stateContent, "Unit Stage")?.trim();
-    const step = unitStage && nodeForSlug(unitStage) ? unitStage : slug;
+    const step = redoStage ?? (unitStage && nodeForSlug(unitStage) ? unitStage : slug);
     if (nodeForSlug(step) === undefined) {
       emit(errorDirective(
         `This workflow's current stage is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,

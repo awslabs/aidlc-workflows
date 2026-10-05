@@ -499,6 +499,10 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(forTheStep.message).not.toContain("Run `next --stage");
     const forBetaStep = report("--choice", "redo", "--target", "code-generation", "--unit", "beta");
     expect(forBetaStep.message).toContain("Run `next --stage code-generation --unit beta`");
+    // The block's first stage named for a Unit is that stage, not the Unit's step.
+    const forBetaFirst = report("--choice", "redo", "--target", "functional-design", "--unit", "beta");
+    expect(forBetaFirst.kind).toBe("print");
+    expect(forBetaFirst.message).toContain("Run `next --stage functional-design --unit beta`");
     writeFileSync(
       statePath(p),
       unitMajor.replace(
