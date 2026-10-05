@@ -2278,6 +2278,7 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
   const guard = (dir: string, command: string) =>
     runAdapter(dir, "guard-tool-call", { cwd: dir, tool_name: "execute_bash", tool_input: { command } }, [], presence);
   const approveGate = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved";
+  const APPROVAL_WAITS = "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.";
   const toUnitMajor = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
 
   test("a gate the person must answer, with no turn of theirs since it opened, refuses the call", () => {
@@ -2286,7 +2287,11 @@ describe("t147 Kiro CLI presence floor holds only at a gate the person must answ
       gateOpen(dir);
       const refused = guard(dir, approveGate);
       expect(refused.code, refused.stderr).toBe(2);
-      expect(refused.stderr).toContain("an approval gate is open and no human has acted since it opened");
+      // Plain words the person reads under Kiro's own prefix, the same as Kiro IDE's.
+      expect(refused.stderr).toContain(APPROVAL_WAITS);
+      const ideSource = readFileSync(join(REPO_ROOT, "harness/kiro-ide/hooks/aidlc-kiro-adapter.ts"), "utf-8");
+      expect(ideSource.replace(/"\s*\+\s*"/g, "")).toContain(APPROVAL_WAITS);
+      expect(refused.stderr).not.toContain("no human has acted since it opened");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
