@@ -418,6 +418,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(r.out).toContain("is not a scope name, so no command was printed");
       expect(r.out).not.toContain("touch pwned");
     }
+    // A blank or unknown saved scope gets no redo command either, never a default plan.
+    for (const saved of ["", "nosuchscope"]) {
+      writeFileSync(statePath(p), state.replace(/^- \*\*Scope\*\*: .*$/m, `- **Scope**: ${saved}`), "utf-8");
+      for (const r of [report("--choice", "redo"), report("--user-input", "2")]) {
+        expect(r.kind, saved).toBe("error");
+        expect(r.message).toContain("cannot be redone from here");
+        expect(r.message).not.toContain("--direction redo");
+      }
+    }
     writeFileSync(statePath(p), state.replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation$(touch pwned)"), "utf-8");
     for (const r of [
       report("--choice", "redo"),

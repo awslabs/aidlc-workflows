@@ -12137,6 +12137,11 @@ function redoCurrentStage(pd: string, scope: string, stateContent: string, slug:
   }
   // A saved scope that is not a scope name stops here, as every printed command does.
   const scopeText = scopeArg(scope);
+  if (!validScopes().has(scope)) {
+    return errorDirective(
+      `This workflow's scope is not one AI-DLC knows, so its stage cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
+    );
+  }
   const unitRedo = unitMajorRedo(pd, scope, stateContent, slug);
   return printDirective(unitRedo ??
     `Redo accepted at "${slug}". Run \`${aidlcToolInvocation("jump")} execute --target ${shellArg(slug)} --direction redo --scope ${scopeText}\` to reset the current stage, then re-run \`next\` to start it over.`);
