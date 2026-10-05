@@ -38,6 +38,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { forwardJumpNotice } from "../../core/tools/aidlc-jump.ts";
+import { stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   runOrchestrateNext,
@@ -566,6 +567,33 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     // And the way back works: the jump it names goes through.
     expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"], chat).status).toBe(0);
     expect(readState(proj)).toContain("- **Current Stage**: code-generation");
+  });
+
+  // Working one Unit at a time, Current Stage names the block's first step
+  // while the person answers a later one (a Unit's code plan): the way back
+  // names the step they were shown.
+  test("after a jump from a step Current Stage does not name, the way back names that step", () => {
+    const chat = {
+      ...process.env,
+      AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000195",
+      AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+    };
+    const proj = createdProject("bugfix");
+    const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
+    expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "build-and-test", "--direction", "forward"], chat).status).toBe(0);
+    // The engine last put the code plan to the person.
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", stage: "code-generation", ask_type: "plan-approval", state_sha256: stateDigest(readState(proj)),
+    });
+    expect(run(proj, "aidlc-jump.ts", ["execute", "--target", String(before), "--direction", "backward"], chat).status).toBe(0);
+    const health = join(recordDirOf(proj), ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "pre-tool-use.last"), new Date().toISOString());
+    const nextEnv: Record<string, string | undefined> = { ...chat };
+    delete nextEnv.AIDLC_SCOPE_MAPPING;
+    const said = (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
+      {}) as { narration?: string };
+    expect(String(said.narration)).toContain("To return to Code Generation, type `/aidlc --stage code-generation`.");
   });
 
   test("backward jump resets a promoted stage's [S/x] like any on-plan stage", () => {
