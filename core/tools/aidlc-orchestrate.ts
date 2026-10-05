@@ -12224,13 +12224,16 @@ function emitTypedResumeChoice(
     return;
   }
   if (choice === "redo" && unitStep !== undefined) {
-    // The step the Unit is on, reopened for that Unit, never the block's
-    // first stage.
-    const active = getField(stateContent, "Active Unit")?.trim() ?? "";
-    const forUnit = active !== "" && validateUnitName(active) === null ? ` --unit ${shellArg(active)}` : "";
-    emit(printDirective(
-      `Redo accepted. Run \`next --stage ${shellArg(unitStep)}${forUnit}\`; it reopens that step${forUnit ? " for the Unit" : ""} and says plainly if it cannot.`,
-    ));
+    // The step the Unit is on is redone the way Unit-by-Unit Construction
+    // redoes it (reopened for that Unit, its work started over), never the
+    // block's first stage. With nothing written for it yet, there is nothing to
+    // throw away: doing it now starts it from the start.
+    if (!validScopes().has(scope)) {
+      emit(redoCurrentStage(pd, scope, stateContent, slug));
+      return;
+    }
+    emit(printDirective(unitMajorRedo(pd, scope, stateContent, slug) ??
+      `Redo accepted at "${unitStep}": nothing is written for it yet, so it starts from the start. Re-run \`next\` and do "${unitStep}".`));
     return;
   }
   if (choice === "redo") {

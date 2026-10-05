@@ -491,9 +491,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
         .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation"),
       "utf-8",
     );
+    // Redone, never just navigated to, and never the block's first stage.
     const forTheStep = report("--choice", "redo", "--target", "code-generation");
     expect(forTheStep.kind).toBe("print");
-    expect(forTheStep.message).toContain("Run `next --stage code-generation`;");
+    expect(forTheStep.message).toContain('Redo accepted at "code-generation"');
+    expect(forTheStep.message).not.toContain("functional-design");
+    expect(forTheStep.message).not.toContain("Run `next --stage");
     const forBetaStep = report("--choice", "redo", "--target", "code-generation", "--unit", "beta");
     expect(forBetaStep.message).toContain("Run `next --stage code-generation --unit beta`");
     writeFileSync(
@@ -505,7 +508,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       "utf-8",
     );
     const forActive = report("--choice", "redo", "--target", "code-generation");
-    expect(forActive.message).toContain("Run `next --stage code-generation --unit alpha`");
+    expect(forActive.message).toContain('Redo accepted at "code-generation"');
     expect(forActive.message).not.toContain("functional-design");
     writeFileSync(statePath(p), unitMajor, "utf-8");
     // The choice alone is enough; the person's words are not needed in the command.
