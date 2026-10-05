@@ -398,6 +398,8 @@ describe("before any workflow, next stops when the person's message left no hear
     expect(prompt.code, prompt.stderr).toBe(0);
     const written = readdirSync(outside, { recursive: true }).map(String);
     expect(written.filter((name) => name.endsWith(".last"))).toEqual([]);
+    // With no heartbeat possible there, the missing one is not read as hooks off.
+    expect(isStop(next(proj, h))).toBe(false);
   });
 
   test("unattended, or with the presence check switched off, the first next is not stopped", () => {

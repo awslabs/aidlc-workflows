@@ -24689,9 +24689,10 @@ export function hookLiveness(
 // does not show that the hooks did not run.
 export function hookStatusPathLinked(projectDir: string, intent?: string, space?: string): boolean {
   try {
-    const record = docsRoot(projectDir, intent, space);
-    const anchorReal = realpathSync(record);
-    const parts = relative(record, hooksHealthDir(projectDir, intent, space))
+    // From the project's own folder, as the heartbeat writer checks: a linked
+    // aidlc/ on the way keeps every heartbeat from being written.
+    const anchorReal = realpathSync(projectDir);
+    const parts = relative(projectDir, hooksHealthDir(projectDir, intent, space))
       .split(/[\\/]/)
       .filter((part) => part.length > 0);
     for (let i = 1; i <= parts.length; i++) {
