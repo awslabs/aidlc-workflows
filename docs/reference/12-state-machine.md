@@ -1457,8 +1457,12 @@ follow-up: `orchestrate report --result rejected` with their words for Request
 Changes, and `log answer --checkpoint summary-confirmation` for their
 confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
 <scope>`, which runs through `next`. Neither does `redo-unit-step`: `next`
-routes the Unit's step again. `reopen-unit-step` and `review-advisory-gate` are
-`command` remedies: once picked, their exact command is admitted.
+routes the Unit's step again. With Construction checkpoints on, a Unit's
+checkpoint is its gate and the stage cannot be reported for approval until
+every checkpoint is approved, so present-approval-gate names `next` there,
+which shows that Unit's checkpoint again with the findings. `reopen-unit-step`
+and `review-advisory-gate` are `command` remedies: once picked, their exact
+command is admitted.
 Before the person picks, the offer alone admits nothing. When the picked remedy's
 work happens while the question is open (`apply-repairs-then-request` and
 `finish-revision` on the pick, `reconfirm-summary` once the person confirmed),
