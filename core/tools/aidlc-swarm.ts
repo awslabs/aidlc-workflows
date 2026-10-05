@@ -399,7 +399,7 @@ function verdictFor(
       tampered = fileTampered(wt, testFile);
       if (tampered && guardPolicyAcceptsChanges(projectDir)) {
         tampered = false;
-        tamperNotice = `Unit ${unit} changed its protected test file ${testFile}; its check passed with that change.`;
+        tamperNotice = `Unit ${unit} changed its protected test file ${renderChangedPaths([testFile])}; its check passed with that change.`;
       }
     }
   }
