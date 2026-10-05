@@ -1697,6 +1697,7 @@ describe("t265b hook lifecycle", () => {
       // A setting such as depth is not a check: once the person has spoken it
       // passes as a move they asked for (t-plan-approval-ask), alone.
       expect(code("aidlc engine config set depth Minimal")).toBe(0);
+      expect(code("aidlc engine config set collaborators off")).toBe(0);
       expect(code("aidlc engine config set depth Minimal; touch src/x.ts")).toBe(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });

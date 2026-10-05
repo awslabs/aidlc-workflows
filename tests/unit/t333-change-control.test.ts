@@ -987,6 +987,9 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     const routed = run(ORCHESTRATE, ["next", "--guard-policy", "relaxed"], proj);
     expect(routed.status, routed.stderr).toBe(0);
     expect(routed.stdout).not.toContain("config set guard-policy");
+    // The command is done: no stage work starts from it.
+    expect(lastDirective(routed.stdout).kind).toBe("print");
+    expect(lastDirective(routed.stdout).message).toContain("already applied");
     expect(guardPolicyRows(proj)).toHaveLength(1);
     // A value the state does not hold yet still names the setter.
     const strict = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "strict"], proj).stdout);

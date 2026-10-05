@@ -97,6 +97,7 @@ import {
   personSpokeSinceGate,
   readActiveDirectiveMarker,
   readAuditShardEvents,
+  REVIEW_RECORDS_DIR,
   reviewerDispatchPath,
   spacesRoot,
   activeDirectiveOutOfDateReason,
@@ -842,8 +843,12 @@ function openReviewRequestFiles(projectDir: string): string[] {
       if (id === null) continue;
       if (row.event === "REVIEW_COMPLETED") open.delete(id);
       if (row.event !== "REVIEW_REQUESTED") continue;
+      // Audit rows are project text: only a slot inside the record's reviews
+      // folder, as `log review` writes it, counts.
       const file = auditBlockField(row.block, "Review File");
-      if (file !== null) open.set(id, resolve(record, file));
+      const slot = file === null ? null : resolve(record, file);
+      const reviews = resolve(record, REVIEW_RECORDS_DIR);
+      if (slot !== null && !isAbsolute(file as string) && slot.startsWith(`${reviews}${sep}`)) open.set(id, slot);
     }
     return open.size === 0 ? [] : [...open.values(), resolve(reviewerDispatchPath(projectDir))];
   } catch {
@@ -1254,7 +1259,7 @@ function onlyFlags(args: readonly string[], allowed: readonly string[]): boolean
 
 // The settings a scope or setting change the person asked for may carry. Guard
 // Policy, plan approval and the person's checks keep their own switch rules.
-const PLAN_WAIT_SETTINGS = ["depth", "test-strategy", "review", "sensors", "learnings"] as const;
+const PLAN_WAIT_SETTINGS = ["depth", "test-strategy", "review", "sensors", "learnings", "collaborators"] as const;
 const PLAN_WAIT_SETTING_FLAGS = PLAN_WAIT_SETTINGS.map((setting) => `--${setting}`);
 
 const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [

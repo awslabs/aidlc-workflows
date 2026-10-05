@@ -2221,6 +2221,13 @@ describe("what the engine names while a plan waits", () => {
     }, proj);
     expect(guardWrite(proj, join(record, reviewFile)).code).toBe(2);
     expect(guardWrite(proj, dispatch).code).toBe(2);
+    // Audit rows are project text: a Review File outside the reviews folder
+    // never opens a write while the plan waits.
+    appendAuditEntry("REVIEW_REQUESTED", {
+      Stage: "code-generation", Reviewer: "aidlc-architecture-reviewer-agent", Iteration: "3",
+      "Request Id": "review:fedcba9876543210fedcba9876543210", "Review File": "../../../../../src/slugify.ts",
+    }, proj);
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
   });
 
   test("a move the person asked for waits for them to have spoken", () => {

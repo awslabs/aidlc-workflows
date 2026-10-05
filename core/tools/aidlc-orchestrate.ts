@@ -7154,6 +7154,15 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       emit(planChangeDirective(planChanges, null, plan, planApprovalAskIsOpen(pd)));
       return;
     }
+    // Only a setting the hook already applied was typed: the command is done,
+    // and no stage work starts from it.
+    if (!describedWork && !flags.resume && typedSettingModifiers(flags).length > 0) {
+      emit(keptWhilePlanWaits(
+        turnEndingPrint("The setting the person typed is already applied: say the line it printed, then stop."),
+        planApprovalAskIsOpen(pd),
+      ));
+      return;
+    }
   }
 
   // Branch 7 — explicit --phase / --stage jump. The conductor relays the
