@@ -7878,6 +7878,7 @@ function applySettledSwarmShape(
 function applyConstructionCheckpointShape(
   directive: RunStageDirective,
   checkpoint: ReturnType<typeof resolveConstructionCheckpoint>,
+  stageDirective?: (slug: string) => RunStageDirective | null,
 ): void {
   directive.gate = true;
   directive.unit = checkpoint.unit;
@@ -7902,6 +7903,20 @@ function applyConstructionCheckpointShape(
     delete directive.review_artifact;
     delete directive.review_class;
     delete directive.reviewer_max_iterations;
+  }
+  // A re-check of another stage's documents gives the reviewer that stage's
+  // own file, inputs, outputs and review settings; the checkpoint stays this one.
+  const rechecked = checkpoint.rereview && checkpoint.rereview.stage !== directive.stage
+    ? stageDirective?.(checkpoint.rereview.stage) ?? null
+    : null;
+  if (rechecked) {
+    directive.reviewer = rechecked.reviewer;
+    directive.review_artifact = rechecked.review_artifact;
+    directive.review_class = rechecked.review_class;
+    directive.reviewer_max_iterations = rechecked.reviewer_max_iterations;
+    directive.stage_file = rechecked.stage_file;
+    directive.consumes = rechecked.consumes;
+    directive.produces = rechecked.produces;
   }
   directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
   // A checkpoint the person approves offers one learnings ritual for the
@@ -10455,7 +10470,13 @@ function emitUnitMajorRunStage(
     );
     // The Unit body and its reviews have already run. The checkpoint owns
     // verification and approval; do not dispatch Code Generation again.
-    applyConstructionCheckpointShape(directive, step.checkpoint);
+    applyConstructionCheckpointShape(directive, step.checkpoint, (slug) => {
+      const stage = nodeForSlug(slug);
+      return stage ? buildRunStageDirective(
+        stage, projectType, step.unit, scope, stateContent, recordPrefix,
+        codekbCtx, kinds?.get(step.unit) ?? null,
+      ) : null;
+    });
     emit(directive);
     return;
   }
@@ -13671,8 +13692,15 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");
   if (payload.t === true) directive.build_settled = true;
   if (payload.j !== undefined && payload.u !== null && liveState !== null) {
+    const unit = payload.u;
     applyConstructionCheckpointShape(
-      directive, resolveConstructionCheckpoint(pd, payload.u, payload.j, liveState),
+      directive, resolveConstructionCheckpoint(pd, unit, payload.j, liveState), (slug) => {
+        const stage = nodeForSlug(slug);
+        return stage ? buildRunStageDirective(
+          stage, projectTypeFrom(liveState), unit, payload.c, payload.a ? liveState : null,
+          engineRelativeRecordDir(pd), codekbCtxFor(pd), payload.k,
+        ) : null;
+      },
     );
   }
   if (payload.y !== undefined && liveState !== null) {
