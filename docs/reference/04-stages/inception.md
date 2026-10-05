@@ -1230,9 +1230,9 @@ All Inception phase artifacts:
    to `<record>/verification-command.txt` using the harness's file-write
    tool (Write/edit), never a shell `echo` or heredoc. Repo-derived command text
    must never be interpolated into a shell line, where substitutions could run
-   before approval. Use the invoking SessionStart session ID: both `log decision`
-   and `log answer` require
-   `--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+   before approval. Both `log decision` and `log answer` take
+   `--checkpoint verification-command --command-file verification-command.txt`
+   and find the session they run in.
    Record the decision before asking and wait for the human's **Approve** /
    **Request Changes** reply in that session. Record the answer with the same
    stage/checkpoint/command/session; only **Approve** authorizes the receipt.

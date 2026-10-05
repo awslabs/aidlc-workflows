@@ -11608,9 +11608,9 @@ export function authorizedVerificationCommand(
 export const VERIFICATION_COMMAND_RECOVERY =
   'Write the proposed command to <record>/verification-command.txt with the harness file-write tool (never shell echo or a heredoc); never interpolate repo-derived command text into a shell line. ' +
   'Record the human choice with aidlc-log.ts decision --stage "<stage>" --checkpoint verification-command ' +
-  '--command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
-  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve". ' +
-  'Use the invoking SessionStart session ID. ' +
+  '--command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes", ' +
+  'then wait for the human\'s offered choice in that session and run aidlc-log.ts answer --stage "<stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve". ' +
+  'Both commands find the session they run in. ' +
   'Apply the receipt with aidlc-state.ts set-construction-verification-command --command-file verification-command.txt.';
 
 export const CONSTRUCTION_POLICY_CHECKPOINT = "Construction Policy";

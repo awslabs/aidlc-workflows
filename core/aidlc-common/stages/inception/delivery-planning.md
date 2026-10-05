@@ -217,10 +217,11 @@ UTF-8 text to `<record>/verification-command.txt` using the harness's
 file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived
 command text must never be interpolated into a shell line: shell substitutions
 could execute before the human approves. Pass only the record-relative file path
-below and use the invoking SessionStart session ID:
+below; the command finds the session it runs in by itself, so pass no session
+and never look one up:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 
 Copy the complete canonical command exactly from the `command` field in the
@@ -243,11 +244,11 @@ options:
 Read the person's reply in that session and record the choice they made. The
 human-turn hook keeps that they replied to this question and their exact words;
 a reply from another session, or to another question, does not count. When they
-approve, record their answer using the same session ID, and set the command with
-the matching tool-owned receipt:
+approve, record their answer, and set the command with the matching tool-owned
+receipt:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve"
 {{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
 ```
 

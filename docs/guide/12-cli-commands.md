@@ -1778,11 +1778,11 @@ completed Unit?** Before presenting the command, write it as UTF-8 text to
 `<record>/verification-command.txt` with the harness's
 file-write tool (Write/edit), never a shell `echo` or heredoc. Repo-derived command
 text must never be interpolated into a shell line: shell substitutions could
-execute before approval. Pass only the record-relative path and use the invoking
-SessionStart session ID:
+execute before approval. Pass only the record-relative path; the command finds
+the session it runs in by itself:
 
 ```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
+{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --decision "Use this command to verify each completed Unit?" --options "Approve,Request Changes"
 ```
 Copy the complete canonical command exactly from the `command` field in the
 `decision` tool's JSON output into the question's code span; never abbreviate or
@@ -1797,13 +1797,14 @@ session. Only **Approve** authorizes the receipt; an unrelated reply,
 `--details "Approve"` unless the human chose it. Only then run:
 
 ```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
+{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --details "Approve"
 {{INVOKE}} engine state set-construction-verification-command --command-file verification-command.txt
 ```
 
 These are the `aidlc-log` decision/answer checkpoint forms. Both require the same
-`--stage`, `--checkpoint verification-command`, canonical command, and
-`--session "<session ID>"`. Each accepts exactly one of `--command-file <path>`
+`--stage`, `--checkpoint verification-command`, and canonical command; each finds
+the session it runs in, and `--session <id>` overrides that only when it reports
+it cannot tell which session this is. Each accepts exactly one of `--command-file <path>`
 or `--command`; both or neither are refused. Use the file form for conductor
 shell calls; the direct argument is only safe when passed without shell
 interpolation. Files must be record-relative regular files, with no absolute

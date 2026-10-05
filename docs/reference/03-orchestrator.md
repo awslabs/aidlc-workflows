@@ -561,9 +561,9 @@ checkpoint. Before presenting the command, write it to
 `<record>/verification-command.txt` with the harness's file-write tool
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
 be interpolated into a shell line, where substitutions could execute before
-approval. Use the invoking SessionStart session ID: both `log decision` and
-`log answer` require
-`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+approval. Both `log decision` and `log answer` take
+`--checkpoint verification-command --command-file verification-command.txt` and
+find the session they run in.
 Copy the complete canonical command exactly from the `command` field in the
 `decision` tool's JSON output into the verification-command question's code span;
 never abbreviate it. Choose a delimiter that preserves any command backticks.
