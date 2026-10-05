@@ -831,15 +831,23 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
 // approval from it. A composition requested while Code Generation is current
 // writes it before its own approval gate. Exactly that file, reached through no
 // symlink and not hard-linked to another file, is exempt.
-// Inside AI-DLC's own records (`aidlc/spaces`), reached through no symlink.
-function isInsideAidlcSpaces(projectDir: string, target: string): boolean {
+// A stage's own record output inside AI-DLC's records (`aidlc/spaces`): reached
+// through no symlink, not hard-linked to another file, and not the work's state,
+// audit trail or engine control files, which only the engine writes.
+function isStageRecordOutput(projectDir: string, target: string): boolean {
   try {
     const projectLexical = resolve(projectDir);
     const targetAbs = resolve(target);
     const inside = relative(resolve(spacesRoot(projectDir)), targetAbs);
     if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return false;
+    const segments = inside.split(/[\\/]/);
+    if (
+      basename(targetAbs) === "aidlc-state.md" || basename(targetAbs) === "intents.json" ||
+      segments.includes(".aidlc-engine") || segments.includes("audit")
+    ) return false;
     assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
-    return true;
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
     return false;
   }
@@ -2121,8 +2129,8 @@ async function evaluate(
       return 0;
     }
     if (
-      otherStageRunning && directiveStage !== GUARDED_STAGE && !guardedDispatch &&
-      mutation.targets.every((candidate) => isInsideAidlcSpaces(projectDir, candidate))
+      otherStageRunning && directiveStage !== GUARDED_STAGE && !guardedDispatch && knownMutationTool &&
+      mutation.targets.every((candidate) => isStageRecordOutput(projectDir, candidate))
     ) {
       return 0;
     }

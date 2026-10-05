@@ -46,7 +46,7 @@ import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harne
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -2101,9 +2101,15 @@ describe("what the engine names while a plan waits", () => {
     expect(record.code, record.stderr).toBe(0);
     const scan = guardBash(proj, "bun .claude/tools/aidlc.ts engine workspace codekb-scope-diff");
     expect(scan.code, scan.stderr).toBe(0);
-    // The workspace source still waits for the approved plan.
+    // The workspace source still waits for the approved plan, and so do the
+    // work's state and a record hard-linked to source.
     expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
     expect(guardBash(proj, "printf x > src/slugify.ts").code).toBe(2);
+    expect(guardWrite(proj, seededStateFile(proj)).code).toBe(2);
+    const linked = join(seededRecordDir(proj), "inception", "reverse-engineering", "linked.md");
+    mkdirSync(dirname(linked), { recursive: true });
+    linkSync(join(proj, "src", "base.ts"), linked);
+    expect(guardWrite(proj, linked).code).toBe(2);
   });
 });
 
