@@ -955,6 +955,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         ["aidlc engine orchestrate park 2>&1 | Out-String", "aidlc engine orchestrate park"],
         ["bun .aidlc/tools/aidlc.ts engine orchestrate report --stage x --result completed | tee out.txt", "bun .aidlc/tools/aidlc.ts engine orchestrate report"],
         ["bun .aidlc/tools/aidlc-orchestrate.ts next && echo done", "bun .aidlc/tools/aidlc-orchestrate.ts next"],
+        // A resume keeps --resume in each spelling: a bare next is refused while it waits.
+        ["aidlc --resume > out.txt", "aidlc engine orchestrate next --resume"],
+        ["bun .aidlc/tools/aidlc.ts --resume | tee out.txt", "bun .aidlc/tools/aidlc.ts engine orchestrate next --resume"],
+        ["bun .aidlc/tools/aidlc-orchestrate.ts next --resume; echo done", "bun .aidlc/tools/aidlc-orchestrate.ts next --resume"],
       ]) {
         const out = decide(command);
         expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");

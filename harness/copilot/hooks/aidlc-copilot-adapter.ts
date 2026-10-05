@@ -922,13 +922,17 @@ export async function run(
       if (routed) verbs = verbs.slice(2);
       const verb = verbs[0] === "--resume" ? "next" : verbs[0] ?? "";
       if (!(["next", "continue", "report", "park"] as string[]).includes(verb)) return { status: "unsupported" };
+      // A resume keeps --resume: a bare next is refused while it waits.
+      const resume = verbs[0] === "--resume" || (verb === "next" && verbs[1] === "--resume");
+      const named = resume ? "next --resume" : verb;
       const start = !bunLed ? "aidlc"
         : `bun ${[".aidlc", "tools", prefixDispatcher ? "aidlc.ts" : "aidlc-orchestrate.ts"].join("/")}`;
-      const orchestrate = (!bunLed || prefixDispatcher) && (routed || !bunLed) ? " engine orchestrate" : "";
+      // The dispatcher's routed form runs every step, the --resume shorthand included.
+      const orchestrate = !bunLed || prefixDispatcher ? " engine orchestrate" : "";
       return {
         status: "unsupported",
         reason: "Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, " +
-          `or redirection other than one terminal \`2>&1\`. Run \`${start}${orchestrate} ${verb}\` as a command of its own, ` +
+          `or redirection other than one terminal \`2>&1\`. Run \`${start}${orchestrate} ${named}\` as a command of its own, ` +
           "with its own arguments.",
       };
     }
