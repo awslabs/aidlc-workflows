@@ -11,6 +11,8 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { SCOPE_SETTING_KEYS } from "../../core/tools/aidlc-graph.ts";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import {
@@ -24,6 +26,7 @@ import {
   seedAidlcMemory,
   seededStateFile,
   seedStateFile,
+  setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -121,8 +124,8 @@ function isolatedProject(scope: string, collaboratorsLine: string): string {
   return proj;
 }
 
-function recordLink(proj: string, link: string): { rc: number; out: string } {
-  const args = [LOG, "link", "--stage", RE_STAGE, "--link", link, "--single"];
+function recordLink(proj: string, link: string, single = true): { rc: number; out: string } {
+  const args = [LOG, "link", "--stage", RE_STAGE, "--link", link, ...(single ? ["--single"] : [])];
   if (link === LEAD) {
     const handoff = join(dirname(seededStateFile(proj)), "inception", RE_STAGE, "developer-scan.md");
     mkdirSync(dirname(handoff), { recursive: true });
@@ -218,4 +221,119 @@ describe("t-collaborators-cli the agent is told how to switch collaborators", ()
       expect(skill).toContain("plan approval on, collaborators off, reviews advisory");
     },
   );
+});
+
+// A lead-only inline stage loads only its lead's persona and knowledge: the
+// switch is about not paying for collaborators the stage never brings in.
+describe("t-collaborators-cli a lead-only inline stage loads only the lead's context", () => {
+  function feasibilityPaths(collaboratorsLine: string | null): string[] {
+    const proj = createTestProject();
+    projects.push(proj);
+    seedAidlcMemory(proj);
+    seedStateFile(proj, MID_IDEATION);
+    if (collaboratorsLine !== null) {
+      const statePath = seededStateFile(proj);
+      writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${collaboratorsLine}\n`);
+    }
+    const run = runNext(proj, []);
+    expect(run.kind, JSON.stringify(run)).toBe("run-stage");
+    expect(run.stage).toBe("feasibility");
+    return run.inline_context_paths as string[];
+  }
+
+  test("collaborators off: no support agent persona or knowledge path", () => {
+    const paths = feasibilityPaths(null);
+    expect(paths.some((path) => path.includes("aidlc-architect-agent"))).toBe(true);
+    expect(paths.filter((path) => /aidlc-(aws-platform|compliance)-agent/.test(path))).toEqual([]);
+  });
+
+  test("collaborators on: the support agents' persona files come back", () => {
+    const paths = feasibilityPaths("- **Collaborators**: on (set by you)");
+    expect(paths.some((path) => path.endsWith("agents/aidlc-aws-platform-agent.md"))).toBe(true);
+    expect(paths.some((path) => path.endsWith("agents/aidlc-compliance-agent.md"))).toBe(true);
+  });
+});
+
+// A switch made while Reverse Engineering is running: the final link must have
+// been recorded as the final link, so a scan-only receipt never stands in for
+// the lead doing both halves, and the lead can record its full run.
+describe("t-collaborators-cli a mid-stage switch never reuses a receipt that no longer fits", () => {
+  function mainRun(line: string): string {
+    const proj = isolatedProject("bugfix", line);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    return proj;
+  }
+  function setCollaborators(proj: string, value: "on" | "off"): void {
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Collaborators\*\*: .*$/m, `- **Collaborators**: ${value} (set by you)`),
+    );
+  }
+
+  test("on to off after the developer's scan: the developer runs again as the only link", () => {
+    const proj = mainRun("- **Collaborators**: on (set by you)");
+    const scan = recordLink(proj, LEAD, false);
+    expect(scan.rc, scan.out).toBe(0);
+    setCollaborators(proj, "off");
+    const resumed = runNext(proj, []);
+    expect(resumed.pipeline).toEqual({ links: [LEAD], completed: [] });
+    const full = recordLink(proj, LEAD, false);
+    expect(full.rc, full.out).toBe(0);
+    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD], completed: [LEAD] });
+  });
+
+  test("off to on after the developer's full run: only the architect is left", () => {
+    const proj = mainRun("- **Collaborators**: off (set by you)");
+    const full = recordLink(proj, LEAD, false);
+    expect(full.rc, full.out).toBe(0);
+    setCollaborators(proj, "on");
+    expect(runNext(proj, []).pipeline).toEqual({ links: [LEAD, FINAL], completed: [LEAD] });
+    const architect = recordLink(proj, FINAL, false);
+    expect(architect.rc, architect.out).toBe(0);
+  });
+});
+
+// The composer is told the same settings the validator requires.
+describe("t-collaborators-cli the composer's proposal shape names every scope setting", () => {
+  test("the composer persona's scopeSettings example and the compose task name all of them", () => {
+    const persona = readFileSync(join(import.meta.dir, "..", "..", "core", "agents", "aidlc-composer-agent.md"), "utf-8");
+    const example = persona.split("\n").find((line) => line.trim().startsWith('"scopeSettings":'));
+    expect(example).toBeDefined();
+    const keys = Object.keys(JSON.parse(`{${example!.trim().replace(/,$/, "")}}`).scopeSettings);
+    expect(keys.sort()).toEqual([...SCOPE_SETTING_KEYS].sort());
+    const proj = createTestProject();
+    projects.push(proj);
+    seedAidlcMemory(proj);
+    const task = composeMessage(proj, ["fix the token bug"]);
+    expect(task).toContain("the six scopeSettings (sensors, learnings, summary_confirmation, plan_approval, and collaborators on|off");
+  });
+});
+
+// Approving a composer change that also turns collaborators on lands both in
+// one recompose, like the other settings.
+describe("t-collaborators-cli an approved compose change can switch collaborators", () => {
+  test("recompose takes --collaborators with the stage changes", () => {
+    const proj = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+    projects.push(proj);
+    const util = (args: string[]) => {
+      const env: NodeJS.ProcessEnv = { ...childEnv() };
+      delete env.AIDLC_SCOPE_MAPPING;
+      const res = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), ...args, "--project-dir", proj], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env,
+        cwd: proj,
+      });
+      return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+    };
+    const created = util(["intent-create", "--scope", "feature"]);
+    expect(created.rc, created.out).toBe(0);
+    const reshaped = util(["recompose", "--skip", "team-formation", "--collaborators", "on"]);
+    expect(reshaped.rc, reshaped.out).toBe(0);
+    const space = readFileSync(join(proj, "aidlc", "active-space"), "utf-8").trim() || "default";
+    const intents = join(proj, "aidlc", "spaces", space, "intents");
+    const record = readFileSync(join(intents, "active-intent"), "utf-8").trim();
+    expect(readFileSync(join(intents, record, "aidlc-state.md"), "utf-8")).toMatch(/^- \*\*Collaborators\*\*: on \(set by /m);
+  });
 });

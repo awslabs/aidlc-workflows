@@ -3605,7 +3605,7 @@ function composeDispatchDirective(
   }
   const proposalShape = inFlight
     ? "mode in-flight, the current scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the preserved full effective grid, exact changes.skip and changes.add arrays, a per-change rationale, the running intent's guardPolicy value unchanged with a one-line guardPolicyRationale, a summary the strict validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)"
-    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default or a stricter value the human asked for, a custom one starts from the classic scope's default, which the validator echoes as custom_start) with a one-line guardPolicyRationale, the five scopeSettings (sensors, learnings, summary_confirmation, and plan_approval on|off, review_cap adversarial|advisory|none, starting from the matched scope's values, or for a custom proposal the classic scope's values in custom_start) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope, typed changes (changes.skip and changes.add stage slugs), and the validator's creationDepth when it names one, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
+    : "mode matched|custom, scopeName (the stock scope when matched, a suggested name to save it under when custom), a nonblank creationDescription, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, ONE guardPolicy value (strict|relaxed|off: a matched proposal carries the stock scope's default or a stricter value the human asked for, a custom one starts from the classic scope's default, which the validator echoes as custom_start) with a one-line guardPolicyRationale, the six scopeSettings (sensors, learnings, summary_confirmation, plan_approval, and collaborators on|off, review_cap adversarial|advisory|none, starting from the matched scope's values, or for a custom proposal the classic scope's values in custom_start) with a one-line scopeSettingsRationale, the validator's typed creationSettings, for a custom proposal its baseScope, typed changes (changes.skip and changes.add stage slugs), and the validator's creationDepth when it names one, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning)";
   const modeContract = inFlight
     ? "the composer's mode is IN-FLIGHT and FINAL for the returned delta: nearest_stock is advisory, the running scope and frozen actions stay unchanged, and approval uses only changes.skip/changes.add through recompose; neither presentation nor comparison with stock grids may alter that delta"
     : "the composer's mode is FINAL for the grid it returned: it routed matched-vs-custom solely on the final proposal validator's nearest_stock distance, a matched proposal already carries the revalidated stock grid verbatim, and neither presentation nor your own comparison of grids ever changes the verdict - never re-derive it, and no proposal writes a scope file; if the human edits a matched stock grid, re-dispatch the composer, which must convert it to CUSTOM and revalidate before re-presenting";
@@ -4922,7 +4922,13 @@ function buildRunStageDirective(
   const depth = stateContent
     ? getField(stateContent, "Depth")
     : loadScopeMetadata()[scope]?.depth ?? null;
-  const inlineContext = inlineContextRoster(node, codekbCtx, depth);
+  // The collaborators the stage ACTUALLY gets this run: the one switch owner.
+  // Empty when the `collaborators` ceremony is off for this scope, which makes
+  // the stage run lead-only on every topology (dispatch, gate, and promotion
+  // all read the same answer, so they can never disagree), and the inline
+  // roster then carries only the lead's persona and knowledge.
+  const effectiveSupports = effectiveSupportAgents(node, scope, stateContent);
+  const inlineContext = inlineContextRoster({ ...node, support_agents: effectiveSupports }, codekbCtx, depth);
   const ruleEntries = codekbCtx
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
@@ -4931,11 +4937,6 @@ function buildRunStageDirective(
   if (codekbCtx && stateContent) {
     ceremony.plan_approval = resolvePlanApprovalSetting(codekbCtx.projectDir, stateContent).value;
   }
-  // The collaborators the stage ACTUALLY gets this run — the one switch owner.
-  // Empty when the `collaborators` ceremony is off for this scope, which makes
-  // the stage run lead-only on every topology (dispatch, gate, and promotion
-  // all read the same answer, so they can never disagree).
-  const effectiveSupports = effectiveSupportAgents(node, scope, stateContent);
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,

@@ -66,7 +66,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --learnings <on\|off>` | Set the learning diary and learning-gate ceremony for this intent |
 | `/aidlc --summary-confirmation <on\|off>` | Set the consolidated-summary confirmation checkpoint for this intent |
 | `/aidlc --plan-approval <on\|off>` | Set whether each code plan is shown for approval before it is built, for this intent (only the person turns it off) |
-| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `guard.<fence>`) |
+| `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, `guard.<fence>`) |
 | `/aidlc config set <key> <value> [--key value ...]` | Change intent settings through the shared setter; typed lowering switches apply at prompt time |
 | `/aidlc config set guard.<fence> <on\|off>` | Turn one fence off for this piece of work, or back on above the policy word (review-freeze, state-transition, reviewer-scope; `guard.plan-approval` is another name for `plan-approval`) |
 | `/aidlc config list` | List all twelve active workflow settings (`--json` for structured output) |
@@ -1102,7 +1102,7 @@ aidlc engine config set guard-policy relaxed --sensors off --intent login-fix --
 bun .claude/tools/aidlc-utility.ts config-change --depth minimal --review none --guard-policy relaxed --sensors off --intent login-fix --space platform --project-dir /work/shop
 ```
 
-`config-change` accepts only the eleven setting flags and the `--intent`,
+`config-change` accepts only the thirteen setting flags and the `--intent`,
 `--space`, and `--project-dir` selectors. At least one setting is required.
 Selectors pin the state file, memory policy, and audit shard to the same target;
 omitted intent/space selectors use the active workflow selection. They do not
@@ -2450,7 +2450,7 @@ directory. Build also defaults its plugin root to the current directory; pass
 
 ### `aidlc-utility recompose` - in-flight plan flips
 
-`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>] [--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>] [--reason <text>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied. The settings flags carry settings approved together with the flips: they are applied in the same state write, with their `CEREMONY_SET` or `REVIEW_CLASS_CHANGED` rows after `RECOMPOSED`, so one approval never leaves the plan half-changed. A setting on its own goes through `config set`. `--reason <text>` records why the plan changed on the `RECOMPOSED` row; the engine passes it when a jump puts a skipped stage back on the plan.
+`{{INVOKE}} engine recompose [--skip <slug,...>] [--add <slug,...>] [--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] [--review <adversarial|advisory|none>] [--reason <text>]` flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Both flags accept comma-separated lists and can be repeated; all occurrences accumulate, with duplicate slugs counted once. Supply at least one flip and omit a flag when its list is empty. A bare flag, blank value, empty CSV element, unknown flag or extra positional argument is a usage error, and no flips are applied. The settings flags carry settings approved together with the flips: they are applied in the same state write, with their `CEREMONY_SET` or `REVIEW_CLASS_CHANGED` rows after `RECOMPOSED`, so one approval never leaves the plan half-changed. A setting on its own goes through `config set`. `--reason <text>` records why the plan changed on the `RECOMPOSED` row; the engine passes it when a jump puts a skipped stage back on the plan.
 
 ```bash
 # Equivalent ways to skip both stages after approval:

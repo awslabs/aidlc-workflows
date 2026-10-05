@@ -10743,13 +10743,13 @@ function rebuildEffectivePlanFields(
 function handleRecompose(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never => die(
     `${message}\nUsage: recompose [--skip <slug,...>] [--add <slug,...>] ` +
-    "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--review <adversarial|advisory|none>] " +
+    "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] [--review <adversarial|advisory|none>] " +
     "[--reason <text>] [--intent <slug>] [--space <name>] [--project-dir <path>] - repeat --skip/--add to list more stages.",
   );
   const flips = { skip: new Set<string>(), add: new Set<string>() };
   // Settings approved together with the stage changes land in the same state
   // write, so one approval never leaves the plan half-applied.
-  const settingKeys = new Set<ConfigKey>(["sensors", "learnings", "summary-confirmation", "review"]);
+  const settingKeys = new Set<ConfigKey>(["sensors", "learnings", "summary-confirmation", "collaborators", "review"]);
   const settings: IntentSettingsRequest = {};
   // Why the plan changed, when the engine knows (a jump to a skipped stage).
   let reason: string | undefined;
@@ -11825,7 +11825,7 @@ export async function main(argv: string[]): Promise<void> {
       "Usage: aidlc-utility intent-create --scope <scope> " +
         '[--arguments "<description>" | --request <id>] [--label "<short label>"] ' +
         "[--depth <level>] [--test-strategy <level>] [--review <class>] [--guard-policy <value>] " +
-        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] " +
+        "[--sensors <on|off>] [--learnings <on|off>] [--summary-confirmation <on|off>] [--collaborators <on|off>] " +
         "[--skip <slug,...>] [--add <slug,...>] [--repos <name,...>] [--project-type <greenfield|brownfield>] " +
         "[--space <name>] [--project-dir <path>]\n",
     );

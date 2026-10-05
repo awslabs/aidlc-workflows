@@ -53,7 +53,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 - **Default depth:** Minimal
 - **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
-- **Ceremony:** No "Anything to add for next time?" question after each stage and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on; type `/aidlc --learnings on` or `/aidlc --summary-confirmation on` to bring either back for this piece of work
+- **Ceremony:** No "Anything to add for next time?" question after each stage and no summary to confirm before an artifact is written. Sensors, every stage approval, and plan approval stay on, and each stage runs with its lead agent only; type `/aidlc --learnings on`, `/aidlc --summary-confirmation on`, or `/aidlc --collaborators on` to bring one back for this piece of work
 
 ### refactor
 
@@ -91,7 +91,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 - **Keywords:** None; selected explicitly or used as the implicit default
 - **Ceremony:** Walking skeleton and summary confirmation off. Sensors run and the learnings ritual runs. Reviews are advisory (one pass per stage, findings at the approval gate); explicit autonomy keeps the single pre-merge review.
 
-Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, `/aidlc --summary-confirmation on|off`, or `/aidlc --plan-approval on|off`. The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, and `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1` force them off. Apart from plan approval, which only you turn off, approval gates, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
+Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, `/aidlc --summary-confirmation on|off`, `/aidlc --plan-approval on|off`, or `/aidlc --collaborators on|off`. The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`, and `AIDLC_DISABLE_COLLABORATORS=1` force them off. Apart from plan approval, which only you turn off, approval gates, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
 
 #### Upgrading an in-flight classic intent
 

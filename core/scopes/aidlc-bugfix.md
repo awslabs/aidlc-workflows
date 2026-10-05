@@ -32,7 +32,9 @@ Learnings and summary confirmation are off: no "Anything to add for next
 time?" question after each stage, and no summary to confirm before an artifact
 is written. Sensors, every stage approval, and plan approval stay on. Turn
 either back on per intent with `/aidlc --learnings on` or
-`/aidlc --summary-confirmation on`.
+`/aidlc --summary-confirmation on`. Collaborators are off, so each stage runs
+with its lead agent only; `/aidlc --collaborators on` brings the support
+agents in.
 
 ## Why these stages, why skip those
 

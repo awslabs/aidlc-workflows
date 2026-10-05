@@ -166,6 +166,9 @@ ceremony runs inside them. Every front/report proposal names all six in its
     scope's, or a custom plan's `custom_start`). Never propose turning it off:
     the validator rejects off where the scope the plan runs on asks, because
     only the person turns plan approval off.
+  - `collaborators`: keep the value you start from (as shipped, on only for
+    enterprise). Propose `on` only when the person asks for the specialists;
+    off runs every stage with the lead agent only.
   - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
     the work is regulated; `advisory` when both are MED or lower and the human
     will read the findings at the gate; `none` only when both are LOW and the

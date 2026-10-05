@@ -31568,13 +31568,19 @@ export function pipelineLinkEvidence(
   );
   const receipts: PipelineLinkReceipt[] = [];
   const chainRepos = repos.length > 0 ? repos : [null];
+  // The final link certifies the finished artifacts, so its receipt counts only
+  // if it was recorded as the final link of a chain this long: a scan-only lead
+  // receipt never stands in for a lead-only run after collaborators turn off.
+  const fitsChain = (receipt: PipelineLinkReceipt, index: number): boolean =>
+    index < links.length - 1 || receipt.position === null ||
+    receipt.position === `${links.length}/${links.length}`;
   for (const repo of chainRepos) {
     const chain: PipelineLinkReceipt[] = [];
     for (const receipt of rawReceipts) {
       if (receipt.repo !== repo) continue;
       if (receipt.link === links[0]) {
         chain.length = 0;
-        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt)) {
+        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt) && fitsChain(receipt, 0)) {
           chain.push(receipt);
         }
         continue;
@@ -31582,7 +31588,8 @@ export function pipelineLinkEvidence(
       if (
         chain.length > 0 &&
         chain.length < links.length &&
-        receipt.link === links[chain.length]
+        receipt.link === links[chain.length] &&
+        fitsChain(receipt, chain.length)
       ) {
         chain.push(receipt);
       }
