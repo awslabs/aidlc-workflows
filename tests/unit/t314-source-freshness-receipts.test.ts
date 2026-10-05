@@ -5651,7 +5651,7 @@ process.stdin.on("end", () => server.stop(true));
         expect(row?.detail).toContain("outside unit \"extra\"'s source manifest (extra.ts)");
       } else {
         expect(finalized.rc, finalized.diagnostic).toBe(0);
-        expect(row?.change_notices).toEqual(["Unit extra also changed extra.ts outside its planned files. Kept them."]);
+        expect(row?.change_notices).toEqual(["The extra Unit also changed extra.ts outside its planned files. Kept them."]);
         expect(readAllAuditShards(proj)).toMatch(/\*\*Event\*\*: CHANGE_ACCEPTED[\s\S]*?\*\*Changed\*\*: extra\.ts/);
       }
     }
@@ -5677,7 +5677,7 @@ process.stdin.on("end", () => server.stop(true));
         expect(row?.detail).toContain("reviewed source manifest binding is missing, corrupt, or no longer matches its review");
       } else {
         expect(finalized.rc, finalized.diagnostic).toBe(0);
-        expect(row?.change_notices).toEqual(["Unit listed's list of files changed after its review. Kept the review."]);
+        expect(row?.change_notices).toEqual(["The listed Unit's list of files changed after it was reviewed. Kept the review."]);
       }
     }
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
