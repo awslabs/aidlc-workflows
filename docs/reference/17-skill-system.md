@@ -20,7 +20,7 @@ The engine is authored at `core/tools/aidlc-orchestrate.ts` and ships into each 
 | `report` | Commit the transition after the conductor acted on a directive. A stage-aware dispatcher: `--stage <slug>` pins the acted directive so a recovered `Current Stage` cannot make the report target drift. It owns approval, rejection, revision, completion, and skip outcomes, dispatching internal state transitions atomically and opening a missing gate before approval when the explicitly reported stage is still `[-]`. | Yes. |
 | `team-board` | Render the pure Team Construction board used by the terminal main dispatcher and `/aidlc --status`. Internal query surface; no fetch and no state/cache mutation. | No. |
 | `wait` | Bounded, read-only wait for dispatched work: polls collaborator contribution files, the stage's required artifacts, or the reviewer's review file (`--for collaborators|artifacts|review`) and returns `status: settled|waiting` within the bound, so the conductor re-runs one pre-approved command instead of writing a shell loop. | No |
-| `park` | Pause an active workflow at a clean inter-stage boundary. It writes the `Parked` marker that makes subsequent `next` calls emit a terminal `parked` directive; `/aidlc --resume` clears the marker before routing resumes. | Yes. |
+| `park` | Pause an active workflow at a clean inter-stage boundary. It writes the `Parked` marker that makes subsequent `next` calls emit a terminal `parked` directive until the person speaks again (a bare `/aidlc` after the park then carries on); `/aidlc --resume` clears the marker before routing resumes. | Yes. |
 
 `report --result skipped` is a main-workflow lifecycle outcome, not a
 single-run outcome. It requires an explicit nonblank `--stage`, a nonblank

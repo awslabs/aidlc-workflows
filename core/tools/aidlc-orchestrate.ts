@@ -253,6 +253,7 @@ import {
   READ_ONLY_FLAGS,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
+  QUESTION_TURN_REPLY,
   readAuditShardEvents,
   readApplicableTeamUnitScopeStamp,
   readStateFile,
@@ -2319,6 +2320,48 @@ function openPlanQuestionReplyDirective(editing: boolean, requestId: string): Pr
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       "their answer.",
+  );
+}
+
+// Words while a workflow is active may ask to redo, jump to a stage, or start
+// fresh ("/aidlc take me back to requirements analysis"), or be new work or a
+// change to this work: the conductor reads which, the same split as
+// openGateReplyDirective. The person's words never travel in the re-entry
+// report; the engine kept them for the other reading.
+function reentryReplyDirective(requestId: string): PrintDirective {
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  return printDirective(
+    "Work is in progress, and the person's words may ask to redo, jump to a stage, or start fresh. Read them. If " +
+      `they do, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with the choice you read ` +
+      "from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` or `--every-unit` " +
+      "when they named a Unit or said every Unit), then follow the print it returns. If they are about something " +
+      `else, such as new work or a change to this work, run \`${orchestrate} next --request ${requestId}\` and follow ` +
+      "what it returns: the engine kept their words and asks them where that work belongs. If you cannot tell which " +
+      "it is, ask the person in one short question and follow their answer.",
+  );
+}
+
+// Whether the person has spoken since the workflow was parked: a turn of
+// theirs on record after the latest park, so a plain `next` is them coming
+// back, never the agent's own loop carrying on past a park they asked for.
+// A park with no turn after it, or one whose order against the turn is not
+// known (another shard in the same second), stays parked.
+function personSpokeSincePark(projectDir: string): boolean {
+  let rows: AuditShardEvent[];
+  try {
+    rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) =>
+      row.event === "WORKFLOW_PARKED" ||
+      (row.event === "HUMAN_TURN" && auditBlockField(row.block, "Reply") !== QUESTION_TURN_REPLY)
+    ));
+  } catch {
+    return false;
+  }
+  let parkAt = -1;
+  for (let i = 0; i < rows.length; i++) if (rows[i].event === "WORKFLOW_PARKED") parkAt = i;
+  if (parkAt === -1) return false;
+  const park = rows[parkAt];
+  return rows.slice(parkAt + 1).some((turn) =>
+    turn.timestamp > park.timestamp || (turn.shard === park.shard && turn.pos > park.pos)
   );
 }
 
@@ -6814,8 +6857,21 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
     const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
     if (parkedAt.length > 0 && parkedAt === currentSlug) {
-      emit(workflowParkedDirective(pd, stateContent, parkedAt));
-      return;
+      // The person came back after the park (a bare `/aidlc` in the same chat,
+      // or their own words): the work carries on, as `--resume` does, and
+      // their words are read below. The Stop hook's probe still sees the park.
+      const back = !isReadOnlyEngineProbe() && personSpokeSincePark(pd);
+      if (back && args.length === 0) {
+        emit(printDirective(
+          `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
+            "to clear the park marker, then re-run `next` to continue.",
+        ));
+        return;
+      }
+      if (!back || flags.intent === undefined) {
+        emit(workflowParkedDirective(pd, stateContent, parkedAt));
+        return;
+      }
     }
   }
 
@@ -7413,6 +7469,18 @@ function routeNext(args: string[], projectDir: string | undefined): void {
         undefined, routingSettings(carriedRoutingFlags(flags)),
       );
       emit(openGateReplyDirective(gateStage, words.id));
+      return;
+    }
+    // Words alone (no setting typed with them) may ask to redo, jump to a
+    // stage, or start fresh, read the same way; a setting typed with them is
+    // asked about with them, as below.
+    const carried = carriedRoutingFlags(flags);
+    if (`${carried.creation}${carried.newWork}${carried.existingWork}${carried.planChanges}` === "") {
+      const words = saveQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carried),
+      );
+      emit(reentryReplyDirective(words.id));
       return;
     }
   }
