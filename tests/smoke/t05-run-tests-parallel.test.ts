@@ -389,7 +389,9 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       expect(result.status, result.out).toBe(0);
       expect(result.out).toContain("=== DONE t298-settings-hierarchy.test.ts (PASS) ===");
       expect(readFileSync(policy, "utf-8")).toBe(sentinel);
-      expect(readdirSync(host)).toEqual(["aidlc"]);
+      // Windows keeps its own caches under LOCALAPPDATA (Microsoft\...) for any
+      // process that runs with it; only AI-DLC's entries matter here.
+      expect(readdirSync(host).filter((name) => name !== "Microsoft")).toEqual(["aidlc"]);
       expect(readdirSync(machine)).toEqual(["aidlc.settings.json"]);
     } finally {
       rmSync(host, { recursive: true, force: true });
