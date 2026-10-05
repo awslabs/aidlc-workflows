@@ -833,6 +833,10 @@ Each stage specifies its lead and supporting agents. To load a persona:
 5. `aidlc/spaces/<active-space>/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
 6. Prior stage artifacts as required by the current stage
 
+On inline stages and for the inline lead of a mob, `inline_context_paths` lists
+the team's knowledge (4 and 5) right after the personas and before the shipped
+methodology (2 and 3): read it in the order listed.
+
 ### For inline stages and the inline lead of a mob:
 1. Before `run-stage`, apply every `load-steering.rules_content` entry in order
    and follow each opaque continuation immediately. The sequence delivers every
