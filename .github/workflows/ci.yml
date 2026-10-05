@@ -98,8 +98,8 @@ jobs:
         # PR pushes and calls run Linux only and stop at integration. The merge
         # queue and a platform_regressions dispatch run every tier on all three
         # OSes, with integration and isolated E2E in separate fresh jobs per OS,
-        # except the scope runs: Linux only here, all three OSes in the nightly
-        # Full Suite.
+        # except the scope runs: Linux only here, all three OSes in a
+        # full_verification Full Suite.
         exclude: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}}]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
     uses: ./.github/workflows/deterministic-tests.yml
     with:

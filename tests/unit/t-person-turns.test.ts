@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { cleanupTestProject, createTestProject, seededAuditShard } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, seedBoltDag, seededAuditShard } from "../harness/fixtures.ts";
 import {
   nextPersonTurnCarriesPicks,
   PersonTurnLedger,
@@ -330,6 +330,36 @@ describe("person-turn check", () => {
     row(dir, "GATE_APPROVED", { Stage: "functional-design" });
     expect(drive.unbacked()).toHaveLength(2);
     expect(drive.unbacked()[1]).toContain("GATE_APPROVED functional-design");
+  });
+
+  test("with two Units the engine settles a stage only after both checkpoints are approved; a rejection and a reopening count", () => {
+    const dir = project();
+    seedBoltDag(dir, ["core", { name: "extra", depends_on: ["core"] }]);
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("start");
+    const checkpoint = (unit: string, event: "GATE_APPROVED" | "GATE_REJECTED", reply: string) => {
+      row(dir, "DECISION_RECORDED", { Stage: "code-generation", Checkpoint: "Construction Unit Approval", Unit: unit, Kind: "unit" });
+      drive.sent(`{"Approve this completed ${unit}?":"${reply}"}`);
+      row(dir, event, { Stage: "code-generation", Checkpoint: "construction-unit", Unit: unit, "Gate Stages": "code-generation" });
+    };
+    const stageGate = () => {
+      row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "code-generation" });
+      row(dir, "GATE_APPROVED", { Stage: "code-generation" });
+    };
+    checkpoint("core", "GATE_APPROVED", "Approve");
+    // The second Unit is not approved yet: a stage approval now is nobody's.
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(1);
+    checkpoint("extra", "GATE_APPROVED", "Approve");
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(1);
+    // The person rejects the second Unit, then approves it again.
+    checkpoint("extra", "GATE_REJECTED", "Request Changes");
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(2);
+    checkpoint("extra", "GATE_APPROVED", "Approve");
+    stageGate();
+    expect(drive.unbacked()).toHaveLength(2);
   });
 
   test("a gate in a single-stage run is not opened by the main workflow's gate", () => {

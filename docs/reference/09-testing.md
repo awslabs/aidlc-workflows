@@ -247,8 +247,9 @@ person's own words, settings typed with new work, a switch mid-run, and a stop
 for the day then a resume. A stage with a new kind of step fails its run until
 the stand-in learns that step. A known engine block the runs exempt is listed in
 `KNOWN_STOP_BLOCKS` with a `test.todo` named after it. CI runs the scope runs as
-their own integration job: Linux on pull requests and in the merge queue, all
-three OSes in the nightly Full Suite.
+their own integration job: Linux on pull requests and in the merge queue, and
+Linux, macOS and Windows in a `full_verification` Full Suite (the scheduled
+nightly runs no deterministic tier).
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
