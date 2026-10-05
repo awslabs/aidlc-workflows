@@ -2,7 +2,8 @@
 //
 // Re-checks an approved Unit's checkpoint routes when its reviewed work
 // changed, under Guard Policy strict. A re-check of a document stage
-// dispatches that stage's own reviewer inputs.
+// dispatches that stage's own reviewer inputs. Two changed stages are
+// re-checked one at a time, in stage order, and the checkpoint then opens.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -19,6 +20,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
+  readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -198,6 +200,10 @@ function editAlphaDocument(p: string) {
   }, p);
 }
 
+function rejected(p: string) {
+  return readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
+}
+
 describe("t-checkpoint-recheck-routing: re-checks of an approved Unit's changed work", () => {
   test("a document re-check dispatches that stage's own file, inputs, outputs and review artifact", () => {
     const p = fixture("strict (set by you)");
@@ -218,5 +224,26 @@ describe("t-checkpoint-recheck-routing: re-checks of an approved Unit's changed 
     for (const path of beat.produces ?? []) expect(path).toContain(`/alpha/${DOCUMENT_STAGE}/`);
     for (const path of beat.consumes ?? []) expect(path).not.toContain("/alpha/nfr-design/");
     expect(beat.protocol_modules).toEqual(["reviewer", "construction"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Guard Policy strict: code and a document both changed are re-checked one at a time, then asked about once", () => {
+    const p = fixture("strict (set by you)");
+    buildReviewed(p, "alpha");
+    approve(p, "alpha");
+    writeFileSync(join(p, "src", "alpha.ts"), "export const alpha = 2;\n");
+    editAlphaDocument(p);
+    for (const stage of [DOCUMENT_STAGE, "code-generation"]) {
+      const beat = next(p);
+      expect(beat.construction_checkpoint?.unit, JSON.stringify(beat)).toBe("alpha");
+      expect(beat.construction_checkpoint?.rereview?.stage, JSON.stringify(beat)).toBe(stage);
+      expect(reviewThroughLog(p, review(stage, "alpha", 2)).recovery).toBe("stale-receipt");
+    }
+    const asked = next(p);
+    expect(asked.construction_checkpoint, JSON.stringify(asked)).toMatchObject({
+      unit: "alpha", ready: true, rechecked: { verdict: "READY", approved_before: true },
+    });
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    expect(rejected(p)).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
