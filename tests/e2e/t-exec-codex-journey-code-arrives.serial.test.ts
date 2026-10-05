@@ -35,7 +35,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { auditBlockField, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { auditBlockField, getField, readAuditShardEvents, STOP_HOOK_PROBE_ENV } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexHeadlessArgs, setupCodexProject } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
@@ -126,6 +126,33 @@ function commandOutputs(stdout: string): string[] {
   return outputs;
 }
 
+// Codex exec can keep a finished command's output as empty. True when the turn
+// ran the engine's `next` and Codex kept nothing of what it printed.
+function blankEngineNext(stdout: string): boolean {
+  return stdout.split("\n").filter((entry) => entry.trim()).some((line) => {
+    const event = JSON.parse(line) as {
+      type?: string;
+      item?: { type?: string; command?: unknown; aggregated_output?: unknown; exit_code?: unknown };
+    };
+    return event.type === "item.completed" && event.item?.type === "command_execution" &&
+      typeof event.item.command === "string" && /engine orchestrate next\b/.test(event.item.command) &&
+      event.item.aggregated_output === "" && event.item.exit_code === 0;
+  });
+}
+
+// The question the engine's `next` hands out now, read with the Stop hook's
+// read-only probe so nothing is recorded: while the folder's type is not
+// answered, it is the same question the agent was given.
+function engineAsksNow(proj: string): boolean {
+  const r = spawnSync("bun", [join(".codex", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--resume"], {
+    cwd: proj,
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    env: { ...process.env, [STOP_HOOK_PROBE_ENV]: "1" },
+  });
+  return r.status === 0 && (r.stdout ?? "").includes(ASKED);
+}
+
 function codexTurn(proj: string, home: string, prompt: string, opts: { resume?: boolean } = {}): CodexTurn {
   const argv = opts.resume ? ["exec", "resume", "--last", "--json", prompt] : ["exec", "--json", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
@@ -162,9 +189,12 @@ describe("t-exec-codex-journey-code-arrives - a new project gains the team's cod
         // Beat 1: the person carries on and is asked about the code.
         const b1 = codexTurn(proj, home, "$aidlc");
         expect(b1.rc, codexExecDiagnostic(b1)).toBe(0);
-        expect(commandOutputs(b1.stdout).some((out) => out.includes(ASKED)), `the existing-code question was never asked\n${codexExecDiagnostic(b1)}`)
-          .toBe(true);
         const atQuestion = readAuditShardEvents(proj);
+        // When Codex kept the engine's output, read it there; when it kept none,
+        // the engine says what it handed out.
+        const asked = commandOutputs(b1.stdout).some((out) => out.includes(ASKED)) ||
+          (blankEngineNext(b1.stdout) && engineAsksNow(proj));
+        expect(asked, `the existing-code question was never asked\n${codexExecDiagnostic(b1)}`).toBe(true);
         expect(atQuestion.filter((r) => r.event === "WORKSPACE_RECLASSIFIED"), "reclassified before the person answered").toEqual([]);
 
         // Beat 2: their answer, in the same session.
