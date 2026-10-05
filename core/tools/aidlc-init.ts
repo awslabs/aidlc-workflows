@@ -4599,7 +4599,7 @@ function preserveClaudeProviderFields(
   if (!regularFile(currentPath) || !regularFile(stagedPath)) return retiredManagedFiles;
   const currentText = readFileSync(currentPath, "utf-8");
   const current = JSON.parse(withoutBom(currentText)) as Record<string, unknown>;
-  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const staged = readJsonFile(stagedPath) as Record<string, unknown>;
   const priorEntries = prior?.entries?.[relative];
   const incomingHookHashes = aidlcHookRegistrationHashes(staged.hooks);
   const recordedHookTargets = Object.keys(priorEntries ?? {})
@@ -4986,9 +4986,15 @@ function preserveOpenCodeProviderFields(
   const current = JSON.parse(withoutBom(currentText)) as Record<string, unknown>;
   if (!current.provider || typeof current.provider !== "object" ||
       Array.isArray(current.provider)) {
+    // The release copy takes the mark the person's file has, so a mark alone
+    // is never read as their change.
+    const stagedText = readFileSync(stagedPath, "utf-8");
+    if (currentText.startsWith("\uFEFF") && !stagedText.startsWith("\uFEFF")) {
+      writeFileSync(stagedPath, `\uFEFF${stagedText}`);
+    }
     return;
   }
-  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const staged = readJsonFile(stagedPath) as Record<string, unknown>;
   const stagedProviders = staged.provider && typeof staged.provider === "object" &&
       !Array.isArray(staged.provider)
     ? staged.provider as Record<string, unknown>

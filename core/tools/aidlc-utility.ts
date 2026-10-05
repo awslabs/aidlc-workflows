@@ -2223,7 +2223,7 @@ function resolveManagedBooleanSetting(
     let effective: boolean | undefined;
     for (const path of managedSettingsFiles(candidate)) {
       try {
-        const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+        const parsed = readJsonFile(path) as Record<string, unknown>;
         const value = parsed[key];
         if (typeof value === "boolean") effective = value;
       } catch {
@@ -4207,7 +4207,7 @@ export async function collectDoctorReport(
       if (managedDisableAllHooks === undefined) {
         for (const [path, label] of hookDisableLayers) {
           try {
-            const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+            const parsed = readJsonFile(path) as {
               disableAllHooks?: unknown;
             };
             // Only a layer that EXPLICITLY sets the boolean resolves it; a layer

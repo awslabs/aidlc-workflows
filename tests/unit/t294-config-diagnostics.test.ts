@@ -4019,17 +4019,30 @@ process.exit(0);
       expect([readFileSync(settingsPath, "utf-8"), readFileSync(mcpPath, "utf-8")]).toEqual(saved);
     }
 
-    const doctor = spawnSync(BUN, [
-      join(project, ".claude", "tools", "aidlc.ts"), "--doctor", "--json", "--offline",
-    ], {
-      cwd: project,
-      env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
-      encoding: "utf-8",
-      timeout: 60_000,
-    });
-    if (doctor.error) throw doctor.error;
-    const checks = JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>;
-    expect(checks.some((check) => check.label.includes("settings.json unreadable"))).toBe(false);
+    const doctorLabels = (): string[] => {
+      const doctor = spawnSync(BUN, [
+        join(project, ".claude", "tools", "aidlc.ts"), "--doctor", "--json", "--offline",
+      ], {
+        cwd: project,
+        env: { ...process.env, ...env, AIDLC_HARNESS_DIR: ".claude" },
+        encoding: "utf-8",
+        timeout: 60_000,
+      });
+      if (doctor.error) throw doctor.error;
+      return (JSON.parse(doctor.stdout).data.checks as Array<{ label: string }>).map((check) => check.label);
+    };
+    expect(doctorLabels().some((label) => label.includes("settings.json unreadable"))).toBe(false);
+    // A marked layer that switches hooks off is read as switching them off.
+    const localPath = join(project, ".claude", "settings.local.json");
+    writeFileSync(localPath, `\uFEFF${JSON.stringify({ disableAllHooks: true }, null, 2)}\n`);
+    expect(doctorLabels().some((label) =>
+      label.includes('Hooks DISABLED via "disableAllHooks": true in .claude/settings.local.json'))).toBe(true);
+    rmSync(localPath);
+
+    // A setting changed without --from reads the person's own copy too.
+    const providers = run(["config", "providers", "--provider", "current", "--project-dir", project, "--yes"], project, env);
+    expect(providers.status, providers.stdout + providers.stderr).toBe(0);
+    expect(readFileSync(settingsPath, "utf-8").startsWith("\uFEFF")).toBe(true);
 
     // A refresh that adds AI-DLC's entries back keeps the person's own, and the mark.
     const settings = JSON.parse(saved[0].slice(1));
@@ -4042,6 +4055,18 @@ process.exit(0);
     expect(after.startsWith("\uFEFF")).toBe(true);
     expect(JSON.parse(after.slice(1)).permissions.deny).toEqual(["Bash(rm -rf:*)"]);
     expect(JSON.parse(after.slice(1)).permissions.allow).toEqual(JSON.parse(saved[0].slice(1)).permissions.allow);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an opencode.json saved with a byte order mark refreshes as the person saved it", () => {
+    const project = install("opencode");
+    const path = join(project, "opencode.json");
+    writeFileSync(path, `\uFEFF${readFileSync(path, "utf-8")}`);
+    const saved = readFileSync(path, "utf-8");
+    const result = run([
+      "config", "--project-dir", project, "--from", join(DIST_RELEASE, "opencode"), "--harness", "opencode", "--yes",
+    ], project, runtimeEnv());
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(readFileSync(path, "utf-8")).toBe(saved);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Claude refresh preserves a wired project hook whose filename starts with aidlc-", () => {
