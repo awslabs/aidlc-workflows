@@ -127,6 +127,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t-checkpoint-review-none.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-guard-policy-off-means-off.test.ts",
           "mechanism": "cli"
         },
@@ -1710,6 +1714,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:aidlcOwnedSourceKey",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -13456,6 +13467,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/integration/t-scope-run-moves-second-install.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t-scope-run-moves-second-review.test.ts",
           "mechanism": "none"
         },
@@ -14895,6 +14910,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t-checkpoint-review-none.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
           "mechanism": "cli"
         }
@@ -15767,6 +15786,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t-checkpoint-review-none.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t-code-generation-resume.test.ts",
           "mechanism": "cli"
         },
@@ -15943,6 +15966,10 @@
         },
         {
           "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t-checkpoint-review-none.test.ts",
           "mechanism": "cli"
         },
         {
