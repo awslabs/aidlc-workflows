@@ -42,9 +42,11 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -565,8 +567,21 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(install.status).toBe(1);
       expect(install.stderr).toContain("refusing to overwrite");
       expect(install.stderr).toContain(".cursor/rules/aidlc.mdc");
+      expect(install.stderr).toContain(
+        "To keep your changes, move these files somewhere else, then run the installer again.",
+      );
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe("# Keep me\n");
       expect(existsSync(join(project, ".cursor", "tools"))).toBe(false);
+      // The step it names: with the file moved aside, the installer runs.
+      renameSync(join(project, ".cursor", "rules", "aidlc.mdc"), join(project, "my-aidlc.mdc"));
+      const again = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(again.status, again.stderr).toBe(0);
+      expect(existsSync(join(project, ".cursor", "tools"))).toBe(true);
+      expect(readFileSync(join(project, "my-aidlc.mdc"), "utf-8")).toBe("project-owned\n");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -892,8 +907,21 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(fileInstall.status).toBe(1);
       expect(fileInstall.stderr).toContain("symlinked installer targets");
       expect(fileInstall.stderr).toContain("AGENTS.md");
+      expect(fileInstall.stderr).toContain(
+        "Replace that link with a regular file or folder, then run the installer again.",
+      );
       expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
       expect(existsSync(join(fileProject, ".cursor", "tools"))).toBe(false);
+      // The step it names: with a regular file in place of the link, it runs.
+      unlinkSync(join(fileProject, "AGENTS.md"));
+      writeFileSync(join(fileProject, "AGENTS.md"), "# Outside\n");
+      const replaced = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(replaced.status, replaced.stderr).toBe(0);
+      expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
 
       const externalCursor = join(root, "external-cursor");
       mkdirSync(externalCursor);
