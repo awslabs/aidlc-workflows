@@ -935,6 +935,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const protocol = read("core/aidlc-common/protocols/stage-protocol.md");
     expect(protocol).not.toContain("Select 'Other' on any question");
     expect(protocol).toContain(`"Pick "[the escape's label]" on any question to answer in your own words or talk it through."`);
+    // The agent reads the protocol, not always the annex, so the protocol names Claude Code's row too.
+    expect(protocol).toContain(`Claude Code's picker: "Type something"`);
     expect(read("harness/claude/skills/aidlc/question-rendering.md"))
       .toContain(`"Pick "Type\n  something" on any question to answer in your own words or talk it through."`);
     expect(read("harness/codex/skills/aidlc/question-rendering.md")).toContain(`"Pick "None of the above" on any question`);
