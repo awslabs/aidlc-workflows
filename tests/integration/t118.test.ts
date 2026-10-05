@@ -520,7 +520,8 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   test("SP7-invalid: a report that names no choice leaves the gate open; the agent's approval then records", () => {
     const { p, guardedEnv } = heldGate();
     const invalid = report(p, guardedEnv, ["--result", "approved"]);
-    expect(invalid.kind).toBe("error");
+    // The agent's next step, not an error for the person.
+    expect(invalid.kind, JSON.stringify(invalid)).toBe("print");
     expect(invalid.message).toContain("names no choice");
     // Their reply is on record: the agent reports the choice it read, and the
     // person is not asked again.

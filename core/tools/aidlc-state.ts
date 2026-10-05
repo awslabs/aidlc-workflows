@@ -5852,12 +5852,14 @@ function verifyApprovalDecision(
     );
   }
   // The conductor reports the choice the person made; a report that names none
-  // records nothing.
+  // records nothing. They have replied by now (checked above), so the step is
+  // to report the choice their reply makes, not to ask them again.
   if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
     refuseForAgent(
-      `Cannot approve "${stage.slug}" because no choice was passed. Re-present the original held gate with ` +
-        "every offered choice, wait for the person's reply, then report the choice they made with " +
-        '--user-input "Approve".',
+      `Cannot approve "${stage.slug}" because no choice was passed. The person replied after the question ` +
+        'was shown: report the choice their reply makes with --user-input (for example "Approve"), or ask ' +
+        "them if their reply is unclear.",
+      { personDecided: true },
     );
   }
   return { approvalInput, autonomousDecision };

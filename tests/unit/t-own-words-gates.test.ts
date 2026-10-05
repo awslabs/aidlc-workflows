@@ -404,6 +404,18 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(turnEndIsOpen(proj)).toBe(true);
   });
 
+  test("their reply is on record and the agent named no choice: the step is to report it, not to ask again", () => {
+    says(proj, "looks fine");
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const refused = report(proj, ["--stage", slug, "--result", "approved"]);
+    expect(refused.kind, JSON.stringify(refused)).toBe("print");
+    expect(refused.message).toContain("without asking them again");
+    expect(refused.message).not.toContain("is still open");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(turnEndIsOpen(proj)).toBe(false);
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  });
+
   test("a refusal that is not about their decision still stops, in plain words", () => {
     says(proj, "Approve");
     expect(state(proj, ["set", "Scope=no-such-scope"]).rc).toBe(0);

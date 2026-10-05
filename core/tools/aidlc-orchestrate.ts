@@ -12528,19 +12528,23 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // --park, which parks once the approval is recorded. With their reply on
   // record, the agent reports the choice it read from it; only with none does
   // the gate wait for one.
+  // Either way it is the agent's next step, never an error for the person.
   if (protectedHumanGate && FORWARD_RESULTS.has(flags.result ?? "") &&
     (!flags.userInput?.trim() || isNonAnswer(flags.userInput))) {
-    emit(errorDirective(
-      `report --result ${flags.result} for "${slug}" ` +
-        (flags.userInput?.trim()
-          ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
-          : "names no choice") +
-        (personSpokeSinceGate(pd, { replies: true })
-          ? ". The person has replied since the gate was shown: report the choice they made with --user-input " +
-            '("Approve", say), without asking them again.'
-          : ". No reply from the person is on record since the gate was shown: show the gate with every offered " +
-            'choice, end the turn, then report the choice they make with --user-input ("Approve", say).'),
-    ));
+    const refused = `report --result ${flags.result} for "${slug}" ` +
+      (flags.userInput?.trim()
+        ? `received ${formatReceivedReply(flags.userInput)}, which is cancellation boilerplate, not a decision`
+        : "names no choice");
+    emit(personSpokeSinceGate(pd, { replies: true })
+      ? printDirective(
+        `${refused}. The person has replied since the gate was shown: report the choice they made with --user-input ` +
+          '("Approve", say), without asking them again.',
+      )
+      : turnEndingPrint(
+        `The question for "${slug}" is still open. ${refused}. No reply from the person is on record since the gate ` +
+          'was shown: show the gate with every offered choice, end the turn, then report the choice they make with ' +
+          '--user-input ("Approve", say).',
+      ));
     return;
   }
   const stopForNow = isGated && flags.result === "approved" && flags.park === true;
