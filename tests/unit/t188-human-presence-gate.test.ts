@@ -1369,6 +1369,37 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
 
+    // From a live Windows run: the person answered a four-question menu, and only
+    // then did the agent log the menu's questions, with all four answers in one
+    // entry. The one reply is recorded once and nothing is left open, so they are
+    // never asked again.
+    test("a menu answered before its questions were logged, with one combined answer, is recorded once", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Q1-Q4", "--options", "A,B,C"]).rc).toBe(0);
+      const r = guardedLog(proj, [
+        "answer", "--stage", slug, "--details",
+        "Q1: A Silent no-op; Q2: A Trim only inside addTodo; Q3: A Targeted only; Q4: A renderHook",
+      ]);
+      expect(r.rc, r.out).toBe(0);
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      const answers = JSON.parse(guardedLog(proj, ["answers", "--stage", slug]).out);
+      expect(answers.answered).toHaveLength(1);
+      expect(answers.open).toEqual([]);
+    });
+
+    test("the stage protocol logs a menu's questions first and puts one reply's answers in one log answer", () => {
+      const protocol = readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", "stage-protocol.md"), "utf-8");
+      expect(protocol).toContain(
+        "Log every question a menu shows before you show the menu, and put all of one reply's answers in a " +
+          "single `log answer` (`--details 'Q1: <choice>; Q2: <choice>'`), even when the reply came before the log.",
+      );
+      expect(protocol).toContain(
+        "If they already replied, log the question now, then put all of that reply's answers in a single " +
+          "`log answer`: a second `log answer` for one reply is refused.",
+      );
+    });
+
     // "Choose the recommended answers", said before the questions came: the
     // agent's choice is recorded as the agent's, with the words that handed it
     // over, never as the person's own answer.
