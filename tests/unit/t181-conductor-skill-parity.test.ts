@@ -1475,6 +1475,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         /the engine routes their words/i,
         // Status shows no receipt-less history either.
         /Receipt-less histories are reported as untracked/i,
+        /the resume menu's/i,
       ]) {
         if (old.test(text)) stale.push(`${rel}  ${old.source}`);
       }
