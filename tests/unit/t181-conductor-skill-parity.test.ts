@@ -995,6 +995,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("every conductor SKILL shows the pick question and waits, even for one piece of work", () => {
+    // An agent that picks the only piece of work itself carries the person into
+    // work they never chose, and "not now" is lost.
+    const missing: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes("show the question and wait for the person's answer, even when it lists one piece of work;")) missing.push(rel);
+    }
+    expect(missing).toEqual([]);
+  });
+
   test("Kiro renders engine asks without a second routing query or replacement prompt", () => {
     const missing: string[] = [];
     for (const harness of ["kiro", "kiro-ide"]) {

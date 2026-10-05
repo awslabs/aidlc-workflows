@@ -23,12 +23,13 @@ import {
   cleanupTestProject,
   createTestProject,
   removeWorkspaceRecord,
+  seedAidlcMemory,
 } from "../harness/fixtures.ts";
 import {
   HARNESS_MATRIX,
   harnessByName,
 } from "../harness/harness-matrix.ts";
-import { loadScopeMapping, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { intentDisplayLabel, loadScopeMapping, readIntentRegistry, toPosix } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { mintQuestionId, saveQuestion } from "../../dist/claude/.claude/tools/aidlc-question-store.ts";
 
 const BUN = process.execPath;
@@ -197,7 +198,11 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const d = JSON.parse(next(args).stdout.trim());
         expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
         expect(d.available_intents).toEqual([first]);
-        expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. Pick it up to carry on\./);
+        expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. /);
+        // A question to the person, naming the work: an agent that reads it never
+        // takes it as its own instruction to pick, and "not now" stays an answer.
+        expect(String(d.question)).toEndWith(` Carry on with \`${intentDisplayLabel(rows[0])}\`, or not now?`);
+        expect(d.question).not.toContain("Pick it up");
         expect(existsSync(cursorPath(proj))).toBe(false);
       });
     }
@@ -315,6 +320,29 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(routing.available_intents).toEqual([kept]);
     });
 
+    test("one piece of work in a fresh clone: picking it up lands on its next step, with nothing more to type", () => {
+      const [first, second] = seedTwoIntentsNoCursor();
+      // The rules a stage loads, so the carried-on step can be handed out.
+      seedAidlcMemory(proj);
+      rmSync(join(intentsDir(proj), second), { recursive: true, force: true });
+      const rows = readIntentRegistry(proj).filter((row) => row.dirName !== second);
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      const pick = JSON.parse(next([]).stdout.trim());
+      expect(pick.ask_type, JSON.stringify(pick).slice(0, 300)).toBe("intent-pick");
+      const picked = runEmittedCommand(pick.select_commands[0].command);
+      expect(picked.status, picked.out).toBe(0);
+      const message = String(JSON.parse(picked.stdout.trim()).message);
+      const switched = runEmittedCommand(printedCommand(message));
+      expect(switched.status, switched.out).toBe(0);
+      expect(readFileSync(cursorPath(proj), "utf-8").trim()).toBe(first);
+      // The same print then names `next`, which carries the picked work on.
+      const carry = message.match(/then run `([^`]+)` and follow what it returns/)?.[1];
+      expect(carry, message).toBeDefined();
+      const step = JSON.parse(runEmittedCommand(carry!).stdout.trim());
+      expect(step.ask_type, JSON.stringify(step).slice(0, 300)).not.toBe("intent-pick");
+      expect(step.kind, JSON.stringify(step).slice(0, 300)).not.toBe("error");
+    });
+
     for (const selector of ["customer work", "x; touch pwned"]) {
       test(`intent picker executes literal selector ${selector}`, () => {
         const records = seedTwoIntentsNoCursor();
@@ -358,13 +386,23 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(d.proposed_scope).toBe("poc");
       });
 
-      test(`${harness.name}: the intent picker names the harness's own entry`, () => {
+      test(`${harness.name}: picking work up selects it and carries on in one answer`, () => {
         seedTwoIntentsNoCursor();
         const orchestrator = join(harness.engineRoot, "tools", "aidlc-orchestrate.ts");
         const d = JSON.parse(next(["--scope", "poc"], proj, orchestrator).stdout.trim());
         expect(d.ask_type).toBe("intent-pick");
-        // A Codex user invokes the skill, not a slash command.
-        expect(d.question).toContain(`then \`${harness.name === "codex" ? "$aidlc" : "/aidlc"}\` carries on where it left off.`);
+        // The person is not told to type the entry again: their pick carries on.
+        expect(d.question).not.toContain("carries on where it left off");
+        const [entry] = d.select_commands;
+        expect(entry.command).toContain(" next --pick ");
+        // This fixture holds only the Claude tree, so the harness's own engine runs the pick.
+        const picked = next(["--pick", entry.selector], proj, orchestrator);
+        expect(picked.status, picked.out).toBe(0);
+        const message = String(JSON.parse(picked.stdout.trim()).message);
+        expect(message).toContain("intent switch");
+        expect(message).toContain(entry.selector);
+        expect(message).toMatch(/then run `[^`]* next` and follow what it returns\.$/);
+        expect(message).not.toContain("Do not call `next`");
       });
     }
 

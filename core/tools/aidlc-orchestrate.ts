@@ -2157,7 +2157,7 @@ function selectCommands(
   const tool = aidlcToolInvocation("orchestrate");
   return availableIntents.map((selector) => ({
     selector,
-    command: `${tool} next intent ${shellArg(selector)}`,
+    command: `${tool} next --pick ${shellArg(selector)}`,
   }));
 }
 
@@ -3178,6 +3178,7 @@ interface ParsedFlags {
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
+  carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
@@ -3285,6 +3286,15 @@ function parseNextFlags(argv: string[]): ParsedFlags {
   if (pluginCommand.kind !== "not-plugin") return { pluginCommand };
   const knowledgeCommand = parseKnowledgeCommand(args);
   if (knowledgeCommand.kind !== "not-knowledge") return { knowledgeCommand };
+  // The pick question's answer, `next --pick <record>`: select that record and
+  // carry on in the same turn, so picking work up takes one step.
+  if (args[0] === "--pick") {
+    const name = args[1];
+    if (name === undefined || args.length > 2) {
+      return { parseError: "--pick takes one record name; run the pick question's own command." };
+    }
+    return { workspaceCommand: { kind: "switch", noun: "intent", name, explicit: true }, carryOn: true };
+  }
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the
   // public grammar promises leading-token semantics.
@@ -4173,16 +4183,16 @@ function intentPickPromptIfRecordsExist(
       pendingWork.approvedRequest,
     );
   }
-  // The harness's own entry: Codex users invoke a skill, not a slash command.
-  const entry = entrySkillInvocation();
+  // One piece of work is still the person's to choose: the question asks them,
+  // naming it, so an agent never reads it as its own instruction to pick.
   const question = presentCount === 1
-    ? `This project has one piece of work in progress${spaceLabel}: ${list}. Pick it up to carry on.`
+    ? `This project has one piece of work in progress${spaceLabel}: ${list}. ` +
+      `Carry on with \`${intentDisplayLabel(selectable[0].intent)}\`, or not now?`
     : `This project has ${presentCount} pieces of work in progress${spaceLabel}, and none is selected here: ${list}${unlisted}. ` +
       "Pick one to carry on.";
-  return intentPickAskDirective(
-    `${question} ${presentCount === 1 ? "Picking it up" : "Picking one"} selects it; then \`${entry}\` carries on where it left off.`,
-    selectors,
-  );
+  // Picking one selects it and carries on (its select command), so the
+  // question needs no word on what to type next.
+  return intentPickAskDirective(question, selectors);
 }
 
 // --- The decision rule (the engine's one ADDED responsibility) ---
@@ -6315,7 +6325,9 @@ function routeNext(args: string[], projectDir: string | undefined): void {
   if (routingAnswer && pickedRecords && routingAnswer.route === "continue" && !typedForExistingWork) {
     // Its select command, exactly as the question supplied it.
     flags.intent = undefined;
-    flags.workspaceCommand = parseNextFlags(["intent", pickedRecords.selectable[0].selector]).workspaceCommand;
+    const picked = parseNextFlags(["--pick", pickedRecords.selectable[0].selector]);
+    flags.workspaceCommand = picked.workspaceCommand;
+    flags.carryOn = picked.carryOn;
   } else if (routingAnswer) {
     flags.intent = undefined;
     flags.request = routingAnswer.question.id;
@@ -6616,6 +6628,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       ? `space ${tail[0] && !tail[0].startsWith("--") ? shellArg(tail.shift()!) : "list"}`
       : verb;
     const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
+    // Picking work up from the pick question is a request to carry on with it.
+    if (flags.carryOn && command.kind === "switch") {
+      emit(printDirective(
+        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then run ` +
+          `\`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+      ));
+      return;
+    }
     // Navigation ends the turn even when the destination has unfinished work:
     // selecting a space or intent is not a request to resume it.
     const terminalBoundary = command.kind === "create-intent"
