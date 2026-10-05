@@ -378,13 +378,14 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
     // A plan composed and approved in a fresh clone is asked about first; started
     // as new work, it is created exactly as approved, never as the stock scope.
     const PLAN = [
-      "--add", "functional-design", "--skip", "deployment-pipeline,deployment-execution",
+      "--add", "functional-design", "--skip", "deployment-pipeline,deployment-execution", "--plan-name", "price-check",
       "--depth", "comprehensive", "--sensors", "off", "--learnings", "off", "--review", "none", "--guard-policy", "strict",
     ];
     const expectApprovedPlan = (request: string): void => {
       const active = readFileSync(cursorPath(proj), "utf-8").trim();
       const state = readFileSync(join(intentsDir(proj), active, "aidlc-state.md"), "utf-8");
-      expect(state).toContain("- **Plan**: custom, based on bugfix");
+      // Named as the gate showed it, never after the scope it runs on.
+      expect(state).toContain("- **Plan**: price-check\n");
       expect(state).toMatch(/^- \[.\] functional-design \u2014 EXECUTE/m);
       expect(state).toMatch(/^- \[.\] deployment-pipeline \u2014 SKIP/m);
       expect(state).toMatch(/^- \[.\] deployment-execution \u2014 SKIP/m);

@@ -35303,9 +35303,12 @@ export function splitSlugList(raw: string | undefined): string[] {
 /** The state field that marks a workflow running a plan composed for it. */
 export const PLAN_FIELD = "Plan";
 
-/** The Plan field value for a plan built on `scope`. */
-export function composedPlanLabel(scope: string): string {
-  return `custom, based on ${scope}`;
+/** A tailored plan's name as the composer suggested it, which the person saw at the gate. */
+export const PLAN_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** The Plan field value for a plan tailored to this work: its name, never the scope it runs on. */
+export function composedPlanLabel(name?: string): string {
+  return name && PLAN_NAME_PATTERN.test(name) ? name : "tailored plan";
 }
 
 /** The stage changes that turn `base` into `grid`, in graph order. A slug the

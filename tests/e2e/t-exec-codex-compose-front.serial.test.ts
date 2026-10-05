@@ -26,7 +26,7 @@
 //            the intent record, aidlc-state.md, WORKFLOW_STARTED audited, and
 //            the created intent's scope resolving through the on-disk
 //            registry. A composed plan writes no scope file: a CUSTOM plan runs
-//            a stock scope with a `Plan: custom, based on <scope>` line, and
+//            a stock scope with a `Plan: <name>` line (the name the gate showed), and
 //            `.codex/scopes/` keeps its stock files.
 //
 // The task is the one the sibling compose-front journeys use (t192, t-tui,
@@ -310,7 +310,8 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
         );
         expect(Object.keys(grid)).toContain(scope);
         expect(scopeFiles(proj).filter((s) => !STOCK_SCOPES.has(s))).toEqual([]);
-        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(state).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
       }, deadlineMs);
     },
     TEST_TIMEOUT_MS,

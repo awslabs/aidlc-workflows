@@ -13,7 +13,7 @@
 //              /aidlc invocation.
 //   case 1:    Approve. No scope file is written: the scope library keeps its
 //              11 files and 11 grid keys, and the created state runs a stock
-//              scope with a `Plan: custom, based on <scope>` line and stage
+//              scope with a `Plan: <name>` line (the name the gate showed) and stage
 //              suffixes that differ from that scope's grid.
 //   case 2:    Approve and save as scope. After creation the conductor runs
 //              `scope save`, so a 12th scope lands (durable record + harness
@@ -140,7 +140,8 @@ describe("t192 front composer journey (/aidlc compose -> approve -> creation, sd
         const state = activeState(proj);
         const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(state)?.[1] ?? "";
         expect(STOCK_SCOPES.has(scope)).toBe(true);
-        expect(state).toContain(`- **Plan**: custom, based on ${scope}`);
+        // The plan is named as the gate showed it, never after the scope it runs on.
+        expect(state).toMatch(/^- \*\*Plan\*\*: (?:[a-z0-9][a-z0-9-]*|tailored plan)$/m);
         const stock = (JSON.parse(readFileSync(gridPath, "utf-8")) as Grid)[scope]?.stages ?? {};
         const plan = planOf(state);
         const changed = Object.keys(plan).filter(

@@ -341,6 +341,7 @@ import {
   pendingPersonLines,
   personLineHeard,
   PLAN_FIELD,
+  PLAN_NAME_PATTERN,
   extractMarkdownSection,
   validateUnitName,
 } from "./aidlc-lib.ts";
@@ -1880,6 +1881,7 @@ function carriedRoutingFlags(flags: ParsedFlags): RoutingCarried {
   const stages: string[] = [];
   if (flags.planChanges?.skip.length) stages.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) stages.push(`--add ${flags.planChanges.add.join(",")}`);
+  if (stages.length > 0 && flags.planName) stages.push(`--plan-name ${flags.planName}`);
   return {
     creation: carriedCreationFlags(flags),
     newWork: existingWork,
@@ -1918,7 +1920,11 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
   flags.review ??= kept.review;
   flags.changeControl ??= kept.changeControl;
   if (kept.ceremony) flags.ceremony = { ...kept.ceremony, ...flags.ceremony };
-  if (!existing && !flags.planChanges && kept.planChanges) flags.planChanges = kept.planChanges;
+  if (!existing && !flags.planChanges && kept.planChanges) {
+    flags.planChanges = kept.planChanges;
+    // The plan's name rides with its stage changes.
+    flags.planName ??= kept.planName;
+  }
   return true;
 }
 
@@ -3041,6 +3047,7 @@ interface ParsedFlags {
   changeControl?: string; // --guard-policy <strict|relaxed|off> (retired spelling --change-control): the per-intent Guard Policy
   ceremony?: Partial<CeremonyPolicy>;
   planChanges?: PlanChanges; // --skip/--add <stage,...>: a new workflow's own stage changes to its scope's grid
+  planName?: string; // --plan-name <name>: the tailored plan's name, as the person saw it at the gate
   readOnly?: string; // the matched read-only flag, if any
   readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   config?: boolean; // --config [section]: terminal in-session project configuration alias
@@ -3305,6 +3312,16 @@ function parseNextFlags(argv: string[]): ParsedFlags {
           flags.planChanges ??= { skip: [], add: [] };
           flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
         }
+        i++;
+      }
+    } else if (a === "--plan-name") {
+      // Echoed into the creation command, so only a plain kebab name passes.
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        flags.parseError = "--plan-name requires <name>.";
+      } else {
+        if (PLAN_NAME_PATTERN.test(value)) flags.planName = value;
+        else flags.parseError = `--plan-name takes lowercase letters, digits and hyphens; received "${value}".`;
         i++;
       }
     } else if (a === "--review") {
@@ -3582,6 +3599,9 @@ function createPrintDirective(
   }
   if (flags.planChanges?.skip.length) cmd.push(`--skip ${flags.planChanges.skip.join(",")}`);
   if (flags.planChanges?.add.length) cmd.push(`--add ${flags.planChanges.add.join(",")}`);
+  if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) {
+    cmd.push(`--plan-name ${flags.planName}`);
+  }
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -3816,7 +3836,7 @@ function composeDispatchDirective(
   );
   if (!inFlight) {
     parts.push(
-      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), --depth <creationDepth> when the proposal carries one (exactly minimal, standard, or comprehensive), the creation flags, and the same --request id (a report-only or task-less composition also passes its creation description after `--`). For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and once the creation command has succeeded run `" +
+      "A custom plan runs on its baseScope with its own stage changes, for this piece of work only: it writes no scope file, so its gate offers Approve / Approve and save as scope / Edit the plan / Reject (a matched plan: Approve / Edit the plan / Reject). On either approval, create it with --scope <baseScope> plus --skip <changes.skip> and --add <changes.add> (join each nonempty array with commas and omit an empty one; every entry must be a stage slug of lowercase letters, digits, and hyphens, and if one is anything else apply nothing and re-dispatch the composer), --depth <creationDepth> when the proposal carries one (exactly minimal, standard, or comprehensive), --plan-name <scopeName> (the name the person saw at the gate; only when it is lowercase letters, digits, and hyphens, otherwise leave it out), the creation flags, and the same --request id (a report-only or task-less composition also passes its creation description after `--`). For Approve and save as scope, ask the human for a name with the same question tool as the gate, offering the composer's scopeName as the first choice, and once the creation command has succeeded run `" +
         aidlcDispatcherInvocation("scope save") +
         " --name <name>` before re-running next; build the name yourself as lowercase words joined by hyphens, never paste it from the proposal unchecked, and if the command reports the name is taken, ask for another and run it again. The same command saves the running plan whenever the human later asks (\"save this plan as quick-fix\").",
     );

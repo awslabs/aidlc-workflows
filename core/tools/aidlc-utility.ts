@@ -270,6 +270,7 @@ import {
   type PlanChanges,
   planWithChanges,
   composedPlanLabel,
+  PLAN_NAME_PATTERN,
   splitSlugList,
   readAllAuditShards,
   readAuditShardEvents,
@@ -508,6 +509,7 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "summary-confirmation",
   "skip",
   "add",
+  "plan-name",
   "repos",
   "project-type",
   "space",
@@ -7610,6 +7612,11 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     add: splitSlugList(flags.add),
   };
   const composedPlan = planChanges.skip.length > 0 || planChanges.add.length > 0;
+  // The tailored plan's name, as the person saw it at the gate.
+  const planName = flags["plan-name"];
+  if (planName !== undefined && !PLAN_NAME_PATTERN.test(planName)) {
+    die(`--plan-name takes lowercase letters, digits and hyphens; received "${planName}".`);
+  }
   const plannedStages = planWithChanges(scope, planChanges);
   if (plannedStages.errors.length > 0) {
     die(`intent-create refused: ${plannedStages.errors.join(" ")}`);
@@ -7925,7 +7932,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
       ...(composedPlan
         ? {
-            [PLAN_FIELD]: composedPlanLabel(scope),
+            [PLAN_FIELD]: composedPlanLabel(planName),
             "Stages skipped": planChanges.skip.join(", ") || "none",
             "Stages added": planChanges.add.join(", ") || "none",
           }
@@ -8251,7 +8258,7 @@ function handleIntentCreateStateBuild(
 - **Project Type**: ${projectType}
 - **${PROJECT_TYPE_SOURCE_FIELD}**: ${projectTypeSource}
 - **Scope**: ${scope}
-${composedPlan ? `- **${PLAN_FIELD}**: ${composedPlanLabel(scope)}\n` : ""}- **Start Date**: ${ts}
+${composedPlan ? `- **${PLAN_FIELD}**: ${composedPlanLabel(flags["plan-name"])}\n` : ""}- **Start Date**: ${ts}
 ${flags.request ? `- **Question Id**: ${flags.request}\n` : ""}- **State Version**: ${CURRENT_STATE_VERSION}
 - **Active Agent**: ${firstPostInitAgent}
 - **Worktree Path**:
@@ -8364,7 +8371,7 @@ ${stageProgress}
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
-${composedPlan ? `Plan: ${composedPlanLabel(scope)}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
+${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
