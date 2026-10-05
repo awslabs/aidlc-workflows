@@ -1852,7 +1852,8 @@ When the Unit's code or documents changed after their review, the checkpoint's `
 the one re-check request, and the agent runs it before verifying. That happens
 under Guard Policy `strict`; under `relaxed` and `off` the change is accepted
 instead, an approved Unit stays approved, and `verify` returns its one line as
-`change_notices`:
+`change_notices`. The same holds with reviews off: the next Unit's `verify`, or
+the Construction stage's own check, returns the line:
 
 ```bash
 aidlc engine bolt checkpoint --action status --unit "<Unit>" --kind <unit|skeleton>

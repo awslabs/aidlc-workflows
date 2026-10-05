@@ -108,7 +108,8 @@ When it carries `rereview`, the Unit's code or documents changed since their rev
 request at once, without asking, then verify and ask the one approval question.
 Only Guard Policy `strict` re-checks: under `relaxed` and `off` there is no
 `rereview`, a change to the Unit's code or documents is accepted with one line,
-and the Unit's approval stands.
+and the Unit's approval stands. The same holds with reviews off: the line comes
+from the next checkpoint's `verify` or the Construction stage's own check.
 With `command_authorized: false`, ask the verification-command question before
 any `verify`, complete the human decision/answer/setter flow, then call `next`.
 Show "Verified with `<full command>` (exit 0)" in the approval question;

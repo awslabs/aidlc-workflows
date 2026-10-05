@@ -236,6 +236,10 @@ verdict is final for this re-check. The re-check runs under Guard Policy
 `strict` only. Under `relaxed` and `off` a change to a Unit's code or documents
 after their review is accepted: no checkpoint carries `rereview`, the Unit's
 approval or readiness stands, and its one line arrives in `change_notices`.
+The same holds with reviews off: under `relaxed` and `off` a later change to an
+approved Unit's work keeps its approval, and its one line arrives in
+`change_notices` from the next checkpoint's `verify` or the Construction stage's
+own check.
 
 Otherwise, if `ready` is false or evidence became stale, explain `errors`.
 Repair the named missing review or receipt through its owning procedure,
