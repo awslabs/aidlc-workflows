@@ -356,7 +356,7 @@ describe("t259 the engine's last word ended the turn", () => {
       await Bun.sleep(20);
       const jump = JSON.parse(run(["engine", "orchestrate", "next", "--stage", "requirements-analysis"]).stdout);
       expect(jump.kind).toBe("print");
-      expect(jump.message).toContain("then re-run `next`");
+      expect(jump.message).toMatch(/[Tt]hen re-run `next`/);
       expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
       if (!copilot) expect(stop().stdout).toContain('"decision":"block"');
     });
