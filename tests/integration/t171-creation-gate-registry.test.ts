@@ -284,6 +284,37 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       });
     }
 
+    test("new work beside another clone's registry row counts only the work whose folder is here", () => {
+      const [here, elsewhere] = seedTwoIntentsNoCursor();
+      // Another clone's work: its registry row came with the pull, its record folder did not.
+      rmSync(join(intentsDir(proj), elsewhere), { recursive: true, force: true });
+      const routing = JSON.parse(next(["--scope", "poc", "a brand new standalone thing"]).stdout.trim());
+      expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+      for (const text of [routing.question, routing.numbered_prose_question]) {
+        expect(text).toContain("This project already has 1 piece of work in progress, and none is currently selected:");
+        expect(text).toContain(here);
+        expect(text).not.toContain(elsewhere);
+      }
+      expect(routing.available_intents).toEqual([here]);
+      expect(recordDirs(proj)).toEqual([here]); // read-only
+    });
+
+    test("new work beside a record that cannot be selected here counts it without naming it", () => {
+      const [kept, odd] = seedTwoIntentsNoCursor();
+      const unbindable = `${odd} `;
+      renameSync(join(intentsDir(proj), odd), join(intentsDir(proj), unbindable));
+      const rows = readIntentRegistry(proj).map((row) => (row.dirName === odd ? { ...row, dirName: unbindable } : row));
+      writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
+      const routing = JSON.parse(next(["--scope", "poc", "a brand new standalone thing"]).stdout.trim());
+      expect(routing.ask_type, JSON.stringify(routing).slice(0, 300)).toBe("new-work-routing");
+      for (const text of [routing.question, routing.numbered_prose_question]) {
+        expect(text).toContain("This project already has 2 pieces of work in progress");
+        expect(text).toContain("(1 more has a record name that cannot be selected here)");
+        expect(text).not.toContain(unbindable);
+      }
+      expect(routing.available_intents).toEqual([kept]);
+    });
+
     for (const selector of ["customer work", "x; touch pwned"]) {
       test(`intent picker executes literal selector ${selector}`, () => {
         const records = seedTwoIntentsNoCursor();

@@ -3982,7 +3982,7 @@ function intentPickPromptIfRecordsExist(
 ): AskDirective | ErrorDirective | null {
   const records = unselectedRecords(projectDir);
   if (records === null) return null;
-  const { space, intents, presentCount, selectable, list } = records;
+  const { space, presentCount, selectable, list } = records;
   // Records that are here but that no session can select are still work in
   // progress, so they do not open the creation path either. Their names are
   // repository text and stay out of the message.
@@ -3995,16 +3995,22 @@ function intentPickPromptIfRecordsExist(
   }
   const selectors = selectable.map(({ selector }) => selector);
   const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
+  // Where each stands. Work whose record folder is here but whose name cannot
+  // be selected is counted, never named; a registry row whose folder is not in
+  // this checkout is neither.
+  const hidden = presentCount - selectable.length;
+  const unlisted = hidden > 0 ? ` (${hidden} more ${hidden === 1 ? "has a record name that cannot" : "have record names that cannot"} be selected here)` : "";
+  const inProgress = `${presentCount} piece${presentCount === 1 ? "" : "s"} of work in progress${spaceLabel}`;
   if (pendingWork?.description.trim()) {
     return newWorkRoutingAskDirective(
-      `This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
-        `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} ` +
+      `This project already has ${inProgress}, ` +
+        `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} ` +
         `Is this (1) part of existing work - select its record and continue it; ` +
         `(2) a separate new piece of work - Yes, set it up alongside the existing work as ` +
         `"${pendingWork.proposedScope}" work without changing it; or (3) a change to an ` +
         "existing remaining plan - select its record, then reshape it?",
-      `**New work routing** — This project already has ${intents.length} piece${intents.length === 1 ? "" : "s"} of work in progress${spaceLabel}, ` +
-        `and none is currently selected: ${list}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?\n\n` +
+      `**New work routing** \u2014 This project already has ${inProgress}, ` +
+        `and none is currently selected: ${list}${unlisted}. You said: "${requestPreview(pendingWork.description)}".${documentSplitSentence(pendingWork.description)} What should I do?\n\n` +
         `${newWorkRoutingOptionLine(0, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
         `${newWorkRoutingOptionLine(1, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
         `${newWorkRoutingOptionLine(2, pendingWork.proposedScope, EXISTING_WORK_ROUTING_OPTIONS)}\n` +
@@ -4026,11 +4032,6 @@ function intentPickPromptIfRecordsExist(
   }
   // The harness's own entry: Codex users invoke a skill, not a slash command.
   const entry = entrySkillInvocation();
-  // Where each stands. Work whose record folder is here but whose name cannot
-  // be selected is counted, never named; a registry row whose folder is not in
-  // this checkout is neither.
-  const hidden = presentCount - selectable.length;
-  const unlisted = hidden > 0 ? ` (${hidden} more ${hidden === 1 ? "has a record name that cannot" : "have record names that cannot"} be selected here)` : "";
   const question = presentCount === 1
     ? `This project has one piece of work in progress${spaceLabel}: ${list}. Pick it up to carry on.`
     : `This project has ${presentCount} pieces of work in progress${spaceLabel}, and none is selected here: ${list}${unlisted}. ` +
