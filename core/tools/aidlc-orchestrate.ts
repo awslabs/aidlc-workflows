@@ -11087,12 +11087,14 @@ function guardRecoveryAskFromToolOutput(
 }
 
 // What `report` says when a state command it ran refuses. The tool's JSON
-// envelope is read, never shown. A decision the person has not made (or made
-// otherwise) is the agent's next step, handed to it with the question still
-// open; anything else stops the workflow with the tool's plain words.
+// envelope is read, never shown. A decision the person has not made is the
+// agent's next step, handed to it with the question still open, so the turn
+// may end there; one the person already made (another pick, their own words)
+// is the agent's to record now. Anything else stops the workflow with the
+// tool's plain words.
 function stateRefusalDirective(lead: string, question: string, detail: string): PrintDirective | ErrorDirective {
   let text = detail;
-  let agentGuidance = false;
+  let agentGuidance: unknown = null;
   try {
     const parsed = JSON.parse(detail.split("\n").filter(Boolean).at(-1) ?? "") as {
       error?: unknown;
@@ -11100,18 +11102,18 @@ function stateRefusalDirective(lead: string, question: string, detail: string): 
     };
     if (typeof parsed.error === "string") {
       text = parsed.error.trim();
-      agentGuidance = parsed.agent_guidance === true;
+      agentGuidance = parsed.agent_guidance;
     }
   } catch {
     // Plain text already.
   }
-  // The question is the person's to answer, so the turn may end at it.
-  if (agentGuidance) {
+  if (agentGuidance === "question-open") {
     return turnEndingPrint(
       `The question for ${question} is still open. ${text} ` +
         "Show the question again if it is not on screen, and never answer it for the person.",
     );
   }
+  if (agentGuidance === "person-decided") return printDirective(text);
   return errorDirective(
     lead + (text ? `: ${text}` : `. Run ${entrySkillInvocation()} --doctor if the reason is unclear.`),
   );

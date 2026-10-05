@@ -753,8 +753,9 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const mismatch = p.report("rejected", [
       "--user-input", "Request Changes", "--reason", "Make all saved searches visible to the team.",
     ]);
+    // Their own words are on record: the step is to pass them, not to ask again.
     expect(mismatch.kind, JSON.stringify(mismatch)).toBe("print");
-    expect(String(mismatch.message)).toContain(`The question for "${STAGE}" is still open.`);
+    expect(String(mismatch.message)).not.toContain("is still open");
     expect(String(mismatch.message)).toContain("does not exactly match");
     expect(p.state()).toBe(beforeRejection);
     expect(p.events("GATE_REJECTED", STAGE)).toHaveLength(0);

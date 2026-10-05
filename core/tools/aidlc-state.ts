@@ -743,11 +743,16 @@ class StateAuditUnavailableError extends StateCommandError {}
 
 // A decision refused because the person has not made it, or made another one.
 // The message is the agent's next step, not news for the person, so the error
-// JSON marks it and the router hands it to the agent with the question open.
-class DecisionNotMadeError extends StateCommandError {}
+// JSON marks it and the router hands it to the agent: with the question still
+// open, or, when the person's own choice is on record, to record that choice.
+class DecisionNotMadeError extends StateCommandError {
+  constructor(msg: string, readonly personDecided: boolean) {
+    super(msg);
+  }
+}
 
-function refuseForAgent(msg: string): never {
-  throw new DecisionNotMadeError(msg);
+function refuseForAgent(msg: string, options: { personDecided?: boolean } = {}): never {
+  throw new DecisionNotMadeError(msg, options.personDecided === true);
 }
 
 function assertWorkflowNotArchived(content: string, operation: string): void {
@@ -1000,7 +1005,11 @@ export function main(argv: string[]): void {
       );
     }
     if (e instanceof DecisionNotMadeError) {
-      exitWithError({ message: e.message, auditMessage: e.message, agentGuidance: true });
+      exitWithError({
+        message: e.message,
+        auditMessage: e.message,
+        agentGuidance: e.personDecided ? "person-decided" : "question-open",
+      });
     }
     exitWithError(errorMessage(e));
   }
@@ -5825,6 +5834,7 @@ function verifyApprovalDecision(
       refuseForAgent(
         `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
           "their words differently.",
+        { personDecided: true },
       );
     }
     // Their exact pick names which approval it is.
@@ -6287,6 +6297,7 @@ function handleReject(args: string[]): void {
       `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
         (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
         " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
+      { personDecided: true },
     );
   }
   if (feedbackStatus === "awaiting-feedback") {
@@ -6307,6 +6318,7 @@ function handleReject(args: string[]): void {
     refuseForAgent(
       `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
         "read their words differently.",
+      { personDecided: true },
     );
   }
   // The person's own words. When this chat's human-turn hook recorded what they
@@ -6351,6 +6363,7 @@ function handleReject(args: string[]): void {
     refuseForAgent(
       `Refusing to reject "${slug}": --feedback does not exactly match the ` +
         "human's separate guard-recovery response. Pass their text unchanged.",
+      { personDecided: true },
     );
   }
 

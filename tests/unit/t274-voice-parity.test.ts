@@ -348,7 +348,6 @@ describe("t274 §5 record-keeping steps are never narrated", () => {
   const RECORD_KEEPING = [
     "receipt",
     "pipeline link",
-    "snapshot",
     "store generation",
     "source fingerprint",
     "compare-and-swap",
@@ -358,8 +357,6 @@ describe("t274 §5 record-keeping steps are never narrated", () => {
     "ritual",
     "ceremony",
     "grounding contract",
-    "CodeKB",
-    "Composite ARS",
   ] as const;
   test("the voice contract reserves the record-keeping words and keeps those steps silent", () => {
     const protocol = flat(PROTOCOL_REL);
@@ -367,8 +364,16 @@ describe("t274 §5 record-keeping steps are never narrated", () => {
     expect(start).toBeGreaterThan(-1);
     const sentence = protocol.slice(start, start + 400);
     expect(RECORD_KEEPING.filter((w) => !sentence.includes(w))).toEqual([]);
-    expect(protocol).toContain("A step that only records something");
+    expect(protocol).toContain("A step that only records something and leaves the person nothing to do or know");
     expect(protocol).toContain("is silent: say nothing about it.");
+    // A caveat the protocol gives the agent to say (what a saved snapshot
+    // keeps) is never swallowed by the silence rule, and the plan offer's
+    // relayed tables keep their own labels.
+    expect(protocol).toContain("A message this protocol gives you to say");
+    const reserved = protocol.slice(start, start + 400);
+    for (const relayed of ["snapshot,", "CodeKB", "Composite ARS"]) {
+      expect(reserved).not.toContain(relayed);
+    }
   });
 
   // Each retired line explained machinery the agent then said in chat.
@@ -396,6 +401,14 @@ describe("t274 §5 record-keeping steps are never narrated", () => {
   test("reverse engineering keeps its record steps silent", () => {
     const body = flat("core/aidlc-common/stages/inception/reverse-engineering.md");
     expect(body).toContain("the person hears only what the scan found in their code");
+  });
+
+  test("the Guard Policy row tells relaxed from off and names a team file that locks strict", () => {
+    const composer = flat("core/agents/aidlc-composer-agent.md");
+    expect(composer).toContain("off: the same, and the checks on how agents move the workflow and what a reviewer reads stand aside too");
+    expect(composer).toContain("when a team memory file locks strict, name that file");
+    expect(composer).toContain("strict and name that file in the rationale");
+    expect(flat("core/knowledge/aidlc-composer-agent/composing.md")).toContain("a team memory file that locks strict is named");
   });
 
   test("the composer offers no kill-switch line when none is set", () => {

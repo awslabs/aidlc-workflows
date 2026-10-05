@@ -71,8 +71,10 @@ caution nor default economy is acceptable.
 
 Every proposal names ONE Guard Policy value with a 1-2 sentence rationale the
 person reads on the gate row: in their words, what happens when an input
-changes after approval and why that suits this work, never fence, check, tool,
-or field names, and never where the value was copied from. The value decides
+changes after approval, what else the value lets go (off also stands aside the
+checks on how agents move the workflow and what a reviewer reads), and why that
+suits this work, never internal field or tool names such as `custom_start`; a
+team memory file that locks strict is named. The value decides
 two things: what happens when an input changes after the human approved or
 confirmed something, and how far the automatic checks stand aside for the
 agents. `strict` lowers

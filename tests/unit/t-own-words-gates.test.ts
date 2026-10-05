@@ -201,6 +201,21 @@ describe("the stage gate records the choice the agent read, with the person's wo
     return refused;
   }
 
+  // The person already chose, and the agent reported something else: nothing
+  // is recorded and the gate stays as it was, but the step is to record their
+  // choice now, not to ask them again, so the turn does not end there.
+  function theirChoice(refuse: () => { kind: string; message?: string }): { kind: string; message?: string } {
+    const before = readFileSync(seededStateFile(proj), "utf-8");
+    const refused = refuse();
+    expect(refused.kind, JSON.stringify(refused)).toBe("print");
+    expect(refused.message).toContain("Report that");
+    expect(refused.message).not.toContain("is still open");
+    expect(refused.message).not.toContain('"error":');
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+    expect(turnEndIsOpen(proj)).toBe(false);
+    return refused;
+  }
+
   test("an approval with an instruction is recorded once, with their words, and no second question", () => {
     says(proj, "looks fine but rename the handler");
     const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
@@ -322,14 +337,14 @@ describe("the stage gate records the choice the agent read, with the person's wo
 
   test.each(["2", "B", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
     says(proj, pick);
-    const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
+    const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
 
   test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
     picks(proj, "Request Changes");
-    const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
+    const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("picked Request Changes");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
@@ -351,7 +366,7 @@ describe("the stage gate records the choice the agent read, with the person's wo
 
   test("an exact Approve is the person's pick: a rejection is refused", () => {
     says(proj, "Approve");
-    const refused = stillOpen(() =>
+    const refused = theirChoice(() =>
       report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"])
     );
     expect(refused.message).toContain("picked Approve");

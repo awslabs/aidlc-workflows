@@ -669,7 +669,7 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
-  "guardPolicyRationale": "<1-2 plain sentences for the person: what happens when an input changes after approval (strict: it is approved again; relaxed or off: it is recorded, they are told in one line, and work goes on) and why that suits this work>",
+  "guardPolicyRationale": "<1-2 plain sentences for the person: what happens when an input changes after approval (strict: it is approved again; relaxed: it is recorded, they are told in one line, and work goes on; off: the same, and the checks on how agents move the workflow and what a reviewer reads stand aside too) and why that suits this work; when a team memory file locks strict, name that file>",
   "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "collaborators": "on | off", "review_cap": "adversarial | advisory | none" },
   "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "creationSettings": { "learnings": "off", "review": "adversarial" },
@@ -699,9 +699,11 @@ will approve. Never return a front/report proposal that would create from only a
 
 `guardPolicy` is REQUIRED for every mode and is ONE value with a 1-2 sentence
 `guardPolicyRationale` the person reads on the gate row: in their words, what
-happens when an input changes after approval and why that suits this work.
-Never name fences, checks, tools, or fields such as `custom_start`, and never
-say where the value was copied from. `strict` lowers
+happens when an input changes after approval, what else the value lets go (off
+also stands aside the checks on how agents move the workflow and what a
+reviewer reads), and why that suits this work. Never name internal fields or
+tools such as `custom_start` or the validator; a team memory file that locks
+strict is named, as below. `strict` lowers
 no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, and continues,
 and also stands the plan-approval and review-freeze checks aside; `off` does
