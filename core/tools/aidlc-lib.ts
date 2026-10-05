@@ -16354,6 +16354,27 @@ function isReviewRecord(value: unknown): value is ReviewRecord {
  * missing, malformed, or its bytes no longer hash to the digest the row pinned:
  * a record that was edited after it was recorded is not the review.
  */
+/**
+ * Whether the written review a completion names is simply not in this
+ * checkout: some part of its path does not exist, and nothing on the way is a
+ * symlink. A dangling or redirected entry is there, and is not that review.
+ */
+function reviewRecordAbsent(projectDir: string, relativePath: string): boolean {
+  if (!isReviewRecordRelativePath(relativePath)) return false;
+  const record = recordDir(projectDir);
+  if (record === null) return true;
+  let at = record;
+  for (const part of relativePath.split("/")) {
+    at = join(at, part);
+    try {
+      if (lstatSync(at).isSymbolicLink()) return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  }
+  return false;
+}
+
 export function readReviewRecord(
   projectDir: string,
   ref: { path: string; digest: string },
@@ -18702,10 +18723,7 @@ export function freshReviewReceipts(
       // machine (another checkout, a clean) keeps its recorded verdict. A
       // record that is here but does not match what was recorded is not
       // that review, so it is checked again under every policy.
-      const recordAbsent = recordRef !== null && (() => {
-        const dir = recordDir(projectDir);
-        return dir === null || !existsSync(join(dir, recordRef.path));
-      })();
+      const recordAbsent = recordRef !== null && reviewRecordAbsent(projectDir, recordRef.path);
       if (!recordAbsent || !isRelaxed()) {
         if (matchesRequest) request.verificationFailed = true;
         continue;

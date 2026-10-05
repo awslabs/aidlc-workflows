@@ -12,7 +12,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -294,6 +294,25 @@ describe("a reviewed Unit whose local records are not on this machine", () => {
     for (const file of files) {
       const path = join(file.parentPath, file.name);
       writeFileSync(path, `${readFileSync(path, "utf-8")}\nAn added line.\n`);
+    }
+    const refused = approve(dir);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("--retry-pending");
+    expect(refused.out).not.toContain("is not on this machine");
+  });
+
+  // A file symlink needs privileges Windows runners do not grant.
+  test.skipIf(process.platform === "win32")("off: a written review that points somewhere else is there, so it is checked again", () => {
+    const { project: dir, record } = project("off");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    const reviews = join(record, ".aidlc-engine", "reviews");
+    const files = readdirSync(reviews, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile());
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const path = join(file.parentPath, file.name);
+      rmSync(path);
+      symlinkSync(join(dir, "no-such-review.json"), path);
     }
     const refused = approve(dir);
     expect(refused.rc).toBe(1);
