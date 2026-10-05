@@ -66,7 +66,9 @@ reply and record the choice they made (Code Generation Step 3), then run `next`;
 never write the questions file, an answer line, a fingerprint, or a receipt
 yourself. A
 code-generation `run-stage` carries `plan_approval.status`: `approved` builds
-(Step 4); `plan`, `revise`, and `repair` return to the plan with its `note` and
+(Step 4) from the plan and test instructions as they are: never rewrite an
+approved plan unless the person asks. `plan`, `revise`, and `repair` return to
+the plan with its `note` and
 `feedback`, then `next`. When `approved` carries `plan_approval.skipped: true`,
 plan approval is off for this piece of work: say `plan_approval.notice` as
 written, then build without asking. After approval, under Guard Policy `relaxed`

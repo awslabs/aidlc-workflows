@@ -813,7 +813,9 @@ the execution plan. Code is written to the workspace root, never to
 
 ### Critical Rules
 
-- Application code goes to workspace root, NEVER to `<record>/`
+- Application code goes to workspace root, NEVER to `<record>/`. The
+  developer's one change there is ticking each step's box in the plan as it
+  finishes that step
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
 - Add `data-testid` attributes to interactive UI elements for test automation
@@ -821,7 +823,11 @@ the execution plan. Code is written to the workspace root, never to
   plan approval off, only its one-line notice), generation (Step 4), the Step 5
   files, then the review (when the directive lists the `reviewer` protocol
   module) and completion (Step 6). The review checks the finished work: the
-  reviewer never runs before the Step 5 files exist
+  reviewer never runs before the Step 5 files exist. When the directive
+  already carries `plan_approval.status: "approved"` (a resumed or continued
+  build), the plan and test instructions on disk are the approved ones: skip
+  Steps 2 and 3 and build them as they are. Never rewrite an approved plan or
+  its test instructions; change them only when the person asks
 - For a Unit (`directive.unit` present), write the engine-required companion
   `source-manifest.json` in Step 5, before the review, listing every
   application-source path this unit created, modified, or deleted, including

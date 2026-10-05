@@ -1518,11 +1518,16 @@ export function workerBrief(
     ? `AIDLC-UNIT: ${target.unit}`
     : "AIDLC-STAGE: code-generation";
   const resume = codeGenerationResume(projectDir, target, { plan, content: snapshotFingerprint });
+  // The worker's ticks are what a pick-up reads, so it is told where the plan
+  // file is and that ticking is its one change to it.
+  const planFile = toPosix(relative(projectDir, join(stageDir, "code-generation-plan.md")));
   const brief =
     `${marker}\n` +
     `AIDLC-TESTING-CONTRACT: ${contractHash}\n` +
     (resume ? progressSection(resume) : "") +
     `\n## Files and commands\n\n${FILE_TOOLS_RULE}\n` +
+    `\n## The plan file\n\nTick each step's box in \`${planFile}\` as you finish the step. ` +
+    "That is the only change you make to that file.\n" +
     (continuation ? "\n## Current plan (plan-approval fence off)\n\n" : "\n## Approved plan\n\n") +
     `${projectedPlan}\n` +
     (continuation ? "\n## Current unit-test instructions\n\n" : "\n## Approved unit-test instructions\n\n") +

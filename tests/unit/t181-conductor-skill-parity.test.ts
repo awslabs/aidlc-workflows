@@ -202,6 +202,42 @@ function stageTableRows(body: string): string[] {
     .slice(2);
 }
 
+// An approved code plan is the plan. A resumed build once rewrote it before
+// building (and dropped an approved step), because the stage file's work order
+// always started at writing the plan. Every conductor SKILL, the stage file and
+// its reference say an approved plan is built as it is.
+describe("an approved code plan is built as it is", () => {
+  const flat = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+
+  test("every conductor SKILL builds an approved plan as it is", () => {
+    const keep = "`approved` builds (Step 4) from the plan and test instructions as they are: " +
+      "never rewrite an approved plan unless the person asks.";
+    const missing = harnessSkills().filter((rel) => !flat(rel).includes(keep));
+    expect(missing).toEqual([]);
+    // The old sentence said only "builds (Step 4)", with nothing on the plan.
+    expect(harnessSkills().filter((rel) => flat(rel).includes("`approved` builds (Step 4);"))).toEqual([]);
+  });
+
+  test("the stage file and its reference skip the plan steps once the plan is approved", () => {
+    const stage = flat("core/aidlc-common/stages/construction/code-generation.md");
+    const reference = flat("docs/reference/04-stages/construction.md");
+    for (const [rel, body] of [["code-generation.md", stage], ["construction.md", reference]] as const) {
+      expect(body, rel).toContain(
+        "When the directive already carries `plan_approval.status: \"approved\"` (a resumed or continued build), " +
+          "the plan and test instructions on disk are the approved ones: skip Steps 2 and 3 and build them as they are. " +
+          "Never rewrite an approved plan or its test instructions; change them only when the person asks",
+      );
+      expect(body, rel).toContain(
+        "The developer's one change there is ticking each step's box in the plan as it finishes that step",
+      );
+    }
+    expect(stage).toContain(
+      "When the directive already carries `plan_approval.status: \"approved\"`, this plan is written and approved: " +
+        "do not rewrite it or the test instructions; go to Step 4.",
+    );
+  });
+});
+
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {
   const skills = harnessSkills();
 
