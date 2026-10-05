@@ -521,6 +521,18 @@ describe("t264 (a) judgeFreeze decision table", () => {
       expect(posix(command), command).toContain("/p/notes.md");
     }
     expect(posix("Set-Content -Path notes.md -Value x")).toEqual(["/p/notes.md", "/p/x"]);
+    // Tee-Object -Variable writes no file; with a path named it would fail.
+    for (const command of [
+      "Tee-Object -InputObject aidlc/a.md -Variable snapshot",
+      "Get-Content aidlc/a.md | Tee-Object -Variable snapshot",
+    ]) {
+      expect(posix(command), command).toEqual([]);
+      expect(powerShell(command), command).toEqual([]);
+    }
+    // Dequoted, '-Variable' reads as -Variable; PowerShell would take it as
+    // the path and refuse the extra value, so nothing is written.
+    expect(posix("'x' | Tee-Object '-Variable' aidlc/a.md")).toEqual([]);
+    expect(posix("'x' | Tee-Object -Variable '-FilePath' aidlc/a.md")).toContain("/p/aidlc/a.md");
     expect(powerShell("New-Item -Path aidlc -Name a.md -ItemType File")).toEqual(["/p/aidlc/a.md"]);
     expect(posix("New-Item -Path: aidlc -Name a.md")).toContain("/p/aidlc/a.md");
     // After --, a word that looks like a parameter is a value as written.

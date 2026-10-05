@@ -757,6 +757,9 @@ interface CmdletWrite {
   paths: string[];
   // The parameter whose value names a child of each path (New-Item -Name).
   child?: string;
+  // A parameter whose set writes no file (Tee-Object -Variable): with it and
+  // no path named, the command writes nothing, and with a path it fails.
+  fileless?: string;
   // Other parameters that take a value.
   valued: string[];
   // Parameters that take no value.
@@ -827,6 +830,7 @@ const CMDLET_WRITES: Record<string, CmdletWrite> = {
   "tee-object": {
     positional: [["filepath", "literalpath"]],
     paths: ["filepath", "literalpath"],
+    fileless: "variable",
     valued: ["encoding", "inputobject", "variable"],
     switches: ["append"],
     aliases: { path: "filepath", pspath: "literalpath", lp: "literalpath" },
@@ -911,6 +915,12 @@ function cmdletWriteTargets(
       if (next !== undefined && next.parameter === undefined) index++;
     }
     bound.set(name, [...(bound.get(name) ?? []), ...values]);
+  }
+  if (
+    spec.fileless !== undefined && bound.has(spec.fileless) &&
+    !spec.paths.some((name) => bound.has(name))
+  ) {
+    return { targets: [], pathBound: false };
   }
   let next = 0;
   for (const slot of spec.positional) {
