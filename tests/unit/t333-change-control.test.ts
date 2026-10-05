@@ -1260,9 +1260,7 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(raised.status, raised.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD)).toBe("relaxed (set by you)");
     expect(guardPolicyRows(proj).map((row) => auditBlockField(row.block, "New Value"))).toEqual(["relaxed"]);
-    // Going back down to off is a lowering: once a question is put to them
-    // after their message, it waits for their word.
-    appendAuditEntry("DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Which database?" }, proj);
+    // Going back down to off is a lowering, and still waits for their word.
     const lowered = run(dispatcher, ["engine", "config", "set", "guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(lowered.status).not.toBe(0);
     expect(refusalError(lowered.stderr)).toContain("Setting Guard Policy off lowers fences, which is the person's call.");
