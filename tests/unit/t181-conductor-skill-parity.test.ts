@@ -526,6 +526,27 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  // From live runs: on "please review Unit 1 again" the agent reviewed in chat,
+  // hand-wrote a review file, or started the stage again, because the rule lived
+  // only in the reviewer protocol, which a mid-chat request never opens.
+  test("every shipped conductor SKILL and the protocol record a review the person asks for through AI-DLC", () => {
+    const missing: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      for (const token of [
+        "When they ask for a review of a stage or of a Unit",
+        "record it through AI-DLC the first time they ask, under every Guard Policy",
+        "engine log review --stage <slug> --reviewer <the stage's reviewer> --iteration <next>",
+        "aidlc-common/protocols/stage-protocol-reviewer.md` says.",
+        "Never review it in chat yourself, never write a review file by hand, never start the stage again with " +
+          "`next --stage` to get one, and never offer to change the Guard Policy for it.",
+      ]) {
+        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
   // From a live Kiro CLI run: "from here on, build one unit at a time; I'll
   // approve the design after" at a gate. The engine takes the agent's Approve
   // whatever the wording, so the guidance is what keeps a request that holds no
