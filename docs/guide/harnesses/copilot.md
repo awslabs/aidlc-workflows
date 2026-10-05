@@ -263,8 +263,8 @@ then use the ignored local `dist/copilot/` output.
     `engine bolt set-autonomy`, the `engine state` status changes, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
     `set-skeleton-stance`, `set-status`). `set-construction-checkpoints` runs
-    without a click when it applies the checkpoints choice you just recorded
-    (its policy receipt for exactly that value);
+    without a click when you asked for that change in the chat since the last
+    decision;
   - commands that switch the work in progress: `engine intent switch` (or
     `engine intent <name>`) and `engine space switch` (or `engine space <name>`);
   - the team `unit` commands, which share claims and approvals through your

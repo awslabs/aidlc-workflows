@@ -3024,10 +3024,27 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:constructionPolicyReceiptApplies",
+      "unitId": "function:constructionPolicyChangeAllowed",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:constructionPolicyChangeAuthority",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t342-construction-checkpoint-routing.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

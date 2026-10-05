@@ -161,8 +161,9 @@ If that is refused with `Select Construction Execution: serial`, the work is
 set to build Units in parallel: run
 `aidlc engine state set-construction-execution serial` first, then switch.
 
-Once Construction has started, the change needs your explicit approval of
-that exact change, and the Units already finished keep their work. See
+Once Construction has started, say it in the chat ("from here on, build one
+unit at a time"): the agent switches it at once and says how to undo it, and
+the Units already finished keep their work. See
 [Construction order and execution](12-cli-commands.md#construction-order-and-execution).
 
 ---

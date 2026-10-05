@@ -75,9 +75,9 @@ The default approval gate presents two options:
 
 Answer in your own words, the way you would answer a colleague. You drive: the
 agent reads your reply and does what you said, at every question (this gate, the
-summary confirmation, a construction policy or verification command, a
-Construction checkpoint, Plan Approval, and a recovery question). You never
-retype an option label or say the same thing twice:
+summary confirmation, a verification command, a Construction checkpoint, Plan
+Approval, and a recovery question). You never retype an option label or say the
+same thing twice:
 
 - `1`, `a` (where the options are lettered), `approved`, `looks good`, or
   `aprove` all approve.
@@ -93,14 +93,14 @@ retype an option label or say the same thing twice:
   question back.
 
 AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
-Construction policy decisions with your words beside them (`Person Reply` in
+Construction setting changes with your words beside them (`Person Reply` in
 the audit trail), as your harness passed them and trimmed. At a stage gate that
 is every message since the gate was shown, up to 8: if a ninth arrives, or one
 message is over 8000 characters, none of them is attached, and a change request
 records the agent's `--reason` instead; at Plan Approval, your latest 8
-replies, each cut to 8000 characters; at a checkpoint,
-verification-command, or Construction policy question, your replies joined in
-order, keeping the last 8000 characters. The summary confirmation records the
+replies, each cut to 8000 characters; at a checkpoint or verification-command
+question, your replies joined in order, keeping the last 8000 characters; for a
+Construction setting you asked to change, the message that asked. The summary confirmation records the
 choice the agent read and, for a change request, what you asked to change. A
 decision needs a reply from you after the question was shown: the agent cannot
 answer for you.

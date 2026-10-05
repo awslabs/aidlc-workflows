@@ -11365,7 +11365,7 @@ export function presenceFloorHolds(
   if (humanActedSinceGate(projectDir)) return false;
   const setter = literalConstructionPolicySetter(command);
   try {
-    if (setter !== null && constructionPolicyReceiptApplies(projectDir, setter.field, setter.value)) {
+    if (setter !== null && constructionPolicyChangeAllowed(projectDir, setter.field, setter.value)) {
       return false;
     }
   } catch { /* an unreadable receipt authorizes nothing */ }
@@ -11505,25 +11505,36 @@ export function authorizedConstructionPolicyChange(
 }
 
 /**
- * True when the person's current unconsumed choice (a CONSTRUCTION_POLICY_RECORDED
- * receipt) authorizes setting `field` to `value` now: the same check the setter
- * makes, so a host that skips its own confirmation for it asks nothing twice.
+ * Why a Construction policy change during Construction is the person's, or
+ * null: their recorded choice from a policy question (`receipt`), or a message
+ * of theirs since the last decision (`asked`), which the conductor read as
+ * this request. An unattended run never changes it on its own. The setter and
+ * every host that skips its own confirmation for the setter share this check,
+ * so nothing is asked twice.
  */
-export function constructionPolicyReceiptApplies(projectDir: string, field: string, value: string): boolean {
+export function constructionPolicyChangeAuthority(
+  projectDir: string,
+  stateContent: string,
+  field: string,
+  value: string,
+): "receipt" | "asked" | null {
+  if (authorizedConstructionPolicyChange(projectDir, stateContent, field, value)) return "receipt";
+  return process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true }) ? "asked" : null;
+}
+
+/** Whether the setter would make this change now (constructionPolicyChangeAuthority on the current state). */
+export function constructionPolicyChangeAllowed(projectDir: string, field: string, value: string): boolean {
   try {
-    return authorizedConstructionPolicyChange(projectDir, readStateFile(projectDir), field, value);
+    return constructionPolicyChangeAuthority(projectDir, readStateFile(projectDir), field, value) !== null;
   } catch {
     return false;
   }
 }
 
 export const CONSTRUCTION_POLICY_RECOVERY =
-  'Record the requested field and value with aidlc-log.ts decision --stage "<stage>" --checkpoint construction-policy ' +
-  '--field "<Construction Checkpoints|Construction Execution|Construction Iteration>" --value "<value>" --session "<session ID>" ' +
-  '--decision "Change this Construction policy?" --options "Approve,Request Changes", then wait for the human\'s offered choice in that session. ' +
-  'Run aidlc-log.ts answer with the same --stage, --checkpoint construction-policy, --field, --value, and --session plus --details "Approve", ' +
-  'then apply that value with aidlc-state.ts set-construction-checkpoints, set-construction-execution, or set-construction-iteration. ' +
-  'Use the invoking SessionStart session ID.';
+  "When the person asks for this Construction change, run aidlc-state.ts set-construction-checkpoints, " +
+  "set-construction-execution, or set-construction-iteration with the value they asked for, then say its notice " +
+  "line to them. Do not ask them to confirm it, and never change it on your own.";
 
 // --- Consolidated-summary confirmation evidence ---
 //

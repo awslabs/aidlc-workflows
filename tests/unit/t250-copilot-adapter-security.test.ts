@@ -143,7 +143,7 @@ export function stateFilePathForSelection(projectDir: string): string {
   return stateFilePath(projectDir);
 }
 export function humanActedSinceGate(): boolean { return process.env.T250_HUMAN_ACTED === "1"; }
-export function constructionPolicyReceiptApplies(_projectDir: string, field: string, value: string): boolean { return process.env.T250_POLICY_RECEIPT === field + "=" + value; }
+export function constructionPolicyChangeAllowed(_projectDir: string, field: string, value: string): boolean { return process.env.T250_POLICY_RECEIPT === field + "=" + value; }
 export function isReadOnlyNextArgv(args: readonly string[]): boolean { return args.includes("--status") || (args[0] === "config" && ["set", "get", "list"].includes(args[1] ?? "")); }
 export function normalizeDriveLetter(p: string): string { return p; }
 export function claimCopilotCommand(): { allowed: true; attemptId: string } {
@@ -1930,7 +1930,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
-  test("27i: a Construction checkpoints change the person already chose runs click-free; autonomy keeps the prompt", () => {
+  test("27i: a Construction checkpoints change the person asked for runs click-free; autonomy keeps the prompt", () => {
     const s = scratch();
     try {
       seedAidlcScripts(s);
@@ -1940,9 +1940,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine state set-construction-checkpoints disabled",
         "bun .aidlc/tools/aidlc-state.ts set-construction-checkpoints disabled",
       ]) {
-        // The receipt for exactly this value: no second confirmation.
+        // The setter's own check passes for exactly this value: no second confirmation.
         expect(decision(command, "Construction Checkpoints=disabled"), command).toBe("allow");
-        // No receipt, or one for the other value, keeps the prompt.
+        // Nothing from the person, or a check for the other value, keeps the prompt.
         expect(decision(command), command).toBeUndefined();
         expect(decision(command, "Construction Checkpoints=enabled"), command).toBeUndefined();
       }

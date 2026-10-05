@@ -1671,8 +1671,7 @@ through its applicable design stages and Code Generation before the next.
 Design-only and no-Unit workflows keep their existing stage flow; team-owned
 Units keep their own gate rhythm. Existing workflows and explicit iteration
 choices are preserved. To choose swarm execution explicitly, select stage-major
-first. During Construction, obtain the field/value consent described below
-before each setter; during Inception these setters need no policy receipt:
+first:
 
 ```bash
 aidlc engine state set-construction-iteration stage-major
@@ -1687,32 +1686,16 @@ runtime preferences. Generic `state set` refuses `Construction Checkpoints`,
 Command`; use `set-construction-checkpoints`, `set-construction-execution`,
 `set-construction-iteration`, or the receipt-bound
 `set-construction-verification-command`, respectively.
-During Construction, changing `Construction Checkpoints`, `Construction
-Execution`, or `Construction Iteration` requires an exact, session-bound human
-choice for that field and value, not merely a fresh human turn. An unattended
-run cannot disable checkpoints to get past a refusal. For example:
-
-```bash
-{{INVOKE}} engine log decision --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --decision "Change Construction Checkpoints to disabled?" --options "Approve,Request Changes"
-```
-
-Present **Approve** and **Request Changes**, then wait for the human to choose
-in the invoking SessionStart session. Only after **Approve**, run:
-
-```bash
-{{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint construction-policy --field "Construction Checkpoints" --value "disabled" --session "<session ID>" --details "Approve"
-{{INVOKE}} engine state set-construction-checkpoints disabled
-```
-
-For **Request Changes**, record the same answer with `--details "Request Changes"`
-and keep the current policy. Use this flow separately for each field/value change,
-including execution and iteration. `CONSTRUCTION_POLICY_RECORDED` authorizes
-only the requested value on that field in the current workflow; a later proposal
-for the field supersedes it and applying it spends it. Another gate's answer,
-an unrelated prompt, or a response from another session cannot authorize the
-change. Reusing an answer is refused. If audit append fails, retry the same
-answer after repairing the failure; the one-shot response is retained until
-the append succeeds.
+During Construction you change any of these in your own words ("turn
+checkpoints off", "from here on, build one unit at a time", "run the Units in
+parallel"). The agent does it in that turn, with no question first, and says one
+line with what changed and the words that undo it, for example "Construction
+checkpoints are off for this work now (they were on). Say 'turn checkpoints back
+on' to undo." The change is recorded as `CONSTRUCTION_POLICY_SET` with your words.
+The setter makes the change only when a message from you since the last decision
+is on record, so the agent cannot change these on its own, and an unattended run
+never changes them. A change that needs another first (parallel Units need
+stage-major and checkpoints on) makes both, and says both.
 
 Switching to `unit-major` or turning checkpoints on in the middle of a stage
 keeps the Units already finished: `/aidlc` carries on with the next Unit that

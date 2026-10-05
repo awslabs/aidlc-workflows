@@ -41,8 +41,9 @@ import {
   withdrawProtectedQuestions,
   VERIFICATION_COMMAND_CHECKPOINT,
   VERIFICATION_COMMAND_RECOVERY,
-  authorizedConstructionPolicyChange,
+  constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
+  latestPersonTurn,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -1141,12 +1142,38 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
     if (updated !== content) {
-      requireHumanConstructionPolicyChange(pd, content, field, args[0]);
-      emitConstructionPolicySet(pd, content, updated, field, args[0]);
+      const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
+      emitConstructionPolicySet(pd, content, updated, field, args[0], words);
     }
     writeStateFile(pd, updated);
-    console.log(JSON.stringify({ updated: true, field, value: args[0] }));
+    console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
   });
+}
+
+// The one line the person hears when a Construction setting changed: what it
+// is now, what it was, and the words that bring the old value back. Each
+// entry says the value as it is now, as it was, and how to ask for it.
+// Nothing when it was already so.
+function constructionPolicyNotice(before: string, after: string, field: string): { notice?: string } {
+  const previous = getField(before, field)?.trim() ?? "";
+  const value = getField(after, field)?.trim() ?? "";
+  if (previous === value) return {};
+  const lines: Record<string, { now: string; was: string; undo: string }> = {
+    enabled: { now: "Construction checkpoints are on for this work now", was: "they were on", undo: "turn checkpoints back on" },
+    disabled: { now: "Construction checkpoints are off for this work now", was: "they were off", undo: "turn checkpoints off" },
+    "unit-major": { now: "Construction now builds one Unit at a time", was: "it built one Unit at a time", undo: "build one Unit at a time" },
+    "stage-major": { now: "Construction now goes stage by stage", was: "it went stage by stage", undo: "go stage by stage" },
+    swarm: { now: "Construction now builds the Units in parallel", was: "it built the Units in parallel", undo: "build the Units in parallel" },
+    serial: { now: "Construction now builds the Units one after another", was: "it built the Units one after another", undo: "build the Units one after another" },
+  };
+  const other: Record<string, string> = {
+    enabled: "disabled", disabled: "enabled", "unit-major": "stage-major", "stage-major": "unit-major",
+    swarm: "serial", serial: "swarm",
+  };
+  const line = lines[value];
+  if (!line) return { notice: `${field} is now ${value}.` };
+  const was = lines[previous];
+  return { notice: `${line.now}${was ? ` (${was.was})` : ""}. Say '${(was ?? lines[other[value]]).undo}' to undo.` };
 }
 
 // Every applied Construction policy change is in the audit with the value it
@@ -1154,7 +1181,9 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
 // floor reads them so switching to unit-major iteration or turning checkpoints
 // on keeps the Units already finished: a stage start recorded while stage
 // starts were attempt boundaries stays the boundary it was.
-function emitConstructionPolicySet(pd: string, before: string, after: string, field: string, value: string): void {
+function emitConstructionPolicySet(
+  pd: string, before: string, after: string, field: string, value: string, words: string | null = null,
+): void {
   const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
   emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
     Field: field,
@@ -1162,16 +1191,24 @@ function emitConstructionPolicySet(pd: string, before: string, after: string, fi
     "Previous Value": current(before, field),
     "Construction Iteration": current(after, "Construction Iteration"),
     "Construction Checkpoints": current(after, "Construction Checkpoints"),
+    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
   });
 }
 
-function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): void {
-  if (
-    getField(content, "Lifecycle Phase")?.toLowerCase() === "construction" &&
-    !humanPresenceGuardDisabled() && !authorizedConstructionPolicyChange(pd, content, field, value)
-  ) {
-    error(`No current unconsumed CONSTRUCTION_POLICY_RECORDED with Field: ${field}, Value: ${value}, and User Input: Approve authorizes this change. ` + CONSTRUCTION_POLICY_RECOVERY);
+// During Construction a policy change is the person's: they asked for it in
+// their own words since the last decision (the conductor read it), or chose it
+// at an older policy question. Returns the words of the turn that asked, for
+// the record, or null.
+function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): string | null {
+  if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction" || humanPresenceGuardDisabled()) return null;
+  const authority = constructionPolicyChangeAuthority(pd, content, field, value);
+  if (authority === null) {
+    error(
+      `No message from the person since the last decision asks to change ${field}. Change it only when they ask ` +
+        "for it, never to clear a refusal or on your own. " + CONSTRUCTION_POLICY_RECOVERY,
+    );
   }
+  return authority === "asked" ? latestPersonTurn(pd)?.words ?? null : null;
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1265,11 +1302,13 @@ function handleSetConstructionIteration(args: string[]): void {
     value,
   );
   if (updated !== content) {
-    requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
-    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value);
+    const words = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
   }
   writeStateFile(pd, updated);
-  console.log(JSON.stringify({ updated: true, construction_iteration: value }));
+  console.log(JSON.stringify({
+    updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
+  }));
   });
 }
 
