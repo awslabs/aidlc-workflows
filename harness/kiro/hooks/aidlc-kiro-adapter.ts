@@ -321,18 +321,21 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // anchor `... engine orchestrate next <ARGS>` bare (no shell capture, no pipe).
 // The body also holds prose examples of `next` (`next --stage <slug>`,
 // `next compose ...`) ahead of that anchor, so only the span followed by
-// "bare" is the person's dispatch. The repo's live kiro-cli 2.6.1 fixture
-// carries plain prompt text, while issue #776 measured Kiro IDE 1.0.309 and
-// kiro-cli 2.18.1 --v3 delivering the raw typed `/aidlc ...` text. The fallback
-// recovers argv directly from that raw shape.
+// "bare" is the person's dispatch, or the only span when there is one. The
+// repo's live kiro-cli 2.6.1 fixture carries plain prompt text, while issue
+// #776 measured Kiro IDE 1.0.309 and kiro-cli 2.18.1 --v3 delivering the raw
+// typed `/aidlc ...` text. The fallback recovers argv directly from that raw
+// shape.
 function extractNextInvocation(
   prompt: string,
 ): { raw: string; args: string[]; typed: string } {
   // The args end at the anchor's closing backtick. Accept the native
-  // dispatcher anchor and the legacy filename shape.
+  // dispatcher anchor and the legacy filename shape. A body with a single
+  // `next` span has no example to mistake for it.
+  const spans = [...prompt.matchAll(/(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)`/g)];
   const anchor = prompt.match(
     /(?:engine\s+orchestrate|aidlc-orchestrate\.ts)\s+next ?([^`\n]*)` bare\b/,
-  );
+  ) ?? (spans.length === 1 ? spans[0] : null);
   const rawInvocation = anchor
     ? anchor[1]
     : prompt.match(/^\s*\/aidlc(?![\w-])([\s\S]*)$/)?.[1];
