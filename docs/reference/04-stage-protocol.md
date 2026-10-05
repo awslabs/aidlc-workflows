@@ -387,8 +387,10 @@ modes mid-stage.
   User must see every option. File retains full option set.
 - Built-in "Other" takes an answer in the user's own words as their answer,
   or opens a discussion when they ask about the question. Tell user before
-  first batch: "Select 'Other' on any question to answer in your own words or
-  to discuss it."
+  first batch, naming that row as their tool labels it (Claude Code: "Type
+  something"; Codex's question tool: "None of the above"; a numbered row:
+  "Other"): "Pick "[that row]" on any question to answer in your own words or
+  talk it through."
 - After each batch, IMMEDIATELY write answers to the questions file
 - Log each batch with fresh ISO timestamp
 - Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print

@@ -150,7 +150,9 @@ reviewer, learnings, or approval steps.
   one-option call: the tool rejects it before the user can answer.
 - **"Other" escape**: `AskUserQuestion` has a built-in "Other" option, always
   available — do NOT add an explicit Other option to the spec's options list
-  for interactive batches. (Questions *files* still end every question with
+  for interactive batches. Claude Code labels that row "Type something", so
+  that is its name whenever you mention it to the person: "Pick "Type
+  something" on any question to answer in your own words or talk it through." (Questions *files* still end every question with
   `X. Other (please specify)` per protocol §3 — the file format is
   harness-neutral.)
 - **Answer capture**: the user's selection returns as the exact option label;

@@ -65,7 +65,10 @@ Map the spec fields 1:1:
 - When a question has a recommended option, list it FIRST and append
   "(Recommended)" to its label — the tool renders recommended-first natively.
 - The tool auto-appends a "None of the above" escape with a notes field — do
-  NOT add an explicit Other option to the tool call. (Questions *files* still
+  NOT add an explicit Other option to the tool call. Name it as shown when you
+  mention it to the person: "Pick "None of the above" on any question and add
+  your own words in its notes (Tab), or tell me what you'd like to talk
+  through." (Questions *files* still
   end every question with `X. Other (please specify)` per protocol §3 — the
   file format is harness-neutral.)
 - Limits: 1–3 questions per call, 2–3 options each. For 4+ options, split
