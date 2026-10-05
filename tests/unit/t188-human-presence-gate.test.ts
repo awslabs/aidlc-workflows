@@ -404,83 +404,38 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
+  // The agent reports the approval it read from the person's reply; the
+  // receipt names Accept as-is only once the gate offers it.
   test.each([2, 3])(
     "decorated Accept as-is respects the revision limit at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
-      const reply = "Accept as-is (Recommended)";
       expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-
-      if (revisionCount < 3) {
-        const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
-        expect(direct.rc, direct.out).not.toBe(0);
-        const refusal = JSON.parse(direct.out);
-        expect(refusal.error).toContain("did not match one of the offered choices");
-        expect(refusal.error).toContain(`the reply ${JSON.stringify(reply)}`);
-      }
-
-      const report = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        "--user-input",
-        reply,
-      ]);
+      const report = guardedReport(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is (Recommended)"]);
       expect(report.rc, report.out).toBe(0);
-      if (revisionCount < 3) {
-        const directive = JSON.parse(report.out);
-        expect(directive.kind).toBe("error");
-        expect(directive.message).toContain("did not match an offered choice");
-        expect(directive.message).toContain(`received reply ${JSON.stringify(reply)}`);
-        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-        expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-      } else {
-        expect(report.out).toContain('"kind":"done"');
-        expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
-        expect(
-          readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-        ).toContain("**User Input**: Accept as-is\n");
-        expect(field(proj, "Current Stage")).not.toBe(slug);
-      }
+      expect(report.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
+        .toContain(revisionCount >= 3 ? "**User Input**: Accept as-is\n" : "**User Input**: Approve\n");
+      expect(field(proj, "Current Stage")).not.toBe(slug);
     },
   );
 
-  test.each(["(Recommended)", "Approve (Recommended) extra", undefined])(
-    "state and report refuse an unoffered approval reply: %s",
+  test.each(["(Recommended)", "Approve (Recommended) extra"])(
+    "the agent's reported approval records as Approve, whatever it passes: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-      const inputArgs = reply === undefined ? [] : ["--user-input", reply];
-      const displayedReply = JSON.stringify(reply ?? "(empty)");
-
-      const direct = guarded(proj, ["approve", slug, ...inputArgs]);
-      expect(direct.rc, direct.out).not.toBe(0);
-      const refusal = JSON.parse(direct.out);
-      expect(refusal.error).toContain("did not match one of the offered choices");
-      expect(refusal.error).toContain(`the reply ${displayedReply}`);
-
-      const report = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        ...inputArgs,
-      ]);
-      expect(report.rc, report.out).toBe(0);
-      const directive = JSON.parse(report.out);
-      expect(directive.kind).toBe("error");
-      expect(directive.message).toContain("did not match an offered choice");
-      expect(directive.message).toContain(`received reply ${displayedReply}`);
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-      expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+      const direct = guarded(proj, ["approve", slug, "--user-input", reply]);
+      expect(direct.rc, direct.out).toBe(0);
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+      expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
+        .toContain("**User Input**: Approve\n");
     },
   );
 
@@ -505,6 +460,97 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(field(proj, "Current Stage")).toBe(slug);
     },
   );
+
+  // A stop is the person's to make. On a host whose hooks can miss a reply,
+  // a park under autonomous Construction is theirs even with no reply on
+  // record; on other hosts, and in an unattended run, the run keeps moving.
+  test("a park under autonomous Construction with no reply on record parks on a missed-reply host only", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    appendAuditEntry("QUESTION_ANSWERED", { Stage: field(proj, "Current Stage"), Details: "an earlier answer" }, proj);
+    const claude = guarded(proj, ["park"]);
+    expect(claude.rc).not.toBe(0);
+    expect(claude.out).toContain("no reply from the person is on record");
+    expect(claude.out).not.toContain("unattended autonomous run");
+    expect(guarded(proj, ["park"], true, KIRO_CLI_STATE).rc).not.toBe(0);
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    const kiro = guarded(proj, ["park"], false, KIRO_CLI_STATE);
+    expect(kiro.rc, kiro.out).toBe(0);
+    expect(kiro.out).toContain("this host can miss one");
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // An unattended run never parks itself, whatever the ledger holds, and an
+  // empty ledger is no reply from the person.
+  test("an autonomous park needs a recorded reply in an attended session", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    // Empty ledger: no reply on record, so the run keeps moving.
+    const empty = guarded(proj, ["park"]);
+    expect(empty.rc, empty.out).not.toBe(0);
+    expect(empty.out).toContain("no reply from the person is on record");
+    // A reply on record, but the driver declared the run unattended.
+    recordHumanTurn(proj);
+    for (const tool of [STATE, KIRO_CLI_STATE]) {
+      expect(guarded(proj, ["park"], true, tool).rc).not.toBe(0);
+    }
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // The same reply in an attended session is the person's stop.
+    const attended = guarded(proj, ["park"]);
+    expect(attended.rc, attended.out).toBe(0);
+    expect(readFileSync(sf, "utf-8")).toContain("- **Parked By**: person");
+  });
+
+  // One owner for every caller: with AIDLC_UNATTENDED=1 an autonomous run
+  // never parks itself, whatever the caller passes, so nobody is left to
+  // resume it.
+  test("an unattended autonomous run never parks through park, report --park, or the Plan Approval answer's park", () => {
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace(
+      "## Runtime State", "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    ), "utf-8");
+    recordHumanTurn(proj);
+    // 1. `state park`.
+    const park = guarded(proj, ["park"], true);
+    expect(park.rc).not.toBe(0);
+    expect(park.out).toContain("AIDLC_UNATTENDED=1 is set");
+    // 2. `orchestrate report --park` at a gate the person answered.
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_UNATTENDED: "1" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const report = spawnSync(BUN, [
+      ORCHESTRATE, "report", "--stage", slug, "--result", "approved", "--user-input", "Approve", "--park",
+      "--project-dir", proj,
+    ], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(`${report.stdout}`).not.toContain('"kind":"parked"');
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+    // 3. The Plan Approval answer's park passes attended: true; the owner still refuses.
+    const inProcess = spawnSync(BUN, ["-e", `
+      const { parkWorkflow } = await import(${JSON.stringify(STATE)});
+      try { parkWorkflow(${JSON.stringify(proj)}, { attended: true }); console.log("parked"); }
+      catch (e) { console.log("refused: " + (e instanceof Error ? e.message : String(e))); }
+    `], { env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(`${inProcess.stdout}${inProcess.stderr}`).not.toContain("parked\n");
+    expect(readFileSync(sf, "utf-8")).not.toContain("- **Parked**:");
+  });
+
+  test("an approval that names no choice records nothing, even after the person replied", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const direct = guarded(proj, ["approve", slug]);
+    expect(direct.rc).not.toBe(0);
+    expect(direct.out).toContain("no choice was passed");
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+  });
 
   // --- Scenario H: persisted per-work switches cannot lower the key holder ---
   test("H: a persisted human-presence Guards Off entry is ignored", () => {
@@ -1130,22 +1176,26 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("COMMITS with a HUMAN_TURN, then a second answer this turn REFUSES", () => {
+    // From a live Kiro IDE run: the person answered five practice questions in
+    // one reply, the first answer recorded, and the rest were refused. One reply
+    // answers every question open when it arrived, each as its own answer; a
+    // question asked after it waits for the next reply.
+    test("one reply answers every question open when it arrived; a question asked after it waits", () => {
       const slug = field(proj, "Current Stage");
+      for (const question of ["Way of working?", "Walking skeleton?", "How much testing?"]) {
+        expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", question, "--options", "A,B"]).rc).toBe(0);
+      }
       recordHumanTurn(proj);
-      const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]);
-      expect(r.rc).toBe(0);
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
-      // The QUESTION_ANSWERED is the new boundary: a second answer with no fresh
-      // HUMAN_TURN refuses (one answer per human turn).
-      const r2 = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
-      expect(r2.rc).not.toBe(0);
-      // The person did reply, and the first answer used that reply: the refusal
-      // says so rather than asking them to reply again.
-      expect(r2.out).toContain("the person's latest reply is already recorded as an answer");
-      expect(r2.out).toContain("single answer entry");
-      expect(r2.out).not.toContain("no new human reply has arrived");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
+      for (const reply of ["A", "B", "A, with CI"]) {
+        const r = guardedLog(proj, ["answer", "--stage", slug, "--details", reply]);
+        expect(r.rc, r.out).toBe(0);
+      }
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
+      expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Deploy anywhere?", "--options", "A,B"]).rc).toBe(0);
+      const late = guardedLog(proj, ["answer", "--stage", slug, "--details", "A"]);
+      expect(late.rc).not.toBe(0);
+      expect(late.out).toContain("no new human reply has arrived for the question");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
     test("with no HUMAN_TURN on record, an attended answer still asks for a reply", () => {
@@ -1256,7 +1306,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       }
     }
 
-    test("a paraphrased approval is a no-op and report refuses it", () => {
+    test("a paraphrased answer is a no-op, and the agent's reported approval records as Approve", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
@@ -1282,9 +1332,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "The user approved",
       ]);
       expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
+      expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     });
 
     test("an interview answer still cannot authorize a later same-turn approval", () => {
@@ -1313,42 +1362,48 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       ]);
       expect(approve.rc).toBe(0);
       expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("did not match an offered choice");
+      // The turn was spent on the interview answer: no reply is behind this approval.
+      expect(approve.out).toContain("no new human reply");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 
-    test("a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer)", () => {
-      const slug = field(proj, "Current Stage");
-      guarded(proj, ["checkbox", `${slug}=in-progress`]);
-      guarded(proj, ["gate-start", slug]);
+    // "can you fix it?" is from a live run where the agent passed the person's
+    // question about a setting as their approval; presence alone refuses it.
+    test.each(["Approve (Recommended)", "can you fix it?"])(
+      "a redundant gate answer with NO human turn refuses (fabricated approve chain breaks at the answer): %s",
+      (reply) => {
+        const slug = field(proj, "Current Stage");
+        guarded(proj, ["checkbox", `${slug}=in-progress`]);
+        guarded(proj, ["gate-start", slug]);
 
-      const answer = guardedLog(proj, [
-        "answer",
-        "--stage",
-        slug,
-        "--details",
-        "Approve (Recommended)",
-      ]);
-      expect(answer.rc).not.toBe(0);
-      expect(answer.out).toContain("Cannot record this approval choice");
-      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+        const answer = guardedLog(proj, [
+          "answer",
+          "--stage",
+          slug,
+          "--details",
+          reply,
+        ]);
+        expect(answer.rc).not.toBe(0);
+        expect(answer.out).toContain("Cannot record this approval choice");
+        expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
 
-      const approve = guardedReport(proj, [
-        "--stage",
-        slug,
-        "--result",
-        "approved",
-        "--user-input",
-        "Approve (Recommended)",
-      ]);
-      expect(approve.rc).toBe(0);
-      expect(approve.out).toContain('"kind":"error"');
-      expect(approve.out).toContain("no new human reply has been received");
-      expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
-      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
-        `- [?] ${slug}`,
-      );
-    });
+        const approve = guardedReport(proj, [
+          "--stage",
+          slug,
+          "--result",
+          "approved",
+          "--user-input",
+          reply,
+        ]);
+        expect(approve.rc).toBe(0);
+        expect(approve.out).toContain('"kind":"error"');
+        expect(approve.out).toContain("no new human reply has been received");
+        expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+        expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+          `- [?] ${slug}`,
+        );
+      },
+    );
 
     test("rejection with NO human turn refuses without mutating state", () => {
       const slug = field(proj, "Current Stage");

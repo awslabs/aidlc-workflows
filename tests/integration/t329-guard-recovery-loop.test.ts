@@ -613,10 +613,12 @@ describe("t329 a guard-recovery ask holds the turn and keeps the human's selecti
     const expected = createHash("sha256")
       .update(label.replace(/\s+/g, " ").trim(), "utf-8")
       .digest("hex");
+    // Exactly one remedy's label: the person's pick, which the agent cannot overrule.
     expect(marker?.guard_recovery_response).toEqual({
       status: "awaiting-feedback",
       selection_sha256: expected,
       selected_op: (ask.remedies as Array<Record<string, unknown>>)[0].op,
+      picked_by: "person",
     });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

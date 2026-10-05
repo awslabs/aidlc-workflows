@@ -2,6 +2,8 @@ import { existsSync } from "node:fs";
 import { appendAuditEntries, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  latestPersonTurn,
+  personSpokeSinceGate,
   assertChangeControlLedgerWritable,
   CEREMONY_ENV,
   CEREMONY_FIELDS,
@@ -311,8 +313,8 @@ export function applyIntentSettings(
     if (loweredFence !== undefined) {
       const section = cc.memoryStrict.heading.replace(/^## /, "");
       die(
-        `Guard Policy is set to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
-          `so ${loweredFence.fence} cannot be turned off from chat. Edit that line to change it for everyone on this repo.`,
+        `Your team set Guard Policy to strict in ${cc.memoryStrict.path} (section: ${section}), ` +
+          `so ${loweredFence.fence} stays on for everyone on this repo. Changing that line there changes it.`,
       );
     }
   }
@@ -368,9 +370,18 @@ export function applyIntentSettings(
   if (lowering.length > 0 && process.env.AIDLC_UNATTENDED === "1") {
     die(guardSwitchRefusal(lowering[0], "config"));
   }
-  if (lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId)) {
-    die(guardSwitchRefusal(lowering[0], "config"));
+  // Lowering a fence is the person's call. Their typed switch carries it out,
+  // and so does this setter when a person has spoken since the last decision:
+  // the conductor runs what they asked for, in their own words.
+  if (
+    lowering.length > 0 && !typedByPerson && !fenceKeyBypassed(projectDir, sessionId) &&
+    !personSpokeSinceGate(projectDir, { requests: true })
+  ) {
+    // A question about the switch ("skip plan approval?") asks for nothing.
+    die(guardSwitchRefusal(lowering[0], "config", personSpokeSinceGate(projectDir)));
   }
+  // The setter carries out what the person asked: their words go on the record.
+  const askedIn = lowering.length > 0 && !typedByPerson ? latestPersonTurn(projectDir)?.words ?? null : null;
 
   const audit: AuditEntryInput[] = [];
   const lines: string[] = [];
@@ -475,7 +486,10 @@ export function applyIntentSettings(
       // Each event named literally at its own call, not through a ternary on
       // eventType: the emitter drift guard reads these call sites as text, and a
       // computed event name is invisible to it.
-      const fenceFields = { Guard: request.fence, Scope: scopeName, Source: request.source };
+      const fenceFields = {
+        Guard: request.fence, Scope: scopeName, Source: request.source,
+        ...(askedIn && after.value === "off" ? { "Person Reply": askedIn } : {}),
+      };
       audit.push(
         after.value === "off"
           ? { eventType: "GUARD_DISABLED", fields: fenceFields }
@@ -509,7 +523,13 @@ export function applyIntentSettings(
     const oldValue = resolution.intent?.value ?? resolution.rawStateValue ?? resolution.scopeDefault;
     // Same as Guard Policy: a scope's default that keeps the value writes no row.
     if (oldValue === value && scopeDefault(flag)) continue;
-    audit.push({ eventType: "CEREMONY_SET", fields: { Key: key, Old: oldValue, New: value, Source: source } });
+    audit.push({
+      eventType: "CEREMONY_SET",
+      fields: {
+        Key: key, Old: oldValue, New: value, Source: source,
+        ...(askedIn && source === "command" && value === "off" ? { "Person Reply": askedIn } : {}),
+      },
+    });
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     lines.push(`${field} changed: ${oldDisplay} to ${line}`);
@@ -696,8 +716,8 @@ export function formatPlanApprovalSetting(setting: PlanApprovalSetting): string 
 }
 
 export function planApprovalMemoryLockRefusal(path: string): string {
-  return `Guard Policy is set to strict in ${path}, so plan approval stays on for everyone on this repo and ` +
-    "cannot be turned off from chat. Edit that file to change it.";
+  return `Your team set Guard Policy to strict in ${path}, so plan approval stays on for everyone on this ` +
+    "repo. Changing that line there changes it.";
 }
 
 // --- Plan approval off, asked before the piece of work exists ----------------

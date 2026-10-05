@@ -360,7 +360,7 @@ describe("t115 report refuses arguments it cannot act on", () => {
       ],
       [
         ["report", "--result", "approved", "--user-input"],
-        "report --user-input requires the offered choice",
+        "report --user-input requires the choice the person made",
       ],
       [
         ["report", "--result", "approved", "--stage"],

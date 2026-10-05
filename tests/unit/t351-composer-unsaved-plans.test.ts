@@ -484,6 +484,9 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const command = /`([^`]*engine recompose [^`]*)`/.exec(d.message)?.[1] ?? "";
     expect(command.endsWith("engine recompose --skip team-formation"), d.message).toBe(true);
     expect(d.message).toContain('"Skipped team-formation. To undo it, type `/aidlc --add team-formation`."');
+    // The one line is all the person hears: recompose's counts stay out of the reply.
+    expect(d.message).toContain("do not show its output");
+    expect(d.message).not.toContain("print its output verbatim");
     const words = command.split(" ");
     const applied = runTool(proj, "aidlc.ts", words.slice(words.indexOf("engine")));
     expect(applied.status, applied.out).toBe(0);
@@ -502,6 +505,8 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(setting, both.message).toBeGreaterThan(-1);
     expect(setting).toBeLessThan(both.message.indexOf("engine recompose --add team-formation"));
     expect(both.message).toContain("To undo it, type `/aidlc --skip team-formation`.");
+    // The setting's own line is still shown; recompose's counts are not.
+    expect(both.message).toMatch(/config set depth minimal[^`]*` and print its output verbatim, then run `[^`]*engine recompose --add team-formation` to change this workflow's remaining stages as the person asked, and do not show its output/);
 
     const combined = nextDirective(proj, ["compose", "--skip", "team-formation", "trim it"]);
     expect(combined.kind).toBe("error");

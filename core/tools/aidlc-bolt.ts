@@ -51,7 +51,8 @@ import {
   claimAttemptFields,
   getField,
   holdsAuditLock,
-  humanActedSinceGate,
+  commandTurnHint,
+  humanRepliedSinceGate,
   humanPresenceGuardDisabled,
   readAuditShardEvents,
   unattendedHumanPresenceHint,
@@ -1231,14 +1232,14 @@ function handleSetAutonomy(args: string[]): void {
     if (
       flags.mode === "autonomous" &&
       !humanPresenceGuardDisabled() &&
-      !humanActedSinceGate(pd)
+      !humanRepliedSinceGate(pd)
     ) {
       error(
         "Refusing to switch Construction to autonomous: no reply from the person is on record since " +
           "the last gate resolution, and autonomous mode is granted only by their answer to the ladder " +
           "prompt (it waives every later gate, so the grant itself needs their reply). Run it after " +
           "they choose it. Do not log the ladder choice via aidlc-log answer; the choice is recorded " +
-          `by set-autonomy itself.${unattendedHumanPresenceHint()}`,
+          `by set-autonomy itself.${commandTurnHint(pd)}${unattendedHumanPresenceHint()}`,
       );
     }
 

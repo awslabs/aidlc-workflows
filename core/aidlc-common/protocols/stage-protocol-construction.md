@@ -183,14 +183,10 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-The human-turn hook reads the person's reply in that session to the pending
-command in their own words ("1", "approve" with a typo, "approved", or what
-they want changed). Only a reply that approves authorizes the receipt; an
-unrelated reply, **Request Changes**, or a reply from another session does not.
-Never write `--details "Approve"` unless their reply approves; passing their
-reply unchanged as one single-quoted `--details` argument (a `'` inside becomes
-`'\''` on POSIX shells, `''` on PowerShell) is always correct. Only then record their answer
-using the same session ID, and set the command:
+Read the person's reply in that session and record the choice they made. The
+human-turn hook keeps that they replied to this question and their exact words;
+a reply from another session, or to another question, does not count. When they
+approve, record their answer using the same session ID, and set the command:
 
 ```bash
 {{INVOKE}} engine log answer --stage "<directive.stage>" --checkpoint verification-command --command-file verification-command.txt --session "<session ID>" --details "Approve"
@@ -262,11 +258,11 @@ command, never abbreviated, in the approval question: "Verified with
 `<full command>` (exit 0). Approve this completed <unit>?" Use the full
 `verification_command` from the current tool output, with a code-span delimiter
 that preserves any backticks. The human's reply in that session, to this
-checkpoint question, authorizes the matching action whether they pick
-**Approve** / **Request Changes** or say it in their own words; an unrelated
-reply, another session's reply, or a reply to a different question does not.
-Pass their reply unchanged as one single-quoted `--user-input` argument; never
-pass a choice they did not make. The response is
+checkpoint question, authorizes the action you read from it: approve, or
+reject with what they asked to change (their words are kept with the record; add
+`--reason` when you want to say more). A reply from another session, or to a
+different question, does not count. When they approved and asked for a change,
+approve, then make the change and say in one line what you changed. The response is
 one-shot and bound to this Unit, kind, current fingerprint, verification proof ID,
 and authorized command digest. If the checkpoint changes, obtain a new directive,
 re-verify, and ask again; a reply captured before re-verification cannot approve
@@ -639,8 +635,8 @@ settled; do not regenerate or re-review them. Run the learnings presentation onl
 `--unit "<directive.unit>"` so pending human decisions remain attempt- and
 Unit-scoped. Every report call for this gate adds
 `--unit "<directive.unit>"`: first `awaiting-approval`, then `approved
---user-input '<their reply>'`, or `rejected --user-input '<their reply>'` and
-later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
+--user-input "Approve"` (with `--park` when they also asked to stop), or
+`rejected --user-input "Request Changes"` and later `revised`. Rejection floors only that Unit's lifecycle/review receipts;
 for `unit-end` it floors all stages in that Unit's chain. Re-run `next` after
 each accepted report. When Unit Ownership is absent or `solo`, follow the checkpoint or legacy
 policy above. The team-owned `unit_gate` path keeps its own approval rhythm and
@@ -846,10 +842,15 @@ prepare/fan-out/check/review/finalize loop run.
 When several Units' plans are ready at once, the engine asks about them in one
 question: `plan_approval.targets` carries each Unit's summary and plan path, and
 the choices are **Approve all**, **Request Changes**, and **I'll edit the files**.
-Show every Unit's summary lines under the question, end the turn, and run `next`
-after the reply. The human-turn hook reads it: "approve all" approves every Unit;
-a change that names a Unit ("change billing: use Stripe") sends just that Unit back
-with those words and approves the rest; a change that names no Unit records
-nothing and the hook asks you to ask once which plan should change. Every Unit
-still gets its own approval record, bound to its own plan; grouping only changes
-how the question is shown, and never approves a later batch.
+Show every Unit's summary lines under the question and end the turn. Read the
+person's reply and record the choice they made, as for one plan:
+`{{INVOKE}} engine log answer --stage code-generation --checkpoint plan-approval
+--details "Approve Plan"` (or `"Request Changes"`, or `"I'll edit the files"`),
+with `--units "<unit>,<unit>"` to record a choice for some Units, then the rest;
+then run `next`. "Approve all" approves every Unit. For a change that names a
+Unit ("change billing: use Stripe"), record Request Changes for that Unit and
+Approve Plan for the rest; for a change that names no Unit, ask once which plan
+should change. An exact "Approve all" or "I'll edit the files" is recorded for
+you; a bare Request Changes still needs to know which plan. Every Unit still
+gets its own approval record, bound to its own plan; grouping only changes how
+the question is shown, and never approves a later batch.

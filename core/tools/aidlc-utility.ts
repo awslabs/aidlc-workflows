@@ -347,6 +347,8 @@ import {
   legacyParkedRefPrefix,
   parkedRefPrefix,
   normalizeDriveLetter,
+  recordDir,
+  removeRecordFileNoFollow,
   toPosix,
   UTILITY_COMMANDS,
 } from "./aidlc-lib.ts";
@@ -9752,7 +9754,8 @@ function handleCodekbPublish(
 }
 
 // `aidlc-utility.ts codekb-scope-diff [--repo <name>] [--compare <timestamp.md>
-// | --check <timestamp.md> | --mint --paths <csv>] [--json]` - read-only. The deterministic half of the reverse-engineering
+// | --check <timestamp.md> | --mint --paths <csv>] [--json]` - read-only, except that a
+// compare removes the repo's own scope draft (below). The deterministic half of the reverse-engineering
 // rerun guard (the store is shared space-level knowledge; compare mode reports
 // which paths/components are no longer claimed as verified deep coverage).
 //
@@ -9781,7 +9784,23 @@ function handleCodekbPublish(
 //
 // Always exits 0 with the verdict in the output (read-only query - mirrors
 // codekb-path; refusals are for lifecycle verbs). No mkdir, no state write,
-// no audit.
+// no audit. The one write: the compared repo's own `scope-draft-<repo>.md` in
+// the active record's `inception/reverse-engineering/` is the stage's
+// temporary input, written only for this compare, so the compare removes it
+// whatever the verdict (no shell delete). `record` is the record the handler
+// selected, so the draft is checked against the same record the compare ran for.
+function comparedScopeDraft(
+  record: string | null,
+  incomingPath: string,
+  repo: string,
+): { record: string; rel: string } | null {
+  const name = `scope-draft-${repo}.md`;
+  if (basename(incomingPath) !== name) return null;
+  if (record === null || !existsSync(record)) return null;
+  const rel = toPosix(relative(realpathSync(record), realpathSync(resolve(incomingPath))));
+  return rel === `inception/reverse-engineering/${name}` ? { record, rel } : null;
+}
+
 function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const selection = resolveWorkflowSelection(projectDir);
@@ -9863,33 +9882,49 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
     return;
   }
 
+  // A compare reads its incoming file first and removes the repo's own scope
+  // draft then, so no store verdict below leaves the draft in the record.
+  let incomingText = "";
+  let removed: { draft_removed?: true } = {};
+  let removedLine = "";
+  if (flags.compare !== undefined) {
+    const incomingPath = flags.compare;
+    if (!incomingPath || !existsSync(incomingPath)) {
+      die(`codekb-scope-diff --compare: file not found: ${incomingPath || "(missing path)"}`);
+    }
+    incomingText = readFileSync(incomingPath, "utf-8");
+    const record = selection.intent === null ? null : recordDir(projectDir, selection.intent, space);
+    const draft = comparedScopeDraft(record, incomingPath, repo);
+    if (draft !== null) {
+      removeRecordFileNoFollow(draft.record, draft.rel);
+      removed = { draft_removed: true };
+      removedLine = "\nThe scope draft has been removed.";
+    }
+  }
+
   if (!existsSync(storePath)) {
     emit(
-      { verdict: "NO_STORE" },
-      `NO_STORE: no reverse-engineering-timestamp.md at ${storeDir}/ - first scan, nothing to compare.`,
+      { verdict: "NO_STORE", ...removed },
+      `NO_STORE: no reverse-engineering-timestamp.md at ${storeDir}/ - first scan, nothing to compare.${removedLine}`,
     );
     return;
   }
   const parsed = parseReScope(readFileSync(storePath, "utf-8"));
   if (!parsed.ok) {
     emit(
-      { verdict: "UNKNOWN_SCOPE", reason: parsed.reason, detail: parsed.detail },
-      `UNKNOWN_SCOPE (${parsed.reason}): ${parsed.detail}. The store predates scope tracking. A focused merge may retain its prose, but prior paths and components are not claimed as verified coverage until rescanned.`,
+      { verdict: "UNKNOWN_SCOPE", reason: parsed.reason, detail: parsed.detail, ...removed },
+      `UNKNOWN_SCOPE (${parsed.reason}): ${parsed.detail}. The store predates scope tracking. A focused merge may retain its prose, but prior paths and components are not claimed as verified coverage until rescanned.${removedLine}`,
     );
     return;
   }
   const store = parsed.scope;
 
   if (flags.compare !== undefined) {
-    const incomingPath = flags.compare;
-    if (!incomingPath || !existsSync(incomingPath)) {
-      die(`codekb-scope-diff --compare: file not found: ${incomingPath || "(missing path)"}`);
-    }
-    const incomingParsed = parseReScope(readFileSync(incomingPath, "utf-8"));
+    const incomingParsed = parseReScope(incomingText);
     if (!incomingParsed.ok) {
       emit(
-        { verdict: "UNKNOWN_SCOPE", reason: incomingParsed.reason, detail: `incoming: ${incomingParsed.detail}` },
-        `UNKNOWN_SCOPE (incoming ${incomingParsed.reason}): ${incomingParsed.detail}.`,
+        { verdict: "UNKNOWN_SCOPE", reason: incomingParsed.reason, detail: `incoming: ${incomingParsed.detail}`, ...removed },
+        `UNKNOWN_SCOPE (incoming ${incomingParsed.reason}): ${incomingParsed.detail}.${removedLine}`,
       );
       return;
     }
@@ -9912,6 +9947,7 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
       incoming_intent: incoming.intent,
       discarded_paths: discardedPaths,
       discarded_components: discardedComponents,
+      ...removed,
     };
     if (narrower) {
       emit(
@@ -9921,10 +9957,11 @@ function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>
           (discardedComponents.length > 0
             ? `\n  components: ${discardedComponents.join(", ")}`
             : "") +
-          `\n(store intent: ${store.intent || "unrecorded"}; incoming intent: ${incoming.intent || "unrecorded"})`,
+          `\n(store intent: ${store.intent || "unrecorded"}; incoming intent: ${incoming.intent || "unrecorded"})` +
+          removedLine,
       );
     } else {
-      emit(payload, `COVERS: the incoming scan covers everything the store analyzed.`);
+      emit(payload, `COVERS: the incoming scan covers everything the store analyzed.${removedLine}`);
     }
     return;
   }
@@ -11924,9 +11961,10 @@ export async function main(argv: string[]): Promise<void> {
     case "codekb-publish":
       handleCodekbPublish(projectDir, flags);
       break;
-    // codekb-scope-diff - read-only query verb. Compares the codekb store's
-    // recorded scope of analysis against the live tree (status) or an
-    // incoming run's timestamp (--compare). The RE stage's rerun guard.
+    // codekb-scope-diff - query verb. Compares the codekb store's recorded
+    // scope of analysis against the live tree (status) or an incoming run's
+    // timestamp (--compare). The RE stage's rerun guard. Read-only except that
+    // a compare removes the repo's own scope draft from the active record.
     case "codekb-scope-diff":
       handleCodekbScopeDiff(projectDir, flags);
       break;

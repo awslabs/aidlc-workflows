@@ -36,7 +36,11 @@
 //     A turn can end while subagents still run, and the session goes on when
 //     they report, so the stream closes only at a result with no task pending
 //     (task_started without its task_notification), or when the drive ends:
-//     a stop, an abort, or its own timeout.
+//     a stop, an abort, or its own timeout. A task that finished while the
+//     turn still ran (task_updated "completed") is reported to the lead inside
+//     that turn and gets no notification, so once every pending task has
+//     finished, a result waits SETTLED_TASK_REPORT_WAIT_MS for one and then
+//     counts as the end of the turn.
 //   - on Windows the CLI is spawned through Options.spawnClaudeCodeProcess
 //     into a kill-on-close Job Object (sdk-process-containment.ts) and the
 //     whole tree is ended after every drive, because the SDK's abort kills
@@ -336,15 +340,38 @@ export function chatAboutThisResult(questions: AskUserQuestionItem[]): string {
 ${questions.map((q) => `- "${q.question}"\n  (No answer provided)`).join("\n")}`;
 }
 
+/** How long a result waits for the report of a task the CLI already marked
+ *  finished. A report that resumes the session follows the result within a
+ *  second; one that never comes was handed to the lead inside the turn. */
+export const SETTLED_TASK_REPORT_WAIT_MS = 30_000;
+
+const FINISHED_TASK_STATUSES = new Set(["completed", "failed", "killed"]);
+
+/** The status a task_updated message sets, if it sets one. */
+export function taskUpdateStatus(message: Record<string, unknown>): string | undefined {
+  const patch = message.patch as { status?: unknown } | undefined;
+  return typeof patch?.status === "string" ? patch.status : undefined;
+}
+
 /** Tasks the CLI has started and not yet reported, read from its
  *  task_started and task_notification messages. Only the notification counts:
  *  a task_updated "completed" can arrive before the result while the
- *  notification that resumes the session arrives after it. */
-export function trackDriveTask(pending: Set<string>, message: Record<string, unknown>): void {
+ *  notification that resumes the session arrives after it. A task_updated
+ *  that finishes a task also puts it in `settled`: a background task that
+ *  finishes while the turn is still running has its report handed to the lead
+ *  inside that turn, and no notification ever follows. */
+export function trackDriveTask(
+  pending: Set<string>,
+  message: Record<string, unknown>,
+  settled?: Set<string>,
+): void {
   const taskId = typeof message.task_id === "string" ? message.task_id : undefined;
   if (taskId === undefined) return;
   if (message.subtype === "task_started") pending.add(taskId);
   if (message.subtype === "task_notification") pending.delete(taskId);
+  if (message.subtype === "task_updated" && FINISHED_TASK_STATUSES.has(taskUpdateStatus(message) ?? "")) {
+    settled?.add(taskId);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +477,12 @@ export interface DriveOptions {
    * such result, as before.
    */
   nextMessage?: (turn: DriveTurnEnd) => string | undefined;
+  /**
+   * After a result, how long to wait for the report of a task the CLI already
+   * marked finished before the turn counts as ended. Default
+   * SETTLED_TASK_REPORT_WAIT_MS; calibration tests shorten it.
+   */
+  settledTaskReportWaitMs?: number;
   /** Capture every Stop hook verdict into DriveResult.stopHooks. */
   captureStopHooks?: boolean;
   /**
@@ -709,10 +742,55 @@ export async function driveAidlc(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const input = driveInput(prompt);
   const pendingTasks = new Set<string>();
+  const settledTasks = new Set<string>();
   const closeInput = (reason: string): void => {
     if (input.closedReason !== undefined) return;
     writeSdkTrace(tracePath, "input_closed", { reason, pendingTasks: [...pendingTasks] });
     input.close(reason);
+  };
+  // A turn ended: send the person's next message, or close the input.
+  const endTurn = (closeReason: string): void => {
+    const ended: DriveTurnEnd = {
+      turn,
+      askedQuestions: askedQuestions.length,
+      toolResults: toolResults.length,
+      stopHooks: stopHooks.length,
+    };
+    turns.push(ended);
+    const next = resultEvent?.is_error ? undefined : opts.nextMessage?.(ended);
+    if (next === undefined) {
+      closeInput(closeReason);
+    } else {
+      turn++;
+      writeSdkTrace(tracePath, "next_message", { turn, message: next });
+      input.send(next);
+    }
+  };
+  // A result with tasks still unreported keeps the stream open, as the session
+  // resumes when they report. When every one of them has already finished, its
+  // report either follows the result at once or was handed to the lead inside
+  // the turn and never comes; after a short wait the turn counts as ended.
+  const settledWaitMs = opts.settledTaskReportWaitMs ?? SETTLED_TASK_REPORT_WAIT_MS;
+  let awaitingReports = false;
+  let settledTimer: ReturnType<typeof setTimeout> | undefined;
+  const watchSettledReports = (): void => {
+    const waiting = awaitingReports && input.closedReason === undefined && pendingTasks.size > 0 &&
+      [...pendingTasks].every((taskId) => settledTasks.has(taskId));
+    if (!waiting) {
+      if (settledTimer) clearTimeout(settledTimer);
+      settledTimer = undefined;
+      return;
+    }
+    settledTimer ??= setTimeout(() => {
+      settledTimer = undefined;
+      writeSdkTrace(tracePath, "settled_tasks_unreported", {
+        pendingTasks: [...pendingTasks],
+        waitedMs: settledWaitMs,
+      });
+      pendingTasks.clear();
+      awaitingReports = false;
+      endTurn("result with finished tasks reported inside the turn");
+    }, settledWaitMs);
   };
 
   try {
@@ -816,9 +894,14 @@ export async function driveAidlc(
 
     for await (const msg of run) {
       writeSdkTrace(tracePath, "message", { type: msg.type });
+      // The lead's own messages mean the session resumed; a subagent's do not.
+      if ((msg.type === "assistant" || msg.type === "user") &&
+        !(msg as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
+        awaitingReports = false;
+      }
       if (msg.type === "system") {
         const m = msg as Record<string, unknown>;
-        trackDriveTask(pendingTasks, m);
+        trackDriveTask(pendingTasks, m, settledTasks);
         if (m.subtype === "hook_response" && m.hook_event === "Stop") {
           const stop = capturedStopHook(m, turn);
           stopHooks.push(stop);
@@ -828,7 +911,7 @@ export async function driveAidlc(
           writeSdkTrace(tracePath, "system", {
             subtype: m.subtype,
             taskId: typeof m.task_id === "string" ? m.task_id : undefined,
-            status: typeof m.status === "string" ? m.status : undefined,
+            status: typeof m.status === "string" ? m.status : taskUpdateStatus(m),
             pendingTasks: pendingTasks.size,
           });
         }
@@ -974,25 +1057,15 @@ export async function driveAidlc(
           pendingTasks: pendingTasks.size,
         });
         // With a task still unreported the session resumes when it reports,
-        // so the stream stays open; the drive's own timeout bounds the wait.
+        // so the stream stays open; the drive's own timeout bounds the wait,
+        // except for tasks that already finished (watchSettledReports).
         if (resultEvent.is_error || pendingTasks.size === 0) {
-          const ended: DriveTurnEnd = {
-            turn,
-            askedQuestions: askedQuestions.length,
-            toolResults: toolResults.length,
-            stopHooks: stopHooks.length,
-          };
-          turns.push(ended);
-          const next = resultEvent.is_error ? undefined : opts.nextMessage?.(ended);
-          if (next === undefined) {
-            closeInput(resultEvent.is_error ? "error result" : "result with no task pending");
-          } else {
-            turn++;
-            writeSdkTrace(tracePath, "next_message", { turn, message: next });
-            input.send(next);
-          }
+          endTurn(resultEvent.is_error ? "error result" : "result with no task pending");
+        } else {
+          awaitingReports = true;
         }
       }
+      watchSettledReports();
     }
   } catch (err) {
     // An abort (timeout) surfaces as a thrown error from the generator. Swallow
@@ -1014,6 +1087,7 @@ export async function driveAidlc(
     }
   } finally {
     if (timer) clearTimeout(timer);
+    if (settledTimer) clearTimeout(settledTimer);
     closeInput(abortController.signal.aborted ? "drive stopped" : "drive ended");
     if (containment) {
       // End the CLI's whole tree before touching anything it may hold open.

@@ -1032,6 +1032,7 @@ describe("documentation parity derives current behavior from authored implementa
     for (const phrase of [
       "Setup check - ",
       "hook PATH ready",
+      "on this shell's PATH only",
       "every agent uses your ",
       "session's model and effort",
       "Runtime hook PATH",

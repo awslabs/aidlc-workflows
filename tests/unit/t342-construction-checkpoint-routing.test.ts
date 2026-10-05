@@ -885,10 +885,7 @@ describe("t342 Construction checkpoint routing", () => {
     policyHuman(p, "Approve", "other-session");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
     expect(policyChoice(p, "answer", field, "disabled", "other-session").status).not.toBe(0);
-    policyHuman(p, "hello");
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
-    policyHuman(p, "what does disabling them change?");
-    expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
+    // Free words are the agent's to read; an exact pick binds the proposal it answered.
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
     // Re-presenting a proposal invalidates the old hook response.
@@ -1955,9 +1952,16 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       `## Steps\n\n${steps.map((step) => `- [ ] ${step}`).join("\n")}\n\n${renderTestingContract(resolveTestingPosture(p))}`);
     writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n");
     expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
-    expect(hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    // The person approves in their own words; the agent records that choice.
+    hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", prompt: "approve",
-    })).toContain("Approve Plan");
+    });
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_UNATTENDED: "0" };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const recorded = tool(p, "log", [
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan", "--session", "t342-plan",
+    ], env);
+    expect(recorded.status, recorded.out).toBe(0);
     expect(next(p).plan_approval).toEqual({ status: "approved" });
     const brief = tool(p, "testing-posture", ["brief", "--unit", "beta"]);
     expect(brief.status, brief.out).toBe(0);

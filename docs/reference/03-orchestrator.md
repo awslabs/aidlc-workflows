@@ -137,7 +137,7 @@ There is no separate scaffold command (the earlier `init` flag was retired; the 
 2. Creates the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). It is free-form with no fixed file set — creation seeds no per-agent subdirectories and no READMEs; the team adds files itself.
 3. Scans the workspace and writes the intent's `aidlc-state.md` with the actual phase (e.g., `IDEATION` for `--scope feature`), the resolved scope, and the stage plan derived from the compiled scope grid (`scope-grid.json`, the transpose of each stage's `scopes:` frontmatter). The exact initial description is persisted as one JSON string in committed `project-description.json`; the state names that source and keeps a safe single-line `Project` preview.
 4. Emits the full event sequence: `WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, `PHASE_STARTED` for the first executing phase, `STAGE_STARTED` + `STAGE_COMPLETED` for each Initialization stage, plus `PHASE_SKIPPED` events for any phases the scope skips.
-5. Auto-creates only on a workspace with no unfinished intents (archived and finished intents do not count); with unfinished intents present and no active cursor, the engine prompts the user to pick one of them (`/aidlc intent <slug>`) rather than creating a duplicate. Finished intents are not listed or counted in that prompt; `/aidlc intent list` still shows them. A lone record found only because it is the only one (a fresh clone of a teammate's work) counts as not selected, so a bare `/aidlc` there also asks; a resumed session that carries its own UUID stamp is the exception, and continues that intent. There is no workflow re-birth flag; this is unrelated to project-level `aidlc config`.
+5. Auto-creates only on a workspace with no unfinished intents (archived and finished intents do not count); with unfinished intents present and no active cursor, the engine prompts the user to pick one of them, each named with where it stands (`at <stage>`, or `in Construction` for work going Unit by Unit), rather than creating a duplicate; a bare `next` and `next --resume` ask the same instead of answering that no workflow exists. Finished intents are not listed or counted in that prompt; `/aidlc intent list` still shows them. A lone record found only because it is the only one (a fresh clone of a teammate's work) counts as not selected, so a bare `/aidlc` there also asks; a resumed session that carries its own UUID stamp is the exception, and continues that intent. There is no workflow re-birth flag; this is unrelated to project-level `aidlc config`.
 6. When creation was reached via the auto-creation print, the conductor re-runs `next` and continues into the first post-Initialization stage; the explicit `/aidlc-init --scope <name>` packaging stops after Initialization so the user invokes `/aidlc` again to begin interactively. `/aidlc-init` with a description and no `--scope` creates nothing itself: it passes the description to `next --new-intent`, which, with no `--scope`, returns the same scope-confirm or compose offer as `/aidlc "<description>"` on a fresh workspace (and leaves any work in progress alone), carrying `--depth`, `--test-strategy`, and `--project-type` on the answer commands; once the user chooses, the flow continues as `/aidlc` does.
 
 ### Resume (State File Exists)
@@ -151,7 +151,7 @@ When the active intent's `aidlc-state.md` exists and a new harness session re-en
 
 Under solo unit-major Construction, Current Stage stays on the first per-unit stage while each Unit works through the later ones. The session-start context therefore names the active Unit's own stage (`Active Unit: <unit> on <stage>` and `Current Step: <stage> for unit <unit>`). Once any Unit has finished work, Redo names no jump, because a redo jump would throw away every Unit's finished work. It names `aidlc-jump.ts reopen --via redo` for that Unit's step instead, with no question, so only that Unit redoes it from a new attempt: the step the Unit is on or paused at (its build progress and Plan Approval do not carry over), the summary's step, or at a Unit checkpoint the last step the Unit did. The agent tells the person in one line what is redone; for Code Generation that is the plan too, which comes back to them for approval unless plan approval is off. A step the Unit has not started yet has nothing to reset, so Redo there tells the conductor to re-run `next` and do it. The reopen records Redo as the answer to that step's artifact re-use question, so the step's directive carries `artifact_reuse` and the conductor redoes it without asking Keep, Modify or Redo again. The other Units keep their finished work, reviews, Plan Approvals and checkpoint approvals.
 
-Explicit `/aidlc --resume` is different: the dispatcher calls `next --resume`, which skips the menu and falls through to the same continuation route as bare `next`. A parked workflow still emits the unpark instruction first, no state still errors, and `/aidlc --resume --stage <slug>` takes the explicit jump route.
+Explicit `/aidlc --resume` is different: the dispatcher calls `next --resume`, which skips the menu and falls through to the same continuation route as bare `next`. A parked workflow still emits the unpark instruction first; with no selected state, unfinished work in the space is put to the person to pick and only an empty space errors; and `/aidlc --resume --stage <slug>` takes the explicit jump route.
 
 ---
 
@@ -773,15 +773,15 @@ The orchestration engine owns every transition above. The conductor reports outc
 3. **Present the approval gate** (AskUserQuestion).
 
 4. **Record the user's response**:
-   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input '<their reply>'`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
-   - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input '<their reply>'` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
+   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
+   - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
    - After re-running work for a `[R]` stage, call `aidlc engine orchestrate report --stage <slug> --result revised` to re-enter the gate (re-runs gate sensors, emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). The approve-time unrecorded-revision backstop uses the same sensor enforcement before recovered re-entry; a blocking result leaves the durable state at `[R]`.
 
 5. **Advance to the next stage**: the approval report in step 4 also advances. The engine derives the next in-scope stage from the state file's EXECUTE/SKIP suffix (set by `init`) plus the compiled scope grid (`scope-grid.json`). It marks `[x]` on completed, `[-]` on next, updates Current Stage / Lifecycle Phase / Active Agent / Next Stage / Last Completed Stage / Last Updated / Completed count, and emits `STAGE_STARTED` for the next stage. At a phase boundary it additionally emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `PHASE_STARTED` atomically.
 
    The tool is idempotent — replaying `advance <slug>` a second time returns `{replay: true}` without re-emitting events.
 
-6. **If this was the last in-scope stage**: the same `report --stage <slug> --result approved --user-input '<their reply>'` call marks `[x]`, sets Status=Completed, and emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
+6. **If this was the last in-scope stage**: the same `report --stage <slug> --result approved --user-input "Approve"` call marks `[x]`, sets Status=Completed, and emits `PHASE_COMPLETED` + `PHASE_VERIFIED` + `WORKFLOW_COMPLETED`. Present a completion summary.
 
 7. **Transition tasks**: mark the old task `completed`, set the new task `in_progress` with `activeForm: "Running <Next Stage> [slug]"`. The `[slug]` suffix triggers the PostToolUse hook that syncs statusline fields.
 
@@ -995,26 +995,35 @@ Bun nor `jq` at runtime.
 
 ### Human turns and protected question responses
 
-The human-turn hook routes a reply to one recorder. While the engine's Plan
-Approval question is the active directive, `recordPlanApprovalAskReply` owns the
-reply: it reads it in the person's own words from any chat on this piece of
-work, takes the fingerprint of the plan files as they are, and writes the
-questions-file answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. A typed
-"review the plan" while an approved plan may keep building records a review
-request instead, and no other recorder reads that reply. A reply that picks a
-waiting guard-recovery question's choice, by its number, label, or a lead
-"Request Changes:", is that question's answer, not a review request. Otherwise
-the reply goes to the legacy Kiro IDE path's
-`recordPlanApprovalHumanResponse`, or to `recordProtectedHumanResponse` for the
-session's verification-command, Construction-policy, or checkpoint-approval
-question. Minting either challenge removes the other challenge and response;
-if conflicting files nevertheless exist, the hook deletes both and records no
-response. A protected response binds the session, fresh challenge ID, and offered
-choice. Its consumer also requires the current canonical target digest.
+The human-turn hook keeps that a person replied to the open question, and their
+exact words; it never reads meaning into them. The conductor reads the reply and
+records the choice the person made through the question's own command; the
+engine requires a reply since the question was shown and carries the person's
+words on the receipt (`Person Reply`). While the engine's Plan Approval
+question is the active directive, `notePlanApprovalAskReply` keeps each message
+on the open question from any chat on this piece of work, and the conductor's
+`answer --checkpoint plan-approval` (`recordPlanApprovalAnswer`) takes the
+fingerprint of the plan files as they are, writes the questions-file answer, the
+receipt, and the `PLAN_APPROVAL_RECORDED` row. A request to look at the plan
+again is the conductor's `answer --details "Review the plan"`
+(`requestPlanApprovalReviewNow`). Otherwise the reply goes to the
+legacy Kiro IDE path's `recordPlanApprovalHumanResponse`, or to
+`recordProtectedHumanResponse` for the session's verification-command,
+Construction-policy, or checkpoint-approval question. Minting either challenge
+removes the other challenge and response; if conflicting files nevertheless
+exist, the hook deletes both and records no
+response. A protected response binds the session, the fresh challenge ID, and the
+person's words, and a reply that is exactly one offered choice also records it
+as their pick. Its consumer also requires the current canonical target digest.
 
-When a picker supplies the rendered question, the hook requires its exact text
-digest to match the minting command's `--decision` text. Without rendered text,
-the one-open-question rule is the fallback. Every `log decision`, including an
+When a picker supplies the rendered question, a single pick answers the
+protected question when its exact text digest matches the minting command's
+`--decision` text, or, however the conductor worded it, when the picker offers
+only Approve and Request Changes (`(Recommended)` stripped) and the person
+picked one of them. Several picks never answer it, even under the exact text;
+a picker offering any other option, or a pick outside those two, answers some
+other question. Without rendered text, the one-open-question rule is the
+fallback. Every `log decision`, including an
 ordinary question, withdraws protected consent for its explicit or
 ancestry-resolved session before recording the decision; if the session cannot
 be resolved, it withdraws every session's protected consent. Opening a lifecycle

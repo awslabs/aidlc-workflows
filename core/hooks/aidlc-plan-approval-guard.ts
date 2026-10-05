@@ -593,9 +593,10 @@ function authorityRemedy(
         `they are done, run ${nextOnItsOwn()}, and follow the step it prints.`;
     }
     return (
-      "The plan is waiting for the person to approve it. Show them the question from the last `next`, end " +
-      `the turn, and after they answer, run ${nextOnItsOwn()}. Nothing is built or changed until then, and ` +
-      "the plan files stay as the person sees them."
+      "The plan is waiting for the person to approve it. Show them the question from the last `next` and end " +
+      "the turn; when they reply, record the choice they made (the stage's `log answer` step), then run " +
+      `${nextOnItsOwn()}. Nothing is built until then. Once they have replied, only the asked plan's own plan ` +
+      "and test instructions can change, for what they asked."
     );
   }
   const stands = standing === null
@@ -786,6 +787,36 @@ function isTrustedRecordTarget(
       relative(projectLexical, targetAbs),
     );
     return isWithinDir(targetAbs, recordAbs);
+  } catch {
+    return false;
+  }
+}
+
+// The asked plans' own plan files the person's reply opened, loaded only while
+// the engine's Plan Approval question is open. Nothing is open when that module
+// cannot be read, so the write is refused as before.
+function planApprovalReplyEditableFiles(projectDir: string): string[] {
+  try {
+    return (require("../tools/aidlc-plan-approval-ask.ts") as typeof import("../tools/aidlc-plan-approval-ask.ts"))
+      .planApprovalReplyEditableFiles(projectDir);
+  } catch {
+    return [];
+  }
+}
+
+// While the engine's Plan Approval question is open and the person has replied,
+// a file-tool write of exactly one of the asked plans' own plan or test
+// instructions (planApprovalReplyEditableFiles), reached through no symlink and
+// not hard-linked to another file, carries out what they asked with their
+// answer. The approval they give then covers the plan as it stands.
+function isRepliedPlanFileTarget(projectDir: string, target: string, editable: string[]): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    if (!editable.some((file) => normalizeDriveLetter(resolve(file)) === normalizeDriveLetter(targetAbs))) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    const existing = lstatSync(targetAbs, { throwIfNoEntry: false });
+    return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
     return false;
   }
@@ -1104,7 +1135,11 @@ function codeGenerationGateHeld(state: string): boolean {
     );
 }
 
-function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
+function isPlanApprovalPrerequisite(
+  args: string[],
+  gateHeld = false,
+  personSpoke: () => boolean = () => false,
+): boolean {
   if (args[0] !== "engine") return false;
   // Direct refusals can offer the abort or the fence switch without publishing
   // a selection marker. The strict drift ask in this hook prints
@@ -1182,12 +1217,19 @@ function isPlanApprovalPrerequisite(args: string[], gateHeld = false): boolean {
   }
   if (noun === "state" && CONSTRUCTION_ENTRY_SETTERS.has(verb)) return true;
   if (noun === "bolt" && verb === "set-autonomy") return true;
-  // Turning plan approval on only adds the stop, so the person can ask for it
-  // while a plan waits. Turning it off stays the person's own typed turn.
+  // Plan approval on or off for this piece of work is the person's call, said
+  // in their own words. On only adds the stop; off is carried out when a person
+  // has spoken since the last decision, so the conductor runs what they asked.
   if (
     noun === "config" && verb === "set" && args.length === 5 &&
-    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") && args[4] === "on"
+    ["plan-approval", "guard.plan-approval"].includes(args[3] ?? "") &&
+    (args[4] === "on" || (args[4] === "off" && personSpoke()))
   ) {
+    return true;
+  }
+  // Recording the remedy the person picked on the engine's recovery question
+  // writes nothing in the workspace; the picked remedy is admitted after it.
+  if (noun === "log" && verb === "answer" && lastFlagValue(args.slice(3), "--checkpoint") === "guard-recovery") {
     return true;
   }
   // The walking-skeleton stance is the same kind of entry choice, recorded
@@ -1302,8 +1344,8 @@ function isFrameworkToolInvocation(
   askAdmits: (engineArgs: readonly string[]) => boolean = () => false,
 ): boolean {
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
+    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir, { requests: true })) ||
+    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
   if (isNativePlanApprovalPrerequisite(name, args, admitted, enginePaths)) {
     // A wrapper (env -C, sudo -D, xargs) can run it against another directory
     // than the one these admissions were judged for.
@@ -1446,8 +1488,8 @@ function shellInvocationNeedsApproval(
   const unwrapped = (invocation.launchers?.length ?? 0) === 0 &&
     !invocation.dataDriven && !invocation.executableResolutionChanged;
   const admitted = (engineArgs: string[]): boolean =>
-    isPlanApprovalPrerequisite(engineArgs, gateHeld) || askAdmits(engineArgs) ||
-    isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
+    isPlanApprovalPrerequisite(engineArgs, gateHeld, () => personSpokeSinceGate(projectDir, { requests: true })) ||
+    askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs);
   if (
     dialect.pathsAsWritten && /[\\/]/.test(executable) &&
     !isNativePlanApprovalPrerequisite(executable, invocation.args, admitted, true)
@@ -2037,8 +2079,15 @@ async function evaluate(
         activeDirective.ask_type === PLAN_APPROVAL_ASK_TYPE
       ) {
         // The engine is asking the person to approve the plan. Nothing is
-        // built or changed until they answer, including the plan files, so an
-        // answer the agent wrote can never stand in for theirs.
+        // built or changed until they reply, so an answer the agent wrote can
+        // never stand in for theirs. After their reply, the asked plan's own
+        // plan and test instructions can change for what they asked; the
+        // questions file, other plans, and code still wait.
+        const editable = planApprovalReplyEditableFiles(projectDir);
+        if (
+          WRITE_TOOLS.has(toolName) && !mutation.opaqueShell && mutation.targets.length > 0 &&
+          mutation.targets.every((candidate) => isRepliedPlanFileTarget(projectDir, candidate, editable))
+        ) return 0;
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
         // Loaded only here: the question's own record, read the way its owner

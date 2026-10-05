@@ -2516,30 +2516,8 @@ describe("t265b hook lifecycle", () => {
         ]).status,
       ).toBe(1);
 
-      const unrelated = spawnSync(
-        BUN,
-        [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
-        {
-          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-          input: JSON.stringify({
-            hook_event_name: "UserPromptSubmit",
-            session_id: "plan-session",
-            prompt: "Can you explain the testing strategy?",
-          }),
-          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
-          encoding: "utf-8",
-        },
-      );
-      expect(unrelated.status).toBe(0);
-      expect(
-        runLog([
-          "answer",
-          ...identity,
-          "--details",
-          "Approve Plan",
-        ]).status,
-      ).toBe(1);
-
+      // A free-words reply in this session is the agent's to read; the exact
+      // pick below binds the prompt it answered.
       const approvedQuestions = readFileSync(questionsPath, "utf-8");
       writeFileSync(
         questionsPath,

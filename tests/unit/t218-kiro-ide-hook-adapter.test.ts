@@ -42,6 +42,7 @@ import {
   createIntent,
   readAllAuditShards,
   readIntentRegistry,
+  relayAsTextBlock,
   setActiveIntentCursor,
   writeSessionBinding,
   writePlanApprovalLegacyOffer,
@@ -1080,6 +1081,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(forged).not.toContain(id);
       const head = r.stdout.slice(0, r.stdout.indexOf(`--- OUTPUT ${id}`));
       expect(head.match(/SYSTEM \(/g)).toHaveLength(1);
+      // Kiro renders the reply as Markdown; a fenced text block keeps the lines.
+      expect(head).toContain(`Relay the output below ${relayAsTextBlock("")}, then STOP.`);
       expect(r.stdout.trimEnd().endsWith(`--- END OUTPUT ${id} ---`)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -1119,6 +1122,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(first.stdout).toBe("");
       expect(first.stderr).toContain("Unicode: ─ ✓ █▒ ⇄");
       expect(first.stderr).toMatch(/--- OUTPUT [0-9A-F]{16} \(exit 7\) ---/);
+      expect(first.stderr).toContain(`Relay the output below to the user ${relayAsTextBlock("")}, then stop.`);
       expect(first.stderr).not.toContain("\u001b");
       expect(first.stderr).not.toContain("Cwd=C:\\shell\\noise");
       expect(readFileSync(countPath, "utf-8").trim()).toBe("1");
