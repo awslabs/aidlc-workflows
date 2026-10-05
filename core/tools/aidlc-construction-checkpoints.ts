@@ -5,8 +5,9 @@
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { relative } from "node:path";
+import { closeSync, existsSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntentUuid,
@@ -141,7 +142,6 @@ export interface ConstructionCheckpoint {
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
 const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
-const CHECK_OUTPUT_BYTES = 1024 * 1024;
 const CHECK_OUTPUT_TAIL_BYTES = 2048;
 const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
 
@@ -536,9 +536,10 @@ function snapshot(
     eventMatchesClaimAttempt(projectDir, row.block, unit),
   ));
   const ready = errors.length === 0;
-  const verified = ready && proof !== null &&
+  const verifiedWith = (commandSha256: string | undefined): boolean => ready && proof !== null &&
+    commandSha256 !== undefined &&
     proof.kind === kind && proof.unit === unit &&
-    shared.verificationCommand !== null && proof.command_sha256 === shared.verificationCommand.sha256 &&
+    proof.command_sha256 === commandSha256 &&
     proof.fingerprint === fingerprint && proof.verified === true &&
     proof.evidence_unchanged === true && proof.exit_code === 0 &&
     proof.signal === null && proof.error === null &&
@@ -546,8 +547,9 @@ function snapshot(
     auditBlockField(verification.block, "Run floor") === floors[stages.at(-1)!] &&
     auditBlockField(verification.block, "Verification Id") === proof.id &&
     auditBlockField(verification.block, "Fingerprint") === fingerprint &&
-    auditBlockField(verification.block, "Command SHA-256") === shared.verificationCommand.sha256 &&
+    auditBlockField(verification.block, "Command SHA-256") === commandSha256 &&
     auditBlockField(verification.block, "Verified") === "true";
+  const verifiedNow = verifiedWith(shared.verificationCommand?.sha256);
   const gate = onlyLatest(rows.filter((row) => {
     if (row.event === "WORKFLOW_STARTED" || row.event === "STAGE_JUMPED") return true;
     if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") return false;
@@ -557,7 +559,7 @@ function snapshot(
     return row.event === "GATE_REJECTED" ||
       auditBlockField(row.block, "Checkpoint") === checkpointName(kind);
   }));
-  const approved = verified && gate?.event === "GATE_APPROVED" &&
+  const gateApproved = gate?.event === "GATE_APPROVED" &&
     auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
@@ -568,6 +570,11 @@ function snapshot(
     eventMatchesClaimAttempt(projectDir, gate.block, unit) &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       (kind !== "skeleton" && auditBlockField(gate.block, "Autonomous") === "true"));
+  // A Unit approved under an earlier verification command keeps its approval
+  // when the person approves a new command: the new one checks the Units
+  // still to be approved.
+  const verified = verifiedNow || (gateApproved && verifiedWith(proof?.command_sha256));
+  const approved = verified && gateApproved;
   const approvedBefore = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!];
   // A re-check of documents during the Unit's build is its usual checkpoint.
@@ -607,6 +614,29 @@ function requireReady(result: ConstructionCheckpoint): void {
   }
 }
 
+// The check writes its output to files, so a verbose suite is never cut short
+// by a memory cap; the proof keeps each stream's size, digest and tail.
+function capturedOutput(path: string): { bytes: number; sha256: string; tail: Buffer } {
+  const hash = createHash("sha256");
+  const keep = CHECK_OUTPUT_TAIL_BYTES + 4;
+  let tail = Buffer.alloc(0);
+  let bytes = 0;
+  const fd = openSync(path, "r");
+  try {
+    const chunk = Buffer.alloc(64 * 1024);
+    for (let read = readSync(fd, chunk); read > 0; read = readSync(fd, chunk)) {
+      const part = chunk.subarray(0, read);
+      hash.update(part);
+      bytes += read;
+      tail = Buffer.concat([tail, part]);
+      if (tail.length > keep) tail = tail.subarray(tail.length - keep);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return { bytes, sha256: hash.digest("hex"), tail };
+}
+
 function outputTail(output: Buffer | null): string {
   if (output === null) return "";
   let start = Math.max(0, output.length - CHECK_OUTPUT_TAIL_BYTES);
@@ -626,6 +656,26 @@ export function verifyConstructionCheckpoint(
   unit: string,
   kind: ConstructionCheckpointKind,
 ): ConstructionCheckpoint {
+  // A check that formats or regenerates the Unit's files changes what it
+  // checked, so it runs once more against the files as they are now.
+  const first = verifyOnce(projectDir, unit, kind, false);
+  if (!first.rerun) return first.result;
+  // The line about an accepted change is said once, on whichever run made it.
+  const second = verifyOnce(projectDir, unit, kind, true).result;
+  const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
+  return notices.length > 0 ? { ...second, change_notices: notices } : second;
+}
+
+const CHECK_KEPT_CHANGING =
+  "The check changed this Unit's files each time it ran, so no one version of them passed. " +
+  "Use a check that leaves the files as they are, then verify again.";
+
+function verifyOnce(
+  projectDir: string,
+  unit: string,
+  kind: ConstructionCheckpointKind,
+  secondRun: boolean,
+): { result: ConstructionCheckpoint; rerun: boolean } {
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind);
@@ -662,19 +712,40 @@ export function verifyConstructionCheckpoint(
   const args = process.platform === "win32"
     ? ["/d", "/s", "/c", `"${before.command}"`]
     : ["-c", before.command];
-  const check = spawnSync(command, args, {
-    cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
-    maxBuffer: CHECK_OUTPUT_BYTES, killSignal: "SIGKILL", windowsHide: true,
-    windowsVerbatimArguments: process.platform === "win32",
-  });
+  const outputDir = mkdtempSync(join(tmpdir(), "aidlc-check-"));
+  const outPath = join(outputDir, "stdout");
+  const errPath = join(outputDir, "stderr");
+  let check: ReturnType<typeof spawnSync>;
+  let stdout: ReturnType<typeof capturedOutput>;
+  let stderr: ReturnType<typeof capturedOutput>;
+  try {
+    const outFd = openSync(outPath, "w");
+    const errFd = openSync(errPath, "w");
+    try {
+      check = spawnSync(command, args, {
+        cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
+        stdio: ["pipe", outFd, errFd], killSignal: "SIGKILL", windowsHide: true,
+        windowsVerbatimArguments: process.platform === "win32",
+      });
+    } finally {
+      closeSync(outFd);
+      closeSync(errFd);
+    }
+    stdout = capturedOutput(outPath);
+    stderr = capturedOutput(errPath);
+  } finally {
+    for (const path of [outPath, errPath]) {
+      try { unlinkSync(path); } catch { /* already gone */ }
+    }
+    try { rmdirSync(outputDir); } catch { /* already gone */ }
+  }
   const proof: ConstructionCheckpointProof = {
     ...before.proof,
     finished_at: new Date().toISOString(), exit_code: check.status,
     signal: check.signal,
-    stdout_bytes: check.stdout?.length ?? 0, stderr_bytes: check.stderr?.length ?? 0,
-    stdout_sha256: createHash("sha256").update(check.stdout ?? "").digest("hex"),
-    stderr_sha256: createHash("sha256").update(check.stderr ?? "").digest("hex"),
-    stdout_tail: outputTail(check.stdout), stderr_tail: outputTail(check.stderr),
+    stdout_bytes: stdout.bytes, stderr_bytes: stderr.bytes,
+    stdout_sha256: stdout.sha256, stderr_sha256: stderr.sha256,
+    stdout_tail: outputTail(stdout.tail), stderr_tail: outputTail(stderr.tail),
     error: check.error?.message ?? null,
   };
   return withAuditLock(projectDir, () => {
@@ -693,8 +764,11 @@ export function verifyConstructionCheckpoint(
     proof.evidence_unchanged = after.root === before.root &&
       after.result.ready && after.result.fingerprint === before.result.fingerprint &&
       after.verificationCommand?.sha256 === proof.command_sha256;
-    proof.verified = proof.exit_code === 0 && proof.signal === null &&
-      proof.error === null && proof.evidence_unchanged;
+    const passed = proof.exit_code === 0 && proof.signal === null && proof.error === null;
+    const changedByCheck = passed && !proof.evidence_unchanged && after.root === before.root &&
+      after.result.ready && after.verificationCommand?.sha256 === proof.command_sha256;
+    if (changedByCheck && secondRun) proof.error = CHECK_KEPT_CHANGING;
+    proof.verified = passed && proof.error === null && proof.evidence_unchanged;
     writeRecordFileNoFollow(before.root, proofRelativePath(unit, kind), `${JSON.stringify(proof, null, 2)}\n`);
     if (after.root !== before.root) throw new Error("Active intent changed during Construction verification.");
     appendAuditEntryUnlocked("CHECKPOINT_VERIFICATION_RECORDED", {
@@ -711,7 +785,10 @@ export function verifyConstructionCheckpoint(
       ...claimAttemptFields(projectDir, unit),
     }, projectDir);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);
-    return before.notices.length > 0 ? { ...result, change_notices: before.notices } : result;
+    return {
+      result: before.notices.length > 0 ? { ...result, change_notices: before.notices } : result,
+      rerun: changedByCheck && !secondRun,
+    };
   }, before.intent, before.space);
 }
 

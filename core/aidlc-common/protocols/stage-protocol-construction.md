@@ -196,7 +196,9 @@ For **Request Changes**, record the same `log answer` with
 command. Never invent or auto-approve a command. The tool-owned approval receipt,
 not the state field, is the authority: never write the field without that receipt
 or use generic `state set`. Changing the command later requires this same fresh
-decision/answer/setter flow. Re-run `next` after recording it, then follow the
+decision/answer/setter flow; Units and batches already approved keep their
+approval, the new command checks the ones still to be approved, and the setter's
+`notice` is the one line to tell the person. Re-run `next` after recording it, then follow the
 new directive before verification. If no runnable project check exists yet,
 resolve that gap with the human; do not substitute a placeholder or claim a pass.
 
@@ -210,7 +212,10 @@ recorded command:
 The verifier stores proof bound to the current artifacts, source, attempt, and
 authorized command's SHA-256 plus the complete canonical command as its display
 label. File presence, a claimed demonstration, a placeholder command, or a previous
-pass is not verification. A failed check halts. Re-run `next` after verification;
+pass is not verification. A failed check halts. A check that changes the Unit's
+files while it runs (a formatter, a generator) runs once more against the files as
+they are then; if it changes them again, its proof's `error` says to use a check
+that leaves the files as they are. Long output never fails a passing check. Re-run `next` after verification;
 the resulting directive is the next source of truth about readiness and
 verification. Re-running `verify` withdraws every open checkpoint question and
 captured checkpoint response for this intent, in any session. Ask again only

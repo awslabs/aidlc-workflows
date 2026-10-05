@@ -101,6 +101,7 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  guardPolicyAcceptsChanges,
   isRegularFile,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
@@ -194,6 +195,8 @@ interface UnitResult {
   reason?: FailureReason;
   detail?: string;
   tampered?: boolean;
+  /** Lines for the person: a change kept under relaxed or off. */
+  change_notices?: string[];
 }
 
 interface SourceBinding {
@@ -331,6 +334,8 @@ interface Verdict {
   converged: boolean;
   tampered: boolean;
   confineError?: string;
+  /** Under relaxed or off a changed protected test file is said, not refused. */
+  tamperNotice?: string;
 }
 
 function requiresCodeGenerationApproval(state: string): boolean {
@@ -374,6 +379,7 @@ function verdictFor(
   const converged = checkConverged(wt, checkCmd);
   let tampered = false;
   let confineError: string | undefined;
+  let tamperNotice: string | undefined;
   if (testFile) {
     // Confine the path inside the unit's worktree — a `../` escape would point
     // the guard at a file the worker never touched and silently DISABLE it, so
@@ -384,9 +390,13 @@ function verdictFor(
       confineError = `--test-file resolves outside the unit worktree: ${testFile}`;
     } else {
       tampered = fileTampered(wt, testFile);
+      if (tampered && guardPolicyAcceptsChanges(projectDir)) {
+        tampered = false;
+        tamperNotice = `Unit ${unit} changed its protected test file ${testFile}; its check passed with that change.`;
+      }
     }
   }
-  return { exists: true, converged, tampered, confineError };
+  return { exists: true, converged, tampered, confineError, ...(tamperNotice ? { tamperNotice } : {}) };
 }
 
 interface ReviewerRequirement {
@@ -2693,6 +2703,7 @@ function handleCheck(rest: string[]): void {
     reason: verdict.tampered ? "error" : null,
   };
   if (verdict.tampered) out.detail = "protected test file was modified";
+  if (verdict.tamperNotice) out.change_notices = [verdict.tamperNotice];
   console.log(JSON.stringify(out));
   // Exit 0 ONLY for a genuine convergence — the seam the ultracode script and
   // the conductor gate on (a worker's self-claim is never read).
@@ -2891,7 +2902,10 @@ function handleFinalize(rest: string[]): void {
             recordSnapshots.set(unit, captured.snapshot);
             genuine.push(unit);
             preparedAttempts.set(unit, preparedAttempt);
-            results.push({ unit, status: "converged" });
+            results.push({
+              unit, status: "converged",
+              ...(verdict.tamperNotice ? { change_notices: [verdict.tamperNotice] } : {}),
+            });
           }
         }
       } else {

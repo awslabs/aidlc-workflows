@@ -312,6 +312,11 @@ function human(pd: string, prompt = "Approve"): void {
   choice(pd, "t343-checkpoint", prompt);
 }
 
+function setPolicy(pd: string, line: string): void {
+  const path = seededStateFile(pd);
+  writeFileSync(path, readFileSync(path, "utf-8").replace(/^- \*\*Change Control\*\*: .*$/m, `- **Guard Policy**: ${line}`));
+}
+
 function gates(pd: string, event = "GATE_APPROVED") {
   return readAuditShardEvents(pd).filter((row) => row.event === event && auditBlockField(row.block, "Checkpoint") === "swarm-batch");
 }
@@ -382,17 +387,29 @@ describe("t343 completed swarm batch checkpoints", () => {
     });
   });
 
-  test("changing the authorized command retires the batch approval even after re-verification", () => {
+  test("changing the authorized command keeps an approved batch approved, and the next batch is checked with the new one", () => {
     const pd = fixture(true);
     converge(pd);
     const approved = approveSwarmCheckpoint(pd, 1, BATCH);
     expect(approved.approved).toBe(true);
+    writeFileSync(join(pd, "src", "gamma.ts"), "export const gamma = 2;\n");
+    git(pd, ["add", "src/gamma.ts"]);
+    git(pd, ["commit", "-qm", "later unit"]);
+    converge(pd, 2, ["gamma"]);
     recordCommand(pd, "git diff --exit-code -- src");
-    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({ ready: false, approved: false });
-    converge(pd, 1, BATCH, "unmerged");
-    const checked = resolveSwarmCheckpoint(pd, 1, BATCH);
-    expect(checked).toMatchObject({ ready: true, approved: false, fingerprint: approved.fingerprint });
-    expect(approveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
+    // The approved batch keeps its approval under the earlier command.
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH)).toMatchObject({
+      ready: true, approved: true, fingerprint: approved.fingerprint, errors: [],
+    });
+    // The batch not yet approved is checked with the new command first.
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"])).toMatchObject({
+      ready: false, approved: false,
+      errors: ["gamma: batch was not checked with the authorized Construction Verification Command."],
+    });
+    converge(pd, 2, ["gamma"], "unmerged");
+    expect(resolveSwarmCheckpoint(pd, 2, ["gamma"]).ready).toBe(true);
+    expect(approveSwarmCheckpoint(pd, 2, ["gamma"]).approved).toBe(true);
+    expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(true);
   });
 
   test("a passing caller check cannot replace the failing authorized command", () => {
@@ -859,15 +876,59 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     } else expect(resolveSwarmCheckpoint(pd, 1, BATCH).approved).toBe(false);
   });
 
-  test("source edits before approval cannot be certified by an older native receipt", () => {
+  test("source edits before approval cannot be certified by an older native receipt, and the batch can still be sent back", () => {
     const pd = fixture(true);
     converge(pd);
     writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
-    expect(resolveSwarmCheckpoint(pd, 1, BATCH).errors.join(" ")).toContain("claimed source differs");
+    const status = resolveSwarmCheckpoint(pd, 1, BATCH);
+    expect(status.errors.join(" ")).toContain("claimed source differs");
+    expect(status.changed_after_check).toBe(true);
     expect(() => approveSwarmCheckpoint(pd, 1, BATCH)).toThrow("not ready");
-    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
-    expect(asked.code).not.toBe(0);
     expect(() => rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint")).toThrow("--action ask");
+    // Under strict the person is still asked, with Request Changes as the way on.
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    const question = readAuditShardEvents(pd).filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "Swarm Batch Approval").at(-1)!;
+    expect(auditBlockField(question.block, "Options")).toBe("Request Changes");
+    choice(pd, "t343-checkpoint", "Request Changes");
+    rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint");
+    expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+  });
+
+  test("under Guard Policy off or relaxed, a later change to an approved batch's files keeps its approval", () => {
+    for (const policy of ["off (set by you)", "relaxed (set by you)", "off (from scope feature)"]) {
+      const pd = fixture(true);
+      setPolicy(pd, policy);
+      converge(pd);
+      const approved = approveSwarmCheckpoint(pd, 1, BATCH);
+      expect(approved.approved).toBe(true);
+      // A later batch or the person changes a file this batch claims.
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const later = resolveSwarmCheckpoint(pd, 1, BATCH);
+      expect(later.errors, policy).toEqual([]);
+      expect(later.approved, policy).toBe(true);
+      expect(later.fingerprint).toBe(approved.fingerprint);
+      expect(later.changed_after_check).toBe(false);
+    }
+  });
+
+  test("under Guard Policy off, a batch changed before its question is asked and approved, with one line", () => {
+    const pd = fixture();
+    setPolicy(pd, "off (set by you)");
+    converge(pd);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(JSON.parse(asked.stdout).notices).toEqual([
+      "Files from unit alpha changed after its batch was checked: src/alpha.ts. Kept them.",
+    ]);
+    const accepted = readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED");
+    expect(accepted.map((row) => auditBlockField(row.block, "Checkpoint"))).toEqual(["swarm-batch"]);
+    choice(pd, "t343-checkpoint", "Approve");
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "Approve", "t343-checkpoint").approved).toBe(true);
+    // Recorded once: the approval adds no second row for the same change.
+    expect(readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
   });
 
   test("later unrelated source and native batches do not reopen an approved batch", () => {

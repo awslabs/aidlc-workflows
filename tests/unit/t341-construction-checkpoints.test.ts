@@ -207,8 +207,8 @@ function submitCommandChoice(project: string, session: string, prompt: string, e
   expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
 }
 
-function recordCommand(project: string, command: string): void {
-  if (authorizedVerificationCommand(project, readFileSync(seededStateFile(project), "utf-8"))?.command === command) return;
+function recordCommand(project: string, command: string): string {
+  if (authorizedVerificationCommand(project, readFileSync(seededStateFile(project), "utf-8"))?.command === command) return "";
   const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command, "--session", "t341-command"];
   for (const args of [
     ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"],
@@ -220,6 +220,7 @@ function recordCommand(project: string, command: string): void {
   }
   const result = cli(project, "state", ["set-construction-verification-command", command]);
   expect(result.code, result.out).toBe(0);
+  return result.out;
 }
 
 function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha") {
@@ -268,10 +269,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const repeated = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(repeated.fingerprint).toBe(approved.fingerprint);
     expect(repeated.approved).toBe(true);
+    // A new command keeps the approval given under the earlier one.
     recordCommand(dir, "exit 0");
-    const stale = resolveConstructionCheckpoint(dir, "alpha", "unit");
-    expect(stale.verified).toBe(false);
-    expect(stale.approved).toBe(false);
+    const kept = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(kept.verified).toBe(true);
+    expect(kept.approved).toBe(true);
+    // Checking the Unit again with the new command asks for its approval again.
     const differentCheck = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(differentCheck.verified).toBe(true);
     expect(differentCheck.approved).toBe(false);
@@ -485,6 +488,66 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(result.verification!.evidence_unchanged).toBe(false);
     expect(result.verified).toBe(false);
     expect(result.approved).toBe(false);
+    // It ran twice and changed the files both times; the proof says what to do.
+    const receipts = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+    expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "false"]);
+    expect(result.verification!.error).toBe(
+      "The check changed this Unit's files each time it ran, so no one version of them passed. " +
+        "Use a check that leaves the files as they are, then verify again.",
+    );
+    // The step it names works: a check that leaves the files alone verifies.
+    expect(pass(dir).verified).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an approved Unit keeps its approval when the person approves a new command, and the next Unit is checked with it", () => {
+    const dir = project();
+    pass(dir);
+    human(dir);
+    expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
+    const newCommand = `${writeCheck(dir, "console.log('new check passed');\n")} --new`;
+    const setter = JSON.parse(recordCommand(dir, newCommand).trim().split("\n").at(-1)!);
+    expect(setter.notice).toBe(`Using \`${newCommand}\` from here on.`);
+    const kept = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(kept.approved).toBe(true);
+    expect(kept.verified).toBe(true);
+    const next = verifyConstructionCheckpoint(dir, "beta", "unit");
+    expect(next.verified, JSON.stringify(next.verification)).toBe(true);
+    expect(next.verification!.command_sha256).toBe(verificationCommandDetails(newCommand).sha256);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a check that formats the Unit's files once verifies on its second run", () => {
+    const dir = project();
+    recordCommand(dir, writeCheck(dir,
+      "const fs = require('node:fs');\n" +
+      "const text = fs.readFileSync('src/alpha.ts', 'utf8');\n" +
+      "if (!text.includes('// formatted')) fs.writeFileSync('src/alpha.ts', text + '// formatted\\n');\n" +
+      "console.log('formatted and checked');\n"));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified, JSON.stringify(result.verification)).toBe(true);
+    expect(result.verification!.evidence_unchanged).toBe(true);
+    expect(result.verification!.error).toBeNull();
+    expect(readFileSync(join(dir, "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 1;\n// formatted\n");
+    const receipts = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+    expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "true"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a passing check that prints more than a megabyte still verifies", () => {
+    const dir = project();
+    const size = 3 * 1024 * 1024;
+    recordCommand(dir, writeCheck(dir,
+      `process.stdout.write('a'.repeat(${size}) + '\\nverbose suite passed\\n');\n` +
+      `process.stderr.write('w'.repeat(${size}));\n`));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified, JSON.stringify({ ...result.verification })).toBe(true);
+    const expected = `${"a".repeat(size)}\nverbose suite passed\n`;
+    expect(result.verification!.exit_code).toBe(0);
+    expect(result.verification!.error).toBeNull();
+    expect(result.verification!.stdout_bytes).toBe(Buffer.byteLength(expected));
+    expect(result.verification!.stdout_sha256).toBe(createHash("sha256").update(expected).digest("hex"));
+    expect(result.verification!.stdout_tail.endsWith("verbose suite passed\n")).toBe(true);
+    expect(result.verification!.stdout_tail.length).toBe(2048);
+    expect(result.verification!.stderr_bytes).toBe(size);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("stage artifacts, claimed source, and manifest edits invalidate verification", () => {

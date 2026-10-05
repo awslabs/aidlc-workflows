@@ -318,7 +318,9 @@ Two surfaces carry the signal:
   thing that lets a Unit's work merge.
 - **A protected spec file.** The referee can anti-tamper compare a designated
   `--test-file` against its forked-git baseline, so a worker cannot quietly weaken
-  the test that defines "done" to make a red check go green. You ensure the spec
+  the test that defines "done" to make a red check go green. Under a relaxed or
+  off Guard Policy a changed protected file is reported in `change_notices`
+  instead of failing the Unit. You ensure the spec
   that encodes the acceptance criteria exists and is the file pointed at.
 
 Your harness contribution is making both real and meaningful. A check that always

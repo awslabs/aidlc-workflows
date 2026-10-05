@@ -1907,9 +1907,17 @@ command in `command_label`, plus exit status, full captured stdout/stderr byte
 counts and SHA-256 digests, and the last 2 KiB of each stream in `stdout_tail` and
 `stderr_tail`. Tails are decoded as UTF-8 after dropping a leading partial
 multibyte sequence; control characters other than newline and tab are replaced
-with U+FFFD. Full output is not retained. Project check commands must not print
-secrets: these diagnostic tails are not secret-redacted. Approval binds
-`Verification Command SHA-256` on `GATE_APPROVED` to the proof's `command_sha256`.
+with U+FFFD. Full output is not retained; the check writes it to temporary files
+rather than memory, so a long-running suite's output never fails a passing check.
+A check that changes the Unit's files while it runs (a formatter, a generator)
+runs once more against the files as they are then; if it changes them again, the
+proof's `error` says to use a check that leaves the files as they are. Project
+check commands must not print secrets: these diagnostic tails are not
+secret-redacted. Approval binds `Verification Command SHA-256` on `GATE_APPROVED`
+to the proof's `command_sha256`. A Unit approved under an earlier authorized
+command keeps its approval when the person approves a new one; the new command
+verifies the Units still to be approved, and the setter returns the line
+`Using <command> from here on.` as `notice`.
 Use the tails to explain a failure; if more diagnostics are needed, use the same
 authorized project check, not a newly chosen command. Version-1 through version-3
 proofs are unverified after upgrading; authorize the recorded command and run
@@ -1937,6 +1945,12 @@ in any session; ask again only after fresh verification, source landing, and a
 batch status of `ready: true`. Only verified native passes
 receive `SWARM_UNIT_CONVERGED`, with the authorized `Command SHA-256` (rows
 from an earlier release may lack it). Land their source through the native worktree merge before `next`.
+Edits the person made to the main checkout while the batch built stop that merge
+under a strict Guard Policy (the refusal names the step: undo them and run the merge
+again, or say `guard policy relaxed` to keep them); under relaxed or off they are
+kept, recorded once as `CHANGE_ACCEPTED` (`swarm-batch`), and the merge prints one
+`note:` line. The same holds for edits made after the last merge when the stage
+completes.
 
 ### `aidlc engine bolt swarm-checkpoint` - approve a completed batch
 
@@ -1983,8 +1997,14 @@ ready question-and-answer flow. Readiness
 comes from the completed batch's current evidence, including each Unit's native
 `Command SHA-256` matching the current
 authorized Construction Verification Command. Batch approval binds that digest
-too: changing the authorized command invalidates prior approval, and older
-native receipts without the digest require fresh verification. Resolve `errors`
+too: a batch already approved keeps its approval when the person approves a new
+command, a batch not yet approved needs fresh verification with it, and older
+native receipts without the digest require fresh verification. When the batch's
+claimed files or outputs changed after it was checked, a strict Guard Policy
+makes it unready with `changed_after_check: true`, and `ask` then offers the
+person Request Changes only; under relaxed or off the change is kept, recorded
+once as `CHANGE_ACCEPTED` (`swarm-batch`), and `ask` / `approve` return its line
+in `notices`. Resolve `errors`
 rather than rebuilding the whole batch or inventing a pass. Re-run `next` after
 approval or rejection; a batch approval is not whole-stage
 approval. Later completion-only stage directives settle bookkeeping without

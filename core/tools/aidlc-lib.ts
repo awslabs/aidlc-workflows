@@ -32973,6 +32973,17 @@ export function currentSwarmSourceMergeChain(
   const lastMerge = new Map<string, AuditShardEvent>();
   let priorFingerprint: string | null = null;
   let openingPrevious: string | null = null;
+  let openingRow: AuditShardEvent | null = null;
+  // A link may start from a main checkout the person changed during the build
+  // when that change was kept and recorded first (relaxed or off).
+  const keptChange = (recorded: string, current: string, merge: AuditShardEvent): boolean =>
+    allRows.some((row) =>
+      row.event === "CHANGE_ACCEPTED" &&
+      auditBlockField(row.block, "Checkpoint") === "swarm-batch" &&
+      auditBlockField(row.block, "Stage") === slug &&
+      auditBlockField(row.block, "Recorded") === recorded &&
+      auditBlockField(row.block, "Current") === current &&
+      attemptEventDefinitelyBefore(row, merge));
   for (let start = 0; start < rows.length;) {
     let end = start + 1;
     while (end < rows.length && rows[end].timestamp === rows[start].timestamp) end++;
@@ -33021,13 +33032,16 @@ export function currentSwarmSourceMergeChain(
           reason: `duplicate SWARM_SOURCE_MERGED authority for unit ${JSON.stringify(unit)}`,
         };
       }
-      if (priorFingerprint !== null && previous !== priorFingerprint) {
+      if (priorFingerprint !== null && previous !== priorFingerprint && !keptChange(priorFingerprint, previous, row)) {
         return {
           state: "invalid",
           reason: `broken SWARM_SOURCE_MERGED aggregate link before unit ${JSON.stringify(unit)}`,
         };
       }
-      if (openingPrevious === null) openingPrevious = previous;
+      if (openingPrevious === null) {
+        openingPrevious = previous;
+        openingRow = row;
+      }
       const convergenceRows = allRows
         .filter(
           (candidate) =>
@@ -33106,7 +33120,10 @@ export function currentSwarmSourceMergeChain(
   if (opening.state === "invalid") {
     return opening;
   }
-  if (openingPrevious !== opening.fingerprint) {
+  if (
+    openingPrevious !== opening.fingerprint &&
+    !(openingPrevious !== null && openingRow !== null && keptChange(opening.fingerprint, openingPrevious, openingRow))
+  ) {
     return {
       state: "invalid",
       reason: `opening SWARM_SOURCE_MERGED link does not match the current ${opening.source === "prior-accepted" ? "prior accepted aggregate" : "stage baseline"}`,
@@ -35776,7 +35793,8 @@ export function noteGuardPolicyRename(write: (line: string) => void = (line) => 
 export type ChangeCheckpoint =
   | "plan-approval"
   | "review-receipt"
-  | "summary-confirmation";
+  | "summary-confirmation"
+  | "swarm-batch";
 
 /** One accepted input change, ready to become a CHANGE_ACCEPTED row. */
 export interface AcceptedChange {
