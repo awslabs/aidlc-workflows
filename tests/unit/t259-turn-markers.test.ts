@@ -303,10 +303,16 @@ describe("t259 the engine's last word ended the turn", () => {
       run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
     markHumanTurn(proj);
     await Bun.sleep(20);
-    const asked = run([
+    // Words alone first get the re-entry readings; the agent reads them as new
+    // work and runs the `next --request` the print names.
+    const read = JSON.parse(run([
       "engine", "orchestrate", "next",
       "build a standalone Python CLI that scrapes NOAA weather data and writes it to a SQLite database",
-    ]);
+    ]).stdout) as { kind: string; message: string };
+    expect(read.kind).toBe("print");
+    const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(read.message)?.[1];
+    expect(request, read.message).toBeDefined();
+    const asked = run(["engine", "orchestrate", "next", ...request!.split(" ")]);
     expect(JSON.parse(asked.stdout).ask_type).toBe("new-work-routing");
     const atQuestion = stop();
     expect(atQuestion.status, atQuestion.stderr).toBe(0);
