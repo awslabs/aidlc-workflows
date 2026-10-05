@@ -1142,10 +1142,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     const missing: string[] = [];
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      // Each names the doctor the way that harness's entry is typed.
+      const entry = rel.includes("/codex/") ? "$aidlc" : "/aidlc";
       for (const token of [
-        "and that /aidlc --doctor shows what to fix, after which they can ask you to carry on) and stop",
-        "names no step for the person, add one line: /aidlc --doctor shows what to fix.",
-        "(or /aidlc --doctor when it offers none)",
+        `and that ${entry} --doctor shows what to fix, after which they can ask you to carry on) and stop`,
+        `names no step for the person, add one line: ${entry} --doctor shows what to fix.`,
+        `(or ${entry} --doctor when it offers none)`,
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
       }

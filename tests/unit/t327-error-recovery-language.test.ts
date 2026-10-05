@@ -27,9 +27,12 @@ function functionBody(source: string, start: string, end: string): string {
 // transcript, the conductor must not add a second, reworded copy.
 const TRANSCRIPT_RELAY_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex"]);
 const VERBATIM_ERROR_ROW =
-  '| `error` | Print `directive.message` verbatim and STOP. Do not recover, retry, or smooth it over \u2014 the message is the user-facing error. |';
-const RELAYED_ERROR_ROW =
-  "| `error` | STOP. When a hook note after the result says the person has already been shown this engine error, the harness displayed `directive.message` exactly as the engine wrote it: do not restate, quote, summarize, or paraphrase it, and add no text of your own. Without that note, print `directive.message` verbatim. Never recover, retry, or work around it; the message is the user-facing error. |";
+  '| `error` | Print `directive.message` verbatim and STOP. Do not recover, retry, or smooth it over: the message is the user-facing error. When it names no step for the person, add one line: /aidlc --doctor shows what to fix. |';
+// The added line names the doctor the way each harness's entry is typed.
+const relayedErrorRow = (entry: string): string =>
+  "| `error` | STOP. When a hook note after the result says the person has already been shown this engine error, the harness displayed `directive.message` exactly as the engine wrote it: do not restate, quote, summarize, or paraphrase it, and add no text of your own. Without that note, print `directive.message` verbatim. Never recover, retry, or work around it; the message is the user-facing error. " +
+  `When you print it yourself and it names no step for the person, add one line: ${entry} --doctor shows what to fix. |`;
+const harnessEntry = (name: string): string => name === "codex" ? "$aidlc" : "/aidlc";
 
 describe("t327 refusal narration contract", () => {
   test("the shared voice contract translates refusals and stops repeated retries", () => {
@@ -79,11 +82,12 @@ describe("t327 refusal narration contract", () => {
       expect(clause).toContain("never read framework or workflow source files");
       expect(clause).toContain("follow the `error` row under \"Acting on a directive\"");
       expect(clause).not.toContain("print that terminal, user-facing message verbatim");
+      const relayed = relayedErrorRow(harnessEntry(harness.name));
       expect(body).toContain(
-        TRANSCRIPT_RELAY_HARNESSES.has(harness.name) ? RELAYED_ERROR_ROW : VERBATIM_ERROR_ROW,
+        TRANSCRIPT_RELAY_HARNESSES.has(harness.name) ? relayed : VERBATIM_ERROR_ROW,
       );
       expect(body).not.toContain(
-        TRANSCRIPT_RELAY_HARNESSES.has(harness.name) ? VERBATIM_ERROR_ROW : RELAYED_ERROR_ROW,
+        TRANSCRIPT_RELAY_HARNESSES.has(harness.name) ? VERBATIM_ERROR_ROW : relayed,
       );
     }
     expect([...clauses.values()].map((names) => names.sort())).toHaveLength(1);
