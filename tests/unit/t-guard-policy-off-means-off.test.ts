@@ -228,3 +228,108 @@ describe("the record of where the stage started is missing on this machine", () 
     expect(restart.out).not.toContain('"kind":"error"');
   });
 });
+
+// What a fresh clone, a second machine or a clean loses: the engine's own
+// local copies of each review and of each Unit's reviewed source.
+function dropLocal(record: string, prefix: "reviews" | "unit-"): void {
+  if (prefix === "reviews") {
+    const reviews = join(record, ".aidlc-engine", "reviews");
+    for (const name of readdirSync(reviews)) rmSync(join(reviews, name), { recursive: true, force: true });
+    return;
+  }
+  const snapshots = join(record, ".aidlc-engine", "source-review", "code-generation");
+  for (const name of readdirSync(snapshots)) {
+    if (name.startsWith(prefix)) rmSync(join(snapshots, name));
+  }
+}
+
+describe("a reviewed Unit whose local records are not on this machine", () => {
+  test("off: the recorded verdicts stand, said once, and the stage completes", () => {
+    const { project: dir, record } = project("off");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    dropLocal(record, "reviews");
+    dropLocal(record, "unit-");
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("is not on this machine; using its recorded verdict.");
+    expect(done.out).toContain("could not be checked against the Code Generation review on this machine; carrying on.");
+  });
+
+  test("strict: it asks for the review again, and that retry is accepted", () => {
+    const { project: dir, record } = project("strict", "from scope enterprise");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    dropLocal(record, "reviews");
+    const refused = approve(dir);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("--retry-pending");
+  });
+});
+
+describe("a Unit's manifest claims a path after its review", () => {
+  test("off: the review stands with one line, and the new claim covers the file", () => {
+    const { project: dir, record } = project("off");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    writeFileSync(join(dir, "extra.ts"), "export const extra = 1;\n");
+    review(dir, record, "beta", []);
+    // The person (or the agent following the old remedy) claims the file in
+    // alpha's manifest without a new review.
+    writeFileSync(
+      join(record, "construction", "alpha", "code-generation", "source-manifest.json"),
+      `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "app.ts" }, { path: "extra.ts" }] }, null, 2)}\n`,
+    );
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("Unit alpha's source-manifest.json changed after it was reviewed.");
+    expect(done.out).not.toContain("changed outside any unit's work");
+  });
+
+  test("strict: the Unit's review is stale, and its named recovery review clears it", () => {
+    const { project: dir, record } = project("strict", "from scope enterprise");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    writeFileSync(
+      join(record, "construction", "alpha", "code-generation", "source-manifest.json"),
+      `${JSON.stringify({ stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "app.ts" }, { path: "other.ts" }] }, null, 2)}\n`,
+    );
+    const refused = approve(dir);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("Changed after review: alpha");
+    review(dir, record, "alpha", ["app.ts", "other.ts"]);
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+  });
+});
+
+describe("the project source cannot be read on this machine", () => {
+  // A boundary file that names a path outside the project makes the whole
+  // workspace walk fail, the same as a walk over its size budget.
+  function breakBoundary(dir: string): void {
+    writeFileSync(join(dir, ".aidlc-source-paths.json"), `${JSON.stringify({ version: 1, paths: ["../outside"] })}\n`);
+  }
+
+  test("off: the reviews stand and the stage completes with one line", () => {
+    const { project: dir, record } = project("off");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    breakBoundary(dir);
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+    expect(done.out).toContain("could not be checked against the Code Generation review on this machine; carrying on.");
+  });
+
+  test("strict: it says the source could not be read, not that it changed, and names doctor", () => {
+    const { project: dir, record } = project("strict", "from scope enterprise");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    breakBoundary(dir);
+    const refused = approve(dir);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("could not be read on this machine");
+    expect(refused.out).not.toContain("because the project source changed after");
+    const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
+    expect(doctor.out).toContain("Workspace source boundary binds: no (");
+  });
+});

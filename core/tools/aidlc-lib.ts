@@ -14246,7 +14246,7 @@ export interface FreshReviewReceipts {
   sourceStale: boolean;
   /** Why the newest source binding is stale. An unbindable boundary is repaired
    *  through source-boundary configuration, not by reverting application bytes. */
-  sourceStaleReason: "boundary-unbindable" | "fingerprint-mismatch" | null;
+  sourceStaleReason: "boundary-unbindable" | "source-unreadable" | "fingerprint-mismatch" | null;
   /** Recovery ordinal/budget state associated with the newest source binding. */
   sourceStaleProgress: StaleReviewProgress | null;
   /** A workspace-global source-staleness recovery request has been emitted in
@@ -18441,6 +18441,22 @@ export function freshReviewReceipts(
   const acceptedChanges: AcceptedChange[] = [];
   const relaxedReviewNotice = (artifact: string): string =>
     `${artifact} changed after it was reviewed. Continuing to the gate with the diff (Guard Policy: relaxed or off).`;
+  // Under relaxed or off, source that cannot be checked against its review on
+  // this machine is said once and the verdict stands.
+  let uncheckedSourceNoticed = false;
+  const acceptUncheckedSource = (unit: string | null, recorded: string, current: string | null): void => {
+    if (uncheckedSourceNoticed) return;
+    uncheckedSourceNoticed = true;
+    acceptedChanges.push({
+      checkpoint: "review-receipt",
+      stage: stage.slug,
+      unit,
+      changed: null,
+      recorded,
+      current: current ?? "(not readable here)",
+      notice: `The project source could not be checked against the ${findStageBySlug(stage.slug)?.name ?? stage.slug} review on this machine; carrying on.`,
+    });
+  };
   const resetUnitReviewState = (unit: string): void => {
     for (const [key, request] of pendingRequests) {
       if (request.unit === unit) pendingRequests.delete(key);
@@ -18658,10 +18674,23 @@ export function freshReviewReceipts(
       continue;
     }
     if (!completionCarriesVerifiedReview(projectDir, request.binding, e.block)) {
-      if (reviewCompletionMatchesRequest(request.binding, e.block)) {
-        request.verificationFailed = true;
+      const matchesRequest = reviewCompletionMatchesRequest(request.binding, e.block);
+      const recordRef = matchesRequest ? reviewRecordRefFromBlock(e.block) : null;
+      // Under relaxed or off, a review whose written record is not on this
+      // machine (another checkout, a clean) keeps its recorded verdict.
+      if (recordRef === null || !isRelaxed()) {
+        if (matchesRequest) request.verificationFailed = true;
+        continue;
       }
-      continue;
+      acceptedChanges.push({
+        checkpoint: "review-receipt",
+        stage: stage.slug,
+        unit: unit ?? null,
+        changed: null,
+        recorded: recordRef.digest,
+        current: "(review text not on this machine)",
+        notice: `The written review for ${findStageBySlug(stage.slug)?.name ?? stage.slug}${unit ? ` (unit ${unit})` : ""} is not on this machine; using its recorded verdict.`,
+      });
     }
     pendingRequests.delete(requestKey);
     const recordedFingerprint = auditBlockField(e.block, "Artifact Fingerprint");
@@ -18852,13 +18881,19 @@ export function freshReviewReceipts(
     newestSourceFingerprint !== UNBINDABLE_FINGERPRINT &&
     currentSourceFingerprint !== null &&
     !sameWorkspaceSource(newestSourceFingerprint, currentSourceFingerprint);
-  // An unbindable boundary or an unreadable workspace is not a change and stays
-  // stale under both values; a moved fingerprint is the governed drift.
+  // An unbindable boundary or an unreadable workspace is not a change: strict
+  // holds it stale, relaxed and off say once that it could not be checked. A
+  // moved fingerprint is the governed drift.
+  const sourceUnchecked =
+    newestSourceFingerprint !== null &&
+    (newestSourceFingerprint === UNBINDABLE_FINGERPRINT || currentSourceFingerprint === null);
+  const acceptUnchecked = sourceUnchecked && isRelaxed();
+  if (acceptUnchecked && newestSourceFingerprint !== null) {
+    acceptUncheckedSource(newestSourceUnit, newestSourceFingerprint, currentSourceFingerprint);
+  }
   const sourceStale =
     newestSourceFingerprint !== null &&
-    (newestSourceFingerprint === UNBINDABLE_FINGERPRINT ||
-      currentSourceFingerprint === null ||
-      (sourceMismatch && !isRelaxed()));
+    ((sourceUnchecked && !acceptUnchecked) || (sourceMismatch && !isRelaxed()));
   // A Unit's own source binding is compared path by path below, and says once
   // which of its paths changed; the whole workspace also moves with another
   // Unit's own build.
@@ -18913,7 +18948,7 @@ export function freshReviewReceipts(
       // Shielding needs a real newest claimant. Equal-second receipts from
       // different shards are causally unordered, so invalidate that tied set
       // rather than let shard filename order choose authority.
-      if (ambiguousReceiptTimes.has(receipt.timestamp)) {
+      if (ambiguousReceiptTimes.has(receipt.timestamp) && !isRelaxed()) {
         unitVerdicts.delete(unit);
         unitStale.add(unit);
         unitStaleProgress.set(unit, {
@@ -18925,11 +18960,17 @@ export function freshReviewReceipts(
       // No modern binding marker at all is migration evidence: keep the #629
       // global policy for this unit and do not invent claims from current bytes.
       if (receipt.fingerprint === null && !receipt.bypass) continue;
-      let stale = receipt.bypass;
+      let stale = false;
       let claimModel: SourceClaimModel | null = null;
       let reviewedListing: WorkspaceSourceListing | null = null;
-      if (!stale && receipt.fingerprint === UNBINDABLE_FINGERPRINT) stale = true;
-      if (!stale && receipt.fingerprint !== null) {
+      // A review recorded under the source bypass, or against a boundary that
+      // could not be bound: strict holds it stale; relaxed and off keep it.
+      const unchecked = receipt.bypass || receipt.fingerprint === UNBINDABLE_FINGERPRINT;
+      if (unchecked) {
+        if (isRelaxed()) acceptUncheckedSource(unit, receipt.fingerprint ?? "(not recorded)", null);
+        else stale = true;
+      }
+      if (!unchecked && receipt.fingerprint !== null) {
         const snapshot = readUnitSourceSnapshot(
           projectDir,
           stage.slug,
@@ -18938,7 +18979,27 @@ export function freshReviewReceipts(
         );
         const manifest = readUnitSourceManifest(projectDir, stage.slug, unit);
         if (snapshot === null || !manifest.ok || snapshot.manifestSha256 !== manifest.rawBytesSha256) {
-          stale = true;
+          if (!isRelaxed()) {
+            stale = true;
+          } else if (snapshot === null || !manifest.ok) {
+            // The reviewed listing is not on this machine, or the manifest
+            // cannot be read: the verdict stands, said once.
+            acceptUncheckedSource(unit, receipt.fingerprint, manifest.ok ? manifest.rawBytesSha256 : null);
+            if (manifest.ok) claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
+          } else {
+            // The unit's manifest changed after its review (a path claimed
+            // since): the verdict stands, the new claims count, said once.
+            claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
+            acceptedChanges.push({
+              checkpoint: "review-receipt",
+              stage: stage.slug,
+              unit,
+              changed: null,
+              recorded: receipt.fingerprint,
+              current: unitSourceFingerprint(currentSourceListing, claimModel, manifest.rawBytesSha256),
+              notice: relaxedReviewNotice(`Unit ${unit}'s source-manifest.json`),
+            });
+          }
         } else {
           claimModel = { claims: manifest.claims, prefixes: manifest.prefixes };
           reviewedListing = recordedSourceListingUnderCurrentBoundary(snapshot.listing, currentSourceListing);
@@ -19024,6 +19085,11 @@ export function freshReviewReceipts(
     for (const [unit, receipt] of modernUnitReceipts) {
       if (!unitVerdicts.has(unit)) continue;
       if (receipt.fingerprint === null && !receipt.bypass) continue;
+      // The workspace cannot be read now: relaxed and off keep the verdicts.
+      if (isRelaxed()) {
+        acceptUncheckedSource(unit, receipt.fingerprint ?? "(not recorded)", null);
+        continue;
+      }
       unitVerdicts.delete(unit);
       unitStale.add(unit);
       unitStaleProgress.set(unit, {
@@ -19136,7 +19202,9 @@ export function freshReviewReceipts(
       ? null
       : newestSourceFingerprint === UNBINDABLE_FINGERPRINT
         ? "boundary-unbindable"
-        : "fingerprint-mismatch",
+        : currentSourceFingerprint === null
+          ? "source-unreadable"
+          : "fingerprint-mismatch",
     sourceStaleProgress: sourceStale
       ? newestSourceProgress === null
         ? null
