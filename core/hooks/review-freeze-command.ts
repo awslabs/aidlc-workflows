@@ -1599,8 +1599,8 @@ function withoutRedirections(segment: string): string {
  * long command still counts. A command `shell` names as PowerShell is read
  * as PowerShell: `Set-Location` and `Push-Location` (and their aliases) by
  * their -Path, -LiteralPath or first positional value, a `\` as a separator,
- * and a bare Set-Location names its homes; `~`, `$HOME`, `${HOME}` and
- * `$env:NAME` there take either separator (see homeReadings).
+ * and a bare Set-Location names its homes; `~`, `$HOME` and `${HOME}` there
+ * take either separator (see homeReadings).
  */
 export function shellDirectoryRoots(
   command: string,
@@ -1639,27 +1639,40 @@ export function shellDirectoryRoots(
     }
     return roots;
   }
-  for (const segment of shellCommandSegments(command)) {
-    const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
-    if (!invocation || !SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) continue;
-    const move = directoryChange(invocation.name, invocation.args);
+  for (const move of shellDirectoryChanges(command)) {
     if (typeof move === "object") change(move.operand);
     else if (move === "home") for (const home of homes) add(home, true);
   }
   return roots;
 }
 
+/**
+ * Where each directory change (a SHELL_DIRECTORY_CHANGES name) in a POSIX
+ * command moves the shell, in the order written, read with its redirections
+ * removed, so `cd 2>/dev/null dir` moves to `dir`. Runtime integrity's
+ * audit-trail pass reads directory changes through this too.
+ */
+export function shellDirectoryChanges(command: string): DirectoryChange[] {
+  const out: DirectoryChange[] = [];
+  for (const segment of shellCommandSegments(command)) {
+    const invocation = shellInvocation(shellWords(withoutRedirections(segment)));
+    if (invocation && SHELL_DIRECTORY_CHANGES.has(invocation.name.toLowerCase())) {
+      out.push(directoryChange(invocation.name, invocation.args));
+    }
+  }
+  return out;
+}
+
 // Where a POSIX directory change (a SHELL_DIRECTORY_CHANGES name) moves the
 // shell: to a literal operand, to $HOME (a bare `cd` or `chdir`), nowhere
 // (`pushd -n`), or to a directory the command cannot see (`cd -`, pushd's
-// stack, a bare `pushd`). A word after `--` is the operand, whatever it looks
-// like. Only pushd reads +N as a stack entry in bash, whose cd takes it as a
-// directory (zsh's cd reads its stack: the directory reading then only adds a
-// candidate). Runtime integrity's audit-trail pass reads directory changes
-// through this too.
+// stack, a bare `pushd`). A word after `--` is the operand, `-` aside, which
+// is still $OLDPWD. Only pushd reads +N as a stack entry in bash, whose cd
+// takes it as a directory (zsh's cd reads its stack: the directory reading
+// then only adds a candidate).
 export type DirectoryChange = { operand: string } | "home" | "stay" | "unknown";
 
-export function directoryChange(name: string, args: string[]): DirectoryChange {
+function directoryChange(name: string, args: string[]): DirectoryChange {
   const command = name.toLowerCase();
   const end = args.indexOf("--");
   const options = end >= 0 ? args.slice(0, end) : args;
@@ -1668,6 +1681,7 @@ export function directoryChange(name: string, args: string[]): DirectoryChange {
   const operand = end >= 0
     ? args[end + 1]
     : args.find((arg) => !arg.startsWith("-") && !(pushd && /^\+\d*$/.test(arg)));
+  if (operand === "-") return "unknown";
   if (operand !== undefined) return { operand };
   const previous = options.some((arg) => /^[+-]\d*$/.test(arg));
   return !previous && (command === "cd" || command === "chdir") ? "home" : "unknown";

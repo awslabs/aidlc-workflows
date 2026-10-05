@@ -1166,6 +1166,7 @@ describe("t242 state-transition ownership guard", () => {
     mkdirSync(join(project, "a"));
     symlinkSync(audit, join(project, "a", "+1"));
     symlinkSync(audit, join(project, "a", "-n"));
+    symlinkSync(audit, join(project, "x"));
     const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
     delete env.AIDLC_RUNTIME_PROJECT_DIR;
     delete env.AIDLC_HARNESS_DIR;
@@ -1175,6 +1176,10 @@ describe("t242 state-transition ownership guard", () => {
       ['cd a; pushd -- +1; f=shard.md; echo x >> "$f"', 2],
       ['cd a; pushd -- -n; f=shard.md; echo x >> "$f"', 2],
       ['cd a; f=shard.md; echo x >> "$f"', 0],
+      // A redirection on the cd is not its operand, and `cd -- -` is $OLDPWD.
+      ['cd 2>/dev/null x; f=shard.md; echo x >> "$f"', 2],
+      ['cd >/dev/null x; f=shard.md; echo x >> "$f"', 2],
+      ['cd -- -; f=audit/shard.md; echo x >> "$f"', 2],
     ] as Array<[string, number]>) {
       const r = spawnSync(process.execPath, [HOOK], {
         cwd: project,

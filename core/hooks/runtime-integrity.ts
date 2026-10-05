@@ -15,9 +15,8 @@ import {
   runtimeProjectDir,
 } from "../tools/aidlc-runtime-paths.ts";
 import {
-  directoryChange,
-  SHELL_DIRECTORY_CHANGES,
   shellCommandInvocationDetails,
+  shellDirectoryChanges,
   shellWriteTargets,
   writeTargets,
 } from "./review-freeze-command.ts";
@@ -1126,11 +1125,9 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // Every directory the shell could be in when a write runs.
   const roots = [cwd];
   let computedRoot = false;
-  for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
-    if (!SHELL_DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
-    // The shared reading of the operand; $HOME and a directory the command
-    // cannot see both stay undecided here.
-    const move = directoryChange(name, args);
+  // The shared reading of each directory change; $HOME and a directory the
+  // command cannot see both stay undecided here.
+  for (const move of [...shellDirectoryChanges(visible), ...shellDirectoryChanges(command)]) {
     if (move === "stay") continue;
     const expansions = typeof move === "object" ? expandWord(move.operand, values) : [null];
     for (const expanded of expansions) {
