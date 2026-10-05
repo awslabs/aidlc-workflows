@@ -468,6 +468,10 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Staff see today\'s rooms; 50% booked!"', ["Staff see today's rooms; 50% booked!"]],
     ['aidlc engine orchestrate next "Rename \u201cTasks\u201d, R&D | QA"', ["Rename \u201cTasks\u201d, R&D | QA"]],
     ['bun .aidlc/tools/aidlc.ts engine orchestrate next "Wow, say !T241_VALUE now"', ["Wow, say !T241_VALUE now"]],
+    // cmd.exe expands neither $ nor the backtick, so text holding them and an &
+    // (refused by PowerShell, which names cmd.exe) can be sent from here.
+    ['aidlc engine orchestrate next "Price rooms at $5k & up for `R&D`"', ["Price rooms at $5k & up for `R&D`"]],
+    ['bun .aidlc/tools/aidlc.ts engine orchestrate next $PATH "$HOME & `whoami`"', ["$PATH", "$HOME & `whoami`"]],
   ];
 
   test("PowerShell and cmd.exe each read their own quoting, and a quote either reads differently is refused", async () => {

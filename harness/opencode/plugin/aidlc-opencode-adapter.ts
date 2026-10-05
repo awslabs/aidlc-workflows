@@ -209,7 +209,8 @@ function shellDialect(configured: string | null | false, platform: NodeJS.Platfo
  * PowerShell a word may be double- or single-quoted (with '' for an
  * apostrophe), line breaks included; under cmd.exe, which reads a single quote
  * as a plain character and ends the command at a line break, only plain words
- * and double-quoted text on one line are read.
+ * and double-quoted text on one line are read, and $ and the backtick, which
+ * cmd.exe never expands, are plain characters.
  */
 function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
   if (dialect === "strict") return null;
@@ -266,7 +267,8 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
         if (powerShell && !wordEnds(i + 1)) return null;
         continue;
       }
-      if (ch === "`" || ch === "$") return null;
+      // cmd.exe expands neither: they are text there.
+      if ((ch === "`" || ch === "$") && dialect !== "cmd") return null;
       if (posix && ch === "\\" && i + 1 < command.length) {
         const next = command[i + 1];
         if (next === "\n" || next === "\r") return null;
@@ -294,6 +296,12 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
       const next = command[++i];
       if (next === "\n" || next === "\r") return null;
       word += next;
+      wordStarted = true;
+      continue;
+    }
+    // cmd.exe expands neither $ nor the backtick: they are plain text there.
+    if (dialect === "cmd" && (ch === "$" || ch === "`")) {
+      word += ch;
       wordStarted = true;
       continue;
     }
