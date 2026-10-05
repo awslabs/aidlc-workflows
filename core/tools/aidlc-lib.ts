@@ -28592,11 +28592,25 @@ export function evaluateGuardRefusal(
       input.attempt.reviewCoverage === "current" &&
       openForWork
     ) {
+      // With Construction checkpoints the Unit's checkpoint is its gate, and
+      // the stage cannot be reported for approval until every Unit's
+      // checkpoint is approved; `next` shows this Unit's checkpoint again.
+      const walk = constructionCheckpointsApply(input.stateContent)
+        ? soloUnitMajorRefusal(input)
+        : null;
+      const checkpointUnit = walk?.live ? walk.unit : null;
+      const showCheckpoint = renderEngineInvocation({
+        route: "orchestrate",
+        args: ["next", ...(input.projectDir ? ["--project-dir", input.projectDir] : [])],
+      }, { harnessDir: harnessDir() });
       remedies.push({
         op: "present-approval-gate",
-        action:
-          "Present the unresolved review findings at the approval gate for the " +
-          "human instead of starting another review pass.",
+        action: checkpointUnit === null
+          ? "Present the unresolved review findings at the approval gate for the " +
+            "human instead of starting another review pass."
+          : `Present the unresolved review findings at unit "${checkpointUnit}"'s checkpoint ` +
+            `for the human instead of starting another review pass: run \`${showCheckpoint}\`, ` +
+            "which shows that checkpoint again, and ask it with the findings.",
         requiresHuman: true,
         executableNow: true,
       });

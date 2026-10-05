@@ -2675,3 +2675,68 @@ describe("unit-major resets name what they throw away", () => {
     expect(stageLevel.remedies.find((remedy) => remedy.op === "restart-stage")?.action).toBe(RESTART);
   });
 });
+
+describe("the gate a spent review budget offers is a step the walk accepts", () => {
+  // A solo unit-major walk with Construction checkpoints: unit "extra" is on
+  // Code Generation and its checkpoint is the open gate. The stage cannot be
+  // reported for approval until every Unit's checkpoint is approved, so the
+  // way to the gate is `next`, which shows the checkpoint again.
+  function checkpointWalk(checkpoints: boolean): string {
+    return [
+      "# AI-DLC State",
+      "- **Scope**: feature",
+      "- **Current Stage**: code-generation",
+      "- **Construction Iteration**: unit-major",
+      ...(checkpoints ? ["- **Construction Checkpoints**: enabled"] : []),
+      "- **Active Unit**: extra",
+      "- **Unit Stage**: code-generation",
+      "- [S] functional-design \u2014 SKIP",
+      "- [S] nfr-requirements \u2014 SKIP",
+      "- [S] nfr-design \u2014 SKIP",
+      "- [S] infrastructure-design \u2014 SKIP",
+      "- [-] code-generation \u2014 EXECUTE",
+      "",
+    ].join("\n");
+  }
+  function budgetRefusal(stateContent: string, unit: string | undefined = "extra") {
+    return evaluateGuardRefusal({
+      code: "REVIEW_BUDGET_EXHAUSTED",
+      blockedAction: "request-review",
+      stage: "code-generation",
+      ...(unit ? { unit } : {}),
+      projectDir: "/tmp/t331-checkpoint-walk",
+      stateContent,
+      invariant: "probe",
+      userMessage: "probe",
+      attempt: {
+        recovery: "available",
+        summaryCoverage: "current",
+        reviewCoverage: "current",
+        sourceCoverage: "current",
+        reviewBudget: { used: 1, limit: 1 },
+      },
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+  }
+  const gate = (refusal: ReturnType<typeof evaluateGuardRefusal>) =>
+    refusal.remedies.find((remedy) => remedy.op === "present-approval-gate");
+
+  test("at a Unit's checkpoint it names `next` for that checkpoint, never a stage report", () => {
+    for (const unit of ["extra", undefined]) {
+      const remedy = gate(budgetRefusal(checkpointWalk(true), unit));
+      expect(remedy?.executableNow, String(unit)).toBe(true);
+      expect(remedy?.action, String(unit)).toContain('at unit "extra"\'s checkpoint');
+      expect(remedy?.action, String(unit)).toMatch(
+        /`bun [^`]*orchestrate(?:\.ts)? next --project-dir \/tmp\/t331-checkpoint-walk`/,
+      );
+      expect(remedy?.action, String(unit)).not.toContain("report");
+    }
+  });
+
+  test("without checkpoints the stage's own approval gate is still the way", () => {
+    expect(gate(budgetRefusal(checkpointWalk(false)))?.action).toBe(
+      "Present the unresolved review findings at the approval gate for the " +
+        "human instead of starting another review pass.",
+    );
+  });
+});
