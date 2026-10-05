@@ -1748,6 +1748,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ANSWER_TEXT_DIR",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:anyIntentRecordExists",
       "minMechanism": "none",
       "coveredBy": [],
@@ -8000,6 +8007,18 @@
         },
         {
           "file": "tests/unit/t-audit-shard-identity.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readAnswerTextFile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t-answer-text-file.test.ts",
           "mechanism": "cli"
         }
       ],
