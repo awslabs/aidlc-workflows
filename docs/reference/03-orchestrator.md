@@ -82,6 +82,8 @@ Prose typed with a `--scope` that differs from the workflow's gets the same `new
 
 Freeform words alone over active work (nothing `next` reads as a flag, scope, verb or noun, and no open question or approval gate they could answer) get a `print` naming the typed re-entry report (`report --result resumed --choice <redo|jump|fresh>`, for words such as "take me back to requirements analysis") or `next --request <id>` (also when the conductor cannot tell), which asks the `new-work-routing` question with the words kept, so a redo, jump, or start-fresh request typed with `/aidlc` itself is that request; words with a setting typed beside them are asked about with it.
 
+In a solo unit-major walk, a Unit's work, its summary confirmation and its checkpoint (the learnings question and the checkpoint approval) run ahead of Current Stage and log their questions under the stage `next` directs (a checkpoint under the block's last stage). Prose then reads that stage's open question by the Stop hook's same rule, so an answer typed in a new chat, after the one that asked ended, reaches the question it answers instead of the new-work routing ask.
+
 ### `/aidlc compose` -- The Adaptive Composer
 
 The compose surfaces (a leading `compose` verb, `--new-scope`, or `--report <path>`) make the engine emit a composer-dispatch `print` instead of a scope confirm. The verb is deliberately NOT a workspace verb (workspace verbs are terminal utility commands the Kiro seam runs off-band; compose is workflow work the conductor dispatches). Two modes split on the state file:

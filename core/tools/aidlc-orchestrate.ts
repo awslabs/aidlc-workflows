@@ -262,6 +262,7 @@ import {
   type KnowledgeCommand,
   parseKnowledgeCommand,
   openDecisionBlock,
+  hasPendingDecision,
   type PluginCommand,
   parsePluginCommand,
   PHASE_NUMBERS,
@@ -2450,12 +2451,27 @@ function pickedRouteRecordAsk(
   );
 }
 
+// The stage `next` directs for the solo unit-major walk's stop at Current
+// Stage: a Unit's work or summary at its own stage, a Unit's checkpoint at the
+// block's last stage. Null off such a walk.
+function unitMajorStopStage(projectDir: string, stateContent: string, currentSlug: string): string | null {
+  const walk = unitMajorWalkBeat(projectDir, getField(stateContent, "Scope")?.trim() ?? "", stateContent, currentSlug);
+  if (walk === null) return null;
+  const { step, block } = walk;
+  if (step.kind === "work" || step.kind === "summary") return step.stage.slug;
+  if (step.kind === "checkpoint") return block.at(-1)?.slug ?? null;
+  return step.kind === "paused" ? step.stage : null;
+}
+
 // The question a person is being asked in a solo walk's current [-] stage: the
 // open DECISION_RECORDED block after that stage's latest STAGE_STARTED, and
 // that stage. The same rule as the Stop hook's carve-out (isPendingDecisionStop
 // in hooks/aidlc-continue-workflow.ts), so the two agree about the same turn:
-// null under autonomous Construction (no person is answering), outside a [-]
-// stage, or when the state or audit cannot be read (never fail `next`).
+// a unit-major walk, and a Unit's checkpoint (its learnings question and
+// approval), run ahead of Current Stage and log under the stage `next` directs,
+// and that stage's open question counts too. Null under autonomous
+// Construction (no person is answering), outside a [-] stage, or when the
+// state or audit cannot be read (never fail `next`).
 function openStageQuestion(projectDir: string, stateContent: string): { stage: string; block: string } | null {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") return null;
@@ -2464,7 +2480,13 @@ function openStageQuestion(projectDir: string, stateContent: string): { stage: s
     if (stage.length === 0) return null;
     if (parseCheckboxes(stateContent).find((row) => row.slug === stage)?.state !== "in-progress") return null;
     const block = openDecisionBlock(projectDir, stage, "STAGE_STARTED");
-    return block === null ? null : { stage, block };
+    if (block !== null) return { stage, block };
+    const ahead = unitMajorStopStage(projectDir, stateContent, stage);
+    if (ahead === null || ahead === stage || !hasPendingDecision(projectDir, ahead, undefined, undefined, true)) {
+      return null;
+    }
+    const aheadBlock = openDecisionBlock(projectDir, ahead);
+    return aheadBlock === null ? null : { stage: ahead, block: aheadBlock };
   } catch {
     return null;
   }
