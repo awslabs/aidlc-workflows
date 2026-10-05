@@ -51,7 +51,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
-import { resolveAction } from "../../dist/claude/.claude/tools/aidlc.ts";
+import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
