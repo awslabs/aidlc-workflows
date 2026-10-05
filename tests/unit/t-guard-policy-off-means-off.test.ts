@@ -267,6 +267,23 @@ describe("a reviewed Unit whose local records are not on this machine", () => {
     expect(done.out).toContain("could not be checked against the Code Generation review on this machine; carrying on.");
   });
 
+  test("off: a written review that is here but changed is not that review, so it is checked again", () => {
+    const { project: dir, record } = project("off");
+    review(dir, record, "alpha", ["app.ts"]);
+    review(dir, record, "beta", []);
+    const reviews = join(record, ".aidlc-engine", "reviews");
+    const files = readdirSync(reviews, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile());
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const path = join(file.parentPath, file.name);
+      writeFileSync(path, `${readFileSync(path, "utf-8")}\nAn added line.\n`);
+    }
+    const refused = approve(dir);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("--retry-pending");
+    expect(refused.out).not.toContain("is not on this machine");
+  });
+
   test("strict: it asks for the review again, and that retry is accepted", () => {
     const { project: dir, record } = project("strict", "from scope enterprise");
     review(dir, record, "alpha", ["app.ts"]);

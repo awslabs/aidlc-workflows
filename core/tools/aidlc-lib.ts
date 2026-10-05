@@ -18697,8 +18697,14 @@ export function freshReviewReceipts(
       const matchesRequest = reviewCompletionMatchesRequest(request.binding, e.block);
       const recordRef = matchesRequest ? reviewRecordRefFromBlock(e.block) : null;
       // Under relaxed or off, a review whose written record is not on this
-      // machine (another checkout, a clean) keeps its recorded verdict.
-      if (recordRef === null || !isRelaxed()) {
+      // machine (another checkout, a clean) keeps its recorded verdict. A
+      // record that is here but does not match what was recorded is not
+      // that review, so it is checked again under every policy.
+      const recordAbsent = recordRef !== null && (() => {
+        const dir = recordDir(projectDir);
+        return dir === null || !existsSync(join(dir, recordRef.path));
+      })();
+      if (!recordAbsent || !isRelaxed()) {
         if (matchesRequest) request.verificationFailed = true;
         continue;
       }

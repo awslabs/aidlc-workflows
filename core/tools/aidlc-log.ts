@@ -3825,7 +3825,8 @@ function handleReview(args: string[]): void {
         verdict: verdict as ReviewVerdict,
         request_id: requestBinding.requestId,
         request_challenge: legacy?.challenge ?? null,
-        artifact_fingerprint: snapshot.fingerprint,
+        // The same fingerprint as the row, so the record pairs with it.
+        artifact_fingerprint: fields["Artifact Fingerprint"],
         source_fingerprint: sourceFingerprint,
         unit_source_fingerprint: unitFingerprint,
         // Older readers read `findings` in today's New/Unresolved/Resolved
