@@ -35,11 +35,12 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { forwardJumpNotice } from "../../core/tools/aidlc-jump.ts";
 import {
   cleanupTestProject,
+  runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -546,9 +547,16 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(back.status, back.out).toBe(0);
     // The way back is not in the tool's own output, which no one reads aloud.
     expect((JSON.parse(back.out) as { notice?: string }).notice).toBeUndefined();
-    const nextIn = () => JSON.parse(run(proj, "aidlc-orchestrate.ts", ["next"], chat).out.split("\n")
-      .find((line) => line.startsWith("{")) ?? "{}") as { kind?: string; narration?: string };
+    // This chat's hooks are running.
+    const health = join(recordDirOf(proj), ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "pre-tool-use.last"), new Date().toISOString());
+    const nextEnv: Record<string, string | undefined> = { ...chat };
+    delete nextEnv.AIDLC_SCOPE_MAPPING;
+    const nextIn = () => (runOrchestrateNext(toolIn(proj, "aidlc-orchestrate.ts"), proj, [], { env: nextEnv }).directive ??
+      {}) as { kind?: string; narration?: string };
     const said = nextIn();
+    expect(said.kind).toBe("run-stage");
     expect(String(said.narration)).toContain(
       "To return to Code Generation, type `/aidlc --stage code-generation`.",
     );
