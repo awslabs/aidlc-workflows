@@ -95,6 +95,7 @@ import {
   readAllAuditShards,
   recordAcceptedChanges,
   governedChangeControl,
+  guardPolicyAcceptsChanges,
   readAuditShardEvents,
   isRequestTurn,
   personSpokeSinceGate,
@@ -3541,10 +3542,13 @@ function handleReview(args: string[]): void {
       // was dispatched on must be the bytes on disk now. A legacy request is
       // compared against the body before any embedded appendix, which is what
       // it fingerprinted.
-      if (
-        !reviewRequestArtifactsCurrent(requestBinding, snapshot) &&
-        !appendedAfterRequest
-      ) {
+      // Under Guard Policy relaxed or off, a change made while the reviewer
+      // worked does not discard the review: the verdict covers the bytes the
+      // reviewer saw, and the change reaches the gate as one line.
+      const changesAccepted = guardPolicyAcceptsChanges(pd, null, { selection: { intent, space } });
+      const artifactsMoved =
+        !reviewRequestArtifactsCurrent(requestBinding, snapshot) && !appendedAfterRequest;
+      if (artifactsMoved && !changesAccepted) {
         refuseReview(
           `Cannot record the verdict for "${flags.stage}" because ` +
             `its output documents changed after review iteration ${iteration} started. ` +
@@ -3661,7 +3665,7 @@ function handleReview(args: string[]): void {
       }
 
       fields["Request Fingerprint"] = requestBinding.artifactFingerprint;
-      fields["Artifact Fingerprint"] = snapshot.fingerprint;
+      fields["Artifact Fingerprint"] = artifactsMoved ? requestBinding.artifactFingerprint : snapshot.fingerprint;
       if (requestBinding.requestId !== null) {
         fields["Request Id"] = requestBinding.requestId;
       }
@@ -3684,7 +3688,8 @@ function handleReview(args: string[]): void {
               "request with --retry-pending before recording the verdict.",
           );
         }
-        if (!sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint)) {
+        const sourceMoved = !sameWorkspaceSource(requestBinding.sourceFingerprint, sourceFingerprint);
+        if (sourceMoved && !changesAccepted) {
           refuseReview(
             `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source changed after ` +
               `REVIEW_REQUESTED iteration ${iteration}. ` +
@@ -3712,7 +3717,12 @@ function handleReview(args: string[]): void {
                 "request with --retry-pending before recording the verdict.",
             );
           }
-          if (unitFingerprint !== requestBinding.unitSourceFingerprint) {
+          const unitSourceMoved = unitFingerprint !== requestBinding.unitSourceFingerprint;
+          if (unitSourceMoved && changesAccepted) {
+            // The verdict covers the Unit source the reviewer was given; its
+            // request-time snapshot carries the comparison to the gate.
+            unitFingerprint = requestBinding.unitSourceFingerprint;
+          } else if (unitSourceMoved) {
             refuseReview(
               `Refusing REVIEW_COMPLETED for "${flags.stage}": unit source or source-manifest.json ` +
                 `changed after REVIEW_REQUESTED iteration ${iteration}. ` +
@@ -3720,7 +3730,7 @@ function handleReview(args: string[]): void {
             );
           }
           fields["Unit Source Fingerprint"] = unitFingerprint;
-          if (sourceState !== null && manifest?.ok === true) {
+          if (!unitSourceMoved && sourceState !== null && manifest?.ok === true) {
             writeUnitSourceSnapshot(
               pd,
               flags.stage,

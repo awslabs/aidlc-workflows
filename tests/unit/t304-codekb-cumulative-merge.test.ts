@@ -29,6 +29,8 @@ import {
   DEFAULT_SPACE,
   REPO_ROOT,
   resetAidlcEnv,
+  seededStateFile,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 import {
   codekbScopeFingerprint,
@@ -377,6 +379,31 @@ describe("t304 source and store generation interleavings", () => {
     expect(`${refused.stdout}\n${refused.stderr}`).toContain("symlink");
     expect(readFileSync(sentinel, "utf-8")).toBe("outside\n");
     expect(existsSync(externalTransaction)).toBe(true);
+  });
+
+  test("under Guard Policy off, code that moved while it was scanned is published with one line", () => {
+    const project = freshProject();
+    seedStateFile(project, "state-mid-inception.md");
+    const statePath = seededStateFile(project);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope bugfix)",
+      "- **Guard Policy**: off (from scope bugfix)",
+    ));
+    const payments = join(project, "src", "payments");
+    mkdirSync(payments, { recursive: true });
+    const paymentFile = join(payments, "gateway.ts");
+    writeFileSync(paymentFile, "export const payment = 1;\n");
+    const sourcePaths = ["src/payments/"];
+    const baseline = snapshot(project, sourcePaths);
+    writeFileSync(paymentFile, "export const payment = 2;\n");
+    const candidate = join(project, "moved-candidate");
+    writeCandidate(candidate, "PAYMENTS AS SCANNED", "payments", sourcePaths, ["payments"], currentFingerprint(project, sourcePaths));
+    const published = publish(project, candidate, sourcePaths, baseline);
+    expect(published.status, published.stderr).toBe(0);
+    expect(JSON.parse(published.stdout).change_notices).toEqual([
+      "The code changed while it was being scanned; saved the scan as it was. Say \"redo reverse engineering\" to scan it again.",
+    ]);
+    expect(readFileSync(join(storeDir(project), "architecture.md"), "utf-8")).toContain("PAYMENTS AS SCANNED");
   });
 
   test("source mutation after the snapshot refuses stale prose with a newly minted fingerprint", () => {

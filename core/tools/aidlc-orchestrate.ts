@@ -228,6 +228,7 @@ import {
   parseCheckboxes,
   parseGuardPolicy,
   resolveGuardPolicy,
+  guardPolicyAcceptsChanges,
   type GuardPolicy,
   noteGuardPolicyRename,
   humanPresenceGuardDisabled,
@@ -11673,7 +11674,9 @@ function checkPipelineLinkEvidence(
       `${refusal}: ${missing.join(", ")}. ` +
       `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
       `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
-      `Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ` +
+      (guardPolicyAcceptsChanges(pd)
+        ? ""
+        : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
       `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
       `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}` +
       `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`,

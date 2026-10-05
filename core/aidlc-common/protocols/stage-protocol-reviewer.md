@@ -241,7 +241,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    embedded input form is removed in the next minor release. Do not write an
    embedded section; the old section stays where it is as inert content.
 
-   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval; summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
+   The recorded receipt is TERMINAL whenever no further review pass follows it: do not write reviewed outputs between recording it and gate approval, except a change the person asks for under Guard Policy `relaxed` or `off` (below); summary-owned questions follow the separate boundary above; for a per-unit `workspace_requires` stage, also do not write the unit's `source-manifest.json` or any claimed source path (a later write is deterministically invalidated at completion and the engine refuses the gate). A verdict may arrive with optional suggestions riding along; do NOT apply them - quote them verbatim in the completion summary for the human to weigh at the gate. A suggestion is gate input, not a defect (step 2: it is not grounds for NOT-READY, so it is not grounds for editing past the terminal receipt either). Riding suggestions also never change the gate itself: keep the §1 approval question's standard option order (Approve first, Request Changes second) - do not present Request Changes as the recommended or first option because a suggestion exists. On harnesses with PreToolUse enforcement the review-freeze hook refuses writes to those reviewed `produces[]`/`optional_produces[]` outputs (`REVIEW_FREEZE_BLOCKED`); manifest and claimed-source writes are caught by the completion guard rather than the hook. A recorded gate rejection lifts the freeze for the revision path.
    If a write still invalidates the receipt, what happens next is decided by
    the intent's Guard Policy value (`/aidlc --status` shows it). Under
    `strict`, the first request after that stale terminal evidence is exactly
@@ -271,11 +271,14 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
    human, and the Review brief below says `Reviewed content differs` with the
-   changed paths. The reviewer's verdict is never altered, and the freeze
-   remains this protocol's obligation under both values; under `relaxed` or
-   `off` the review-freeze fence stands aside for work nobody directed and
-   records `GUARD_STOOD_ASIDE` instead of refusing, so the obligation is met by
-   following this protocol rather than by a refusal. Construction checkpoints
+   changed paths. The reviewer's verdict is never altered. Under `relaxed` or
+   `off`, a change the person asks for after the verdict ("rename the handler",
+   "fix that answer") is made directly, with no Request Changes round and no
+   new review; the gate then shows the change as above. The freeze stays this
+   protocol's obligation only for changes nobody asked for, such as applying a
+   reviewer's riding suggestions on your own; the review-freeze fence stands
+   aside and records `GUARD_STOOD_ASIDE` instead of refusing, so that
+   obligation is met by following this protocol rather than by a refusal. Construction checkpoints
    read the same value: under `relaxed` and `off` a change to a Unit's code or
    documents after their review is accepted there too, with one line, and the
    Unit's approval stands. Under `strict`, a Unit whose reviewed code or

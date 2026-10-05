@@ -145,6 +145,7 @@ import {
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
   guardPolicyAtLeast,
+  guardPolicyAcceptsChanges,
   personSpokeSinceGate,
   scopeDefinitionGuardPolicy,
   GUARD_FENCES,
@@ -9838,6 +9839,10 @@ function handleCodekbPublish(
     }
   }
 
+  // Under Guard Policy relaxed or off, code that moved while it was scanned is
+  // published as scanned and said once; a later scan brings it up to date.
+  const changesAccepted = guardPolicyAcceptsChanges(projectDir, null, { selection: { space } });
+  let movedDuringScan = false;
   const result = withCodekbLock(projectDir, space, repo, () => {
     recoverCodekbTransactions(projectDir, space, repo);
     const currentStore = codekbStoreGeneration(storeDir);
@@ -9848,7 +9853,9 @@ function handleCodekbPublish(
       );
     }
     const currentSource = codekbSourceFingerprint(repoDir, sourcePaths, excludes);
-    if (currentSource === null || currentSource !== expectedSource) {
+    if ((currentSource === null || currentSource !== expectedSource) && changesAccepted) {
+      movedDuringScan = true;
+    } else if (currentSource === null || currentSource !== expectedSource) {
       die(
         `CODEKB_SOURCE_CHANGED: expected ${expectedSource}, found ${currentSource ?? "unavailable"}. ` +
           `Re-scan the affected source, re-synthesize all nine artifacts, take a fresh snapshot, and retry.`,
@@ -9859,10 +9866,12 @@ function handleCodekbPublish(
       candidate.scope.analyzedPaths,
       excludes,
     );
-    if (
+    const candidateStale =
       candidate.scope.fingerprint !== currentCandidateFingerprint &&
-      !(candidate.scope.fingerprint === null && currentCandidateFingerprint === null)
-    ) {
+      !(candidate.scope.fingerprint === null && currentCandidateFingerprint === null);
+    if (candidateStale && changesAccepted) {
+      movedDuringScan = true;
+    } else if (candidateStale) {
       die(
         `CODEKB_CANDIDATE_STALE: staged fingerprint ` +
           `${candidate.scope.fingerprint ?? "unknown"} does not match the current source ` +
@@ -9912,10 +9921,13 @@ function handleCodekbPublish(
       `codekb-publish: published, but kept the staged candidate: ${relative(projectDir, cleanup.keptAt) || cleanup.keptAt}\n`,
     );
   }
+  const changeNotice = movedDuringScan
+    ? "The code changed while it was being scanned; saved the scan as it was. Say \"redo reverse engineering\" to scan it again."
+    : null;
   process.stdout.write(
     flags.json === "true"
-      ? `${JSON.stringify({ ...result, staged_removed: stagedRemoved })}\n`
-      : `PUBLISHED ${result.published} ${result.generation}\n`,
+      ? `${JSON.stringify({ ...result, staged_removed: stagedRemoved, ...(changeNotice ? { change_notices: [changeNotice] } : {}) })}\n`
+      : `PUBLISHED ${result.published} ${result.generation}\n${changeNotice ? `${changeNotice}\n` : ""}`,
   );
 }
 

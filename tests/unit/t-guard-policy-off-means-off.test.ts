@@ -14,16 +14,27 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
+  checkSummaryConfirmationEvidence,
   guardPolicyAcceptsChanges,
+  summaryConfirmationContentHash,
   readAllAuditShards,
   workspaceSourceListing,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_MEMORY_SRC, AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
+import {
+  AIDLC_MEMORY_SRC,
+  AIDLC_SRC,
+  createTestProject,
+  FIXTURES_DIR,
+  seedAidlcMemory,
+  seededRecordDir,
+  seededStateFile,
+  seedStateFile,
+} from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -331,5 +342,139 @@ describe("the project source cannot be read on this machine", () => {
     expect(refused.out).not.toContain("because the project source changed after");
     const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
     expect(doctor.out).toContain("Workspace source boundary binds: no (");
+  });
+});
+
+// A review in two steps, so a change can land while the reviewer works.
+function requestOnly(dir: string, record: string, unit: string, writes: string[], iteration = "1"): { args: string[]; plan: string; slot: string } {
+  const unitPath = unitDir(record, unit);
+  writeFileSync(
+    join(unitPath, "source-manifest.json"),
+    `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes: writes.map((path) => ({ path })) }, null, 2)}\n`,
+  );
+  const args = ["review", "--stage", "code-generation", "--reviewer", REVIEWER, "--unit", unit, "--iteration", iteration];
+  const request = cli(LOG, args, dir);
+  expect(request.rc, request.out).toBe(0);
+  return { args, plan: join(unitPath, "code-generation-plan.md"), slot: slotOf(dir, request.out) };
+}
+
+function slotOf(dir: string, out: string): string {
+  const named = JSON.parse(out.trim().split("\n").at(-1) ?? "{}") as { reviewFile?: string };
+  expect(typeof named.reviewFile).toBe("string");
+  return join(dir, named.reviewFile as string);
+}
+
+// The reviewer writes its review into the slot its request named.
+function verdict(dir: string, args: string[], slot: string, iteration = "1"): { rc: number; out: string } {
+  mkdirSync(join(slot, ".."), { recursive: true });
+  writeFileSync(slot, `## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`);
+  return cli(LOG, [...args, "--verdict", "READY"], dir);
+}
+
+describe("something changes while the reviewer works", () => {
+  test("off: the plan document changes; the verdict counts and the gate says so once", () => {
+    const { project: dir, record } = project("off");
+    const alpha = requestOnly(dir, record, "alpha", ["app.ts"]);
+    appendFileSync(alpha.plan, "\nOne more step the person added.\n");
+    const recorded = verdict(dir, alpha.args, alpha.slot);
+    expect(recorded.rc, recorded.out).toBe(0);
+    review(dir, record, "beta", []);
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+    expect(acceptedRows(dir).some((block) => auditBlockField(block, "Unit") === "alpha")).toBe(true);
+  });
+
+  test("off: another file in the project changes; the verdict counts", () => {
+    const { project: dir, record } = project("off");
+    const alpha = requestOnly(dir, record, "alpha", ["app.ts"]);
+    writeFileSync(join(dir, "other.ts"), "export const other = 1;\n");
+    const recorded = verdict(dir, alpha.args, alpha.slot);
+    expect(recorded.rc, recorded.out).toBe(0);
+  });
+
+  test("off: the Unit's own file changes; the verdict counts and the gate names the file", () => {
+    const { project: dir, record } = project("off");
+    const alpha = requestOnly(dir, record, "alpha", ["app.ts"]);
+    writeFileSync(join(dir, "app.ts"), "export const app = 2;\n");
+    const recorded = verdict(dir, alpha.args, alpha.slot);
+    expect(recorded.rc, recorded.out).toBe(0);
+    review(dir, record, "beta", []);
+    const done = approve(dir);
+    expect(done.rc, done.out).toBe(0);
+    expect(acceptedRows(dir).some((block) =>
+      auditBlockField(block, "Unit") === "alpha" && (auditBlockField(block, "Changed") ?? "").includes("app.ts"))).toBe(true);
+  });
+
+  test("strict: the Unit's own file changes; the verdict is refused and the request it names is accepted", () => {
+    const { project: dir, record } = project("strict", "from scope enterprise");
+    const alpha = requestOnly(dir, record, "alpha", ["app.ts"]);
+    writeFileSync(join(dir, "app.ts"), "export const app = 2;\n");
+    const refused = verdict(dir, alpha.args, alpha.slot);
+    expect(refused.rc).toBe(1);
+    expect(refused.out).toContain("Request it again so the reviewer reviews what is there now");
+    const again = cli(LOG, alpha.args, dir);
+    expect(again.rc, again.out).toBe(0);
+    const recorded = verdict(dir, alpha.args, slotOf(dir, again.out));
+    expect(recorded.rc, recorded.out).toBe(0);
+  });
+});
+
+describe("the questions file changes after the person said Looks correct", () => {
+  const confirmed = "# Questions\n\n## Q1\n\nKeep the login flow.\n\n## Consolidated Summary Confirmation\n\n[Answer]: Looks correct\n";
+  function summaryFixture(policy: Policy) {
+    const proj = createTestProject();
+    dirs.push(proj);
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-mid-inception.md");
+    const statePath = seededStateFile(proj);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Change Control**: strict (from scope bugfix)",
+      `- **Guard Policy**: ${policy} (from scope bugfix)`,
+    ));
+    const stage: Parameters<typeof checkSummaryConfirmationEvidence>[1] = {
+      slug: "requirements-analysis", name: "Requirements Analysis", phase: "inception",
+      outputs: "record", produces: ["requirements", "requirements-analysis-questions"],
+      optional_produces: [], produces_kinds: {}, summary_confirmation: "required",
+    };
+    const dir = join(seededRecordDir(proj), "inception", stage.slug);
+    mkdirSync(dir, { recursive: true });
+    const questions = join(dir, `${stage.slug}-questions.md`);
+    writeFileSync(questions, confirmed);
+    appendAuditEntry("SUMMARY_CONFIRMATION_RECORDED", {
+      Stage: stage.slug, Details: "Looks correct", Checkpoint: "Consolidated Summary Confirmation",
+      "Questions File": relative(proj, questions).replaceAll("\\", "/"),
+      "Questions SHA-256": summaryConfirmationContentHash(confirmed), "Hash Scope": "confirmed-content-v2",
+    }, proj);
+    const artifact = join(dir, "requirements.md");
+    writeFileSync(artifact, "# Requirements\n");
+    appendAuditEntry("ARTIFACT_CREATED", { Stage: stage.slug, File: relative(proj, artifact).replaceAll("\\", "/") }, proj);
+    // A follow-up question the protocol tells the agent to add after the summary.
+    writeFileSync(questions, `${confirmed}\n## Q2\n\nShould guests see the login page?\n\n[Answer]: yes\n`);
+    const evidence = () => {
+      const prior = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+      process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "0";
+      try {
+        return checkSummaryConfirmationEvidence(proj, stage, { stateContent: readFileSync(statePath, "utf-8") });
+      } finally {
+        if (prior === undefined) delete process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+        else process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = prior;
+      }
+    };
+    return { proj, evidence };
+  }
+
+  test("off: the confirmation stands and the change is named once", () => {
+    const result = summaryFixture("off").evidence();
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect((result.acceptedChanges ?? []).map((change) => change.notice).join(" "))
+      .toContain("changed after you confirmed its summary; carrying on with it as it is now.");
+  });
+
+  test("strict: the summary is asked again, as before", () => {
+    const result = summaryFixture("strict").evidence();
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal?.code).toBe("SUMMARY_CONTENT_STALE");
   });
 });

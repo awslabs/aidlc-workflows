@@ -6018,10 +6018,14 @@ function handleApprove(args: string[]): void {
       preflightStage,
     );
   }
+  // Under Guard Policy relaxed or off an edit at the open gate is a change the
+  // person's Approve accepts (the review scan names it once), never a Request
+  // Changes they did not give.
   const preflightBackstop =
     preflightTeamGate === null &&
     !revisionBackstopDisabled() &&
     !preflightDecision.autonomousDecision &&
+    !guardPolicyAcceptsChanges(pd, preflightContent) &&
     unrecordedRevisionSinceGateOpen(pd, preflightStage);
   const backstopSensorEvaluation = preflightBackstop
     ? fireGateSensors(pd, preflightStage, preflightContent)
@@ -6142,6 +6146,7 @@ function handleApprove(args: string[]): void {
   const backstopNow =
     !revisionBackstopDisabled() &&
     !autonomousDecision &&
+    !guardPolicyAcceptsChanges(pd, content) &&
     unrecordedRevisionSinceGateOpen(pd, stage);
   if (backstopNow && !preflightBackstop) {
     error(

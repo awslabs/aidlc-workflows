@@ -734,6 +734,41 @@ describe("t315 pipeline link receipts", () => {
     }).completed).toEqual([LEAD, FINAL]);
   });
 
+  // Under Guard Policy relaxed or off, a targeted fix after Request Changes, or
+  // a handoff edited, copied or cloned, keeps the scan the agents already did.
+  function offPipelineProject(): string {
+    const proj = pipelineProject();
+    const statePath = seededStateFile(proj);
+    const content = readFileSync(statePath, "utf-8");
+    const line = "- **Guard Policy**: off (from scope enterprise)";
+    writeFileSync(
+      statePath,
+      /^- \*\*(Change Control|Guard Policy)\*\*: .*/m.test(content)
+        ? content.replace(/^- \*\*(Change Control|Guard Policy)\*\*: .*/m, line)
+        : content.replace(/^(- \*\*Scope\*\*: .*)$/m, `$1\n${line}`),
+    );
+    return proj;
+  }
+  const RE_NODE = { slug: RE_STAGE, lead_agent: LEAD, support_agents: [FINAL] };
+
+  test("under Guard Policy off, Request Changes keeps the earlier scan's handoffs", () => {
+    const proj = offPipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    appendAuditEntry("GATE_REJECTED", { Stage: RE_STAGE, Feedback: "rename module X in the architecture doc" }, proj);
+    expect(pipelineLinkEvidence(proj, RE_NODE).completed).toEqual([LEAD, FINAL]);
+  });
+
+  test("under Guard Policy off, an edited handoff keeps its link", () => {
+    const proj = offPipelineProject();
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    appendFileSync(developerHandoffPath(proj), "\nThe person's own note.\n");
+    expect(pipelineLinkEvidence(proj, RE_NODE).completed).toEqual([LEAD, FINAL]);
+  });
+
   test("gate-start and approve refuse conductor-written artifacts without the final receipt", () => {
     const proj = pipelineProject();
     writeAllCodekbArtifacts(proj);

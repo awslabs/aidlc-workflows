@@ -13003,9 +13003,21 @@ export function checkSummaryConfirmationEvidence(
         "stale",
       );
     }
-    if (
-      auditBlockField(receipt.block, "Questions SHA-256") !== currentHash
-    ) {
+    const confirmedHash = auditBlockField(receipt.block, "Questions SHA-256");
+    if (confirmedHash !== currentHash && changeControl() !== "strict") {
+      // Under relaxed or off, an answer fixed or a follow-up question added
+      // after "Looks correct" keeps the confirmation: recorded and said once.
+      const questionsFile = toPosix(relative(projectDir, question.path));
+      acceptedChanges.push({
+        checkpoint: "summary-confirmation",
+        stage: stage.slug,
+        unit: question.unit ?? options.unit ?? null,
+        changed: [questionsFile],
+        recorded: confirmedHash ?? "(not recorded)",
+        current: currentHash,
+        notice: `${questionsFile} changed after you confirmed its summary; carrying on with it as it is now.`,
+      });
+    } else if (confirmedHash !== currentHash) {
 			if (hashScope !== null && LEGACY_SUMMARY_CONFIRMATION_HASH_SCOPES.includes(hashScope)) {
 				return failure(
 					"SUMMARY_CONTENT_SEMANTICS_CHANGED",
@@ -31620,6 +31632,7 @@ function pipelineAttemptFloor(
   events: OrderedPipelineEvidenceEvent[],
   stageSlug: string,
   singleRun: boolean,
+  rejectionKeepsReceipts = false,
 ): PipelineAttemptFloor | null {
   const workflow = `single-stage:${stageSlug}`;
   const boundaries = events.filter((entry) => {
@@ -31631,6 +31644,7 @@ function pipelineAttemptFloor(
         entry.event === "STAGE_JUMPED" ||
         (
           entry.event === "GATE_REJECTED" &&
+          !rejectionKeepsReceipts &&
           auditBlockField(entry.block, "Stage") === stageSlug
         )
       ) &&
@@ -31757,7 +31771,9 @@ export function currentPipelineLinkReceipts(
   const events = orderedPipelineEvidenceEvents(projectDir);
   const singleRun = options.singleRun === true;
   const workflow = `single-stage:${stageSlug}`;
-  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
+  // Under Guard Policy relaxed or off, Request Changes for a targeted fix keeps
+  // the pipeline's earlier handoffs: the agents do not all run again.
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun, guardPolicyAcceptsChanges(projectDir));
   const receipts: PipelineLinkReceipt[] = [];
   for (const entry of events) {
     if (!pipelineEventAfterFloor(entry, floor)) continue;
@@ -31861,6 +31877,9 @@ function pipelineReceiptArtifactIsCurrent(
       guardedPath,
       true,
     );
+    // Under Guard Policy relaxed or off, an edited, copied or cloned handoff
+    // still records the scan the developer agent did.
+    if (guardPolicyAcceptsChanges(projectDir)) return true;
     if (
       Math.abs(snapshot.mtimeMs - receipt.artifactMtimeMs) > 0.01
     ) {
@@ -31885,7 +31904,7 @@ function currentPipelineReuseEvidence(
   singleRun: boolean,
 ): Set<string | null> {
   const events = orderedPipelineEvidenceEvents(projectDir);
-  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun, guardPolicyAcceptsChanges(projectDir));
   const workflow = `single-stage:${stageSlug}`;
   const reused = new Set<string | null>();
   for (const entry of events) {
