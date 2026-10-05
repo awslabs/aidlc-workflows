@@ -378,7 +378,10 @@ function checkWorkerWriteHook(worker: string, unit: string, allowed: boolean): v
 
 describe("swarm consumes lowered plan-approval allowance", () => {
   for (const fault of ["later-target", "source-during-publication"] as const) {
-    test.each(["relaxed", "off"] as const)(`a %s dispatch rolls back all new starts after ${fault} and revalidates its retry`, async (mode) => {
+    const outcome = fault === "later-target"
+      ? "rolls back all new starts after later-target and revalidates its retry"
+      : "goes ahead when a file is written while its starts are published";
+    test.each(["relaxed", "off"] as const)(`a %s dispatch ${outcome}`, async (mode) => {
       const pd = fixture(true);
       const originals = GROUP_UNITS.map((unit) => approvalSnapshot(pd, unit));
       const approvals = readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED");
@@ -438,6 +441,17 @@ describe("swarm consumes lowered plan-approval allowance", () => {
         } finally {
           clearTimeout(cleanupTimer);
         }
+      }
+      if (fault === "source-during-publication") {
+        // With the check lowered, a file written during the start is the same
+        // accepted change as one written before it.
+        expect(processUnderTest.exitCode, await stderr).toBe(0);
+        for (const original of originals) {
+          expect(readPlanApprovalReceipt(pd, original.key)?.status).toBe("generation");
+        }
+        expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvals);
+        expect(readFileSync(statePath, "utf-8")).toBe(state);
+        return;
       }
       expect(processUnderTest.exitCode, await stderr).toBe(2);
       expect(await stdout).not.toContain("Continuing past");

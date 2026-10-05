@@ -4559,11 +4559,15 @@ function publishCodeGenerationStart(
     }
   }
   const sourceAfter = workspaceSourceFingerprint(projectDir);
-  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+  if (
+    (sourceAfter === null || sourceAfter !== sourceBefore) &&
+    !codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined)
+  ) {
     // Revert the generation boundary rather than delete the approval: the
     // human's decision is still a fact, only the start is not. This is the
-    // race window, not the governed drift, so both Change Control values
-    // ask for the step again.
+    // race window, not the governed drift, so strict asks for the step again.
+    // With the plan-approval check lowered a file that moves during the start
+    // is the same accepted change as one that moved before it.
     throw new Error(
       "Source files changed while code generation was starting. Retry the step.",
     );
