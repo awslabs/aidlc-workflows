@@ -162,8 +162,8 @@ describe.skipIf(
 
       // Plain words are the person's request too: the agent runs the setter for
       // them, the change is set by you with their words, and one line says how
-      // to put it back. No exact typing. The guards as a whole are the Guard
-      // Policy, even when the same words also name one check.
+      // to put it back. No exact typing. The guards as a whole off is Guard
+      // Policy off, even when the same words also name one check.
       const asked = "please stop asking me to re-approve when files change, turn the guards off";
       const plain = await drive(asked, 150_000, {
         toolName: "Bash",
