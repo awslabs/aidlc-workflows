@@ -7355,7 +7355,11 @@ function routeNext(args: string[], projectDir: string | undefined): void {
       // A later pick against the one on record: their latest word stands.
       if (planQuestion.answered && planQuestion.isChoice && planQuestion.overrules !== null) {
         const log = aidlcToolInvocation("log");
-        emit(printDirective(planQuestion.overrules === "request-changes"
+        emit(printDirective(planQuestion.picked === "edit"
+          ? "The person answered the code plan question earlier and now says they will edit the files, and nothing " +
+            `is built yet. Run \`${log} answer --stage code-generation --checkpoint plan-approval --details ` +
+            `"I'll edit the files"\`, tell them where the files are, and wait for them to say done.`
+          : planQuestion.overrules === "request-changes"
           ? "The person asked for changes to the code plan earlier and now approves it. Run " +
             `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Approve Plan'\`, then bare ` +
             `\`${aidlcToolInvocation("orchestrate")} next\`: it builds the plan.`

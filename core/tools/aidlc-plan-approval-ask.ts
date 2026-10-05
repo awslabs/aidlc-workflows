@@ -981,27 +981,35 @@ function currentPlanApprovalAsk(
 /**
  * The engine's Plan Approval question while it is the open step: whether every
  * plan it asks about has an answer, whether the person is editing the files,
- * whether `words` are exactly one of its choices ("1", "Approve Plan"), and,
- * when they are, the recorded answer they pick against ("approve" or
- * "request-changes", or null when they pick what is recorded).
- * Null when it is not the open step.
+ * whether `words` are exactly one of its choices ("1", "Approve Plan"), the
+ * choice they pick, and, when they pick against the recorded answer, that
+ * answer ("approve" or "request-changes", or null when they pick what is
+ * recorded). Null when it is not the open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
   words: string,
-): { answered: boolean; editing: boolean; isChoice: boolean; overrules: "approve" | "request-changes" | null } | null {
+): {
+  answered: boolean;
+  editing: boolean;
+  isChoice: boolean;
+  picked: PlanApprovalAnswerChoice | null;
+  overrules: "approve" | "request-changes" | null;
+} | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
     const { record } = open;
     const pick = exactOptionPick(words, record.choices);
-    const picked = pick === 0 ? "approve" : pick === 1 ? "request-changes" : pick === 2 ? "edit" : null;
+    const picked: PlanApprovalAnswerChoice | null =
+      pick === 0 ? "approve" : pick === 1 ? "request-changes" : pick === 2 ? "edit" : null;
     const recorded = record.mode === "editing" ? null
       : (record.results ?? []).find((result) => (result.choice === "request-changes" ? "request-changes" : "approve") !== picked);
     return {
       answered: record.targets.every((target) => record.results?.some((result) => result.unit === target.unit)),
       editing: record.mode === "editing",
       isChoice: pick !== null,
+      picked,
       overrules: picked === null || recorded === undefined || recorded === null ? null
         : recorded.choice === "request-changes" ? "request-changes" : "approve",
     };
@@ -1235,6 +1243,27 @@ export function notePlanApprovalAskReply(
 
 export type PlanApprovalAnswerChoice = "approve" | "request-changes" | "edit";
 
+// The person edits the plan files themselves: the question waits in edit mode,
+// with no answer recorded, until they say done. Caller holds the audit lock.
+function startEditing(projectDir: string, record: PlanApprovalAskRecord): PlanApprovalAnswerResult {
+  const next: PlanApprovalAskRecord = { ...record, bound: false, mode: "editing" };
+  delete next.lastNotice;
+  delete next.replies;
+  delete next.results;
+  // Their "done" comes in a later reply.
+  next.repliesFrom = auditMark(projectDir);
+  writePlanApprovalAsk(projectDir, next);
+  const files = record.targets.flatMap((target) => {
+    const view = targetView(projectDir, target.unit);
+    return [view.plan_path, view.instructions_path];
+  });
+  return {
+    complete: false,
+    message: `Recorded that the person will edit ${files.join(", ")} themselves. Tell them where the files ` +
+      "are, end the turn, and wait for them to say done; then read what they changed and record their choice.",
+  };
+}
+
 export interface PlanApprovalAnswer {
   choice: PlanApprovalAnswerChoice;
   /** The Units the choice is for; every Unit the question asks about when absent. */
@@ -1406,6 +1435,9 @@ export function recordPlanApprovalAnswer(
         if (theirs === answer.choice) {
           return { complete: true, message: `The person's choice, "${ANSWER_LABELS[theirs]}", is already recorded. Run next.` };
         }
+        // Nothing is built while the question is open: "I'll edit the files"
+        // after an answer is their latest word, and the editing starts now.
+        if (answer.choice === "edit") return startEditing(projectDir, record);
         const corrected = answer.choice === "approve"
           ? correctReadRequestChanges(projectDir, session, named
             .filter((result) => result.choice === "request-changes").map((result) => result.unit))
@@ -1477,23 +1509,7 @@ export function recordPlanApprovalAnswer(
     }
     const next: PlanApprovalAskRecord = { ...record, bound: false };
     delete next.lastNotice;
-    if (answer.choice === "edit") {
-      next.mode = "editing";
-      delete next.replies;
-      delete next.results;
-      // Their "done" comes in a later reply.
-      next.repliesFrom = auditMark(projectDir);
-      writePlanApprovalAsk(projectDir, next);
-      const files = record.targets.flatMap((target) => {
-        const view = targetView(projectDir, target.unit);
-        return [view.plan_path, view.instructions_path];
-      });
-      return {
-        complete: false,
-        message: `Recorded that the person will edit ${files.join(", ")} themselves. Tell them where the files ` +
-          "are, end the turn, and wait for them to say done; then read what they changed and record their choice.",
-      };
-    }
+    if (answer.choice === "edit") return startEditing(projectDir, record);
     const results: PlanApprovalAskResult[] = (record.results ?? []).filter((result) => !chosen.includes(result.unit));
     const approved: Array<string | null> = [];
     const edited: Array<string | null> = [];

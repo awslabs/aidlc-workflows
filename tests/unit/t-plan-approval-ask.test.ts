@@ -599,6 +599,36 @@ describe("the engine asks for Plan Approval", () => {
     expect(again.ask_type).toBe("plan-approval");
   });
 
+  // "I'll edit the files" after an answer is their latest word too: the
+  // question waits in edit mode, with nothing built, until they say done.
+  test("I'll edit the files after an exact approval opens edit mode before anything is built", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc 1");
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    reply(proj, "/aidlc 3");
+    const read = next(proj, ["3"]);
+    expect(read.kind, JSON.stringify(read)).toBe("print");
+    expect(read.message).toContain(`--details "I'll edit the files"`);
+    expect(read.message).not.toContain("Review the plan");
+    const edit = answer(proj, "I'll edit the files");
+    expect(edit.code, edit.message).toBe(0);
+    const again = next(proj);
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(again.ask_type).toBe("plan-approval");
+    expect(again.plan_approval?.editing).toBe(true);
+  });
+
+  test("I'll edit the files after Request Changes opens edit mode", () => {
+    const proj = project();
+    askFor(proj);
+    reply(proj, "/aidlc 2");
+    reply(proj, "/aidlc 3");
+    const again = next(proj);
+    expect(again.kind, JSON.stringify(again)).toBe("ask");
+    expect(again.plan_approval?.editing).toBe(true);
+  });
+
   // Both halves of one message are done: the switch lands on this work, and
   // the choice typed after it answers the plan question.
   test("a switch typed before a plan choice applies to this work, and the choice is recorded", () => {
