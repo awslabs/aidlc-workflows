@@ -1545,8 +1545,21 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  test("R5: REVIEW_REQUESTED alone (no verdict) does NOT satisfy the precondition", () => {
+  // The person's own approval goes over a review with no verdict (see
+  // t-approve-over-unfinished-review); a team that locks Guard Policy strict
+  // keeps the review required, and the step it names is the retry.
+  test("R5: REVIEW_REQUESTED alone (no verdict) does NOT satisfy the precondition under a strict lock", () => {
     const p = projWithState("state-mid-inception.md");
+    const memoryFile = join(p, "aidlc", "spaces", "default", "memory", "project.md");
+    mkdirSync(dirname(memoryFile), { recursive: true });
+    const memory = existsSync(memoryFile) ? readFileSync(memoryFile, "utf-8") : "# Project\n";
+    writeFileSync(
+      memoryFile,
+      memory.includes("## Guard Policy\n")
+        ? memory.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
+        : `${memory.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`,
+      "utf-8",
+    );
     const artifact = join(
       seededRecordDir(p),
       "inception",
