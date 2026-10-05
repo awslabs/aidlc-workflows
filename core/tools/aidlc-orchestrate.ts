@@ -11652,9 +11652,8 @@ function handleSkeletonStanceReport(
   // absent field). The engine writes nothing itself — the spawned tool mutates.
   const res = spawnState(pd, ["set-skeleton-stance", stance]);
   if (res.exitCode !== 0) {
-    const detail = (res.stderr || res.stdout).trim();
-    emit(errorDirective(
-      `Failed to record skeleton stance for "${slug}"` + (detail ? `: ${detail}` : "."),
+    emit(stateRefusalDirective(
+      `Failed to record skeleton stance for "${slug}"`, `"${slug}"`, (res.stderr || res.stdout).trim(),
     ));
     return;
   }
@@ -13438,7 +13437,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 // Stop hook honours as a clean turn-end. Mutation lives entirely in the spawned
 // subcommand - the engine itself writes nothing, mirroring report's discipline.
 // A non-zero exit (e.g. the autonomy refusal, or an already-completed workflow)
-// is relayed verbatim as an error directive.
+// is relayed as an error directive in the refusal's own words.
 function handlePark(_args: string[], projectDir: string | undefined): void {
   const pd = resolveProjectDir(projectDir);
   // Turn-shape marker: a `park` mutates workflow state, so it is engagement. See
@@ -13447,8 +13446,8 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
   touchEngineMarker(projectDir);
   const res = spawnState(pd, ["park"]);
   if (res.exitCode !== 0) {
-    const detail = (res.stderr || res.stdout).trim();
-    emit(errorDirective(`Cannot park the workflow${detail ? `: ${detail}` : "."}`));
+    // The state tool's refusal arrives as its JSON envelope: say its words.
+    emit(stateRefusalDirective("Cannot park the workflow", "this step", (res.stderr || res.stdout).trim()));
     return;
   }
   emit(parkedAfterPark(pd, res.stdout));
