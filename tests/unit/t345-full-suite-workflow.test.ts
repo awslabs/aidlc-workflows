@@ -32,7 +32,7 @@ interface Matrix {
   exclude?: string;
   family?: LiveFamily[];
   runner?: string[] | string;
-  suite?: Array<{ name: string; tier: string; shard?: string; filter?: string }>;
+  suite?: Array<{ name: string; tier: string; shard?: string; filter?: string; exclude?: string }>;
 }
 interface Job {
   name?: string;
@@ -201,7 +201,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "filter", "ref", "retry-once", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "exclude", "filter", "ref", "retry-once", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -283,6 +283,9 @@ describe("t345 complete nightly coverage", () => {
     expect(evaluate({ diagnostic_filter: "^t-tui-runtime$" })).toBe("^t-tui-runtime$");
     expect(evaluate({ filter: "" })).toBe("");
     expect(evaluate({ filter: "^t-scope-run-" })).toBe("^t-scope-run-");
+    expect(step.env?.TEST_EXCLUDE).toBe(`\${{ inputs.exclude || '' }}`);
+    expect(step.run).toMatch(/if \[ -n "\$\{TEST_EXCLUDE:-\}" \]; then/);
+    expect(step.run).toContain('args+=(--exclude "$TEST_EXCLUDE")');
     expect(Object.keys(deterministic.jobs)).toEqual(["test"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     expect(deterministic.jobs.test.permissions).toBeUndefined();
@@ -370,18 +373,19 @@ describe("t345 complete nightly coverage", () => {
     }
     // One integration job runs everything but the scope runs; the other runs only them.
     const integration = matrix.suite!.filter((suite) => suite.tier === "integration");
-    expect(integration.map(({ name, filter }) => [name, filter])).toEqual([
-      ["integration", "^(?!(integration-)?t-scope-run-)"],
-      ["scope-runs", "^t-scope-run-"],
+    expect(integration.map(({ name, filter, exclude }) => [name, filter, exclude])).toEqual([
+      ["integration", undefined, "^t-scope-run-"],
+      ["scope-runs", "^t-scope-run-", undefined],
     ]);
     // The runner matches a filter against a file's base name, stem and
     // tier-qualified stem (run-tests.ts matchesE2eFilter): every integration
     // file lands in exactly one of the two jobs.
     const names = (file: string) => [file, file.replace(/\.test\.ts$/, ""), `integration-${file.replace(/\.test\.ts$/, "")}`];
     const files = readdirSync(join(REPO_ROOT, "tests", "integration")).filter((file) => file.endsWith(".test.ts"));
-    const [rest, scoped] = integration.map(({ filter }) => new RegExp(filter!));
+    const left = new RegExp(integration[0].exclude!);
+    const scoped = new RegExp(integration[1].filter!);
     for (const file of files) {
-      const inRest = names(file).some((name) => rest.test(name));
+      const inRest = !names(file).some((name) => left.test(name));
       const inScoped = names(file).some((name) => scoped.test(name));
       expect([file, inRest !== inScoped], file).toEqual([file, true]);
       expect([file, inScoped], file).toEqual([file, file.startsWith("t-scope-run-")]);
@@ -391,6 +395,9 @@ describe("t345 complete nightly coverage", () => {
     expect(deterministic.on.workflow_call.inputs.filter.required).toBeUndefined();
     expect(ci.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
     expect(workflow.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
+    expect(ci.jobs.deterministic.with?.exclude).toBe(`\${{ matrix.suite.exclude || '' }}`);
+    expect(workflow.jobs.deterministic.with?.exclude).toBe(`\${{ matrix.suite.exclude || '' }}`);
+    expect(deterministic.on.workflow_call.inputs.exclude).toMatchObject({ default: "", type: "string" });
     expect(matrixOf(workflow.jobs.deterministic).exclude).toBeUndefined();
     expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
@@ -1572,7 +1579,7 @@ describe("t345 complete nightly coverage", () => {
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
     // Integration runs as two jobs: the scope runs, and everything else.
     expect(suites.filter((suite) => suite.tier === "integration")).toEqual([
-      { name: "integration", tier: "integration", filter: "^(?!(integration-)?t-scope-run-)" },
+      { name: "integration", tier: "integration", exclude: "^t-scope-run-" },
       { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" },
     ]);
     expect(suites.filter((suite) => suite.tier === "e2e")).toEqual([{ name: "e2e", tier: "e2e" }]);

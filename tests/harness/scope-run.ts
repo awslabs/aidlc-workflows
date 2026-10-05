@@ -712,7 +712,8 @@ export class AgentStandIn {
     if (d.gate === "unresolved") {
       // The walking-skeleton stance is the agent's reading of the team's
       // practice; the stand-in's practice defers to the scope's own switch.
-      this.report(stage, "--skeleton-stance", "scope-dependent");
+      // The protocol's form: report the stance alone, with no stage or result.
+      this.must("orchestrate", "report", "--skeleton-stance", "scope-dependent");
       return;
     }
     const plan = d.plan_approval as { status?: string } | undefined;

@@ -92,7 +92,7 @@ jobs:
           # The scope runs (tests/integration/t-scope-run-*) drive whole scopes
           # through the engine and take minutes each, so they run in their own
           # integration job beside the rest.
-          - {name: integration, tier: integration, filter: '^(?!(integration-)?t-scope-run-)'}
+          - {name: integration, tier: integration, exclude: '^t-scope-run-'}
           - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: e2e, tier: e2e}
         # PR pushes and calls run Linux only and stop at integration. The merge
@@ -108,6 +108,7 @@ jobs:
       tier: ${{ matrix.suite.tier }}
       unit-shard: ${{ matrix.suite.shard || '' }}
       filter: ${{ matrix.suite.filter || '' }}
+      exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: ci-deterministic-${{ matrix.suite.name }}
       # No workflow downloads CI evidence, so an upload timeout cannot drop a PR.
       evidence-optional: true

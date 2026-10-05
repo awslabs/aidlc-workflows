@@ -156,6 +156,8 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
                   driver traces to tests/logs/
   --filter PAT    Only run tests whose filename matches extended regex PAT
                   Fails if a selected file executes no cases or no files match.
+  --exclude PAT   Leave out tests whose filename matches PAT (the same names
+                  --filter matches); the rest run as an ordinary tier.
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
                   Default: 1 (serial). Smoke and unit tiers always run serially.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
@@ -216,6 +218,18 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const args = parseArgs(process.argv.slice(2));
+// --exclude drops the files it matches from every tier, as if they were not
+// there: the rest run as an ordinary tier, so their optional skips stay SKIP
+// (unlike --filter, which makes each matched file an explicit selection).
+const excludeRegex: RegExp | null = (() => {
+  if (!args.exclude) return null;
+  try {
+    return new RegExp(args.exclude);
+  } catch (err) {
+    process.stderr.write(`ERROR: --exclude must be a valid JavaScript regex: ${err}\n`);
+    process.exit(2);
+  }
+})();
 const RUN_DEADLINE_MS = args.runTimeout === null
   ? undefined
   : Date.now() + args.runTimeout * 1000;
@@ -1220,6 +1234,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
         .filter((f) => !excludeSet.has(f))
         .sort()
         .map((f) => join(dir, f))
+        .filter((f) => excludeRegex === null || !matchesE2eFilter(f, excludeRegex))
     : [];
   // Fold plugin content tests into the integration tier. Exclusion is keyed by
   // the plugin-dir-qualified name (`plugin-<plugin>-<stem>`), NOT the bare
@@ -1229,7 +1244,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     files.push(...pluginTestFiles().filter((f) => {
       const m = f.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
       const qualified = m ? `plugin-${m[1]}-${basename(f).replace(/\.test\.ts$/, "")}` : basename(f);
-      return !excludeSet.has(qualified);
+      return !excludeSet.has(qualified) && (excludeRegex === null || !matchesE2eFilter(f, excludeRegex));
     }));
   }
   if (level === "unit" && args.shard) {

@@ -116,6 +116,15 @@ describe("runner guard profile options", () => {
     }
   });
 
+  test("--exclude takes a non-empty filename regex and leaves the filter alone", () => {
+    expect(parseRunnerArgs(["--integration", "--exclude", "^t-scope-run-"], {})).toMatchObject({
+      exclude: "^t-scope-run-", filter: "",
+    });
+    expect(parseRunnerArgs(["--integration"], {}).exclude).toBe("");
+    expect(() => parseRunnerArgs(["--exclude"], {})).toThrow(RunnerArgsError);
+    expect(() => parseRunnerArgs(["--exclude", ""], {})).toThrow(RunnerArgsError);
+  });
+
   test("a filter value is not interpreted as a guard option; help still exits parsing", () => {
     expect(parseRunnerArgs(["--filter", "--production-guards"], {}).guardProfile)
       .toBe("fixture");

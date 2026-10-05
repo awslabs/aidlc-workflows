@@ -333,7 +333,7 @@ jobs:
           - {name: unit-12, tier: unit, shard: "12/12"}
           # The scope runs (tests/integration/t-scope-run-*) run in their own
           # integration job, here on every OS.
-          - {name: integration, tier: integration, filter: '^(?!(integration-)?t-scope-run-)'}
+          - {name: integration, tier: integration, exclude: '^t-scope-run-'}
           - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: e2e, tier: e2e}
         # Adds the OS label for the job name to each runner's legs.
@@ -348,6 +348,7 @@ jobs:
       tier: ${{ matrix.suite.tier }}
       unit-shard: ${{ matrix.suite.shard || '' }}
       filter: ${{ matrix.suite.filter || '' }}
+      exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
   production_guards:
     name: "Linux / production-guards"

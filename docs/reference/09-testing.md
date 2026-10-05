@@ -712,9 +712,10 @@ called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard, an optional file `filter` (empty runs the whole tier)
-and artifact label. Both split integration in two jobs with that filter: the
-scope runs (`t-scope-run-*`) and everything else. PR CI selects Linux smoke,
+runner, tier, unit shard, an optional file `filter` and `exclude` (both empty
+by default, so the whole tier runs) and artifact label. Both split integration
+in two jobs: the scope runs (`filter`, `t-scope-run-*`) and everything else
+(`exclude` of the same names). PR CI selects Linux smoke,
 twelve weighted unit shards, and both integration jobs; Full Suite selects
 smoke, the same twelve shards, both integration jobs, and isolated E2E on
 Linux/macOS/Windows. Integration and
@@ -925,6 +926,7 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --debug         # Implies --verbose; streams per-test output and writes SDK/TUI
                 # driver traces to tests/logs/
 --filter PAT    # Only run tests whose filename matches extended regex PAT
+--exclude PAT   # Leave out tests whose filename matches PAT; the rest run as an ordinary tier
 --parallel N    # Run up to N test files concurrently within a tier (alias: -P N).
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
 --file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
@@ -961,6 +963,10 @@ escape hatch for calibration.
 environment already set it. This makes the "everything with traces" profile run
 the live, token-spending TUI journeys by default; set `AIDLC_TUI_LIVE=0`
 explicitly to keep those files on their in-test SKIP path.
+
+`--exclude` matches the same names but selects nothing: the files it matches
+are left out of the tier, and the rest keep their ordinary, unfiltered rules
+below. CI uses it to run the scope runs as a job of their own.
 
 An explicit **`--filter` requires execution in each selected file**. A file
 whose cases are all skipped (or which declares no cases) fails the run even
