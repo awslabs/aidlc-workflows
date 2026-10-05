@@ -102,8 +102,8 @@ export async function run(
           permission: "deny",
           agent_message:
             "AIDLC could not read this tool call's hook input, so its safety checks could not run and the call " +
-            "was stopped. Retry it once; if it is stopped again, tell the person to run " +
-            `\`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`,
+            "was stopped. Retry it once; if it is stopped again, tell the person to quit Cursor fully and open " +
+            "this folder again, since Cursor sends this input itself.",
         })}\n`);
       }
       return 0;
@@ -2854,7 +2854,8 @@ export async function run(
         ? r.stderr.trim() || "blocked by AIDLC guard hook"
         : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
           "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
-          `\`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`;
+          `\`${aidlcInvocation()} config --harness cursor\` in a terminal, which puts AI-DLC's Cursor files ` +
+          "back, then try again.";
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }

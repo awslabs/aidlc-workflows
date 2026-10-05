@@ -51,6 +51,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
+import { resolveAction } from "../../dist/claude/.claude/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
@@ -1561,6 +1562,11 @@ describe("t276 cursor adapter payload conversion", () => {
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
     expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
+    // It names the step that puts the files back, and that command is a real route.
+    expect(out.agent_message ?? "").toContain("config --harness cursor");
+    expect(out.agent_message ?? "").not.toContain("doctor");
+    const action = resolveAction(["config", "--harness", "cursor"]);
+    expect(action.type).not.toBe("error");
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {
