@@ -56,7 +56,7 @@
 // suppressing it would change the Stop hook's conversational carve-out, which is
 // a separate behaviour with its own tests. Reviewers who want the marker
 // suppressed too should say so — it is a one-line follow-on, not a silent choice.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   clearSessionIntentHandoff,
@@ -75,6 +75,7 @@ import {
   hooksHealthDir,
   humanTurnMintAllowed,
   isoTimestamp,
+  keepPlanApprovalAskOverStateWrite,
   markHumanTurn,
   parseTypedGuardSwitchRequest,
   recordGateWords,
@@ -396,12 +397,16 @@ try {
   }
   // Apply before the state-file gate so a first-use switch reports that the
   // person must create the piece of work, then type the switch again.
-  // The plan question is bound to the state the switch changes, so a switch
-  // typed before a plan choice lands after the choice is noted, below.
   const switchAnswer = typedPrompt ? planAnswerAfterSwitch(projectDir, typedPrompt) : null;
-  if (mintAllowed && sessionId && typedPrompt && switchAnswer === null) {
+  if (mintAllowed && sessionId && typedPrompt) {
     try {
-      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt);
+      // A switch typed before a plan choice keeps the plan question open over
+      // its state write, so the choice after it is still its answer.
+      const before = switchAnswer !== null ? readFileSync(stateFilePath(projectDir), "utf-8") : null;
+      const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt, { wordsAnswer: switchAnswer !== null });
+      if (before !== null) {
+        keepPlanApprovalAskOverStateWrite(projectDir, before, readFileSync(stateFilePath(projectDir), "utf-8"));
+      }
       if (outcome !== null) {
         notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
       }
@@ -519,14 +524,6 @@ try {
         }
       } catch {
         // Non-authority marker consumption is independently best-effort.
-      }
-    }
-    if (switchAnswer !== null && mintAllowed && sessionId) {
-      try {
-        const outcome = applyTypedGuardSwitchPrompt(projectDir, sessionId, typedPrompt, { wordsAnswer: true });
-        if (outcome !== null) notes.push(`AIDLC Guard Policy: ${outcome.lines.join(" ")}`);
-      } catch {
-        // A switch failure must never block the human's turn.
       }
     }
     markHumanTurn(projectDir);
