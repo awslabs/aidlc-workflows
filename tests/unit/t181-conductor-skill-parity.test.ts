@@ -984,6 +984,17 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A live Codex run quoted the skill file at most gates. The skills now never
   // quote AI-DLC's instructions on their own, answer the person who asks about
   // one, and the work's own files keep their paths.
+  // The person's Plan Approval pick is matched on the choice labels, so they
+  // stay exactly as given even when the rest of the question is translated.
+  test("every conductor keeps the Plan Approval choice labels exactly as given", () => {
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      expect(body, rel).toContain(
+        "the three `plan_approval.choices` with their labels exactly as given, in any language (the person's pick is matched on them)",
+      );
+    }
+  });
+
   test("every conductor quotes AI-DLC's instructions only when asked and still names the work's own files", () => {
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");

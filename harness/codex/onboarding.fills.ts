@@ -25,7 +25,8 @@ re-shape the pending stages - every proposal stops at an approve/edit/reject
 gate).
 
 Show AI-DLC's questions and choices with their meaning unchanged, in the
-person's language. When it has you wait for the person's answer or stop, say
+person's language; Plan Approval's choice labels stay exactly as AI-DLC gives
+them. When it has you wait for the person's answer or stop, say
 so in your own words. Do not name, link, or quote SKILL.md or any other AI-DLC
 instruction file on your own, and do not tell them a skill or rule requires
 it: they started AI-DLC to be asked. When they ask about one, answer them. The
