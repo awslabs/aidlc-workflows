@@ -1310,8 +1310,8 @@ state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
-`restore-or-jump`, `restart-stage`, `redo-unit-step`, `change-scope`, `restore-scope`,
-`abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
+`restore-or-jump`, `restart-stage`, `redo-unit-step`, `reopen-unit-step`,
+`review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
@@ -1335,12 +1335,19 @@ approvals, but only when two things hold. The step must be the one the walk is
 on: the recorded `Active Unit` and `Unit Stage`, when present, must name it. And
 redoing it must be able to clear the refusal: no review in flight, review budget
 left, and the one stale-review recovery not used once a review exists. It resets
-no attempt (a Unit-scoped attempt boundary does not exist yet), so a refusal
-about the review attempt itself gets no redo. A later block stage then offers
-nothing executable, because its restart either lands back on the same step or
-jumps and starts every Unit's finished work over, and a repeated refusal
-reaches the terminal ask, where the person decides; prose recovery guidance
-says the same.
+no attempt, so a refusal about the review attempt itself gets no redo. A later
+block stage then offers `reopen-unit-step` for that same Unit instead: a
+`command` remedy whose operation `{kind: "reopen-unit", stage, unit}` renders
+`aidlc engine jump reopen --target <stage> --units <unit>`. Once the person
+picks it, it writes the Unit-scoped `GATE_REJECTED` a Unit checkpoint's Request
+Changes writes, a new attempt for that Unit and stage only, and every other Unit
+keeps its finished work. A stage restart is never offered there, because it
+either lands back on the same step or jumps and starts every Unit's finished
+work over. When this work allows no review at all (a review budget of 0), a new
+attempt clears nothing, so nothing is offered and a repeated refusal reaches the
+terminal ask, where the person decides. Prose recovery guidance names the same
+reopen, or, with no Unit on record, asks the person which Unit does the step
+again with `/aidlc --stage <stage> --unit <name>`.
 The first block stage still offers `restart-stage`, which is no forward jump,
 with its cost. The stage-wide resets offered in other states (`request-changes`,
 `unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
@@ -1379,10 +1386,16 @@ the selected interaction:
 | `human-input` | Present the action's follow-up and end the turn. Request Changes needs a separate answer to "What should change?"; when it is the only remedy, a reply that does not pick it (and is not a dismissed question) is taken as that answer, so the person is not asked twice, and a later reply replaces it until the reject is submitted. A Scope remedy needs the human's concrete Scope. |
 | `external-work` | Perform the described work through its existing protocol and tools. Selection needs no additional feedback turn, but it does not prove that the work succeeded or supply missing arguments. |
 
-`aidlc-guard-operation.ts` defines four operations:
+`aidlc-guard-operation.ts` defines six operations:
 `{kind: "restart-stage", stage}`, `{kind: "abort-bolt", unit, slug}`,
-`{kind: "lower-fence", fence}`, and
-`{kind: "record-unit-completion", stage, unit}`. The last renders
+`{kind: "lower-fence", fence}`, `{kind: "reopen-unit", stage, unit}` (one Unit's
+step of a unit-major walk starts again, above), `{kind: "review-advisory"}`, and
+`{kind: "record-unit-completion", stage, unit}`. `review-advisory` renders
+`aidlc engine config set review advisory` and is offered beside
+`apply-repairs-then-request` as `review-advisory-gate`: when the person wants to
+decide now instead of another review pass, this work's reviews go advisory, so
+the reviewer's NOT-READY is final and its open findings go to the approval gate.
+`record-unit-completion` renders
 `aidlc engine state unit complete --stage <stage> --unit <unit>` and is offered,
 first, when a team Unit's gate is refused `UNIT_COMPLETION_MISSING` while its
 work is open: the Unit's artifacts are on disk and only the receipt is missing.
@@ -1428,7 +1441,8 @@ follow-up: `orchestrate report --result rejected` with their words for Request
 Changes, and `log answer --checkpoint summary-confirmation` for their
 confirmation. A Scope remedy opens no route: the person types `/aidlc --scope
 <scope>`, which runs through `next`. Neither does `redo-unit-step`: `next`
-routes the Unit's step again.
+routes the Unit's step again. `reopen-unit-step` and `review-advisory-gate` are
+`command` remedies: once picked, their exact command is admitted.
 Before the person picks, the offer alone admits nothing. When the picked remedy's
 work happens while the question is open (`apply-repairs-then-request` and
 `finish-revision` on the pick, `reconfirm-summary` once the person confirmed),

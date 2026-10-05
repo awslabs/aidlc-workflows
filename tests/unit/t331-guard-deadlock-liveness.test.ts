@@ -701,6 +701,15 @@ describe("bounded guard-remedy liveness", () => {
       );
       expect(repair?.action).toContain("review iteration 2");
       expect(repair?.executableNow).toBe(fixture.executable);
+      // The person may want the gate now: reviews go advisory for this piece of
+      // work and the open findings go to the gate, once they say so.
+      const gate = refusal.remedies.find((remedy) => remedy.op === "review-advisory-gate");
+      expect(gate).toMatchObject({
+        requiresHuman: true, interaction: "command", operation: { kind: "review-advisory" },
+        executableNow: fixture.executable,
+      });
+      expect(gate?.command).toContain("config-change --review advisory");
+      expect(gate?.action).toContain("present the reviewer's open findings at the approval gate");
       expect(
         refusal.remedies.some((remedy) =>
           remedy.action.includes("Record the verdict for pending review") ||
@@ -2524,7 +2533,7 @@ describe("unit-major resets name what they throw away", () => {
     }
   });
 
-  test("a refusal redoing the step cannot clear ends in the terminal ask, not a redo loop", () => {
+  test("a refusal redoing the step cannot clear starts that Unit's step again, never a redo loop", () => {
     const stuck: Array<[string, GuardRefusalInput["attempt"], string?]> = [
       ["review freeze", { ...clearable, reviewCoverage: "current" }, "REVIEW_FREEZE_ACTIVE"],
       ["review budget spent", { ...clearable, reviewCoverage: "current", reviewBudget: { used: 3, limit: 3 } }],
@@ -2536,22 +2545,43 @@ describe("unit-major resets name what they throw away", () => {
     ];
     for (const [label, attempt, code] of stuck) {
       const refusal = walkRefusal({ attempt, ...(code ? { code } : {}) });
-      expect(ops(refusal), label).not.toContain("redo-unit-step");
-      expect(ops(refusal), label).not.toContain("restart-stage");
-      expect(guardRecoveryAskForRefusal(refusal), label).toBeNull();
-      const project = mkdtempSync(join(tmpdir(), "t331-unit-major-stuck-"));
-      try {
-        let ask: ReturnType<typeof recordGuardRefusal>["ask"] | undefined;
-        for (let repeat = 0; repeat < 5; repeat++) ask = recordGuardRefusal(project, refusal, attempt).ask;
-        expect(ask?.remedies, label).toEqual([]);
-        expect(ask?.question, label).toMatch(/tell me how you want to proceed/i);
-      } finally {
-        rmSync(project, { recursive: true, force: true });
-      }
+      expect(ops(refusal), label).toEqual(["reopen-unit-step"]);
+      const reopen = refusal.remedies[0];
+      expect(reopen, label).toMatchObject({
+        executableNow: true, requiresHuman: true, interaction: "command",
+        operation: { kind: "reopen-unit", stage: "code-generation", unit: "beta" },
+      });
+      expect(reopen.command, label).toContain("reopen --target code-generation --units beta");
+      expect(reopen.action, label).toContain('Start "code-generation" again for unit "beta" only');
+      expect(reopen.action, label).toContain("the other units keep their finished work");
+      const ask = guardRecoveryAskForRefusal(refusal);
+      expect(ask, label).not.toBeNull();
+      expect(validateDirective(ask).valid, label).toBe(true);
+    }
+    // A new attempt has no review either when this work allows none, so nothing
+    // is offered and a repeated refusal reaches the terminal ask, where the
+    // person decides.
+    const none = { ...clearable, reviewCoverage: "current" as const, reviewBudget: { used: 0, limit: 0 } };
+    const refusal = walkRefusal({ attempt: none, code: "REVIEW_BUDGET_EXHAUSTED" });
+    expect(ops(refusal)).toEqual([]);
+    const project = mkdtempSync(join(tmpdir(), "t331-unit-major-stuck-"));
+    try {
+      let ask: ReturnType<typeof recordGuardRefusal>["ask"] | undefined;
+      for (let repeat = 0; repeat < 5; repeat++) ask = recordGuardRefusal(project, refusal, none).ask;
+      expect(ask?.remedies).toEqual([]);
+      expect(ask?.question).toMatch(/tell me how you want to proceed/i);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
     }
     const guidance = recoveryGuidance("/nonexistent-project", betaBuilding, "code-generation", { unit: "beta" });
     expect(guidance).not.toContain("--stage code-generation");
-    expect(guidance).toContain('ask the person how to go on with unit "beta"\'s "code-generation"');
+    expect(guidance).toContain('Start "code-generation" again for unit "beta" only');
+    expect(guidance).toContain("reopen --target code-generation --units beta`");
+    // With no Unit on record the person names the one that does it again.
+    expect(recoveryGuidance("/nonexistent-project", walkState(), "code-generation")).toContain(
+      'Ask the person which unit should do "code-generation" again, then run ' +
+        "/aidlc --stage code-generation --unit <name>.",
+    );
     // Restarting the first block stage is no forward jump, so it stays, with its cost.
     const first = unitRefusal(" ").remedies.find((remedy) => remedy.op === "restart-stage");
     expect(first?.action).toContain(RESTART);
@@ -2567,6 +2597,7 @@ describe("unit-major resets name what they throw away", () => {
       walkRefusal({ stateContent: walkState({ activeUnit: "beta", unitStage: "nfr-design" }) }),
     ]) {
       expect(ops(refusal)).not.toContain("redo-unit-step");
+      expect(ops(refusal)).not.toContain("reopen-unit-step");
       expect(ops(refusal)).not.toContain("restart-stage");
     }
     // With no Active Unit on record and no Unit named, no restart is offered at a

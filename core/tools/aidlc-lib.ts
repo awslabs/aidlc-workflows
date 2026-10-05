@@ -9418,6 +9418,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "restart-stage": null,
   // Carried out through `next`, which routes the Unit's step again.
   "redo-unit-step": null,
+  "reopen-unit-step": null,
+  "review-advisory-gate": null,
   // The person types `/aidlc --scope <scope>`, which runs through `next`: the
   // Scope is theirs, never a value the conductor fills in.
   "change-scope": null,
@@ -27876,6 +27878,12 @@ export const GUARD_REMEDY_OPS = [
   // Redo one Unit's step in a solo unit-major walk, where a stage restart
   // would reach every Unit's finished work.
   "redo-unit-step",
+  // Start one Unit's step again in a solo unit-major walk, when redoing it
+  // cannot clear the refusal: a new attempt for that Unit and stage only.
+  "reopen-unit-step",
+  // The person asked for the gate while the reviewer still wants repairs: set
+  // this work's reviews to advisory and present the open findings there.
+  "review-advisory-gate",
   "change-scope",
   "restore-scope",
   "abort-bolt",
@@ -28185,6 +28193,19 @@ function redoUnitStepRemedy(stage: string, unit: string): GuardRemedy {
   };
 }
 
+function reopenUnitStepRemedy(stage: string, unit: string): GuardRemedy {
+  return {
+    op: "reopen-unit-step",
+    action:
+      `Start "${stage}" again for unit "${unit}" only, then re-run next. Unit "${unit}" does that ` +
+      "step again; the other units keep their finished work, reviews, Plan Approvals and " +
+      "checkpoint approvals.",
+    ...guardOperation({ kind: "reopen-unit", stage, unit }),
+    requiresHuman: true,
+    executableNow: true,
+  };
+}
+
 // What a stage-wide reset still offered in a solo unit-major walk throws away,
 // said where it is offered: it reaches every Unit, not just this one.
 function unitMajorResetCost(reset: "jump" | "reject", stage: string): string {
@@ -28248,9 +28269,16 @@ function lifecycleResetRemedies(
     // Restarting the first block stage is not a forward jump, so it is still
     // offered with its cost. A later block stage's restart either lands back on
     // the same step (when the walk is on it), which cannot clear the refusal, or
-    // jumps and starts every Unit's finished work over, so nothing is offered
-    // and a repeated refusal reaches the terminal ask, where the person decides.
-    if (!walk.firstStage) return [];
+    // jumps and starts every Unit's finished work over. So the Unit on this
+    // step starts it again on its own: a new attempt, which clears every
+    // refusal about the old one unless this work allows no review at all. With
+    // no such Unit nothing is offered and a repeated refusal reaches the
+    // terminal ask, where the person decides.
+    if (!walk.firstStage) {
+      return walk.unit !== null && walk.live && input.attempt.reviewBudget?.limit !== 0
+        ? [reopenUnitStepRemedy(input.stage, walk.unit)]
+        : [];
+    }
     const restart = restartStageRemedy(input.stage);
     return [{ ...restart, action: restart.action + cost("jump") }];
   }
@@ -28443,6 +28471,16 @@ export function evaluateGuardRefusal(
           "Apply the reviewer's requested repairs, then request review iteration " +
           `${input.attempt.repairReview.iteration + 1}.`,
         requiresHuman: false,
+        executableNow: input.attempt.summaryCoverage === "current" && openForWork,
+      });
+      // Another pass is the reviewer's call; the person may want the gate now.
+      remedies.push({
+        op: "review-advisory-gate",
+        action:
+          "If the person wants to decide now, set reviews to advisory for this piece of work, then " +
+          "present the reviewer's open findings at the approval gate for them to decide.",
+        ...guardOperation({ kind: "review-advisory" }),
+        requiresHuman: true,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
     }
@@ -29159,11 +29197,16 @@ export function recoveryGuidance(
     humanAuthority: humanAuthorityState(null),
     ...(options.teamGate ? { teamGate: options.teamGate } : {}),
   });
-  const executable = refusal.remedies.find((remedy) => remedy.executableNow)?.action;
-  if (executable !== undefined) return executable;
+  const remedy = refusal.remedies.find((candidate) => candidate.executableNow);
+  // The reopen runs as its own command, which a prose refusal has to name.
+  if (remedy?.op === "reopen-unit-step" && remedy.command) {
+    return `${remedy.action} When the person says so, run \`${remedy.command}\`.`;
+  }
+  if (remedy !== undefined) return remedy.action;
   if (options.teamGate?.resolved === false) return unresolvedTeamGateRemedy(options.teamGate).action;
   // A later block stage of a solo unit-major walk has no restart to offer: it
-  // lands back on the same step or starts every Unit's finished work over.
+  // lands back on the same step or starts every Unit's finished work over. The
+  // person names the one unit that does it again.
   const walk = soloUnitMajorRefusal({
     stateContent,
     stage: stageSlug,
@@ -29171,9 +29214,11 @@ export function recoveryGuidance(
     ...(options.teamGate ? { teamGate: options.teamGate } : {}),
   });
   if (walk && !walk.firstStage) {
-    const target = walk.unit ? `unit "${walk.unit}"'s "${stageSlug}"` : `"${stageSlug}"`;
-    return `Stop and ask the person how to go on with ${target}. Construction runs one unit at a ` +
-      `time here, so restarting "${stageSlug}" would throw away the work every unit has finished.`;
+    const ask = walk.unit
+      ? `Ask the person whether unit "${walk.unit}" should do "${stageSlug}" again; when they say so, run `
+      : `Ask the person which unit should do "${stageSlug}" again, then run `;
+    return ask + `${entrySkillInvocation()} --stage ${stageSlug} --unit ${walk.unit ?? "<name>"}. ` +
+      "Only that unit does it again; the other units keep their finished work.";
   }
   return restartStageRemedy(stageSlug).action;
 }

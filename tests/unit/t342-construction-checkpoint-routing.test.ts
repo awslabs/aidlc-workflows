@@ -21,6 +21,7 @@ import {
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { guardOperationInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
   codeGenerationRecordDir, renderTestingContract, resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
@@ -1266,6 +1267,24 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(ask.question).toMatch(/tell me how you want to proceed/i);
     expect(JSON.stringify(ask)).not.toContain("--stage code-generation");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
+    expect(approved(p, "alpha")).toBe(true);
+    expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The command a stuck refusal offers for the Unit on the step, once the
+  // person picks it: only beta starts Code Generation again.
+  test("starting beta's Code Generation again runs, and alpha keeps its approval", () => {
+    const p = betaBuilding();
+    const reopen = guardOperationInvocation({ kind: "reopen-unit", stage: "code-generation", unit: "beta" });
+    expect(reopen.route).toBe("jump");
+    const run = tool(p, "jump", reopen.args);
+    expect(run.status, run.out).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({ reopened: "code-generation", units: ["beta"] });
+    const rejected = readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED");
+    expect(rejected).toHaveLength(1);
+    expect(auditBlockField(rejected[0].block, "Unit")).toBe("beta");
+    expect(auditBlockField(rejected[0].block, "Gate Scope")).toBe("unit-end");
+    expect(jumped(p)).toBe(0);
     expect(approved(p, "alpha")).toBe(true);
     expect(next(p)).toMatchObject({ stage: "code-generation", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
