@@ -1526,9 +1526,10 @@ function summaryConfirmationWayOut(): string {
 }
 
 // Plan approval off is read from what the person types or says, so this build
-// cannot carry the typed switch; the recorded one works now, as above.
+// cannot carry the typed switch, and it keeps its plan picker either way. The
+// recorded switch still turns the Plan Approval check's refusals off now.
 function planApprovalWayOut(): string {
-  return `To build code plans without being asked now, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes\` in a terminal: it turns plan approval off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on). After you update Kiro IDE, you can instead type \`/aidlc config set plan-approval off\` yourself.`;
+  return `This Kiro IDE build still shows each plan here for you to approve; after you update Kiro IDE, you can type \`/aidlc config set plan-approval off\` to build plans without being asked. If the plan approval check refuses work wrongly meanwhile, run \`${aidlcInvocation()} config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes\` in a terminal to turn that check off for all work in this project, including the work running now (run it again with \`--clear-bypass\` in place of \`--bypass\` to turn it back on).`;
 }
 
 // "summary" when the only lowering is summary confirmation off, which skips

@@ -367,7 +367,9 @@ function runIdeStdin(
 
 const KIRO_GUARD_SWITCH_REFUSAL = "Guard settings cannot be lowered for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. Update Kiro IDE or start a new piece of work from a scope whose default already uses the lower setting. You can still select strict or turn a fence on.";
 const KIRO_SUMMARY_WAY_OUT = "To turn summary confirmation off now, run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SUMMARY_CONFIRMATION --local --yes` in a terminal: it turns it off for all work in this project, including the work running now (run it again with `--clear-bypass` in place of `--bypass` to turn it back on). After you update Kiro IDE, you can instead type `/aidlc config set summary-confirmation off` yourself.";
-const KIRO_PLAN_APPROVAL_WAY_OUT = "To build code plans without being asked now, run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes` in a terminal: it turns plan approval off for all work in this project, including the work running now (run it again with `--clear-bypass` in place of `--bypass` to turn it back on). After you update Kiro IDE, you can instead type `/aidlc config set plan-approval off` yourself.";
+// This build keeps its plan picker even with plan approval off, so the way out
+// promises no skip: it names the update, and the switch for the check's refusals.
+const KIRO_PLAN_APPROVAL_WAY_OUT = "This Kiro IDE build still shows each plan here for you to approve; after you update Kiro IDE, you can type `/aidlc config set plan-approval off` to build plans without being asked. If the plan approval check refuses work wrongly meanwhile, run `bun .kiro/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes` in a terminal to turn that check off for all work in this project, including the work running now (run it again with `--clear-bypass` in place of `--bypass` to turn it back on).";
 const KIRO_PLAN_APPROVAL_SWITCH_REFUSAL = `Plan approval cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_PLAN_APPROVAL_WAY_OUT}`;
 const KIRO_SUMMARY_SWITCH_REFUSAL = `Summary confirmation cannot be turned off for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. ${KIRO_SUMMARY_WAY_OUT}`;
 const KIRO_PROMPT_CAPABILITY_NOTE = `Guard settings cannot be lowered, and summary confirmation and plan approval cannot be turned off, for the active piece of work in this Kiro IDE session because this version does not provide the submitted message. To use a lower guard setting, update Kiro IDE or start a new piece of work from a scope whose default already uses that setting. ${KIRO_SUMMARY_WAY_OUT} ${KIRO_PLAN_APPROVAL_WAY_OUT} You can still select strict or turn a fence on. An existing Change Control: relaxed|off line is renamed to Guard Policy without changing its value.`;
@@ -1317,6 +1319,8 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     };
     try {
       const named = /run `([^`]+)` in a terminal/.exec(KIRO_PLAN_APPROVAL_WAY_OUT)?.[1] ?? "";
+      expect(named).toContain("--bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD");
+      expect(KIRO_PLAN_APPROVAL_WAY_OUT).not.toContain("without being asked now");
       const before = planLine();
       expect(before).toMatch(/^Plan Approval: on/);
       const bypass = run(named.split(" "));
