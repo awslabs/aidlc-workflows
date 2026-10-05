@@ -1266,7 +1266,9 @@ tool-as-actor Learnings Ritual, not a separate guardrail-emission flow.
 When `directive.protocol_modules` lists `learnings`, the ritual runs between the completion message and the approval gate. Bootstrap stages keep only a diary; isolated `single: true` runs keep no diary or ritual; per-unit `gate: false` iterations defer the ritual to the final stage gate, except team-owned unit-major gates run it at each emitted Unit gate. Gate revisions never rerun it. With the module absent, keep no diary, surface no candidates, ask no learning question, and go directly to the approval gate. The enabled ritual is:
 
 1. **Diary**: the agent maintains a per-stage `memory.md` (Interpretations /
-   Deviations / Tradeoffs / Open questions) as it works.
+   Deviations / Tradeoffs / Open questions) as it works. A Unit's turn tags its
+   entries `[unit <name>]` after the timestamp, so a Unit's checkpoint surfaces
+   that Unit's entries and the untagged ones.
 2. **Surface**: `aidlc-learnings.ts surface --slug <slug>` reads the diary and
    emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm**: the conductor renders the candidates; the user picks which to

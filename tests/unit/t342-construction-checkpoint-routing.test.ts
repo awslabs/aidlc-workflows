@@ -308,6 +308,36 @@ describe("t342 Construction checkpoint routing", () => {
     expect(surface("code-generation").stderr).toContain('slug mismatch: requested "code-generation"');
   });
 
+  // Every Unit's turn at a stage writes the one stage diary. A Unit's
+  // checkpoint lists the notes written for that Unit and the notes that name
+  // no Unit, never an earlier Unit's notes again.
+  test("a Unit's checkpoint lists only that Unit's notes and the notes that name no Unit", () => {
+    const p = fixture();
+    const surface = learningsSurface(p);
+    const dash = "\u2014"; // the diary line's separator, an em dash
+    const diary = join(seededRecordDir(p), "construction", "functional-design", "memory.md");
+    mkdirSync(dirname(diary), { recursive: true });
+    writeFileSync(diary, [
+      "## Interpretations",
+      `- 2026-10-05T10:00:00Z [unit alpha] ${dash} alpha keeps its own store; it owns the data`,
+      `- 2026-10-05T10:05:00Z ${dash} every Unit logs in UTC; the team asked for it`,
+      `- 2026-10-05T11:00:00Z [unit beta] ${dash} beta reads the store through alpha; no second copy`,
+      "",
+    ].join("\n"));
+    const offered = () => {
+      const result = surface("functional-design");
+      expect(result.status, result.stderr).toBe(0);
+      return (JSON.parse(result.stdout).candidates as Array<{ summary: string }>).map((c) => c.summary);
+    };
+    cover(p, "alpha");
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+    expect(offered()).toEqual(["alpha keeps its own store", "every Unit logs in UTC"]);
+    approve(p, "alpha");
+    cover(p, "beta");
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(offered()).toEqual(["every Unit logs in UTC", "beta reads the store through alpha"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the working skeleton's checkpoint offers the learnings of the stages its Unit walked", () => {
     const p = fixture({ stance: "on", iteration: "stage-major" });
     seedBoltDag(p, [{ name: "beta", depends_on: ["alpha"] }, "alpha"], [["alpha"], ["beta"]]);

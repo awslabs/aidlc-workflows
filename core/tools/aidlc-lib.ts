@@ -35456,6 +35456,7 @@ export function parseMemoryHeadings(raw: string): {
 export function parseMemoryEntries(raw: string): Array<{
   heading: "Interpretations" | "Deviations" | "Tradeoffs" | "Open questions";
   ts: string;
+  unit?: string;
   summary: string;
   context: string;
   raw: string;
@@ -35480,6 +35481,7 @@ export function parseMemoryEntries(raw: string): Array<{
   const entries: Array<{
     heading: "Interpretations" | "Deviations" | "Tradeoffs" | "Open questions";
     ts: string;
+    unit?: string;
     summary: string;
     context: string;
     raw: string;
@@ -35518,37 +35520,42 @@ export function parseMemoryEntries(raw: string): Array<{
 
     // Counted line → one entry. Parse the canonical bullet shape; degrade to
     // raw on any deviation (never throw).
-    const { ts, summary, context } = parseMemoryEntryLine(trimmed);
-    entries.push({ heading: current, ts, summary, context, raw: trimmed });
+    const { ts, unit, summary, context } = parseMemoryEntryLine(trimmed);
+    entries.push({ heading: current, ts, ...(unit === undefined ? {} : { unit }), summary, context, raw: trimmed });
   }
 
   return entries;
 }
 
-// Split a single counted memory line into ts / summary / context. The
+// Split a single counted memory line into ts / unit / summary / context. The
 // canonical shape is `- <ISO> — <summary>; <context>` (stage-protocol.md
 // :876-879). Tolerates a missing `;` (tail → summary, context empty) and a
 // missing ts/em-dash (degrade to summary = the whole line, ts empty).
+// A Unit's iteration of a stage adds `[unit <name>]` after the timestamp.
 function parseMemoryEntryLine(trimmed: string): {
   ts: string;
+  unit?: string;
   summary: string;
   context: string;
 } {
   // Strip a leading list bullet ("- " or "* ").
   const body = trimmed.replace(/^[-*]\s+/, "");
-  // Pull an ISO-8601 timestamp prefix followed by an em-dash separator.
-  const tsMatch = body.match(/^(\S+)\s+—\s+(.*)$/);
+  // Pull an ISO-8601 timestamp prefix, the optional Unit tag, then the
+  // em-dash separator.
+  const tsMatch = body.match(/^(\S+)\s+(?:\[unit:?\s+([^\]\s]+)\]\s+)?\u2014\s+(.*)$/);
   if (!tsMatch) {
     return { ts: "", summary: body, context: "" };
   }
   const ts = tsMatch[1];
-  const rest = tsMatch[2];
+  const tagged = tsMatch[2] === undefined ? {} : { unit: tsMatch[2] };
+  const rest = tsMatch[3];
   const semi = rest.indexOf(";");
   if (semi === -1) {
-    return { ts, summary: rest.trim(), context: "" };
+    return { ts, ...tagged, summary: rest.trim(), context: "" };
   }
   return {
     ts,
+    ...tagged,
     summary: rest.slice(0, semi).trim(),
     context: rest.slice(semi + 1).trim(),
   };

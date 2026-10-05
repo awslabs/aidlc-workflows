@@ -38,6 +38,8 @@ When this module is listed, trigger after Step N-1 (completion message rendered)
    - 2026-05-20T10:14:32Z — <one-line summary>; <2-3 sentences of context>
    ```
 
+   In a Unit's turn at a per-Unit stage (the directive names `unit`), write `[unit <directive.unit>]` right after the timestamp, so that Unit's checkpoint offers its own notes and not another Unit's. A note with no tag is offered at every checkpoint.
+
    The memory file persists across sessions — a stage that halts and resumes keeps its log intact. On stage approval, the memory file stays in the artefact directory as part of the stage's permanent record (committed alongside other artefacts).
 
 2. **Surface candidates (the tool reads memory.md).** Run:
