@@ -2577,6 +2577,34 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
+  test("the switch that turns the Plan Approval check off turns the adapter's own refusals off too", () => {
+    // AIDLC_DISABLE_PLAN_APPROVAL_GUARD (in the environment or recorded with
+    // `config flags --bypass`) turns the core guard off before it reads anything;
+    // on Kiro IDE the adapter's own refusals for payloads that hide their target
+    // ignored it, so the person's way out did nothing here.
+    const dir = scratchProject(true);
+    try {
+      seedCodeGenerationDirective(dir);
+      const payloads: Array<[string, string]> = [
+        ["malformed tool name", JSON.stringify({ hook_event_name: "PreToolUse", tool_name: 42, tool_input: {} })],
+        ["malformed input", JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "fs_write", tool_input: [] })],
+        ["two developer stages", dispatchPayload(dir, "orchestrate_subagent", pipeline(
+          { name: "unit-a", role: "aidlc-developer-agent" },
+          { name: "unit-b", role: "aidlc-developer-agent" },
+        ))],
+      ];
+      for (const [label, payload] of payloads) {
+        // With the check on, the adapter refuses as before.
+        expect(runIdeStdin(dir, "plan-approval-guard", payload, { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "0" }).code, label).toBe(2);
+        const off = runIdeStdin(dir, "plan-approval-guard", payload, { AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1" });
+        expect(off.code, `${label}: ${off.stderr}`).toBe(0);
+        expect(off.stderr, label).toBe("");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("orchestrate_subagent with two developer stages is refused before any stage is decided", () => {
     const dir = scratchProject(true);
     try {

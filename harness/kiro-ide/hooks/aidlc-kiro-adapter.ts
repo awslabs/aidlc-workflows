@@ -118,6 +118,7 @@ import {
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
   recordPreWorkflowHeartbeat,
+  resolveProjectFlag,
   readPlanApprovalViolation,
   readPlanApprovalLegacyWindow,
   readPlanApprovalLegacyWindows,
@@ -138,6 +139,7 @@ import {
 import {
   approvalFingerprint,
   beginCodeGeneration,
+  codeGenerationPlanApprovalFence,
   legacyPlanApprovalGuardState,
   parseTestingContract,
   renderTestingContract,
@@ -1910,6 +1912,23 @@ function extractAgentIdentity(toolResult: string, structured = ""): string {
 
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
+// A lowered Plan Approval check (Guard Policy relaxed or off, or the person's
+// own switch) lets changed content through once the plan is approved, as the
+// core guard does; it never supplies the first approval. These refusals are the
+// adapter's own, for payloads that hide their target, so they follow the same
+// rule. An unreadable state keeps the check up.
+function loweredPlanCheckAdmitsApprovedWork(): boolean {
+  try {
+    const state = legacyPlanApprovalGuardState(projectDir);
+    if (!state.active || !state.approved || state.target === null) return false;
+    return codeGenerationPlanApprovalFence(projectDir, state.target, {
+      sessionId: resolvedPlanApprovalSessionId(ide),
+    }).decision === "stand-aside";
+  } catch {
+    return false;
+  }
+}
+
 // The chat session a prompt starts, when the prompt names a session other than
 // the one this adapter last saw. Set by the record-human-turn route.
 let promptSessionStart = "";
@@ -1921,7 +1940,11 @@ function buildForward(): Forward {
       "kiro-adapter",
       `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
     );
-    if (target === "plan-approval-guard" && !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide))) {
+    if (
+      target === "plan-approval-guard" &&
+      !ideStandsOutside(projectDir, resolvedPlanApprovalSessionId(ide)) &&
+      !loweredPlanCheckAdmitsApprovedWork()
+    ) {
       const malformedToolName = ide.toolName ?? "";
       if (
         readPlanApprovalLegacyWindows(projectDir).length > 0 &&
@@ -2258,6 +2281,7 @@ function buildForward(): Forward {
               },
             };
           }
+          if (loweredPlanCheckAdmitsApprovedWork()) return null;
         }
         if (
           state.active &&
@@ -2787,6 +2811,9 @@ if (fwd === null) {
   return 0;
 }
 if (fwd.hook === "__legacy_plan_approval_block__") {
+  // The switch that turns the Plan Approval check off turns the adapter's own
+  // refusals off too, as it turns off the core guard before it reads anything.
+  if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", process.env, projectDir) === "1") return 0;
   process.stderr.write(`${String(fwd.input.reason ?? "Plan Approval blocked this tool.")}\n`);
   return 2;
 }
