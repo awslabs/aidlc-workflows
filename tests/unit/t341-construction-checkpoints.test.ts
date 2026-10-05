@@ -1015,6 +1015,37 @@ describe("t341 verification command consent", () => {
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Like a Unit's checkpoint, the command question finds the session it runs
+  // in, so the agent never goes looking for one (on Kiro that was a permission
+  // prompt to read the person's environment).
+  test("asking and answering the command question need no --session", () => {
+    const dir = project();
+    const own = "t341-own-command-session";
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: own, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0"];
+    const asked = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(dir, own)).not.toBeNull();
+    submitCommandChoice(dir, own, "Approve", env);
+    const answered = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
+    expect(answered.code, answered.out).toBe(0);
+    expect(readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")
+      .map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("no shipped step or doc asks the agent for a session to ask or answer the command question", () => {
+    const root = join(import.meta.dir, "..", "..");
+    const files = (dir: string): string[] => fs.readdirSync(join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return files(rel);
+      return /\.(md|ts)$/.test(entry.name) ? [rel] : [];
+    });
+    const asksForSession = /--checkpoint verification-command\b.*--session/;
+    const hits = ["core", "harness", "docs"].flatMap(files).filter((rel) =>
+      readFileSync(join(root, rel), "utf-8").split("\n").some((line) => asksForSession.test(line)));
+    expect(hits).toEqual([]);
+  });
+
   test("numbered and Recommended-decorated choices retain the Plan Approval matching rules", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
