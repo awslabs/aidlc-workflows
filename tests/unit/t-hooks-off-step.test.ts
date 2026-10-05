@@ -13,7 +13,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, normalize } from "node:path";
 import { HOOKS_OFF_RERUN, hooksHealthDir, unattendedHumanPresenceHint } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -267,6 +267,34 @@ describe("next stops with the agent's step when the engine knows the hooks never
     ], env);
     expect(recorded.code, recorded.stdout + recorded.stderr).toBe(0);
     expect(isStop(fromElsewhere())).toBe(false);
+  });
+
+  // The step has the agent change one project file. Through a link that
+  // change would land outside the project, so the agent is told to leave it
+  // and show the person their own step.
+  test.skipIf(process.platform === "win32")("a settings file the step would change through a link is left alone", () => {
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-hooks-off-outside-"));
+    outsides.push(outside);
+    const target = join(outside, "target.json");
+    writeFileSync(target, "{}\n");
+    const cases: Array<[Harness, (proj: string) => void, string]> = [
+      [HARNESSES[0], (proj) => symlinkSync(target, join(proj, ".claude", "settings.local.json")), "set `\"disableAllHooks\": false`"],
+      [HARNESSES[0], (proj) => linkSync(target, join(proj, ".claude", "settings.local.json")), "set `\"disableAllHooks\": false`"],
+      [COPILOT, (proj) => {
+        rmSync(join(proj, ".vscode"), { recursive: true, force: true });
+        symlinkSync(outside, join(proj, ".vscode"));
+      }, "set `\"chat.useHooks\": true`"],
+    ];
+    for (const [h, link, edit] of cases) {
+      const proj = installed(h);
+      intentCreate(proj, h);
+      link(proj);
+      const stop = next(proj, h);
+      expect(isStop(stop), h.name).toBe(true);
+      expect(stop.message, h.name).toContain("is a link, so do not change it");
+      expect(stop.message, h.name).not.toContain(edit);
+    }
+    expect(readFileSync(target, "utf-8")).toBe("{}\n");
   });
 
   test("a conversation that has not joined the workflow is not stopped", () => {

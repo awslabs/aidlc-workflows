@@ -70,6 +70,7 @@ const manifest: HarnessManifest = {
     notRunInWorkflow:
       "Turn on Chat: Use Hooks in VS Code for this folder (in the Copilot CLI, trust this folder " +
       "when it asks), then carry on.",
+    agentStepEdits: ".vscode/settings.json",
     agentStep:
       "Copilot is not running AI-DLC's hooks in this folder. In VS Code: open " +
       "`.vscode/settings.json` by its path (VS Code's file search skips it, so do not search), " +

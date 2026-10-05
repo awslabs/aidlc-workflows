@@ -37,6 +37,7 @@ const manifest: HarnessManifest = {
       "project, ask your Claude Code administrator to allow project hooks. If AI-DLC was set up " +
       "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
       "<entry>.",
+    agentStepEdits: ".claude/settings.local.json",
     agentStep:
       "Claude Code is not running AI-DLC's hooks in this project. First show the person this " +
       'line: "Choose Yes when Claude Code asks to change this project\'s settings, then answer ' +

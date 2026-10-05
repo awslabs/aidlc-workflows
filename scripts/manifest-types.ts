@@ -183,6 +183,13 @@ export type HarnessManifest = {
      * `<entry>`, `<folder>` and `<next>` are filled in.
      */
     agentStep?: string;
+    /**
+     * The project file `agentStep` has the agent change, relative to the
+     * project. When it, or a folder on the way to it, is a link, or it is
+     * not one plain file, the agent changes nothing and shows the person
+     * `recovery` instead.
+     */
+    agentStepEdits?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;

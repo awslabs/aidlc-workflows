@@ -380,6 +380,7 @@ export interface HookActivation {
   notRunYet?: string;
   notRunInWorkflow?: string;
   agentStep?: string;
+  agentStepEdits?: string;
 }
 
 interface ShippedHarnessData {
@@ -560,6 +561,7 @@ function readShippedHarnessData(): ShippedHarnessData {
             ? { notRunInWorkflow: activation.notRunInWorkflow }
             : {}),
           ...(typeof activation.agentStep === "string" ? { agentStep: activation.agentStep } : {}),
+          ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
         }
         : null;
     _shippedHarnessData = {
@@ -24558,8 +24560,25 @@ const HOOKS_OFF_AGENT_RULES =
  * that was not recorded carries it.
  */
 export function hooksOffAgentStep(projectDir?: string, next?: string): string | null {
-  const step = hookActivation()?.agentStep;
-  return step ? `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next)}` : null;
+  const activation = hookActivation();
+  if (!activation?.agentStep) return null;
+  // Through a link the agent would change a file outside the project.
+  const edits = activation.agentStepEdits;
+  if (edits && !plainProjectFile(resolveProjectDir(projectDir), edits)) {
+    return `${HOOKS_OFF_AGENT_RULES} \`${edits}\` in this project is a link, so do not change it. Show the person ` +
+      `this line and end your turn: "${fillHookActivationText(activation.recovery, projectDir, next)}"`;
+  }
+  return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(activation.agentStep, projectDir, next)}`;
+}
+
+function plainProjectFile(projectDir: string, rel: string): boolean {
+  try {
+    const path = assertNoSymlinkInChainOrThrow(realpathSync(projectDir), rel);
+    const stat = lstatSync(path, { throwIfNoEntry: false });
+    return stat === undefined || (stat.isFile() && stat.nlink === 1);
+  } catch {
+    return false;
+  }
 }
 
 export interface HookHeartbeatStamp {
