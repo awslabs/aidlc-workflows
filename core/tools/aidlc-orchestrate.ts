@@ -12158,7 +12158,10 @@ function emitTypedResumeChoice(
   // to redo.
   if (choice === "redo" && named !== undefined) {
     const wanted = named.trim();
-    if (wanted === slug) named = undefined;
+    // Unit-by-Unit Construction keeps Current Stage on the block's first stage
+    // while the Unit works through later ones: the step it is on is current too.
+    const unitStage = getField(stateContent, "Unit Stage")?.trim();
+    if (wanted === slug || (unitStage !== undefined && wanted === unitStage && nodeForSlug(unitStage) !== undefined)) named = undefined;
     else if (parseCheckboxes(stateContent).some((box) => box.slug === wanted && box.state === "completed")) choice = "jump";
     else {
       emit(errorDirective(

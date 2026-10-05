@@ -483,6 +483,21 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       expect(r.kind).toBe("error");
       expect(r.message).toContain(`"${notRun}" has not run yet, so there is nothing to redo`);
     }
+    // Unit by Unit, the step the Unit is on is the current one too.
+    const unitMajor = readFileSync(statePath(p), "utf-8");
+    writeFileSync(
+      statePath(p),
+      unitMajor
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: functional-design\n- **Unit Stage**: code-generation"),
+      "utf-8",
+    );
+    const extras: string[][] = [[], ["--unit", "beta"]];
+    for (const extra of extras) {
+      const r = report("--choice", "redo", "--target", "code-generation", ...extra);
+      expect(r.kind).toBe("print");
+      expect(r.message).not.toContain("has not run yet");
+    }
+    writeFileSync(statePath(p), unitMajor, "utf-8");
     // The choice alone is enough; the person's words are not needed in the command.
     expect(report("--choice", "resume").message).toContain("Re-run `next`");
 
