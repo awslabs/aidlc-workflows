@@ -167,6 +167,13 @@ function planSteps(planPath: string): boolean[] {
   return enginePlanSteps(readFileSync(planPath, "utf-8")).map((step) => step.ticked);
 }
 
+function untickLastStep(planPath: string): void {
+  const plan = readFileSync(planPath, "utf-8");
+  const at = Math.max(plan.lastIndexOf("- [x]"), plan.lastIndexOf("- [X]"));
+  expect(at, "no ticked step to untick").toBeGreaterThanOrEqual(0);
+  writeFileSync(planPath, `${plan.slice(0, at)}- [ ]${plan.slice(at + "- [x]".length)}`, "utf-8");
+}
+
 function rowsOf(proj: string, event: string): Row[] {
   return readAuditShardEvents(proj).filter((row) => row.event === event);
 }
@@ -263,7 +270,15 @@ describe.skipIf(
       });
       expect(chat2.stoppedWhen, "the build never ticked a step").toBe(true);
       expect(engineSaid(chat2, ASKED), "the plan was asked about again after approval").toBe(false);
-      const interrupted = planSteps(planPath);
+      let interrupted = planSteps(planPath);
+      // The agent may do the work and then tick every step in one edit, so
+      // the chat is cut off with nothing left unticked. Picking up reads the
+      // ticks (task markers are outside what was approved), so the last step
+      // is unticked: the build was cut off before it.
+      if (!interrupted.includes(false)) {
+        untickLastStep(planPath);
+        interrupted = planSteps(planPath);
+      }
       const firstUnticked = interrupted.indexOf(false) + 1;
       expect(firstUnticked, "every step was ticked before the interruption").toBeGreaterThan(0);
 
