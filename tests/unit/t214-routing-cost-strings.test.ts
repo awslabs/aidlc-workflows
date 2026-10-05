@@ -184,6 +184,44 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
   });
 });
 
+describe("t214 every plan the offer lists carries the engine's own count", () => {
+  // A host that shows the other plans as choices shows these numbers, so the
+  // choices agree with the question ("classic = 17" in the question, "18 of 33
+  // stages" on the classic choice was the agent's own count).
+  function rowsAgree(d: Record<string, unknown>, greenfield: boolean): void {
+    const rows = d.scope_commands as Array<{ scope: string; stages?: string }>;
+    for (const [scope, entry] of Object.entries(GRID)) {
+      const c = counts(entry.stages, greenfield);
+      expect(rows.find((row) => row.scope === scope)?.stages, scope).toBe(`${c.execute} of ${c.total} stages`);
+    }
+  }
+
+  test("the compose offer's plans, on a new project", () => {
+    proj = createTestProject();
+    const d = directiveOf(runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out);
+    expect(d.ask_type).toBe("compose-offer");
+    rowsAgree(d, true);
+    expect(String(d.question)).toContain(`classic = ${counts(GRID.classic.stages, true).execute}`);
+    // Every count the question names is its plan's row count, so a choice that
+    // shows a row's number can only differ from the question in wording.
+    const rows = d.scope_commands as Array<{ scope: string; stages?: string }>;
+    const named = [...String(d.question).matchAll(/\b([a-z][a-z-]*) = (?:all )?(\d+)\b/g)];
+    expect(named.map(([, scope]) => scope)).toEqual(["bugfix", "express", "classic", "feature"]);
+    for (const [, scope, n] of named) {
+      expect(rows.find((row) => row.scope === scope)?.stages, scope).toStartWith(`${n} of `);
+    }
+  });
+
+  test("the plan offer's other plans, on existing code", () => {
+    proj = createTestProject();
+    writeFileSync(join(proj, "app.ts"), "export const existing = true;\n");
+    const d = directiveOf(runNext(proj, ["fix login bug"]).out);
+    expect(d.ask_type).toBe("scope-confirm");
+    rowsAgree(d, false);
+    expect(String(d.question)).toContain(costClause(counts(GRID.bugfix.stages)));
+  });
+});
+
 describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();

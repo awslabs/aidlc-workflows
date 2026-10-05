@@ -121,6 +121,7 @@ import {
   type RunStageDirective,
   type RunStageWave,
   type RunStageWaveEntry,
+  type ScopeCommandRow,
   type StageValidityAdvisory,
   validateDirective,
 } from "./aidlc-directive.ts";
@@ -1787,15 +1788,24 @@ function documentSplitSentence(raw: string): string {
 
 // One complete, shell-quoted command per valid scope, so a human's choice of
 // another plan never becomes conductor-built shell text.
+// Each plan the person can name instead, with its stage count for this
+// project counted as the offer's own question counts it, so a host that shows
+// the plans as choices never shows a number of its own.
 function scopeCommands(
   prefix: string,
   questionId: string,
-  carried = "",
-): Array<{ scope: string; command: string }> {
-  return [...validScopes()].map((scope) => ({
-    scope,
-    command: `${prefix} --scope ${scopeArg(scope)} --request ${questionId}${carried}`,
-  }));
+  carried: string,
+  projectDir: string,
+  declaredType?: "greenfield" | "brownfield",
+): ScopeCommandRow[] {
+  return [...validScopes()].map((scope) => {
+    const cost = effectiveScopeCostSummary(scope, projectDir, undefined, undefined, undefined, declaredType);
+    return {
+      scope,
+      command: `${prefix} --scope ${scopeArg(scope)} --request ${questionId}${carried}`,
+      ...(cost ? { stages: `${cost.execute} of ${cost.total} stages` } : {}),
+    };
+  });
 }
 
 // The depth, test strategy, project type, and sensors, learnings, summary
@@ -1935,6 +1945,7 @@ function scopeConfirmAskDirective(
   projectDir: string,
   carried = "",
   newWork = false,
+  declaredType?: "greenfield" | "brownfield",
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, proposedScope, "front", undefined, newWork);
@@ -1948,7 +1959,7 @@ function scopeConfirmAskDirective(
     proposed_scope: proposedScope,
     confirm_command: confirmCommand,
     compose_command: composeCommand,
-    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType),
     // The answers the question offers, worded for the person, so a host that
     // shows options shows these instead of ones the agent makes up.
     choices: [
@@ -1964,6 +1975,7 @@ function composeOfferAskDirective(
   projectDir: string,
   carried = "",
   newWork = false,
+  declaredType?: "greenfield" | "brownfield",
 ): AskDirective {
   const tool = aidlcToolInvocation("orchestrate");
   const stored = saveQuestion(projectDir, intentText, "", "front", undefined, newWork);
@@ -1973,7 +1985,7 @@ function composeOfferAskDirective(
     response_route: "next",
     question,
     compose_command: `${tool} next compose --request ${stored.id}${carried}`,
-    scope_commands: scopeCommands(`${tool} next`, stored.id, carried),
+    scope_commands: scopeCommands(`${tool} next`, stored.id, carried, projectDir, declaredType),
   };
 }
 
@@ -2375,7 +2387,7 @@ function newWorkRoutingAskDirective(
     proposed_scope: proposedScope,
     new_intent_command:
       `${tool} next --new-intent --scope ${scopeArg(proposedScope)} --request ${stored.id}${carried.newWork}${carried.planChanges}`,
-    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork).map((entry) =>
+    scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
       entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
     // Beside active work this reshapes it; with records to pick it composes
     // the new work, like a plan offer's compose answer.
@@ -3475,6 +3487,7 @@ function freshWorkOfferDirective(
       pd,
       carriedCreationFlags(flags),
       flags.newIntent === true,
+      flags.projectType,
     );
   }
   // Anchor the compose offer with the counts for the named scopes so the
@@ -3497,6 +3510,7 @@ function freshWorkOfferDirective(
     pd,
     carriedCreationFlags(flags),
     flags.newIntent === true,
+    flags.projectType,
   );
 }
 

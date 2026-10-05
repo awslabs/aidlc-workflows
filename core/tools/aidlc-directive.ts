@@ -502,13 +502,20 @@ interface AskDirectiveBase {
   question: string;
 }
 
+/** One plan the person can name instead: its complete command, and its stage count as the person sees it ("17 of 33 stages"). */
+export interface ScopeCommandRow {
+  scope: string;
+  command: string;
+  stages?: string;
+}
+
 export interface ScopeConfirmAskDirective extends AskDirectiveBase {
   ask_type: "scope-confirm";
   response_route: "next";
   proposed_scope: string;
   confirm_command: string;
   compose_command: string;
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
   /** The offer's answers as the person sees them, in order: go ahead, then compose. */
   choices: Array<{ label: string; command: string }>;
 }
@@ -517,7 +524,7 @@ export interface ComposeOfferAskDirective extends AskDirectiveBase {
   ask_type: "compose-offer";
   response_route: "next";
   compose_command: string;
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
 }
 
 export interface IntentPickAskDirective extends AskDirectiveBase {
@@ -560,7 +567,7 @@ export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   /** Option 2 with the proposed scope. */
   new_intent_command: string;
   /** Option 2 with a human-corrected scope: one complete command per valid scope. */
-  scope_commands: Array<{ scope: string; command: string }>;
+  scope_commands: ScopeCommandRow[];
   /** Option 3, after any required record selection. */
   compose_command: string;
   /** Option 1 for the active workflow the question named; absent when the human selects a record. */
@@ -1132,7 +1139,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "confirm_command", kind, errors);
         checkString(o, "compose_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         checkCommandRows(o, "choices", "label", kind, errors);
         rejectUnexpected(
           "scope-confirm",
@@ -1149,7 +1156,7 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: compose-offer response_route must be "next"`);
         }
         checkString(o, "compose_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         rejectUnexpected(
           "compose-offer",
           {
@@ -1196,7 +1203,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         checkString(o, "proposed_scope", kind, errors);
         checkString(o, "numbered_prose_question", kind, errors);
         checkString(o, "new_intent_command", kind, errors);
-        checkCommandRows(o, "scope_commands", "scope", kind, errors);
+        checkCommandRows(o, "scope_commands", "scope", kind, errors, ["stages"]);
         checkString(o, "compose_command", kind, errors);
         if ("available_intents" in o || "select_commands" in o || "reshape_commands" in o) {
           checkStringArray(o, "available_intents", kind, errors);
@@ -2331,6 +2338,7 @@ function checkCommandRows(
   key: string,
   kind: DirectiveKind,
   errors: string[],
+  optional: readonly string[] = [],
 ): void {
   if (!(field in o)) {
     errors.push(`${kind}: missing required field: ${field}`);
@@ -2350,8 +2358,10 @@ function checkCommandRows(
       continue;
     }
     for (const rowKey of Object.keys(row)) {
-      if (rowKey !== key && rowKey !== "command") {
+      if (rowKey !== key && rowKey !== "command" && !optional.includes(rowKey)) {
         errors.push(`${kind}: ${field}[${i}] unknown key: ${rowKey}`);
+      } else if (optional.includes(rowKey) && typeof row[rowKey] !== "string") {
+        errors.push(`${kind}: ${field}[${i}].${rowKey} must be string, got ${describe(row[rowKey])}`);
       }
     }
     if (typeof row[key] !== "string") {
