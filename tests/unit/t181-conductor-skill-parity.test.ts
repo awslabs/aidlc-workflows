@@ -928,6 +928,19 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(skill).toContain("active track supplies exactly one escape");
   });
 
+  // The own-words tip names the free-text row as the person's tool shows it:
+  // Claude Code's picker calls it "Type something", never "Other".
+  test("the own-words tip names the escape row in each tool's own words", () => {
+    const read = (rel: string) => readFileSync(join(REPO_ROOT, rel), "utf-8");
+    const protocol = read("core/aidlc-common/protocols/stage-protocol.md");
+    expect(protocol).not.toContain("Select 'Other' on any question");
+    expect(protocol).toContain(`"Pick "[the escape's label]" on any question to answer in your own words or talk it through."`);
+    expect(read("harness/claude/skills/aidlc/question-rendering.md"))
+      .toContain(`"Pick "Type\n  something" on any question to answer in your own words or talk it through."`);
+    expect(read("harness/codex/skills/aidlc/question-rendering.md")).toContain(`"Pick "None of the above" on any question`);
+    expect(read("docs/reference/04-stage-protocol.md")).not.toContain("Select 'Other'");
+  });
+
   test("every question renderer pins the mandatory summary checkpoint", () => {
     const missing: string[] = [];
     for (const rel of harnessQuestionAnnexes()) {
