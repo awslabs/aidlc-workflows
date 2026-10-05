@@ -283,7 +283,7 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 
 The gate's audit trail is report-owned:
 1. Before presenting the gate, `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`)
-2. After the response, `report --result approved|rejected --user-input "<the choice they made>"` (`"Approve"` or `"Request Changes"`) records that choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
+2. After the response, `report --result approved|rejected --user-input '<the choice they made>'` (`"Approve"` or `"Request Changes"`) records that choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
 
 ### Part 1: Announcement
 
@@ -480,7 +480,8 @@ ask targeted follow-up. Do NOT proceed until resolved.
 - When the user leaves a choice to the agent ("up to you", "whatever you think
   is best", or "choose the recommended answers" for this stage), the agent
   decides: it picks the option that best fits what they have said and records
-  it with `log answer --on-instruction "<their words>"`, so the record shows
+  it with `log answer --on-instruction '<their words>'` (single-quoted, like
+  every piece of the person's text on a command line), so the record shows
   the agent chose it as they asked. It then says one line: "You left <the
   question> to me, so I chose <the choice>. Say if you want something else."
   (for several questions, "You left <Stage>'s <N> questions to me, so I chose

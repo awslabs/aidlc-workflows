@@ -1348,7 +1348,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       .replace(/\s+/g, " ");
     for (const rule of [
       'When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide',
-      '--on-instruction "<their words that left it to you>"',
+      "--on-instruction '<their words that left it to you>'",
       '**SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else."',
       '**SAY:** "Approvals are still yours: I\'ll stop at each stage for you to approve."',
       "When the person's request already chose",
@@ -1468,5 +1468,19 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(
       readFileSync(join(REPO_ROOT, "core/hooks/aidlc-session-start.ts"), "utf-8"),
     ).toContain("(at an approval gate too, where it is that request and not the gate's answer)");
+  });
+
+  // In double quotes a shell runs a `$(...)`, a backtick or a `$NAME` inside
+  // the text, and a choice's text can come from the project: answer text is
+  // shown single-quoted, as the protocol's own rule for the person's words says.
+  test("the protocol never shows a double-quoted placeholder for answer text", () => {
+    const doubleQuoted = /--(?:details|on-instruction|user-input|instruction|answer) "</;
+    const found: string[] = [];
+    for (const rel of ["core/aidlc-common/protocols/stage-protocol.md", "docs/reference/04-stage-protocol.md"]) {
+      readFileSync(join(REPO_ROOT, rel), "utf-8").split("\n").forEach((line, index) => {
+        if (doubleQuoted.test(line)) found.push(`${rel}:${index + 1}  ${line.trim().slice(0, 120)}`);
+      });
+    }
+    expect(found).toEqual([]);
   });
 });
