@@ -179,6 +179,7 @@ import {
   withWorkspaceSourceStateCache,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
+  withoutEntryWord,
   SKELETON_STANCES,
   guardRefusalStreakView,
   type GuardRemedy,
@@ -3034,13 +3035,12 @@ type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 // flag extraction — the value of a valued flag is the following argv token.
 // The entry word the person typed (`/aidlc`, Codex's `$aidlc`) is how they
 // reach AI-DLC, never part of what they asked for. An agent can pass it on as
-// an argument, or at the front of the description; either way the work is
-// never named after it.
-const ENTRY_WORD_ARG = /^[/$]aidlc$/i;
+// an argument (withoutEntryWord, shared with the terminal classifiers), or at
+// the front of the description; either way the work is never named after it.
 const ENTRY_WORD_PREFIX = /^[/$]aidlc\s+/i;
 
-function parseNextFlags(args: string[]): ParsedFlags {
-  if (args.length > 0 && ENTRY_WORD_ARG.test(args[0])) args = args.slice(1);
+function parseNextFlags(argv: string[]): ParsedFlags {
+  const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST, not intent text. Without
   // this, the token falls into intentWords and the freeform funnel offers to
   // create an intent literally named "help" (fresh workspace) or silently

@@ -1008,9 +1008,19 @@ export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
   return refused;
 }
 
+// The entry word the person typed (`/aidlc`, Codex's `$aidlc`) is how they
+// reach AI-DLC, never an argument: an agent that passes it on as the first
+// argument means what follows it. The one owner, so the engine's reading
+// (parseNextFlags) and every terminal classifier agree.
+const ENTRY_WORD_ARG = /^[/$]aidlc$/i;
+export function withoutEntryWord(args: readonly string[]): string[] {
+  return args.length > 0 && ENTRY_WORD_ARG.test(args[0]) ? args.slice(1) : [...args];
+}
+
 // One rule for the Copilot adapter claim gate and isTerminalUtilityNext, mirroring
 // parseNextFlags/routeNext's terminal early returns and engine-marker exclusion.
-export function isReadOnlyNextArgv(args: readonly string[]): boolean {
+export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
+  const args = withoutEntryWord(argv);
   if (isRetiredOnlyNextArgv(args)) return true;
   if (isRefusedModifierNextArgv(args)) return true;
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) return true;
@@ -1662,7 +1672,8 @@ function terminalCommandFromWorkspaceCommand(
 // matching rules are byte-for-byte the engine's parseNextFlags terminal branches
 // (read-only flag anywhere; workspace verb only at index 0) so the seam and the
 // engine can never disagree about what is terminal.
-export function classifyTerminalCommand(args: string[]): TerminalCommand | null {
+export function classifyTerminalCommand(argv: string[]): TerminalCommand | null {
+  const args = withoutEntryWord(argv);
   // A SOLE bare `help` / `-h` token is a help REQUEST (terminal, read-only);
   // mirrors parseNextFlags in the engine. Without this the token reads as
   // freeform intent text and the funnel offers to create an intent named
