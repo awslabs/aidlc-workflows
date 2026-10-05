@@ -36127,7 +36127,15 @@ export function memoryGuardPolicyDeclarations(
 /** Retired alias of memoryGuardPolicyDeclarations. */
 export const memoryChangeControlDeclarations = memoryGuardPolicyDeclarations;
 
-/** The scope's default from its frontmatter; strict when the scope declares none. */
+/** A scope's Guard Policy default: what its file declares, else off, the
+ *  default of every shipped scope but enterprise (which declares strict). An
+ *  author who wants strict writes it. A scope that is not defined here at all
+ *  stays strict. */
+export function scopeDefinitionGuardPolicy(definition: { guardPolicy?: GuardPolicy } | undefined): GuardPolicy {
+  return definition === undefined ? "strict" : definition.guardPolicy ?? "off";
+}
+
+/** The scope's default from its frontmatter; off when the scope declares none. */
 export function scopeGuardPolicyDefault(scope: string | null | undefined): GuardPolicy {
   if (!scope) return "strict";
   let mapping: Record<string, ScopeDefinition>;
@@ -36136,7 +36144,7 @@ export function scopeGuardPolicyDefault(scope: string | null | undefined): Guard
   } catch {
     return "strict";
   }
-  return mapping[scope.trim().toLowerCase()]?.guardPolicy ?? "strict";
+  return scopeDefinitionGuardPolicy(mapping[scope.trim().toLowerCase()]);
 }
 /** Retired alias of scopeGuardPolicyDefault. */
 export const scopeChangeControlDefault = scopeGuardPolicyDefault;
@@ -36144,8 +36152,10 @@ export const scopeChangeControlDefault = scopeGuardPolicyDefault;
 /**
  * Resolved value = the intent's own valid line if present, else strict. Two
  * disagreeing state lines resolve to strict until a write keeps one line.
- * If ANY memory layer declares strict, that file is the source instead.
- * Memory `relaxed` or an absent section has no effect. A lone malformed state
+ * If ANY memory layer declares strict, that file is the source instead. A
+ * memory `relaxed` or `off` (the narrowest layer that declares one) replaces a
+ * value that came from the scope or is not set; the person's own switch keeps
+ * its value. An absent section has no effect. A lone malformed state
  * line is a validation error unless the repair command opts into reading it
  * tolerantly. Pure: reads state and memory, writes nothing.
  */
@@ -36193,11 +36203,11 @@ export function resolveGuardPolicy(
   }
   const stateValue = conflict === undefined ? intent?.value ?? "strict" : "strict";
   const stateSource = conflict === undefined ? intent?.source ?? "not set" : "conflicting state lines";
-  const memoryStrict =
-    memoryGuardPolicyDeclarations(projectDir, {
-      intent: selection.intent ?? undefined,
-      space: selection.space,
-    }).find((declaration) => declaration.value === "strict") ?? null;
+  const declarations = memoryGuardPolicyDeclarations(projectDir, {
+    intent: selection.intent ?? undefined,
+    space: selection.space,
+  });
+  const memoryStrict = declarations.find((declaration) => declaration.value === "strict") ?? null;
   if (memoryStrict !== null) {
     return {
       value: "strict",
@@ -36209,6 +36219,22 @@ export function resolveGuardPolicy(
       stateField,
       ...(conflict === undefined ? {} : { conflict }),
       memoryStrict,
+    };
+  }
+  // A memory layer's relaxed or off (the narrowest layer that declares one)
+  // replaces a value that came from the scope, or none at all; the person's
+  // own switch and a strict lock still win.
+  const layered = [...declarations].reverse()[0];
+  if (layered !== undefined && conflict === undefined && (intent === null || intent.source.startsWith("scope "))) {
+    return {
+      value: layered.value,
+      source: `${layered.layer}.md`,
+      scopeDefault,
+      intent,
+      stateValue,
+      rawStateValue,
+      stateField,
+      memoryStrict: null,
     };
   }
   return {

@@ -145,6 +145,8 @@ import {
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
   guardPolicyAtLeast,
+  personSpokeSinceGate,
+  scopeDefinitionGuardPolicy,
   GUARD_FENCES,
   type GuardSwitch,
   entrySkillInvocation,
@@ -7645,7 +7647,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   }
   // Naming the scope's own default is not a lowering: the same creation without
   // the flag would carry that value from the scope, so it is recorded that way.
-  const scopeDefaultPolicy = loadScopeMapping()[scope]?.guardPolicy ?? "strict";
+  const scopeDefaultPolicy = scopeDefinitionGuardPolicy(loadScopeMapping()[scope]);
   const requestedChangeControl =
     flaggedChangeControl !== "strict" && flaggedChangeControl === scopeDefaultPolicy ? null : flaggedChangeControl;
   // Plan approval off is the person's move too. Naming the scope's own default
@@ -7835,7 +7837,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
         : requestedChangeControl !== null
           ? formatGuardPolicy(requestedChangeControl, "you")
           : formatGuardPolicy(
-              lockedScopeDef.guardPolicy ?? "strict",
+              scopeDefinitionGuardPolicy(lockedScopeDef),
               `scope ${scope}`,
             );
     waitAtIntentCreateChangeControlSnapshotBarrier();
@@ -10661,6 +10663,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     const oldScope = getField(contentBefore, "Scope");
     if (!oldScope) die("Cannot read current Scope from state file.");
     const requested = intentSettingsFromFlags(flags);
+    let keptPolicyLine: string | null = null;
     if (oldScope !== newScope) {
       const source = `scope ${newScope}`;
       requested.depth ??= { value: newScopeDef.depth, source };
@@ -10673,12 +10676,19 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       );
       if (previousCC?.source.startsWith("scope ")) {
         const strictness = { off: 0, relaxed: 1, strict: 2 } as const;
-        const nextPolicy = newScopeDef.guardPolicy ?? "strict";
-        // Scope changes may raise the policy automatically, but never lower it.
-        // The person must type a lowering switch first, matching the authority
-        // required by a direct Guard Policy change.
+        const nextPolicy = scopeDefinitionGuardPolicy(newScopeDef);
+        // Scope changes raise the policy automatically. A lower default
+        // follows the scope only on the person's own request for the change
+        // (the authority a direct Guard Policy lowering needs); otherwise the
+        // work keeps its value and the output says so in one line.
         if (strictness[nextPolicy] >= strictness[previousCC.value]) {
           requested["guard-policy"] ??= { value: nextPolicy, source };
+        } else if (process.env.AIDLC_UNATTENDED !== "1" && personSpokeSinceGate(projectDir, { requests: true })) {
+          requested["guard-policy"] ??= { value: nextPolicy, source };
+        } else {
+          keptPolicyLine =
+            `Guard Policy stays ${previousCC.value} (from ${previousCC.source}). ` +
+            `Say "guard policy ${nextPolicy}" to match ${newScope}.`;
         }
       }
       for (const key of CEREMONY_KEYS) {
@@ -10865,6 +10875,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
             `To run it on its own, type \`${entrySkillInvocation()} --stage ${slug} --single\`.`),
         ...update.lines,
+        ...(keptPolicyLine === null ? [] : [keptPolicyLine]),
       ];
     }
     if (content !== contentBefore) {
@@ -11327,8 +11338,7 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
     const policyField = guardPolicyStateField(content);
     const guardPolicy =
       parseGuardPolicyStateLine(policyField ? getField(content, policyField) : null)?.value ??
-      scopeDef.guardPolicy ??
-      "strict";
+      scopeDefinitionGuardPolicy(scopeDef);
     // The saved scope keeps the values this work chose, not a machine's kill switch.
     const ceremony = Object.fromEntries(
       CEREMONY_KEYS.map((key) => {

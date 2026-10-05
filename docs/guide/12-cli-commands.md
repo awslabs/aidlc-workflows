@@ -1296,7 +1296,8 @@ saved intent value (raw text if invalid; `strict` when no line existed), not
 the memory-effective value. Governed-checkpoint observations still record
 effective old/new values.
 An older intent without the line stays strict until it is set; a new intent
-starts from its scope's default. When a memory layer's `## Guard Policy`
+starts from its scope's default, or from a memory layer's `Mode: relaxed` or
+`Mode: off` when one is set. When a memory layer's `## Guard Policy`
 section says `Mode: strict`, an explicit `relaxed` or `off` refuses the whole
 command, including any other supplied settings, and names that file: edit the
 memory line there to relax it for everyone. An explicit strict setting is still

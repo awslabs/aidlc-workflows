@@ -637,19 +637,25 @@ describe("t333 (3) resolution precedence", () => {
     expect(memoryGuardPolicyDeclarations(proj)).toEqual([
       { layer: "project", path: memoryFile(proj, "project"), heading: "## Guard Policy", value: "relaxed" },
     ]);
-    expect(resolveGuardPolicy(proj).value).toBe("off");
+    // The new heading's relaxed replaces the scope's off: memory sets the
+    // policy for work whose value came from its scope.
+    expect(resolveGuardPolicy(proj).value).toBe("relaxed");
+    expect(resolveGuardPolicy(proj).source).toBe("project.md");
   });
 
-  test("memory relaxed or off and an absent section have no effect", () => {
+  test("memory relaxed or off replaces a scope default and names its layer; an absent section has no effect", () => {
     for (const mode of ["relaxed", "off"] as const) {
       const { proj } = project("enterprise");
       declareMemoryMode(proj, "project", mode);
       expect(memoryGuardPolicyDeclarations(proj)).toEqual([
         { layer: "project", path: memoryFile(proj, "project"), heading: "## Guard Policy", value: mode },
       ]);
-      expect(resolveGuardPolicy(proj).value).toBe("strict");
-      expect(resolveGuardPolicy(proj).source).toBe("scope enterprise");
+      expect(resolveGuardPolicy(proj).value).toBe(mode);
+      expect(resolveGuardPolicy(proj).source).toBe("project.md");
     }
+    const { proj } = project("enterprise");
+    expect(resolveGuardPolicy(proj).value).toBe("strict");
+    expect(resolveGuardPolicy(proj).source).toBe("scope enterprise");
   });
 
   test("an invalid memory value is a validation error naming the file, the section, and the allowed values", () => {
@@ -1023,6 +1029,21 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(retiredChange.status, retiredChange.stderr).toBe(0);
     expect(renameNotices(retiredChange.stderr)).toBe(1);
     expect(getField(readFileSync(retired.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (set by you)");
+  });
+
+  test("a scope change the person asked for carries the new scope's lower default; otherwise it says what stayed", () => {
+    const asked = project("enterprise");
+    expect(getField(readFileSync(asked.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
+    recordHumanPrompt(asked.proj, "/aidlc --scope classic");
+    const changed = run(UTILITY, ["scope-change", "--scope", "classic"], asked.proj, FENCE_ENV_CLEAR);
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(getField(readFileSync(asked.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("off (from scope classic)");
+
+    const unasked = project("enterprise");
+    const kept = run(UTILITY, ["scope-change", "--scope", "classic"], unasked.proj, FENCE_ENV_CLEAR);
+    expect(kept.status, kept.stderr).toBe(0);
+    expect(getField(readFileSync(unasked.state, "utf-8"), GUARD_POLICY_FIELD)).toBe("strict (from scope enterprise)");
+    expect(kept.stdout).toContain('Guard Policy stays strict (from scope enterprise). Say "guard policy off" to match classic.');
   });
 
   test("creation accepts its scope default, while scope-change lowering requires a typed switch", () => {
