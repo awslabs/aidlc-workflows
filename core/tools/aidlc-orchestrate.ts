@@ -2335,9 +2335,9 @@ function reentryReplyDirective(requestId: string): PrintDirective {
       `they do, run \`${orchestrate} report --result resumed --choice <redo|jump|fresh>\` with the choice you read ` +
       "from their words (add `--target <stage slug>` for the stage they named, and `--unit <unit>` or `--every-unit` " +
       "when they named a Unit or said every Unit), then follow the print it returns. If they are about something " +
-      `else, such as new work or a change to this work, run \`${orchestrate} next --request ${requestId}\` and follow ` +
-      "what it returns: the engine kept their words and asks them where that work belongs. If you cannot tell which " +
-      "it is, ask the person in one short question and follow their answer.",
+      `else, such as new work or a change to this work, or you cannot tell which, run \`${orchestrate} next ` +
+      `--request ${requestId}\` and follow what it returns: the engine kept their words and asks the person where ` +
+      "that work belongs, and a redo or jump they say there is read the same way.",
   );
 }
 

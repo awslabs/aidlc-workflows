@@ -1010,7 +1010,10 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(read.message).toContain("report --result resumed --choice <redo|jump|fresh>");
     expect(read.message).toContain("--target <stage slug>");
     expect(read.message).toMatch(/next --request [0-9a-f]{8}`/);
-    expect(read.message).toContain("If you cannot tell which it is, ask the person");
+    // When the agent cannot tell, the engine's own question asks the person, so
+    // the turn ends at a question the Stop hook honours.
+    expect(read.message).toContain("or you cannot tell which, run");
+    expect(read.message).not.toContain("ask the person in one short question");
     // None of the person's words ride the directive.
     expect(read.message).not.toContain("intent capture");
     // The same words asked about as work keep them.
