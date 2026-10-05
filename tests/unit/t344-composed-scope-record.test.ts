@@ -604,8 +604,20 @@ describe("t344 a scope name that is not one is never written or run", () => {
       expect(refused.stdout).toBe("");
       expect(refused.stderr).toContain("is not a scope name, so no command was printed for it");
       expect(refused.stderr).not.toContain("USERNAME");
-      // Switching to a real scope still works, and it offers no way back to the bad one.
-      const switched = tool("aidlc-utility.ts", ["scope-change", "--scope", "feature"]);
+      // The way out the refusal names, /aidlc --scope <name>, switches to a
+      // real scope, and the switch offers no way back to the bad one.
+      const asked = tool("aidlc-orchestrate.ts", ["next", "--scope", "feature"]);
+      expect(asked.status, asked.stderr).toBe(0);
+      const command = /`([^`]+)`/.exec(JSON.parse(asked.stdout).message ?? "")?.[1] ?? "";
+      expect(command).toEndWith("scope change --scope feature");
+      const [runner, ...argv] = command.split(" ");
+      expect(runner).toBe("bun");
+      const switched = spawnSync(process.execPath, argv, {
+        cwd: proj,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
       expect(switched.status, switched.stdout + switched.stderr).toBe(0);
       expect(switched.stdout).toContain("Switched to feature");
       expect(switched.stdout).not.toContain("To go back");

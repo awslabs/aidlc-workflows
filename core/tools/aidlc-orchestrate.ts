@@ -6719,6 +6719,14 @@ function routeNext(args: string[], projectDir: string | undefined): void {
     return;
   }
   if (!validScopes().has(scope) && !retiredScopeOfFinishedWork) {
+    // Naming a real scope for a workflow whose saved scope this install does
+    // not know switches the workflow to it, with any settings typed alongside.
+    if (stateContent && source === "state" && flags.scope && validScopes().has(flags.scope) && !flags.stage && !flags.phase && !flags.planChanges) {
+      const parts = [`--scope ${scopeArg(flags.scope)}`, ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)];
+      const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
+      emit(turnEndingPrint(`Run \`${command}\` to change scope, then print its output verbatim and stop.`));
+      return;
+    }
     const valid = [...validScopes()].join(", ");
     emit(errorDirective(`Unknown scope "${scope}". Valid scopes: ${valid}.`));
     return;
