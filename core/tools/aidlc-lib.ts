@@ -8980,15 +8980,6 @@ export function refreshActiveDirectiveMarker(
   });
 }
 
-// The marker as written, whether or not the state has moved on since.
-export function readStoredActiveDirectiveMarker(projectDir: string): ActiveDirectiveMarker | null {
-  try {
-    return readActiveDirectiveMarkerRaw(activeDirectiveMarkerPath(projectDir));
-  } catch {
-    return null;
-  }
-}
-
 export function readActiveDirectiveMarker(
   projectDir: string,
   stateContent: string,

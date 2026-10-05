@@ -1,7 +1,7 @@
 // covers: function:routeCodeGenerationPlanApproval, function:publishPlanApprovalAsk, function:notePlanApprovalAskReply, function:recordPlanApprovalAnswer, function:requestPlanApprovalReviewNow, function:codeGenerationPlanReadiness, function:planSummaryLines,
 // function:PLAN_APPROVAL_ASK_TYPE, function:planApprovalRuntimeFile, function:readPlanApprovalRuntimeRecord,
 // function:writePlanApprovalRuntimeRecord, function:removePlanApprovalRuntimeRecord, function:releaseTakenGuardRecoveryReply,
-// function:readStoredActiveDirectiveMarker, function:keepPlanApprovalAskOverStateWrite
+// function:keepPlanApprovalAskOverStateWrite
 //
 // The engine asks for Plan Approval itself. These cases drive the real `next`,
 // the real human-turn hook, and the real plan-approval guard over one poc
@@ -2045,6 +2045,8 @@ describe("what the engine names while a plan waits", () => {
     expect(guardBash(proj, jump).code).toBe(2);
     expect(guardBash(proj, "bun .claude/tools/aidlc.ts engine recompose --skip build-and-test").code).toBe(2);
     reply(proj, "/aidlc --stage nfr-requirements");
+    // The jump the engine printed for that request.
+    expect(namedCommands(next(proj, ["--stage", "nfr-requirements"]))).toContain(jump);
     const verdict = guardBash(proj, jump);
     expect(verdict.code, verdict.stderr).toBe(0);
     // A skip passes with its own flags only.
@@ -2099,6 +2101,9 @@ describe("what the engine names while a plan waits", () => {
     expect(record.code, record.stderr).toBe(0);
     const scan = guardBash(proj, "bun .claude/tools/aidlc.ts engine workspace codekb-scope-diff");
     expect(scan.code, scan.stderr).toBe(0);
+    // The workspace source still waits for the approved plan.
+    expect(guardWrite(proj, join(proj, "src", "slugify.ts")).code).toBe(2);
+    expect(guardBash(proj, "printf x > src/slugify.ts").code).toBe(2);
   });
 });
 

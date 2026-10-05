@@ -95,7 +95,7 @@ import {
   personCheckSwitchAllowed,
   personSpokeSinceGate,
   readActiveDirectiveMarker,
-  readStoredActiveDirectiveMarker,
+  spacesRoot,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
   releaseAuditLock,
@@ -831,6 +831,20 @@ function isRepliedPlanFileTarget(projectDir: string, target: string, editable: s
 // approval from it. A composition requested while Code Generation is current
 // writes it before its own approval gate. Exactly that file, reached through no
 // symlink and not hard-linked to another file, is exempt.
+// Inside AI-DLC's own records (`aidlc/spaces`), reached through no symlink.
+function isInsideAidlcSpaces(projectDir: string, target: string): boolean {
+  try {
+    const projectLexical = resolve(projectDir);
+    const targetAbs = resolve(target);
+    const inside = relative(resolve(spacesRoot(projectDir)), targetAbs);
+    if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return false;
+    assertNoSymlinkInChainOrThrow(realpathSync(projectLexical), relative(projectLexical, targetAbs));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isComposerProposalTarget(projectDir: string, target: string): boolean {
   try {
     const projectLexical = resolve(projectDir);
@@ -1203,22 +1217,28 @@ const ENGINE_DIRECTED_WHILE_PLAN_WAITS: readonly EngineDirectedRoute[] = [
   { noun: "workspace", verbs: ["reclassify", "codekb-scope-diff"], asked: true },
 ];
 
-function engineDirectedWhilePlanWaits(args: readonly string[], personSpoke: () => boolean): boolean {
+function engineDirectedWhilePlanWaits(args: readonly string[], personAsked: () => boolean): boolean {
   if (args[0] !== "engine") return false;
   const [noun, verb] = [args[1], args[2]];
   return ENGINE_DIRECTED_WHILE_PLAN_WAITS.some((route) =>
     route.noun === noun &&
     (route.verbs === undefined || route.verbs.includes(verb ?? "")) &&
     (route.admits === undefined || route.admits(args.slice(2))) &&
-    (route.asked !== true || personSpoke()));
+    (route.asked !== true || personAsked()));
 }
 
-// The engine's recovery question was the last step it issued, current or gone
-// stale: the remedy the person picks there is the only move it carries out
-// (guardRecoveryAnswerAdmits), and `next` names the step after it.
-function guardRecoveryAskOnRecord(projectDir: string): boolean {
-  const marker = readStoredActiveDirectiveMarker(projectDir);
-  return marker?.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE;
+// The engine's last step is current and was delivered as issued, and it is not
+// its recovery question, whose own picked remedy is the one move it carries out
+// (guardRecoveryAnswerAdmits). A step gone stale or superseded since names
+// nothing the person's earlier words still ask for: `next` names the step now.
+function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
+  try {
+    const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
+    return marker !== null && marker.delivery !== "superseded" &&
+      !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
+  } catch {
+    return false;
+  }
 }
 
 // Everything admitted while a plan waits, in one place: the prerequisites
@@ -1234,7 +1254,7 @@ function planWaitAdmits(
   return isPlanApprovalPrerequisite(engineArgs, gateHeld, personSpoke) ||
     askAdmits(engineArgs) || isReadOnlyDiagnostic(engineArgs) || recordedSwitchChangeAdmitted(projectDir, engineArgs) ||
     chatSwitchChangeAdmitted(projectDir, engineArgs) ||
-    engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && !guardRecoveryAskOnRecord(projectDir));
+    engineDirectedWhilePlanWaits(engineArgs, () => personSpoke() && lastStepAdmitsPersonsMoves(projectDir));
 }
 
 function isPlanApprovalPrerequisite(
@@ -2072,12 +2092,14 @@ async function evaluate(
       promptTestingContractMarkers(dispatchPrompt).length > 0;
     // A run of another stage on its own while Code Generation is current (the
     // Reverse Engineering a person asked for once the folder turned out to hold
-    // existing code) is that stage's work, not Code Generation's.
+    // existing code): its steps and its writes inside AI-DLC's own folder are
+    // that stage's work; a write to the workspace source still waits for the
+    // approved plan.
     const otherStageRunning = activeDirective?.version === 2 && activeDirective.kind === "run-stage" &&
       directiveStage !== "" && directiveStage !== GUARDED_STAGE;
     const codeGenerationRelevant =
       directiveStage === GUARDED_STAGE ||
-      (durableStage === GUARDED_STAGE && !otherStageRunning) ||
+      durableStage === GUARDED_STAGE ||
       (guardedDispatch && explicitPlanDispatch);
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
@@ -2096,6 +2118,12 @@ async function evaluate(
             shellCommand: `unknown mutation-capable tool: ${toolName}`,
           };
     if (!guardedDispatch && mutation.targets.length === 0 && !mutation.opaqueShell) {
+      return 0;
+    }
+    if (
+      otherStageRunning && directiveStage !== GUARDED_STAGE && !guardedDispatch &&
+      mutation.targets.every((candidate) => isInsideAidlcSpaces(projectDir, candidate))
+    ) {
       return 0;
     }
     // A file-tool write of the composer's proposal alone passes in every Plan
