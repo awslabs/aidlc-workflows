@@ -240,7 +240,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       const end = body.indexOf("**Autonomous reviewer boundary.**");
       expect(start, `${rel} lacks config alias block`).toBeGreaterThan(-1);
       expect(end, `${rel} lacks config alias end anchor`).toBeGreaterThan(start);
-      const block = body.slice(start, end).trim();
+      // The doctor is named the way each harness's entry is typed ($aidlc on Codex).
+      const block = body.slice(start, end).trim().replaceAll("$aidlc --doctor", "/aidlc --doctor");
       blocks.set(block, [...(blocks.get(block) ?? []), rel]);
     }
     expect(missing).toEqual([]);
