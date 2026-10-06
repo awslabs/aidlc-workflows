@@ -163,7 +163,7 @@ function reviewThroughLog(p: string, args: string[]): string {
   mkdirSync(dirname(join(p, request.reviewFile)), { recursive: true });
   writeFileSync(join(p, request.reviewFile), `**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n` +
     `**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`);
-  const recorded = tool(p, "log", [...args, "--verdict", "READY"]);
+  const recorded = tool(p, "log", [...args.filter((arg) => arg !== "--retry-pending"), "--verdict", "READY"]);
   expect(recorded.status, recorded.out).toBe(0);
   return join(p, request.reviewFile);
 }
@@ -288,6 +288,7 @@ describe("t-checkpoint-off-machine: an approved Unit whose reviewed evidence can
       reviewThroughLog(p, [
         "review", "--stage", status.rereview.stage, "--reviewer", status.rereview.reviewer,
         "--unit", "alpha", "--iteration", String(status.rereview.iteration),
+        ...(status.rereview.command.includes("--retry-pending") ? ["--retry-pending"] : []),
       ]);
     }
     expect(rechecked.length, "no re-check was offered").toBeGreaterThan(0);

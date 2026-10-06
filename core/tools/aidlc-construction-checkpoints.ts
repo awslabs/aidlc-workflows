@@ -676,21 +676,26 @@ function snapshot(
         const recordNotHere = review !== null && review !== undefined && binding !== null && !acceptsChanges() &&
           !completionCarriesVerifiedReview(projectDir, binding, review.block) &&
           reviewRecordNotHere(projectDir, binding, review.block);
-        const moved = receipts.unitSourceMoved.get(unit) ??
+        const changed = receipts.unitSourceMoved.get(unit) ??
           (review && (
             auditBlockField(review.block, "Artifact Fingerprint") !== artifact ||
             (receipts.unitStale.has(unit) && listing !== null)
-          ) ? receipts.unitStaleProgress.get(unit) : undefined) ??
-          (recordNotHere
-            ? { nextIteration: (receipts.unitIterations.get(unit) ?? 0) + 1, recoverySpent: false }
-            : undefined);
-        if (review && moved && !moved.recoverySpent && !receipts.unitPending.has(unit)) {
+          ) ? receipts.unitStaleProgress.get(unit) : undefined);
+        // That review still counts as waiting for its verdict, so the re-check
+        // repeats the same iteration and records it again here.
+        const retryPending = changed === undefined && recordNotHere;
+        const moved = changed ?? (retryPending
+          ? { nextIteration: receipts.unitIterations.get(unit) ?? 1, recoverySpent: false }
+          : undefined);
+        if (review && moved && !moved.recoverySpent && (!receipts.unitPending.has(unit) || retryPending)) {
           const reviewer = stage.reviewer!;
           const iteration = moved.nextIteration;
           recheckable++;
           rereview ??= {
             stage: slug, reviewer, iteration,
-            command: renderReviewRequestCommand({ projectDir, stage: slug, reviewer, unit, iteration }),
+            command: renderReviewRequestCommand({
+              projectDir, stage: slug, reviewer, unit, iteration, ...(retryPending ? { retryPending: true } : {}),
+            }),
           };
         }
       } else if (request && auditBlockField(request.block, "Recovery") === "stale-receipt") {

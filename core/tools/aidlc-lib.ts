@@ -28415,6 +28415,8 @@ interface ReviewCommandInput {
   unit?: string;
   single?: boolean;
   iteration: number;
+  /** Repeat the same iteration's request (a review whose record is not here). */
+  retryPending?: boolean;
 }
 
 // The review request and its verdict, rendered once: the same scope selectors
@@ -28432,6 +28434,7 @@ function renderReviewCommand(input: ReviewCommandInput, verdict: boolean): strin
       ...(input.single ? ["--single"] : []),
       "--iteration",
       String(input.iteration),
+      ...(input.retryPending && !verdict ? ["--retry-pending"] : []),
       ...(verdict ? ["--verdict", "<READY|NOT-READY>"] : []),
       "--project-dir",
       input.projectDir,
