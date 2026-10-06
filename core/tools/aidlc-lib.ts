@@ -17784,9 +17784,9 @@ export function reviewAttemptAccounting(
 
   // A solo unit-major walk hands a Unit's finished step back when its work is
   // gone, and the Unit starts that step again. That run of the step gets the
-  // stage's review passes again, so a redo the engine asked for can finish
-  // under any review cap. The passes keep their numbers, and the attempt and
-  // its records stay as they are.
+  // stage's review passes and its one stale-review recovery again, so a redo
+  // the engine asked for can finish under any review cap. The passes keep their
+  // numbers, and the attempt and its records stay as they are.
   let restart: AuditShardEvent | null = null;
   if (unitMajor && !isTeamUnitOwnership(stateContent) && unit !== undefined && workflow === undefined) {
     const floorRow = floor < 0 ? null : events[floor];
@@ -17854,11 +17854,13 @@ export function reviewAttemptAccounting(
       // dispatch of new bytes, so it neither counts again nor inherits a retry.
       const previous = pendingRequests.get(iteration);
       const replacement = reviewRequestReplaces(entry.block, previous);
+      // The restarted step's passes and its one stale-review recovery are its own.
+      const sinceRestart = restart === null || attemptEventDefinitelyBefore(restart, entry);
       if (auditBlockField(entry.block, "Retry") !== "pending-request" && !replacement) {
         requestCount++;
-        if (restart === null || attemptEventDefinitelyBefore(restart, entry)) budgetCount++;
+        if (sinceRestart) budgetCount++;
       }
-      if (auditBlockField(entry.block, "Recovery") === "stale-receipt") {
+      if (auditBlockField(entry.block, "Recovery") === "stale-receipt" && sinceRestart) {
         recoveryIteration = iteration;
         recoverySpent = true;
       }
