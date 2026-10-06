@@ -865,11 +865,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
 
       const ensemble = read(`${protocolRoot}/stage-protocol-ensemble.md`);
+      // The Kiro CLI subsection runs to the next heading; a shipped tree
+      // carries only its own tool's subsection, so that may be the end.
       const cliStart = ensemble.indexOf("### Kiro CLI\n");
-      const ideStart = ensemble.indexOf("### Kiro IDE\n", cliStart);
       expect(cliStart).toBeGreaterThan(-1);
-      expect(ideStart).toBeGreaterThan(cliStart);
-      const binding = ensemble.slice(cliStart, ideStart);
+      const next = ensemble.slice(cliStart + 1).search(/\n#{2,3} /);
+      const binding = ensemble.slice(cliStart, next === -1 ? undefined : cliStart + 1 + next);
       expect(binding, protocolRoot).toContain(citation);
       expect(binding, protocolRoot).toContain("native preload");
       expect(binding, protocolRoot).not.toMatch(residualPaste);

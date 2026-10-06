@@ -88,17 +88,31 @@ describe("t-own-harness-bindings", () => {
     expect(wrong).toEqual([]);
   });
 
-  test("a tree's own subsection ships whole", async () => {
-    const { keepOwnHarnessBindings } = await import("../../scripts/harness-bindings.ts");
-    const module = readFileSync(
-      join(REPO_ROOT, "dist", "claude", ".claude", "aidlc-common", "protocols", "stage-protocol-construction.md"),
-      "utf-8",
-    );
-    // Shipping is idempotent: the tree's copy is already cut to its own run.
-    expect(keepOwnHarnessBindings(module, "claude", "stage-protocol-construction.md")).toBe(module);
-    const own = module.slice(module.indexOf("### Claude Code\n"), module.indexOf("### Grouped Plan Approval\n"));
-    expect(own).toContain("**`gate: \"unresolved\"`**");
-    expect(own).toContain("**Per-unit iteration (`directive.unit`).**");
+  test("a tree's own subsection ships whole", () => {
+    // Every line of a tool's authored subsection ships; only token lines differ.
+    const section = (text: string, own: string) => {
+      const from = text.indexOf(`### ${own}\n`);
+      const rest = text.slice(from + 1).search(/\n#{2,3} /);
+      return text.slice(from, rest === -1 ? undefined : from + 1 + rest).split("\n");
+    };
+    const differ: string[] = [];
+    for (const [tree, dir, own] of TREES) {
+      for (const module of MODULES) {
+        const core = section(readFileSync(join(REPO_ROOT, "core", "aidlc-common", "protocols", module), "utf-8"), own);
+        const shipped = section(
+          readFileSync(join(REPO_ROOT, "dist", tree, dir, "aidlc-common", "protocols", module), "utf-8"),
+          own,
+        );
+        if (shipped.length !== core.length) {
+          differ.push(`${tree} ${module}: ${shipped.length} lines shipped, ${core.length} authored`);
+          continue;
+        }
+        core.forEach((line, i) => {
+          if (!line.includes("{{") && line !== shipped[i]) differ.push(`${tree} ${module} line ${i + 1}`);
+        });
+      }
+    }
+    expect(differ).toEqual([]);
   });
 
   test("the filter keeps fenced text, nested headings and the text after the run", async () => {

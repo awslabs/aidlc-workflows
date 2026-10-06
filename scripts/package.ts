@@ -67,6 +67,7 @@ import {
   reviewerAgentSet,
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
+import { keepOwnHarnessBindings } from "./harness-bindings.ts";
 import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
@@ -842,6 +843,10 @@ function buildTree(
       // Manifest keys are POSIX; normalize the platform separator so the
       // lookup works on Windows too.
       const harnessRel = join(finalDst, rel).split(sep).join("/");
+      // A protocol module's per-tool binding subsections: this tree keeps its own.
+      if (/^aidlc-common\/protocols\/[^/]+\.md$/.test(harnessRel)) {
+        out = Buffer.from(keepOwnHarnessBindings(out.toString("utf-8"), m.name, harnessRel), "utf-8");
+      }
       const fmLines = fmAdditions.get(harnessRel);
       if (fmLines) {
         out = Buffer.from(
