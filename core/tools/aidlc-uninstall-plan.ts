@@ -8,7 +8,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { VERSION_ID } from "./aidlc-channel.ts";
-import { renderCompletion, type Shell } from "./aidlc-completions.ts";
+import { isGeneratedCompletion, renderCompletion, type Shell } from "./aidlc-completions.ts";
 import { sha256File } from "./aidlc-distribution.ts";
 import {
   binRoot,
@@ -95,6 +95,50 @@ function noLinks(path: string, root: string): boolean {
     if (index < parts.length) cursor = join(cursor, parts[index]);
   }
   return true;
+}
+
+const SMALL_FILE_BYTES = 1024 * 1024;
+
+function smallRegularFile(path: string): Buffer | null {
+  if (!existsWithoutFollowing(path)) return null;
+  const stat = lstatSync(path);
+  return stat.isFile() && stat.size <= SMALL_FILE_BYTES ? readFileSync(path) : null;
+}
+
+// The hash a completion file must still have to be removed: its own bytes when
+// they are an untouched AI-DLC render (any release's), else this release's.
+function completionExpected(path: string, shell: Shell, root: string): string {
+  const own = `sha256:${createHash("sha256").update(renderCompletion(shell)).digest("hex")}`;
+  try {
+    const bytes = noLinks(path, root) ? smallRegularFile(path) : null;
+    if (!bytes) return own;
+    const text = bytes.toString("utf-8");
+    return Buffer.from(text, "utf-8").equals(bytes) && isGeneratedCompletion(shell, text)
+      ? `sha256:${createHash("sha256").update(bytes).digest("hex")}`
+      : own;
+  } catch {
+    return own;
+  }
+}
+
+// A release plugin folder carries the marker its build wrote, naming the
+// plugin and harness of the folder it sits in.
+const RELEASE_PLUGIN_MARKER = ".aidlc-plugin-projection.json";
+const RELEASE_NAME = /^[a-z][a-z0-9-]*$/;
+
+function realDirectory(path: string): boolean {
+  return existsWithoutFollowing(path) && lstatSync(path).isDirectory();
+}
+
+function releasePluginFolder(tree: string, plugin: string, harness: string): boolean {
+  try {
+    const bytes = smallRegularFile(join(tree, RELEASE_PLUGIN_MARKER));
+    const marker = bytes && JSON.parse(bytes.toString("utf-8")) as Record<string, unknown> | null;
+    return !!marker && typeof marker === "object" && marker.schema === 1 &&
+      marker.producer === "aidlc-plugin-build" && marker.plugin === plugin && marker.harness === harness;
+  } catch {
+    return false;
+  }
 }
 
 type Inventory = {
@@ -208,6 +252,32 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
     }
   };
 
+  // A version installed before full file inventories existed records only its
+  // runtime. The plugin folders its release unpacked beside it carry that
+  // release's marker, so they go with the version; anything else stays.
+  const addReleasePluginFolders = (version: string): void => {
+    const plugins = join(version, "plugins");
+    if (!noLinks(plugins, root) || !realDirectory(plugins)) return;
+    const addTree = (directory: string): void => {
+      for (const name of readdirSync(directory)) {
+        const path = join(directory, name);
+        const stat = lstatSync(path);
+        if (stat.isDirectory()) addTree(path);
+        else if (stat.isFile()) addFile(path);
+      }
+    };
+    for (const plugin of readdirSync(plugins)) {
+      const pluginRoot = join(plugins, plugin);
+      if (!RELEASE_NAME.test(plugin) || !realDirectory(pluginRoot)) continue;
+      for (const harness of readdirSync(pluginRoot)) {
+        const tree = join(pluginRoot, harness);
+        if (RELEASE_NAME.test(harness) && realDirectory(tree) && releasePluginFolder(tree, plugin, harness)) {
+          addTree(tree);
+        }
+      }
+    }
+  };
+
   const versions = resolve(versionsRoot());
   if (existsWithoutFollowing(versions)) {
     if (!noLinks(versions, root) || !lstatSync(versions).isDirectory()) {
@@ -267,6 +337,7 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
             executableHash === `sha256:${asset.sha256}`
           );
           if (binary) addFile(executablePath, `sha256:${binary.sha256}`);
+          addReleasePluginFolders(version);
         }
         addFile(inventory.path, inventory.expected);
         addFile(manifestPath, manifestExpected);
@@ -283,8 +354,8 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
   for (const [shell, name] of Object.entries({
     bash: "aidlc.bash", zsh: "_aidlc", fish: "aidlc.fish", powershell: "aidlc.ps1",
   })) {
-    const expected = `sha256:${createHash("sha256").update(renderCompletion(shell as Shell)).digest("hex")}`;
-    addFile(join(root, "completions", name), expected);
+    const path = join(root, "completions", name);
+    addFile(path, completionExpected(path, shell as Shell, root));
   }
   if (existsWithoutFollowing(command)) {
     const stat = lstatSync(command);

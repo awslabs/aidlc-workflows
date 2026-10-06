@@ -1717,11 +1717,17 @@ Uninstall uses an explicit list of installer-owned files and checks their
 contents before deleting them. It does not recursively remove installation or
 version directories. Directories are removed only when empty; project trees,
 unlisted files, changed files, and linked targets are preserved. The result
-reports unowned or changed paths kept for review.
+lists, once, each path it left because AI-DLC did not install it or it changed
+after install.
 
 New installations record a full per-version `installed-files.json` inventory,
 whose hash is stored in `version.json`. Older installations use their verified
-runtime inventory where available; files without ownership evidence are kept.
+runtime inventory where available, plus the plugin folders their release
+unpacked beside it, which carry the marker the release build wrote; other files
+without ownership evidence are kept. A shell completion counts as AI-DLC's when
+it is exactly what an AI-DLC release renders, so the completions an earlier
+release wrote while it updated to this one are removed, and an edited one is
+kept.
 Without `--purge`, machine config, update cache, pin registrations, and the
 default harness are also preserved. `--purge` selects those known machine
 records for removal; it does not broaden deletion to unrelated files.
@@ -1738,7 +1744,8 @@ project roots, as well as root-owned, package-manager-owned, or
 mixed-ownership commands. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
-exits. An interrupted continuation can resume only with its validated file plan.
+exits; uninstall is done when the `aidlc` command is no longer found. An
+interrupted continuation can resume only with its validated file plan.
 Older journals without such a plan are refused and left for inspection. See
 [Transactions and Recovery](#transactions-and-recovery) for how a failed
 cleanup is reported and retried.
