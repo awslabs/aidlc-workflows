@@ -794,6 +794,17 @@ test("fails on its first attempt only", () => {
 });`,
   steady: `${RETRY_PRELUDE}
 test("passes", () => expect(1).toBe(1));`,
+  timesOutOnce: `${RETRY_PRELUDE}
+test("runs past its case timeout on its first attempt only", async () => {
+  const marker = join(observer, name + ".timed-out-once");
+  if (!existsSync(marker)) {
+    writeFileSync(marker, "1");
+    await Bun.sleep(3_000);
+  }
+}, 500);`,
+  timeoutBesideFailure: `${RETRY_PRELUDE}
+test("runs past its case timeout", async () => { await Bun.sleep(3_000); }, 500);
+test("fails an assertion", () => expect(1).toBe(2));`,
   alwaysFails: `${RETRY_PRELUDE}
 test("fails every time", () => expect(1).toBe(2));`,
   hangs: `${RETRY_PRELUDE}
@@ -855,6 +866,27 @@ describe("merge-queue retry of ordinary tiers through the public runner", () => 
     for (const retry of report.retries) {
       expect(retry).toMatchObject({ passedOnRetry: true, firstAttempt: { failedCases: 1 }, secondAttempt: { status: "PASS", failedCases: 0 } });
     }
+  });
+
+  test("a file whose only failure is a case timeout is retried, and the retry says so", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-times-out-once.test.ts": RETRY_CASES.timesOutOnce });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status, result.out + result.failures).toBe(0);
+    expect(runs()).toEqual(["t-times-out-once", "t-times-out-once"]);
+    expect(result.out).toContain("=== RETRY t-times-out-once.test.ts (first attempt failed 1 case(s), each by its case timeout;");
+    const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
+    expect(retry).toMatchObject({ passedOnRetry: true, firstAttempt: { failedCases: 1, caseTimeoutsOnly: true } });
+  });
+
+  test("a case timeout beside an assertion failure follows the ordinary rule", () => {
+    const { fixture, observer, runs } = retryFixture({ "integration/t-timeout-beside-failure.test.ts": RETRY_CASES.timeoutBesideFailure });
+    const result = fixture.run(["--integration", "--no-llm", "--file-retries", "1"], { AIDLC_RETRY_OBSERVER: observer });
+    expect(result.status).toBe(1);
+    expect(runs()).toEqual(["t-timeout-beside-failure", "t-timeout-beside-failure"]);
+    expect(result.out).not.toContain("each by its case timeout");
+    const [retry] = JSON.parse(readFileSync(join(result.stamp, "retries.json"), "utf8")).retries;
+    expect(retry.firstAttempt.caseTimeoutsOnly).toBeUndefined();
+    expect(retry).toMatchObject({ passedOnRetry: false, firstAttempt: { failedCases: 2 } });
   });
 
   test("a second failure stays a failure", () => {

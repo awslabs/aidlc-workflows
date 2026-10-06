@@ -45,7 +45,7 @@ import {
   TestBudgetExhaustedError,
 } from "./harness/test-budget.ts";
 import { buildMeta, renderMeta } from "./lib/bun-junit-to-meta.ts";
-import { ISOLATED_RETRY_MAX_MS, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
+import { CASE_TIMEOUT_RETRY_MAX_MS, ISOLATED_RETRY_MAX_MS, onlyCaseTimeouts, ORDINARY_RETRY_MAX_MS, preserveFirstAttempt, retryEligible, retryPassed } from "./lib/file-retry.ts";
 import {
   type OrderWeights,
   orderLongestFirst,
@@ -123,6 +123,8 @@ interface FileExecution {
   evidenceComplete?: boolean;
   evidenceError?: string;
   junitPath?: string;
+  /** Every failed case failed by running past its case timeout. */
+  caseTimeoutsOnly?: boolean;
 }
 
 function usage(): string {
@@ -172,7 +174,9 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --file-retries N  Retry a short assertion-failed file once (0 or 1): in a fresh
                   isolated worker with --isolated-files, otherwise in a fresh
                   process for smoke/unit/integration (the merge queue). A
-                  timeout, crash or cleanup failure is never retried.
+                  file whose only failures are case timeouts may run up to 25
+                  minutes and still retry. A file past its deadline, a crash
+                  or a cleanup failure is never retried.
                   Known serial driver families may overlap; assertions are unchanged.
   --e2e-plan      Print the isolated file inventory/resource plan; run no tests or builds.
                   Requires --e2e or --isolated-files; implies --isolated-e2e.
@@ -1196,6 +1200,7 @@ async function runBunTestFile(
     evidenceComplete: evidence.complete,
     evidenceError: evidence.complete ? undefined : evidence.error,
     junitPath: junitXml,
+    ...(status === "FAIL" && onlyCaseTimeouts(xml) ? { caseTimeoutsOnly: true } : {}),
     // Diagnostic evidence, never grounds for changing an assertion or retrying.
     throttlingSignals: (run.output.match(
       /ThrottlingException|TooManyRequestsException|(?:HTTP|status(?:Code)?)\s*[:=]?\s*429\b|rate[_ ]limit[_ ]exceeded/gi,
@@ -1300,7 +1305,8 @@ async function runFileWithRetry(file: string, parallelMode: boolean): Promise<Fi
     return first;
   }
   const log = kept.log;
-  await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${log ? `; its log is ${log}` : ""}) ===\n`);
+  const timedOutCases = first.caseTimeoutsOnly ? ", each by its case timeout" : "";
+  await say(`=== RETRY ${basename(file)} (first attempt failed ${first.cases.failed} case(s)${timedOutCases}${log ? `; its log is ${log}` : ""}) ===\n`);
   let second = await runBunTestFile(file, parallelMode);
   if (!second) return first;
   const passedOnRetry = retryPassed(first, second);
@@ -1323,7 +1329,10 @@ async function runFileWithRetry(file: string, parallelMode: boolean): Promise<Fi
     file: relative(REPO_ROOT, file).replaceAll("\\", "/"),
     name,
     passedOnRetry,
-    firstAttempt: { failedCases: first.cases.failed, wallTimeMs: first.wallTimeMs, log },
+    firstAttempt: {
+      failedCases: first.cases.failed, wallTimeMs: first.wallTimeMs, log,
+      ...(first.caseTimeoutsOnly ? { caseTimeoutsOnly: true } : {}),
+    },
     secondAttempt,
   });
   if (passedOnRetry) {
@@ -1825,6 +1834,7 @@ function writeVerboseSummary(): void {
     // run allowed retries, so "no retries" is distinguishable from "not enabled".
     writeFileSync(join(logDir, "retries.json"), `${JSON.stringify({
       maxFirstAttemptSeconds: ORDINARY_RETRY_MAX_MS / 1000,
+      maxCaseTimeoutFirstAttemptSeconds: CASE_TIMEOUT_RETRY_MAX_MS / 1000,
       platform: process.platform,
       retries: ordinaryRetries,
     }, null, 2)}\n`);

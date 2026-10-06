@@ -669,12 +669,15 @@ is seen where it was introduced. The merge queue is different, because one
 flaky file drops the PR and rebuilds every group queued behind it. There,
 `ci.yml` passes `retry-once` to the smoke, unit and integration legs, which run
 the tier with `--file-retries 1`: a file whose first attempt failed assertions
-(failed cases, complete JUnit evidence, no timeout, no cleanup failure, at most
-ten minutes, and at least five minutes left in the run) runs once more in a
-fresh process and temporary directory. The rule lives in
+(failed cases, complete JUnit evidence, no file timeout, no cleanup failure, at
+most ten minutes, and at least five minutes left in the run) runs once more in a
+fresh process and temporary directory. A case that ran past its own case timeout
+is a failed case, and a file whose only failures are such case timeouts (a slow
+Windows runner timing out hook-spawning cases) may have run up to 25 minutes and
+still gets its one retry; `retries.json` marks it `caseTimeoutsOnly`. The rule lives in
 `tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
-nonzero exit without failed cases, a file that executed no cases, a timeout,
-and a second failure are never retried. Only a retry that passes every case the
+nonzero exit without failed cases, a file that executed no cases, a file that
+ran past its deadline, and a second failure are never retried. Only a retry that passes every case the
 first attempt ran replaces the first failure: a second failure, or a retry that
 skips one of those cases or executes none, stays a failure.
 The retry starts only after the first attempt's evidence is moved aside whole;
