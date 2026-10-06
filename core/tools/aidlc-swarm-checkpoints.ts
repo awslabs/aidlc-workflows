@@ -203,11 +203,12 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
     // What finalize kept after this review under relaxed or off: the review
     // stands for the kept content, and finalize already said so once. The
     // review row reaches this audit at merge, after finalize's row, so the
-    // two are ordered by time, not by position.
+    // two are ordered by time (to the second, so the same second counts), not
+    // by position.
     const keptRows = review ? rows.filter((row) => row.event === "CHANGE_ACCEPTED" &&
       auditBlockField(row.block, "Checkpoint") === "review-receipt" &&
       auditBlockField(row.block, "Stage") === STAGE && auditBlockField(row.block, "Unit") === unit &&
-      review.timestamp < row.timestamp) : [];
+      review.timestamp <= row.timestamp) : [];
     const reviewedOrKept = (field: string): string | null => {
       const recorded = review ? auditBlockField(review.block, field) : null;
       const kept = latest(keptRows.filter((row) => auditBlockField(row.block, "Recorded") === recorded));
@@ -244,10 +245,18 @@ function snapshot(pd: string, batch: number, requested: string[], stateContent?:
       );
       if (!manifest.ok) throw new Error(manifest.reason);
       const committed = manifest.listing;
+      if (!review) throw new Error("source manifest or claimed source does not match the native reviewed binding");
       // A Unit finalize kept a change for lands as it was kept, not as reviewed.
-      if (!review || (keptRows.length === 0 && unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256) !==
-        auditBlockField(review.block, "Unit Source Fingerprint"))) {
-        throw new Error("source manifest or claimed source does not match the native reviewed binding");
+      // A list of files changed after that is kept under relaxed or off.
+      const bound = unitSourceFingerprint(committed, manifest, manifest.rawBytesSha256);
+      const reviewedBinding = auditBlockField(review.block, "Unit Source Fingerprint");
+      if (keptRows.length === 0 && bound !== reviewedBinding) {
+        const error = "source manifest or claimed source does not match the native reviewed binding";
+        if (!acceptsChanges) throw new Error(error);
+        changedAfterCheck(unit, `${unit}: ${error}`, {
+          changed: null, recorded: reviewedBinding ?? "", current: bound,
+          notice: `The ${unitPlainName(unit)} Unit's list of files changed after its batch was checked. Kept them.`,
+        });
       }
       const parentClaims = {
         claims: new Set([...manifest.claims].map((key) => repos.length ? `${repo}${key}` : key)),

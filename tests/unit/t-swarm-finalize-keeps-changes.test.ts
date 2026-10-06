@@ -9,8 +9,8 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { auditBlockField, boltSlugForUnit, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { isAbsolute, join } from "node:path";
+import { auditBlockField, auditShardDir, boltSlugForUnit, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codeGenerationRecordDir } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 import { seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -47,16 +47,32 @@ function reviewedThenChanged(policy: string, edit: Edit) {
   return { pd, finalized, row };
 }
 
-function landAndStatus(pd: string) {
+function land(pd: string): void {
   const merged = runCheckpointTool(pd, "tools/aidlc-worktree.ts", [
     "merge", "--slug", boltSlugForUnit("alpha"), "--target", "main", "--strategy", "squash", "--project-dir", pd,
   ]);
   expect(merged.code, `${merged.out}\n${merged.err}`).toBe(0);
+}
+
+function landAndStatus(pd: string) {
+  land(pd);
+  return batchStatus(pd);
+}
+
+function batchStatus(pd: string) {
   const status = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
     "swarm-checkpoint", "--action", "status", "--batch", "1", "--units", "alpha", "--project-dir", pd,
   ]);
   expect(status.code, `${status.out}\n${status.err}`).toBe(0);
   return JSON.parse(status.out) as { ready: boolean; errors: string[]; changed_after_check: boolean; notices?: string[] };
+}
+
+function ask(pd: string): string[] {
+  const asked = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
+    "swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", "alpha", "--session", "keeps-changes", "--project-dir", pd,
+  ]);
+  expect(asked.code, `${asked.out}\n${asked.err}`).toBe(0);
+  return JSON.parse(asked.out).notices ?? [];
 }
 
 const accepted = (pd: string) => readAuditShardEvents(pd).filter((row) => row.event === "CHANGE_ACCEPTED");
@@ -97,13 +113,47 @@ describe("a swarm Unit changed after its review", () => {
       const status = landAndStatus(pd);
       expect(status.errors).toEqual([]);
       expect(status.ready).toBe(true);
-      const asked = runCheckpointTool(pd, "tools/aidlc-bolt.ts", [
-        "swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", "alpha", "--session", "keeps-changes", "--project-dir", pd,
-      ]);
-      expect(asked.code, `${asked.out}\n${asked.err}`).toBe(0);
       // Said once, at finalize: the batch adds no second row and no second line.
-      expect(JSON.parse(asked.out).notices ?? []).toEqual([]);
+      expect(ask(pd)).toEqual([]);
       expect(accepted(pd)).toHaveLength(1);
     });
   }
+
+  // Audit timestamps are to the second: a finalize in the review's own second
+  // still counts as after it.
+  test("a change kept in the same second as the review still leaves the batch ready", () => {
+    const { pd, finalized } = reviewedThenChanged("off (set by you)", (p) => writeUnitSource(p, "alpha", 3));
+    expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+    land(pd);
+    const events = readAuditShardEvents(pd);
+    const review = events.filter((row) => row.event === "REVIEW_COMPLETED").at(-1)!;
+    const kept = events.find((row) => row.event === "CHANGE_ACCEPTED")!;
+    const path = isAbsolute(kept.shard) ? kept.shard : join(auditShardDir(pd)!, kept.shard);
+    const text = readFileSync(path, "utf-8");
+    const sameSecond = kept.block.replace(`**Timestamp**: ${kept.timestamp}`, `**Timestamp**: ${review.timestamp}`);
+    expect(sameSecond).not.toBe(kept.block);
+    expect(text).toContain(kept.block);
+    writeFileSync(path, text.replace(kept.block, sameSecond));
+    const status = batchStatus(pd);
+    expect(status.errors).toEqual([]);
+    expect(status.ready).toBe(true);
+  });
+
+  test("its list of files changed after finalize: strict names it; off keeps it with one line", () => {
+    for (const policy of ["strict", "off (set by you)"]) {
+      const { pd, finalized, row } = reviewedThenChanged(policy, () => {});
+      expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
+      expect(row?.change_notices ?? []).toEqual([]);
+      land(pd);
+      appendFileSync(join(codeGenerationRecordDir(pd, "alpha"), "source-manifest.json"), "\n");
+      const status = batchStatus(pd);
+      if (policy === "strict") {
+        expect(status.errors.join("\n")).toContain("source manifest or claimed source does not match the native reviewed binding");
+        continue;
+      }
+      expect(status.errors).toEqual([]);
+      expect(status.ready).toBe(true);
+      expect(ask(pd)).toEqual(["The alpha Unit's list of files changed after its batch was checked. Kept them."]);
+    }
+  });
 });
