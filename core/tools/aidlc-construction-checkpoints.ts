@@ -5,7 +5,7 @@
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -291,6 +291,37 @@ function readProof(root: string, path: string): ConstructionCheckpointProof | nu
     if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError) return null;
     throw error;
   }
+}
+
+// Whether this checkout has no proof file for the Unit at all: the proof
+// folder is not committed, so a fresh clone or another machine has none.
+// Anything at the path (a file, a link, a folder) is a proof that must read.
+function proofFileAbsent(root: string, path: string): boolean {
+  try {
+    lstatSync(recordFileTargetOrThrow(root, path));
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
+// What a committed verification row records of its proof, read the way the
+// proof file is: the row is written with the proof, and Verified true means
+// the check passed with the Unit's evidence unchanged.
+function proofFromVerificationRow(
+  block: string, kind: ConstructionCheckpointKind, unit: string,
+): Pick<ConstructionCheckpointProof, "id" | "kind" | "unit" | "fingerprint" | "command_sha256" |
+  "verified" | "evidence_unchanged" | "exit_code" | "signal" | "error" | "finished_at"> | null {
+  const id = auditBlockField(block, "Verification Id");
+  const fingerprint = auditBlockField(block, "Fingerprint");
+  const commandSha256 = auditBlockField(block, "Command SHA-256");
+  const verified = auditBlockField(block, "Verified") === "true";
+  if (!id || !fingerprint || !commandSha256 || !/^[a-f0-9]{64}$/.test(commandSha256)) return null;
+  return {
+    id, kind, unit, fingerprint, command_sha256: commandSha256, verified, evidence_unchanged: verified,
+    exit_code: auditBlockField(block, "Exit Code") === "0" ? 0 : null, signal: null, error: null,
+    finished_at: verified ? "recorded" : null,
+  };
 }
 
 interface Snapshot {
@@ -666,6 +697,7 @@ function snapshot(
   });
   const proofPath = proofRelativePath(unit, kind);
   const proof = readProof(root, proofPath);
+  const proofFile = proof;
   const verification = onlyLatest(rows.filter((row) =>
     row.event === "CHECKPOINT_VERIFICATION_RECORDED" &&
     auditBlockField(row.block, "Unit") === unit &&
@@ -673,7 +705,10 @@ function snapshot(
     eventMatchesClaimAttempt(projectDir, row.block, unit),
   ));
   const ready = errors.length === 0;
-  const verifiedWith = (commandSha256: string | undefined): boolean => ready && proof !== null &&
+  const verifiedWith = (
+    commandSha256: string | undefined,
+    proof: ReturnType<typeof proofFromVerificationRow> = proofFile,
+  ): boolean => ready && proof !== null &&
     commandSha256 !== undefined &&
     proof.kind === kind && proof.unit === unit &&
     proof.command_sha256 === commandSha256 &&
@@ -687,22 +722,34 @@ function snapshot(
     auditBlockField(verification.block, "Command SHA-256") === commandSha256 &&
     auditBlockField(verification.block, "Verified") === "true";
   const verifiedNow = verifiedWith(shared.verificationCommand?.sha256);
-  const gateApproved = gate?.event === "GATE_APPROVED" &&
+  const gateApprovedWith = (commandSha256: string | undefined): boolean => gate?.event === "GATE_APPROVED" &&
     auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Stage") === stages.at(-1) &&
     auditBlockField(gate.block, "Stages") === stages.join(", ") &&
     auditBlockField(gate.block, "Gate Scope") === "unit-end" &&
     auditBlockField(gate.block, "Fingerprint") === fingerprint &&
-    auditBlockField(gate.block, "Verification Command SHA-256") === proof?.command_sha256 &&
+    commandSha256 !== undefined &&
+    auditBlockField(gate.block, "Verification Command SHA-256") === commandSha256 &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&
     eventMatchesClaimAttempt(projectDir, gate.block, unit) &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
       (kind !== "skeleton" && auditBlockField(gate.block, "Autonomous") === "true"));
+  const gateApproved = gateApprovedWith(proof?.command_sha256);
   // A Unit approved under an earlier verification command keeps its approval
   // when the person approves a new command: the new one checks the Units
   // still to be approved.
-  const verified = verifiedNow || (gateApproved && verifiedWith(proof?.command_sha256));
-  const approved = verified && gateApproved;
+  let verified = verifiedNow || (gateApproved && verifiedWith(proof?.command_sha256));
+  let approved = verified && gateApproved;
+  // A checkout with no proof file at all (a fresh clone, another machine):
+  // the committed verification row stands in for it, for a Unit already
+  // approved whose evidence is unchanged since. Nothing is run again.
+  if (!approved && proof === null && verification !== null && proofFileAbsent(root, proofPath)) {
+    const committed = proofFromVerificationRow(verification.block, kind, unit);
+    if (committed && gateApprovedWith(committed.command_sha256) && verifiedWith(committed.command_sha256, committed)) {
+      verified = true;
+      approved = true;
+    }
+  }
   const approvedBefore = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!];
   // A re-check of documents during the Unit's build is its usual checkpoint.
