@@ -65,11 +65,13 @@ function project(withWork = true): string {
   const dir = mkdtempSync(join(tmpdir(), "t-front-gate-"));
   created.push(dir);
   cpSync(KIRO_IDE_TREE, join(dir, ".kiro"), { recursive: true });
-  const lib = join(dir, ".kiro", "tools", "aidlc-lib.ts");
-  writeFileSync(
-    lib,
-    `require("node:fs").writeFileSync(process.env.T_ENGINE_LOADED ?? "/dev/null", "loaded");\n${readFileSync(lib, "utf-8")}`,
-  );
+  // The adapter marks the full hook path; the library marks the engine loading.
+  for (const [file, variable] of [["tools/aidlc-lib.ts", "T_ENGINE_LOADED"], ["hooks/aidlc-kiro-adapter.ts", "T_HOOK_RAN"]]) {
+    const path = join(dir, ".kiro", file);
+    const source = readFileSync(path, "utf-8");
+    const shebang = source.startsWith("#!") ? `${source.slice(0, source.indexOf("\n") + 1)}` : "";
+    writeFileSync(path, `${shebang}if (process.env.${variable}) require("node:fs").writeFileSync(process.env.${variable}, "x");\n${source.slice(shebang.length)}`);
+  }
   if (!withWork) return dir;
   const intents = intentsDirOf(dir, DEFAULT_SPACE);
   cpSync(join(KIRO_IDE_TREE, "tools", "data", "memory-seed"), join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), {
@@ -125,8 +127,9 @@ function markTime(dir: string, hook: Gated): number {
 
 let calls = 0;
 /** One shell command's PostToolUse call through the dispatcher, as Kiro IDE runs it. */
-function shellHook(dir: string, target: string, env: Record<string, string> = {}): { code: number; engineLoaded: boolean } {
+function shellHook(dir: string, target: string, env: Record<string, string> = {}): { code: number; ran: boolean; engineLoaded: boolean } {
   const loaded = join(dir, `engine-loaded-${++calls}`);
+  const ran = join(dir, `hook-ran-${calls}`);
   const payload = JSON.stringify({
     session_id: "sess_front_gate",
     hook_event_name: target === "enforce-approval-gate" ? "PreToolUse" : "PostToolUse",
@@ -139,6 +142,7 @@ function shellHook(dir: string, target: string, env: Record<string, string> = {}
     ...process.env,
     CLAUDE_PROJECT_DIR: dir,
     T_ENGINE_LOADED: loaded,
+    T_HOOK_RAN: ran,
     ...env,
   };
   delete childEnv.USER_PROMPT;
@@ -152,7 +156,16 @@ function shellHook(dir: string, target: string, env: Record<string, string> = {}
     env: childEnv as NodeJS.ProcessEnv,
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });
-  return { code: result.status ?? -1, engineLoaded: existsSync(loaded) };
+  return { code: result.status ?? -1, ran: existsSync(ran), engineLoaded: existsSync(loaded) };
+}
+
+// Skipped: the hook never ran, and the engine never loaded. On Windows the
+// dispatcher itself loads the engine library at start (its uninstall recovery
+// check), so there only the hook is measured.
+function expectSkipped(call: { code: number; ran: boolean; engineLoaded: boolean }): void {
+  expect(call.code).toBe(0);
+  expect(call.ran).toBe(false);
+  if (process.platform !== "win32") expect(call.engineLoaded).toBe(false);
 }
 
 /** The full hook runs once on aged files and finds nothing to do. */
@@ -160,7 +173,7 @@ function settled(dir: string, hook: Gated): void {
   ageInputs(dir);
   const first = shellHook(dir, hook);
   expect(first.code).toBe(0);
-  expect(first.engineLoaded).toBe(true);
+  expect(first.ran).toBe(true);
 }
 
 function currentStage(dir: string): string {
@@ -171,23 +184,19 @@ describe("a shell command that changed nothing the hook reads skips the engine",
   test.each([...GATED])("%s: the second call does not load the engine", (hook) => {
     const dir = project();
     settled(dir, hook);
-    const second = shellHook(dir, hook);
-    expect(second.code).toBe(0);
-    expect(second.engineLoaded).toBe(false);
+    expectSkipped(shellHook(dir, hook));
   });
 
   test.each([...GATED])("%s with no AI-DLC work in the folder does not load the engine", (hook) => {
     const dir = project(false);
-    const call = shellHook(dir, hook);
-    expect(call.code).toBe(0);
-    expect(call.engineLoaded).toBe(false);
+    expectSkipped(shellHook(dir, hook));
   });
 
   test("the guards always load the engine", () => {
     const dir = project();
     settled(dir, "rebuild-stage-graph");
     settled(dir, "sync-workflow-state");
-    expect(shellHook(dir, "enforce-approval-gate").engineLoaded).toBe(true);
+    expect(shellHook(dir, "enforce-approval-gate").ran).toBe(true);
   });
 
   test("a skipped rebuild still says the hook fired", () => {
@@ -195,7 +204,7 @@ describe("a shell command that changed nothing the hook reads skips the engine",
     settled(dir, "rebuild-stage-graph");
     const heartbeat = join(hooksHealthDir(dir), "rebuild-stage-graph.last");
     writeFileSync(heartbeat, "2026-01-01T00:00:00Z");
-    expect(shellHook(dir, "rebuild-stage-graph").engineLoaded).toBe(false);
+    expectSkipped(shellHook(dir, "rebuild-stage-graph"));
     expect(Date.parse(readFileSync(heartbeat, "utf-8"))).toBeGreaterThan(Date.now() - 60_000);
   });
 
@@ -215,7 +224,7 @@ describe("anything that might matter runs the full hook", () => {
     appendStageStarted(dir, "user-stories");
     setTime(mark(dir, "sync-workflow-state"), -30_000);
     const call = shellHook(dir, "sync-workflow-state");
-    expect(call.engineLoaded).toBe(true);
+    expect(call.ran).toBe(true);
     expect(currentStage(dir)).toBe("user-stories");
   });
 
@@ -227,7 +236,7 @@ describe("anything that might matter runs the full hook", () => {
     appendStageStarted(dir, "requirements-analysis");
     setTime(mark(dir, "rebuild-stage-graph"), -30_000);
     const call = shellHook(dir, "rebuild-stage-graph");
-    expect(call.engineLoaded).toBe(true);
+    expect(call.ran).toBe(true);
     expect(existsSync(graph) && statSync(graph).mtimeMs > before).toBe(true);
   });
 
@@ -235,7 +244,7 @@ describe("anything that might matter runs the full hook", () => {
     const dir = project();
     settled(dir, hook);
     appendFileSync(shard(dir), "\n## Decision Recorded\n**Event**: DECISION_RECORDED\n\n---\n");
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test.each([...GATED])("%s: a write just before the mark, inside the margin (a race or a 2 s clock)", (hook) => {
@@ -243,7 +252,7 @@ describe("anything that might matter runs the full hook", () => {
     settled(dir, hook);
     const at = new Date(markTime(dir, hook) - 1_000);
     utimesSync(shard(dir), at, at);
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test.each([...GATED])("%s: the same timestamp on the mark and a write (a coarse file system)", (hook) => {
@@ -252,35 +261,35 @@ describe("anything that might matter runs the full hook", () => {
     const at = new Date(Math.floor(markTime(dir, hook) / 2_000) * 2_000);
     utimesSync(shard(dir), at, at);
     if (existsSync(mark(dir, hook))) utimesSync(mark(dir, hook), at, at);
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test.each([...GATED])("%s: the mark is ahead of the clock (the clock moved back)", (hook) => {
     const dir = project();
     settled(dir, hook);
     setTime(mark(dir, hook), 60_000);
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test.each([...GATED])("%s: a file the hook reads is ahead of the clock", (hook) => {
     const dir = project();
     settled(dir, hook);
     setTime(shard(dir), 60_000);
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test("sync: the state file changed after the mark", () => {
     const dir = project();
     settled(dir, "sync-workflow-state");
     writeFileSync(seededStateFile(dir), readFileSync(seededStateFile(dir), "utf-8"));
-    expect(shellHook(dir, "sync-workflow-state").engineLoaded).toBe(true);
+    expect(shellHook(dir, "sync-workflow-state").ran).toBe(true);
   });
 
   test("rebuild: the graph was compiled after the mark", () => {
     const dir = project();
     settled(dir, "rebuild-stage-graph");
     writeFileSync(join(seededRecordDir(dir), "runtime-graph.json"), "{}\n");
-    expect(shellHook(dir, "rebuild-stage-graph").engineLoaded).toBe(true);
+    expect(shellHook(dir, "rebuild-stage-graph").ran).toBe(true);
   });
 
   test.each([...GATED])("%s: a second piece of work the hook has not looked at", (hook) => {
@@ -291,20 +300,20 @@ describe("anything that might matter runs the full hook", () => {
     writeFileSync(join(other, "aidlc-state.md"), readFileSync(seededStateFile(dir), "utf-8"));
     writeFileSync(join(other, "audit", shardName()), "# AI-DLC Audit Log\n");
     for (const path of [join(other, "aidlc-state.md"), join(other, "audit", shardName())]) setTime(path, -60_000);
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test.each([...GATED])("%s: the flat layout from before spaces", (hook) => {
     const dir = project();
     settled(dir, hook);
     mkdirSync(join(dir, "aidlc-docs"));
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 
   test.each([...GATED])("%s: hook debugging is on", (hook) => {
     const dir = project();
     settled(dir, hook);
-    expect(shellHook(dir, hook, { AIDLC_HOOK_DEBUG: "1" }).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook, { AIDLC_HOOK_DEBUG: "1" }).ran).toBe(true);
   });
 
   test.skipIf(process.platform === "win32").each([...GATED])("%s: a linked audit folder", (hook) => {
@@ -316,6 +325,6 @@ describe("anything that might matter runs the full hook", () => {
     for (const name of readdirSync(audit)) unlinkSync(join(audit, name));
     rmdirSync(audit);
     symlinkSync(moved, audit);
-    expect(shellHook(dir, hook).engineLoaded).toBe(true);
+    expect(shellHook(dir, hook).ran).toBe(true);
   });
 });
