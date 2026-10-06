@@ -275,6 +275,10 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc.ts version",
       "bun .cursor/tools/aidlc.ts --doctor",
       "bun .cursor/tools/aidlc.ts status",
+      // The utility spellings agents also use, and config's own help.
+      "bun .cursor/tools/aidlc.ts --status",
+      "bun .cursor/tools/aidlc.ts --version",
+      "bun .cursor/tools/aidlc.ts config --help",
       "bun .cursor/tools/aidlc-utility.ts",
       "bun .cursor/tools/aidlc-utility.ts codekb-path",
       "bun .cursor/tools/aidlc-log.ts answers --stage x",
@@ -295,6 +299,9 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       // Any config change, a machine-wide flag however it is spelled included,
       // and a read that only looks like the shipped forms.
       "bun .cursor/tools/aidlc.ts config --pin 2.10.0",
+      // The guided setup, which changes the project.
+      "bun .cursor/tools/aidlc.ts config",
+      "bun .cursor/tools/aidlc.ts config --yes",
       "bun .cursor/tools/aidlc.ts config --unpin",
       "bun .cursor/tools/aidlc.ts config --channel",
       "bun .cursor/tools/aidlc.ts config --channel preview",
@@ -318,6 +325,57 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       "bun .cursor/tools/aidlc-log.ts.bak answers --stage x",
     ]) {
       expect(cursorShellEffect(cli, command), command).toBe("ask");
+    }
+  });
+
+  // The native release runs AI-DLC through the installed `aidlc` command. It
+  // pre-approves the engine prefix and, exactly as written, the same read-only
+  // and turn-back-on commands as the copy channel; any change still asks.
+  test("6c: the native release runs the read-only and turn-back-on commands with no prompt; any change asks", () => {
+    const shipped = JSON.parse(readFileSync(join(CURSOR_RELEASE_ROOT, ".cursor", "cli.json"), "utf-8")) as {
+      permissions: { allow: string[]; deny?: string[] };
+    };
+    const cli = { allow: shipped.permissions.allow, deny: shipped.permissions.deny ?? [] };
+    expect(cli.allow.filter((entry) => entry.includes("aidlc"))).toEqual([
+      "Shell(aidlc:engine *)",
+      ...copyChannelDispatcherCommands().map((command) => `Shell(aidlc:${command})`),
+    ]);
+    const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+    for (const command of [
+      "aidlc engine orchestrate next",
+      "aidlc doctor",
+      "aidlc --doctor",
+      "aidlc status",
+      "aidlc --status",
+      "aidlc version",
+      "aidlc --version",
+      "aidlc config --help",
+      "aidlc config models --show --json",
+      "aidlc config flags --help",
+      ...RECORDABLE_PROJECT_BYPASSES.map((name) => `aidlc config flags --clear-bypass ${name} --yes`),
+    ]) {
+      expect(cursorShellEffect(cli, command), command).toBe("allow");
+    }
+    for (const command of [
+      "aidlc config",
+      "aidlc config --yes",
+      "aidlc config --pin 2.10.0",
+      "aidlc config --channel preview",
+      "aidlc config models --show --json --global",
+      "aidlc config models --deciding-effort high --project --yes",
+      `aidlc config flags --bypass ${check} --local --yes`,
+      `aidlc config flags --bypass ${check} --yes`,
+      `aidlc config flags --clear-bypass ${check} --bypass AIDLC_DISABLE_SENSORS --yes`,
+      `aidlc config flags --clear-bypass ${check} --yes --bypass AIDLC_DISABLE_SENSORS`,
+      `aidlc config flags --clear-bypass ${check} --yes --global`,
+      "aidlc config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+      "aidlc doctor --fix",
+      "aidlc update",
+      "aidlc use 2.10.0",
+      "aidlc uninstall --yes",
+      "aidlc system config global set offline on",
+    ]) {
+      expect(cursorShellEffect(cli, command), command).not.toBe("allow");
     }
   });
 

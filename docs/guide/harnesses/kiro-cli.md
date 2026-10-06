@@ -57,7 +57,9 @@ Kiro from the project root:
 kiro-cli chat
 ```
 
-The native projection allows `aidlc engine *` engine commands. It also ships
+The native projection allows `aidlc engine *` engine commands and the exact
+read-only and turn-back-on commands (`aidlc doctor`, `aidlc config <section> --show --json`
+and the others listed under the session start below). It also ships
 `.kiro/settings/cli.json` with `chat.defaultAgent: "aidlc"`, so `/aidlc` is
 active without an agent flag. Run `/aidlc --doctor` in chat before the first
 workflow.
@@ -183,10 +185,13 @@ at that plain-text relay boundary; ordinary Unicode, paths, tabs, newlines, and
 literal escape-looking text remain unchanged.
 
 **Start the session from the project root.** Native installs pre-approve the
-installed `aidlc` command. Source/development copies pre-approve only
+installed `aidlc engine ...` commands and, exactly as written, the same
+read-only and turn-back-on commands listed next, run as `aidlc ...`.
+Source/development copies pre-approve only
 AI-DLC's own workflow commands, run project-relative: the engine commands
 (`bun .kiro/tools/aidlc.ts engine ...`), the read-only `doctor`, `version`,
-`--doctor`, `status`, `config <section> --show --json` and
+`--version`, `--doctor`, `status`, `--status`, `config --help`,
+`config <section> --show --json` and
 `config <section> --help`, turning a check back on with
 `config flags --clear-bypass <switch> --yes`, and the AI-DLC tool scripts
 (`bun .kiro/tools/aidlc-<tool>.ts`). Any other `config` change (turning a check

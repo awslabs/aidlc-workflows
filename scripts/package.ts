@@ -1015,6 +1015,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// The dispatcher commands every install pre-approves exactly as written
+// (copyChannelDispatcherCommands), as the native release runs them: through
+// the installed aidlc command, never a project path.
+function nativeDispatcherCommands(): string[] {
+  return copyChannelDispatcherCommands().map((command) => `aidlc ${command}`);
+}
+
 // A manifest's nativeReplacements, applied before the generic rewrite, which
 // would otherwise turn their copy-channel text into retired or unresolvable
 // engine spellings.
@@ -1072,7 +1079,12 @@ function rewriteKiroNativeAllowlists(outRoot: string, m: HarnessManifest): void 
         ? trustedCommand(".*")
         : command
     );
-    value.toolsSettings!.execute_bash!.allowedCommands = [...new Set(rewritten)];
+    // An agent the copy channel let run AI-DLC's tool commands also runs the
+    // exact read-only and turn-back-on commands natively, as anchored patterns.
+    const trusted = trustedCommand(".*");
+    value.toolsSettings!.execute_bash!.allowedCommands = [...new Set(rewritten)].flatMap((command) =>
+      command === trusted ? [command, ...nativeDispatcherCommands().map(escapeRegExp)] : [command]
+    );
     writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
   }
 }
@@ -1087,13 +1099,15 @@ function rewriteClaudeNativePermissions(outRoot: string, m: HarnessManifest): vo
   if (!Array.isArray(allow)) throw new Error("[claude] settings.json has no permissions.allow list");
   // The copy channel's AI-DLC command entries (the tool rewrite above has
   // already turned their `bun <dir>/tools/aidlc...` into `aidlc engine ...`)
-  // give way to the one trusted prefix.
+  // give way to the one trusted prefix and the exact read-only and
+  // turn-back-on commands, run as the installed aidlc command.
   value.permissions!.allow = [
     ...allow.filter((entry) =>
       entry !== "Bash" &&
       !(typeof entry === "string" && (entry.startsWith("Bash(bun ") || entry.startsWith("Bash(aidlc ")))
     ),
     `Bash(${trustedCommand("*")})`,
+    ...nativeDispatcherCommands().map((command) => `Bash(${command})`),
   ];
   writeFileSync(settingsPath, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -1234,15 +1248,28 @@ function rewriteCursorNativePermissions(outRoot: string, m: HarnessManifest): vo
   const allow = value.permissions?.allow;
   if (!Array.isArray(allow)) throw new Error("[cursor] cli.json has no permissions.allow list");
   // The copy channel's bun entries name its tool paths; native runs the
-  // aidlc command, so they give way to its one trusted-prefix entry.
+  // aidlc command, so they give way to its one trusted-prefix entry and the
+  // same exact read-only and turn-back-on commands.
   value.permissions!.allow = [
     ...allow.filter((entry) => typeof entry !== "string" || !entry.startsWith("Shell(bun")),
     cursorTrustedShell(),
+    // Cursor reads the first token as the command and the rest as an
+    // argument glob, so each exact form is `Shell(aidlc:<arguments>)`.
+    ...copyChannelDispatcherCommands().map((command) => `Shell(aidlc:${command})`),
   ];
   writeFileSync(cliPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function rewriteNativeOnboarding(value: string): string {
+// The native Permissions line. A harness whose native allow list carries the
+// exact read-only and turn-back-on commands names them; the others keep the
+// engine prefix alone.
+function nativePermissionsLine(exactReads: boolean): string {
+  return exactReads
+    ? `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix, the read-only \`aidlc doctor\`, \`status\`, \`version\` and \`config <section> --show --json\` and \`--help\` forms, turning a check back on (\`aidlc config flags --clear-bypass <switch> --yes\`), and its listed read-only tools; everything else prompts, including any other \`config\` change.`
+    : `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`;
+}
+
+function rewriteNativeOnboarding(value: string, exactReads = false): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
@@ -1252,10 +1279,7 @@ function rewriteNativeOnboarding(value: string): string {
       /^- \*\*Hook permissions\*\*:.*$/gm,
       "- **Hook permissions**: Framework hooks run through the self-contained `aidlc` binary. No separate script runtime or executable bits are required.",
     )
-    .replace(
-      /^- \*\*Permissions\*\*:.*$/gm,
-      `- **Permissions**: the \`aidlc\` agent pre-approves only the native \`${TRUSTED_COMMAND_PREFIX}\` command prefix and its listed read-only tools; everything else prompts.`,
-    )
+    .replace(/^- \*\*Permissions\*\*:.*$/gm, nativePermissionsLine(exactReads))
     .replace(
       /TypeScript, run via bun/g,
       "TypeScript sources invoked through the self-contained `aidlc` runtime",
@@ -1423,7 +1447,7 @@ function rewriteNativeInvocations(
       `"${trustedCommand(".*")}"`,
     );
     value = substituteInvocationTokens(value, m.harnessDir, "aidlc");
-    value = rewriteNativeOnboarding(value);
+    value = rewriteNativeOnboarding(value, m.tierFlavor === "claude" || m.tierFlavor === "cursor" || m.name === "kiro");
     writeFileSync(file, value);
   }
   rewriteKiroNativeAllowlists(outRoot, m);

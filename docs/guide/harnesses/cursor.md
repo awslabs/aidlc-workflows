@@ -209,10 +209,13 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
 - **Tab autocomplete is untouched** by this install - it rides Cursor's own
   models regardless of configuration.
 - **Permissions**: `.cursor/cli.json` pre-approves only AI-DLC's own workflow
-  commands: its engine commands, `doctor`, `version`, `status`, the read-only
-  `config <section> --show --json` and `--help` forms, turning a check back on
-  (`config flags --clear-bypass <switch> --yes`), and its `aidlc-*.ts`
-  tools (a project-level `cli.json` carries permissions only). Every other
+  commands: its engine commands, `doctor`, `version`, `status` (and their
+  `--doctor`, `--version` and `--status` spellings), `config --help`, the
+  read-only `config <section> --show --json` and `--help` forms, turning a
+  check back on (`config flags --clear-bypass <switch> --yes`), and its
+  `aidlc-*.ts` tools (a project-level `cli.json` carries permissions only). A
+  native install pre-approves the same commands run as the installed `aidlc`
+  command, and `aidlc engine ...`. Every other
   shell command follows your Cursor approval settings, including any other
   `config` change (turning a check off too), the commands that change the machine's AI-DLC install (`use`,
   `update`, `rollback`, `uninstall`, `system`), and the tool scripts behind

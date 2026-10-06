@@ -206,6 +206,10 @@ const MUST_ALLOW = [
   'bun ".kiro/tools/aidlc-utility.ts" status',
   "bun .kiro/tools/aidlc.ts engine orchestrate next",
   "bun .kiro/tools/aidlc.ts --doctor",
+  // The utility spellings agents also use, and config's own help.
+  "bun .kiro/tools/aidlc.ts --status",
+  "bun .kiro/tools/aidlc.ts --version",
+  "bun .kiro/tools/aidlc.ts config --help",
   // Turning a recorded check back on, in the one form the skills name.
   ...RECORDABLE_PROJECT_BYPASSES.map((name) => `bun .kiro/tools/aidlc.ts config flags --clear-bypass ${name} --yes`),
   "bun .kiro/tools/aidlc.ts config providers --show --json",
@@ -268,6 +272,9 @@ const MUST_ASK_OUTSIDE_THE_WORKFLOW = [
   "bun .kiro/tools/aidlc-init.ts --pin 2.10.0",
   "bun .kiro/tools/aidlc-doctor.ts",
   "bun .kiro/tools/aidlc.ts config --pin 2.10.0",
+  // The guided setup, which changes the project.
+  "bun .kiro/tools/aidlc.ts config",
+  "bun .kiro/tools/aidlc.ts config --yes",
   "bun .kiro/tools/aidlc.ts config --channel",
   "bun .kiro/tools/aidlc.ts config models --gl\"obal\" --yes",
   "bun .kiro/tools/aidlc.ts config models --deciding-effort high --project --yes",
@@ -549,4 +556,72 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       expect(writeVerdict(architect, "aidlc/spaces/default/intents/fix/plan.md")).toBe("allow");
     });
   }
+});
+
+// The native release runs AI-DLC through the installed `aidlc` command. Every
+// agent that runs AI-DLC's engine commands also runs, exactly as written, the
+// same read-only and turn-back-on commands as the copy channel; any change
+// still waits for the person.
+describe("t252 Kiro native release allowlist", () => {
+  function nativeBash(agentFile: string): ExecuteBash {
+    const p = join(REPO_ROOT, "dist-release", "kiro", ".kiro", "agents", agentFile);
+    const doc = JSON.parse(readFileSync(p, "utf-8")) as { toolsSettings?: Record<string, ExecuteBash> };
+    const eb = doc.toolsSettings?.execute_bash;
+    if (!eb) throw new Error(`dist-release/kiro/${agentFile}: no execute_bash settings`);
+    return eb;
+  }
+  const agents = ["aidlc.json", ...PERSONAS];
+  const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+
+  test("reading a setting, doctor, status, version and turning a check back on run unprompted", () => {
+    for (const agent of agents) {
+      const eb = nativeBash(agent);
+      for (const p of [...(eb.allowedCommands ?? []), ...(eb.deniedCommands ?? [])]) {
+        expect(compile(p), `${agent}: inert pattern ${p}`).not.toBeNull();
+      }
+      for (const command of [
+        "aidlc engine orchestrate next",
+        "aidlc doctor",
+        "aidlc --doctor",
+        "aidlc status",
+        "aidlc --status",
+        "aidlc version",
+        "aidlc --version",
+        "aidlc config --help",
+        "aidlc config models --show --json",
+        "aidlc config flags --help",
+        ...RECORDABLE_PROJECT_BYPASSES.map((name) => `aidlc config flags --clear-bypass ${name} --yes`),
+      ]) {
+        expect(evaluate(eb, command), `${agent}: should allow \`${command}\``).toBe("allow");
+      }
+    }
+  });
+
+  test("the guided setup, any config change, turning a check off and the machine commands still ask", () => {
+    for (const agent of agents) {
+      const eb = nativeBash(agent);
+      for (const command of [
+        "aidlc config",
+        "aidlc config --yes",
+        "aidlc config --pin 2.10.0",
+        "aidlc config --channel preview",
+        "aidlc config models --show --json --global",
+        "aidlc config models --deciding-effort high --project --yes",
+        `aidlc config flags --bypass ${check} --local --yes`,
+        `aidlc config flags --bypass ${check} --yes`,
+        `aidlc config flags --clear-bypass ${check} --bypass AIDLC_DISABLE_SENSORS --yes`,
+        `aidlc config flags --clear-bypass ${check} --yes --bypass AIDLC_DISABLE_SENSORS`,
+        `aidlc config flags --clear-bypass ${check} --yes --global`,
+        "aidlc config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+        "aidlc doctor --fix",
+        "aidlc doctor && aidlc update",
+        "aidlc update",
+        "aidlc use 2.10.0",
+        "aidlc uninstall --yes",
+        "aidlc system config global set offline true",
+      ]) {
+        expect(evaluate(eb, command), `${agent}: should ask for \`${command}\``).not.toBe("allow");
+      }
+    }
+  });
 });

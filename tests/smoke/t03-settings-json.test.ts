@@ -55,7 +55,7 @@ import { join } from "node:path";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES } from "../../core/tools/aidlc.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
 const SETTINGS_PATH = join(AIDLC_SRC, "settings.json");
 const RAW = readFileSync(SETTINGS_PATH, "utf-8");
@@ -266,6 +266,80 @@ describe("permissions.allow — pre-approved tool list [.sh tests 2-9]", () => {
       for (const command of commands) {
         expect(claudeBashEffect(command), command).toBe(configChange(command) ? "prompt" : "allow");
       }
+    }
+  });
+});
+
+// The native release runs AI-DLC through the installed `aidlc` command. It
+// pre-approves the engine prefix and, exactly as written, the same read-only
+// and turn-back-on commands as the copy channel, so reading a setting or
+// running doctor needs no click there either; any change still asks.
+describe("permissions.allow on the native release", () => {
+  const nativeAllow = (JSON.parse(
+    readFileSync(join(REPO_ROOT, "dist-release", "claude", ".claude", "settings.json"), "utf-8"),
+  ) as Settings).permissions?.allow ?? [];
+  function nativeEffect(command: string): "allow" | "prompt" {
+    return nativeAllow.some((rule) => {
+      const m = /^Bash\((.*)\)$/.exec(rule);
+      if (!m) return false;
+      const glob = m[1].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*");
+      return new RegExp(`^${glob}$`).test(command);
+    })
+      ? "allow"
+      : "prompt";
+  }
+  const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+
+  test("the engine prefix and each exact read-only and turn-back-on command are the only AI-DLC entries", () => {
+    expect(nativeAllow.filter((entry) => entry.includes("aidlc"))).toEqual([
+      "Bash(aidlc engine *)",
+      ...copyChannelDispatcherCommands().map((command) => `Bash(aidlc ${command})`),
+    ]);
+  });
+
+  test("reading a setting, doctor, status, version and turning a check back on run with no prompt", () => {
+    for (const command of [
+      "aidlc engine orchestrate next",
+      "aidlc doctor",
+      "aidlc --doctor",
+      "aidlc status",
+      "aidlc --status",
+      "aidlc version",
+      "aidlc --version",
+      "aidlc config --help",
+      ...CONFIG_SECTIONS.flatMap((section) => [
+        `aidlc config ${section} --show --json`,
+        `aidlc config ${section} --help`,
+      ]),
+      ...RECORDABLE_PROJECT_BYPASSES.map((name) => `aidlc config flags --clear-bypass ${name} --yes`),
+    ]) {
+      expect(nativeEffect(command), command).toBe("allow");
+    }
+  });
+
+  test("the guided setup, any config change, turning a check off and the machine commands still prompt", () => {
+    for (const command of [
+      "aidlc config",
+      "aidlc config --yes",
+      "aidlc config --pin 2.10.0",
+      "aidlc config --unpin",
+      "aidlc config --channel preview",
+      "aidlc config models --show --json --global",
+      "aidlc config models --deciding-effort high --project --yes",
+      `aidlc config flags --bypass ${check} --local --yes`,
+      `aidlc config flags --bypass ${check} --yes`,
+      `aidlc config flags --clear-bypass ${check} --bypass AIDLC_DISABLE_SENSORS --yes`,
+      `aidlc config flags --clear-bypass ${check} --yes --bypass AIDLC_DISABLE_SENSORS`,
+      `aidlc config flags --clear-bypass ${check} --yes --global`,
+      "aidlc config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+      "aidlc doctor --fix",
+      "aidlc doctor && aidlc update",
+      "aidlc update",
+      "aidlc use 2.10.0",
+      "aidlc uninstall --yes",
+      "aidlc system config global set offline true",
+    ]) {
+      expect(nativeEffect(command), command).toBe("prompt");
     }
   });
 });

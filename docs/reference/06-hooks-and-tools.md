@@ -1824,6 +1824,8 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 | `Task` | Delegating to subagents for Reverse Engineering and Code Generation |
 | `WebSearch` | Market research, design reference lookups, compliance framework research |
 | `Bash(bun .claude/tools/aidlc.ts config flags --clear-bypass <switch> --yes)`, one exact entry per recordable switch | Turning a check back on, which only ever raises a check; turning one off still asks |
+| `Bash(bun .claude/tools/aidlc.ts --status)`, `Bash(bun .claude/tools/aidlc.ts --version)` and `Bash(bun .claude/tools/aidlc.ts config --help)` | The status, version and config help spellings agents also run |
+| `Bash(aidlc <command>)` for each exact entry above, beside `Bash(aidlc engine *)` (native release) | The same read-only and turn-back-on commands on a native install, run as the installed `aidlc` command |
 
 Reading and searching inside the project (`Read`, `Glob`, `Grep`) needs no entry. Writes outside the project, and the project's own build and test commands, ask as Claude Code normally does. So do a `config` change and the commands that change the machine's AI-DLC install (`use`, `update`, `rollback`, `uninstall`, `system`), with the tool scripts behind them (`aidlc-doctor.ts`, `aidlc-init.ts`, `aidlc-lifecycle.ts`, `aidlc-machine-config.ts`): the packager lists the copy channel's entries from the same command and script lists the Cursor copy channel uses, and those are not on them.
 

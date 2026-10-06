@@ -90,6 +90,7 @@ import {
   writeOperation,
 } from "../../core/tools/aidlc-transaction.ts";
 import { AIDLC_VERSION } from "../../core/tools/aidlc-version.ts";
+import { copyChannelDispatcherCommands } from "../../core/tools/aidlc.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   recoverWindowsUninstallContinuations,
@@ -8058,9 +8059,12 @@ describe("t243 projection channel", () => {
     expect(claudeSettings.permissions.allow).toContain(`Bash(${trustedCommand("*")})`);
     expect(claudeSettings.permissions.allow).not.toContain("Bash");
     expect(claudeSettings.permissions.allow.some((entry) => entry.startsWith("Bash(bun "))).toBe(false);
+    // The engine prefix, then each read-only and turn-back-on command exactly
+    // as the installed aidlc command runs it.
+    const exactNative = copyChannelDispatcherCommands().map((command) => `aidlc ${command}`);
     expect(
       claudeSettings.permissions.allow.filter((entry) => entry.includes("aidlc")),
-    ).toEqual([`Bash(${trustedCommand("*")})`]);
+    ).toEqual([`Bash(${trustedCommand("*")})`, ...exactNative.map((command) => `Bash(${command})`)]);
     for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
       expect(
         claudeSettings.permissions.allow.some((entry) =>
@@ -8082,7 +8086,10 @@ describe("t243 projection channel", () => {
         expect(allowed).toContain(trustedCommand(".*"));
         expect(allowed.some((command) => command.startsWith("bun "))).toBe(false);
         expect(allowed.filter((command) => command.includes("aidlc")))
-          .toEqual([trustedCommand(".*")]);
+          .toEqual([
+            trustedCommand(".*"),
+            ...exactNative.map((command) => command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+          ]);
         for (const namespace of UNTRUSTED_ROUTE_NAMESPACES) {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }
@@ -8136,9 +8143,11 @@ describe("t243 projection channel", () => {
       readFileSync(join(CURSOR_RELEASE, ".cursor", "cli.json"), "utf-8"),
     ) as { permissions: { allow: string[] } };
     // Cursor reads the first token as the command base and the rest as an
-    // argument glob.
-    expect(cursorCli.permissions.allow).toEqual(["Shell(aidlc:engine *)"]);
-    expect(cursorCli.permissions.allow).toEqual([cursorTrustedShell()]);
+    // argument glob: the engine prefix, then each exact read-only and
+    // turn-back-on command.
+    const cursorExact = copyChannelDispatcherCommands().map((command) => `Shell(aidlc:${command})`);
+    expect(cursorCli.permissions.allow).toEqual(["Shell(aidlc:engine *)", ...cursorExact]);
+    expect(cursorCli.permissions.allow).toEqual([cursorTrustedShell(), ...cursorExact]);
     expect(cursorCli.permissions.allow).not.toContain("Shell(bun)");
     const cursorHooks = readFileSync(
       join(CURSOR_RELEASE, ".cursor", "hooks.json"),
