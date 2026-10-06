@@ -125,7 +125,17 @@ function beforeCommand(proj: string, command: string): void {
   });
 }
 
-function intentCreate(proj: string, harnessDir: string): void {
+// The PostToolUse the host fires once that command has returned its output.
+function afterCommand(proj: string, command: string, output: string): void {
+  hostEvent(proj, "post-tool", {
+    hook_event_name: "PostToolUse",
+    tool_name: "run_in_terminal",
+    tool_input: { command },
+    tool_response: output,
+  });
+}
+
+function intentCreate(proj: string, harnessDir: string): string {
   const r = run(proj, [
     join(proj, harnessDir, "tools", "aidlc-utility.ts"),
     "intent-create",
@@ -137,6 +147,7 @@ function intentCreate(proj: string, harnessDir: string): void {
     "fix the flag parser",
   ]);
   expect(r.code, r.stderr).toBe(0);
+  return r.stdout;
 }
 
 type Printed = { kind: string; receipt?: string; part?: number; parts?: number; change_notices?: string[] };
@@ -204,7 +215,10 @@ describe("Copilot: hooks that never ran are visible", () => {
     const proj = installed(COPILOT_ROOT);
     startChat(proj);
     beforeCommand(proj, "bun .aidlc/tools/aidlc-utility.ts intent-create");
-    intentCreate(proj, ".aidlc");
+    // The chat joins the new work from the host's event after the command, as
+    // in a real chat, so a loaded machine where the command could not find its
+    // chat in time still records the next heartbeat in that work.
+    afterCommand(proj, "bun .aidlc/tools/aidlc-utility.ts intent-create", intentCreate(proj, ".aidlc"));
     beforeCommand(proj, "bun .aidlc/tools/aidlc-orchestrate.ts next");
     expect(hookNotices(engine(proj, ".aidlc", ["next"]))).toEqual([]);
   });
