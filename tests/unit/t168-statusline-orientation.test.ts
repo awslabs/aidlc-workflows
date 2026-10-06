@@ -37,8 +37,8 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, renameSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   createIntent,
   setActiveIntentCursor,
@@ -215,5 +215,59 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
       expect(out).not.toContain("CONSTRUCTION");
       expect(out).not.toContain(named);
     }
+  });
+});
+
+// Working one Unit at a time, Current Stage stays on the block's first stage
+// while the person is on a later step of a Unit: a live run read
+// "0/5 > Functional Design -- Architect Agent" at Unit 2's checkpoint.
+describe("t168 statusline names the step the person is on", () => {
+  function seedUnitWalk(p: string): string {
+    const created = createIntent(p, "notes-cli", "default", "feature");
+    const state = stateFilePath(p, created.dirName, "default");
+    writeFileSync(
+      state,
+      "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n" +
+        "- **Current Stage**: functional-design\n- **Active Agent**: aidlc-architect-agent\n" +
+        "- **Construction Iteration**: unit-major\n- **Status**: Running\n",
+      "utf-8",
+    );
+    return state;
+  }
+
+  function writeMarker(state: string, marker: Record<string, unknown>): string {
+    const dir = join(dirname(state), ".aidlc-engine");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "active-directive.json");
+    writeFileSync(path, JSON.stringify({ version: 2, state_sha256: "0".repeat(64), ...marker }), "utf-8");
+    return path;
+  }
+
+  test("the Unit's step the engine last put to the person is the step shown", () => {
+    const state = seedUnitWalk(proj);
+    writeMarker(state, { kind: "run-stage", stage: "code-generation", unit: "u2-note-tags" });
+    const out = runStatusline(proj);
+    expect(out).toContain("> Code Generation for u2-note-tags");
+    expect(out).not.toContain("Functional Design");
+    // The Active Agent field follows Current Stage, so it is not shown beside another step.
+    expect(out).not.toContain("Architect");
+  });
+
+  test("a marker from before the state's last change names nothing; Current Stage shows", () => {
+    const state = seedUnitWalk(proj);
+    const marker = writeMarker(state, { kind: "run-stage", stage: "code-generation", unit: "u2-note-tags" });
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(marker, past, past);
+    const out = runStatusline(proj);
+    expect(out).toContain("> Functional Design");
+    expect(out).not.toContain("Code Generation");
+  });
+
+  test("a marker Unit that is not a Unit name never reaches the line", () => {
+    const state = seedUnitWalk(proj);
+    writeMarker(state, { kind: "run-stage", stage: "code-generation", unit: "u2\u001b[31mred" });
+    const out = runStatusline(proj);
+    expect(out).toContain("> Code Generation");
+    expect(out).not.toContain("u2");
   });
 });
