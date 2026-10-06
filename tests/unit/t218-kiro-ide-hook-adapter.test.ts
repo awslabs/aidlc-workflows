@@ -67,6 +67,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   intentsDirOf,
+  seedBoltDagBatches,
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
@@ -185,6 +186,22 @@ function seedCodeGenerationDirective(dir: string, unit?: string): void {
   });
 }
 
+// A group of Units built at once: the swarm directive names them all.
+function seedSwarmDirective(dir: string, units: string[]): void {
+  const statePath = seededStateFile(dir);
+  const state = readFileSync(statePath, "utf-8").replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
+  );
+  writeFileSync(statePath, state);
+  writeActiveDirectiveMarker(dir, {
+    kind: "invoke-swarm",
+    stage: "code-generation",
+    units,
+    state_sha256: stateDigest(state),
+  });
+}
+
 function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolean } = {}): void {
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "base.ts"), "export const base = true;\n");
@@ -208,11 +225,11 @@ function initGitWorkspace(dir: string, options: { applicationSourceOnly?: boolea
 
 function seedStageLevelPlanApproval(
   dir: string,
-  options: { bareSection?: boolean } = {},
+  options: { bareSection?: boolean; unit?: string } = {},
 ): string {
   const contract = resolveTestingPosture(dir);
-  const authority = resolveCodeGenerationAuthority(dir, { unit: null });
-  const record = codeGenerationRecordDir(dir, null);
+  const authority = resolveCodeGenerationAuthority(dir, { unit: options.unit ?? null });
+  const record = codeGenerationRecordDir(dir, options.unit ?? null);
   mkdirSync(record, { recursive: true });
   const plan = `# Plan\n\n${renderTestingContract(contract)}`;
   const instructions = "# Unit Test Instructions\n\nRun the focused test.\n";
@@ -3101,6 +3118,98 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Source moving while the plan question waits: under a lowered Guard Policy
+  // the person's answer accepts that change, so the fallback never shows the
+  // plan again. It waits while the question is open, names the answer's own
+  // write once the person has replied, and their answer builds on. Strict
+  // re-presents the plan.
+  test.each(["off", "strict"] as const)("Guard Policy %s: source moves while the plan question waits", (policy) => {
+    const dir = scratchProject(true);
+    try {
+      initGitWorkspace(dir);
+      seedCodeGenerationDirective(dir);
+      const choices = seedLegacyDirectiveChoices(dir);
+      expect(runIde(dir, "session-start", null).code).toBe(0);
+      if (policy === "off") {
+        const memory = join(dir, "aidlc", "spaces", "default", "memory");
+        mkdirSync(memory, { recursive: true });
+        writeFileSync(join(memory, "project.md"), "# Project\n\n## Guard Policy\n\nMode: off\n", "utf-8");
+      }
+      const questions = seedStageLevelPlanApproval(dir);
+      const plan = join(seededRecordDir(dir), "construction", "code-generation", "code-generation-plan.md");
+      writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`)).code).toBe(0);
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+      writeFileSync(join(dir, "src", "moved.ts"), "export const moved = true;\n");
+      const opaque = () => {
+        const r = runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "execute_bash", toolArgs: {} }));
+        return { code: r.code, said: `${r.stdout}${r.stderr}` };
+      };
+      const waiting = opaque();
+      expect(waiting.code).toBe(2);
+      if (policy === "strict") {
+        expect(waiting.said).toContain("Re-present the plan");
+        return;
+      }
+      expect(waiting.said).toContain("Plan Approval is awaiting a human response");
+      expect(waiting.said).not.toContain("Re-present the plan");
+      expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+      const replied = opaque();
+      expect(replied.code).toBe(2);
+      expect(replied.said).toContain("owns fingerprint, decision, and answer recording");
+      expect(replied.said).not.toContain("awaiting a human response");
+      expect(replied.said).not.toContain("Re-present the plan");
+      writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+      expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+      expect(evaluateCodeGenerationApproval(dir, { unit: null }).ok).toBe(true);
+      expect(opaque().code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A call with no arguments may build any Unit of a group: under a lowered
+  // Guard Policy an approved Unit whose plan changed builds on only while every
+  // other Unit of the group is approved too. A Unit the person never approved
+  // keeps the call refused.
+  test.each([["approved too", 0], ["never approved", 2]] as const)(
+    "Guard Policy off, a group: one approved plan edited later, the other Unit %s",
+    (_other, code) => {
+      const dir = scratchProject(true);
+      try {
+        initGitWorkspace(dir);
+        const units = ["u1-store", "u2-tags"];
+        seedBoltDagBatches(dir, [units]);
+        seedSwarmDirective(dir, units);
+        expect(runIde(dir, "session-start", null).code).toBe(0);
+        const approve = (unit: string): string => {
+          const choices = seedLegacyDirectiveChoices(dir, {}, unit);
+          const questions = seedStageLevelPlanApproval(dir, { unit });
+          const plan = join(codeGenerationRecordDir(dir, unit), "code-generation-plan.md");
+          writeFileSync(plan, "# Plan\n\n## Steps\n\n- [ ] Implement\n", "utf-8");
+          expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, plan)} file.`)).code).toBe(0);
+          expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+          expect(runIde(dir, "record-human-turn", JSON.stringify({ prompt: choices.approve })).code).toBe(0);
+          writeFileSync(questions, readFileSync(questions, "utf-8").replace("[Answer]:", "[Answer]: Approve Plan"));
+          expect(runIde(dir, "audit-and-sensors", ctx("fs_write", `Created the ${relative(dir, questions)} file.`)).code).toBe(0);
+          expect(evaluateCodeGenerationApproval(dir, { unit }).ok).toBe(true);
+          return plan;
+        };
+        const plan = approve(units[0]);
+        if (code === 0) approve(units[1]);
+        const memory = join(dir, "aidlc", "spaces", "default", "memory");
+        mkdirSync(memory, { recursive: true });
+        writeFileSync(join(memory, "project.md"), "# Project\n\n## Guard Policy\n\nMode: off\n", "utf-8");
+        // The person edits the first Unit's approved plan by hand.
+        writeFileSync(plan, `${readFileSync(plan, "utf-8")}\n- [ ] Add a log line\n`, "utf-8");
+        expect(evaluateCodeGenerationApproval(dir, { unit: units[0] }).ok).toBe(false);
+        expect(runIde(dir, "plan-approval-guard", JSON.stringify({ toolName: "execute_bash", toolArgs: {} })).code).toBe(code);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("legacy file-tool mediation injects the contract and records a valid human approval", () => {
     const dir = scratchProject(true);
