@@ -304,6 +304,30 @@ and the command would otherwise still act. A hook with no matcher also sees Kiro
   session identity use the host-derived identity or the retained session, with
   an explicit legacy bucket when neither is available. The 0.12 camelCase
   fallback reads the command from `toolArgs.command`.
+- **A bare `next` after a terminal command**: the refusal above reads only the
+  direct `aidlc-orchestrate.ts` spelling. Once a terminal command has run for a
+  chat's turn, `terminal-command-guard` also refuses (exit 2, one line on
+  stderr saying to end the turn) that chat's `next` with no arguments in the
+  same turn when it goes through the dispatcher: `.kiro/tools/aidlc.ts`
+  through `bun`, `bun run` or `bun.exe`, or the native `aidlc`, `aidlc.cmd` or
+  `aidlc.exe`, by name or path, also after `command` or `exec`. The
+  dispatcher's own route resolution decides that the call is orchestrate
+  `next` (`engine orchestrate next` or the top-level `next`). Besides `next`
+  it may carry only `--aidlc-attempt-id`, an output flag (`--json`, `--quiet`,
+  `--no-color`, `--yes`, `--offline`, `--verbose`), or a `--project-dir` that
+  names this project. A shell call is read as one literal command: a leading
+  `cd <absolute dir> &&` and a trailing `2>&1` on a POSIX shell; a leading
+  `&`, a trailing `2>&1` and `\` paths on PowerShell. Any other chain, an
+  `echo`, a call aimed at another project (by `--project-dir`, a `cd`
+  prelude, or a leading assignment such as `AIDLC_PROJECT_DIR=`), or a `next`
+  with any other argument (a stage, `--skip`, a request, `compose`, typed words) is not
+  refused. This check judges only the chat the payload's `session_id` names,
+  against a turn that chat has recorded: with no session in the payload,
+  another chat's latch, or a later turn it refuses nothing. When the turn
+  count file is missing, the latch beside it is dropped, so neither refusal
+  matches it. The engine's own guard for this (Branch 0) does not read these
+  per-chat latches: it finds its chat through process ancestry, and the chats
+  of one Kiro IDE window share a process, so it could pick another chat's latch.
 - **cmd.exe metacharacters**: native Windows `aidlc` is `aidlc.cmd`, so cmd.exe
   reads the command line Windows PowerShell 5.1 builds for it: a value holding
   a space is wrapped in double quotes with its own double quotes left as they

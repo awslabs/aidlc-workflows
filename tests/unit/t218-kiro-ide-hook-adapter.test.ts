@@ -6703,3 +6703,137 @@ describe("t218 terminal-command-guard holds a command with a lone carriage retur
     }
   });
 });
+
+// A terminal command typed as the chat message (`/aidlc --help`) runs inside the
+// UserPromptSubmit hook and leaves this chat's terminal latch. The engine's own
+// Branch 0 guard reads only the agent-v1 latch files, so on this row the
+// PreToolUse hook is what keeps a bare `next` that same turn from handing out
+// the next stage, in every spelling the conductor can run it. A `next` with an
+// argument, another chat, a later turn, or a payload with no session is not
+// this guard's.
+describe("t218 a bare next on a turn whose terminal command already ran is refused through the dispatcher", () => {
+  const SAME_TURN = "this turn and gave you its output to show the person, so this `next` would move the workflow on a turn that asked for no workflow work. End the turn.";
+
+  function submit(dir: string, sessionId: string, prompt: string) {
+    const r = runIdeStdin(dir, "verb-intercept", JSON.stringify({
+      session_id: sessionId,
+      hook_event_name: "UserPromptSubmit",
+      cwd: dir,
+      prompt,
+    }));
+    expect(r.code, r.stderr).toBe(0);
+  }
+
+  function shell(dir: string, command: string, sessionId?: string, tool = "execute_bash") {
+    return runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
+      ...(sessionId === undefined ? {} : { session_id: sessionId }),
+      hook_event_name: "PreToolUse",
+      cwd: dir,
+      tool_name: tool,
+      tool_input: { command },
+    }));
+  }
+
+  // The direct `aidlc-orchestrate.ts` spelling is the one the existing refusal
+  // already read; these go through the dispatcher.
+  const BARE_SPELLINGS: Array<[string, string]> = [
+    ["execute_bash", "bun .kiro/tools/aidlc.ts engine orchestrate next"],
+    ["execute_bash", "aidlc engine orchestrate next"],
+    ["execute_bash", "bun .kiro/tools/aidlc.ts --project-dir . engine orchestrate next"],
+    ["execute_bash", "aidlc engine orchestrate next --aidlc-attempt-id 7f3c"],
+    ["execute_bash", "aidlc next"],
+    ["execute_bash", "bun .kiro/tools/aidlc.ts next"],
+    ["execute_bash", "bun run .kiro/tools/aidlc.ts engine orchestrate next"],
+    ["execute_bash", "aidlc next --quiet"],
+    ["execute_bash", "command aidlc next"],
+    ["execute_pwsh", "aidlc.cmd engine orchestrate next"],
+    ["execute_pwsh", "& aidlc.cmd engine orchestrate next"],
+    ["execute_pwsh", "bun.exe .kiro\\tools\\aidlc.ts engine orchestrate next"],
+    ["execute_pwsh", "& \"C:\\Users\\dev\\AppData\\Local\\aidlc\\bin\\aidlc.exe\" engine orchestrate next"],
+    ["execute_pwsh", "&\"C:\\Users\\dev\\AppData\\Local\\aidlc\\bin\\aidlc.exe\" engine orchestrate next 2>&1"],
+  ];
+
+  test("the literal dispatcher spellings of a bare next are refused, in one line", () => {
+    const dir = scratchProject(true);
+    try {
+      submit(dir, "sess_bare_a", "/aidlc --help");
+      // The prelude and the stream merge the conductor's own commands carry,
+      // and this project named; quoted, so a Windows path reads as one word.
+      const own: Array<[string, string]> = [
+        ["execute_bash", `cd '${dir}' && aidlc engine orchestrate next 2>&1`],
+        ["execute_bash", `aidlc --project-dir '${dir}' engine orchestrate next`],
+      ];
+      for (const [tool, command] of [...BARE_SPELLINGS, ...own]) {
+        // Twice: a refusal does not start a turn of its own.
+        for (const attempt of [1, 2]) {
+          const r = shell(dir, command, "sess_bare_a", tool);
+          expect(r.code, `${tool} #${attempt}: ${command}\n${r.stderr}`).toBe(2);
+          expect(r.stdout).toBe("");
+          expect(r.stderr, command).toBe(`AIDLC already ran \`/aidlc --help\` ${SAME_TURN}\n`);
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a next with an argument, a later turn, and another chat are not this guard's", () => {
+    const dir = scratchProject(true);
+    try {
+      submit(dir, "sess_bare_a", "/aidlc --help");
+      for (const command of [
+        "bun .kiro/tools/aidlc.ts engine orchestrate next --stage requirements-analysis",
+        "aidlc engine orchestrate next --skip market-research",
+        "aidlc engine orchestrate next --request 0123abcd --continue",
+        "aidlc engine orchestrate next fix the login bug",
+        "bun .kiro/tools/aidlc.ts engine orchestrate next compose 'drop market research'",
+        "echo bun .kiro/tools/aidlc.ts engine orchestrate next",
+        "aidlc engine orchestrate next; echo done",
+        "aidlc engine orchestrate report",
+        "aidlc --project-dir /elsewhere/project engine orchestrate next",
+        "cd /elsewhere/project && aidlc engine orchestrate next",
+        "AIDLC_PROJECT_DIR=/elsewhere/project aidlc next",
+      ]) {
+        const r = shell(dir, command, "sess_bare_a");
+        expect(r.code, `${command}\n${r.stderr}`).toBe(0);
+        expect(r.stderr).toBe("");
+      }
+      // Another chat in the same folder: its bare next is its own.
+      submit(dir, "sess_bare_b", "carry on with the work");
+      const other = shell(dir, "bun .kiro/tools/aidlc.ts engine orchestrate next", "sess_bare_b");
+      expect(other.code, other.stderr).toBe(0);
+      // The first chat's next message is a new turn.
+      submit(dir, "sess_bare_a", "carry on with the work");
+      const later = shell(dir, "bun .kiro/tools/aidlc.ts engine orchestrate next", "sess_bare_a");
+      expect(later.code, later.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no chat named, or its turn count lost, a bare next is never refused on a guess", () => {
+    const dir = scratchProject(true);
+    try {
+      submit(dir, "sess_bare_a", "/aidlc --help");
+      const command = "bun .kiro/tools/aidlc.ts engine orchestrate next";
+      const unnamed = shell(dir, command);
+      expect(unnamed.code, unnamed.stderr).toBe(0);
+      // A latch whose turn count is gone cannot say it is this turn's, on the
+      // first call or on any call after it.
+      const sessionDir = join(
+        dir, "aidlc", ".aidlc-sessions", "kiro-terminal",
+        createHash("sha256").update("sess_bare_a").digest("hex"),
+      );
+      expect(existsSync(join(sessionDir, "latch.json"))).toBe(true);
+      rmSync(join(sessionDir, "turn"), { force: true });
+      for (const attempt of [1, 2]) {
+        const lost = shell(dir, command, "sess_bare_a");
+        expect(lost.code, `#${attempt}\n${lost.stderr}`).toBe(0);
+      }
+      const legacy = shell(dir, "bun .kiro/tools/aidlc-orchestrate.ts next", "sess_bare_a");
+      expect(legacy.code, legacy.stderr).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

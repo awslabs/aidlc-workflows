@@ -119,6 +119,7 @@ import {
   isAutonomousMode,
   isSwitchableGuardFence,
   kiroIdeLegacyPlanApprovalSessionId,
+  parseLiteralShellInvocation,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
   recordHookDrop,
@@ -154,9 +155,10 @@ import {
   resolveTestingPosture,
 } from "../tools/aidlc-testing-posture.ts";
 import { normalizeRetiredGuardPolicyField } from "../tools/aidlc-guard-switch.ts";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { aidlcEngineCommand, aidlcInvocation } from "../tools/aidlc-runtime-paths.ts";
-import { terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { resolveAction, terminalDispatcherArgv } from "../tools/aidlc.ts";
+import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
 import {
   canonicalWriteTool,
   isKiroAppendTool,
@@ -1393,6 +1395,71 @@ function toolTerminalInvocation(command: string): TerminalInvocation | null {
   return { raw, args: splitKiroCommandArgs(raw) };
 }
 
+// Whether one shell call is a bare engine `next` for this project through the
+// dispatcher: the Bun `.kiro/tools/aidlc.ts` (through `bun`, `bun run` or
+// `bun.exe`) or the native `aidlc`, `aidlc.cmd` or `aidlc.exe`, by name or
+// path, whose route the dispatcher itself resolves (`resolveAction`) to
+// orchestrate `next` with no argument but `--aidlc-attempt-id`, an output flag
+// (`--json`, `--quiet`, ...), or a `--project-dir` naming this project. A POSIX
+// shell call is read by the literal shell reader, which also takes a leading
+// `cd <dir> &&` and a trailing `2>&1`; a PowerShell call may start with `&`,
+// end with `2>&1`, and use `\`. Any other chain, an `echo`, another command,
+// or a call aimed at another project (by `--project-dir`, a `cd` prelude, or
+// an assignment such as `AIDLC_PROJECT_DIR=`) is not one. The direct
+// `aidlc-orchestrate.ts` spelling is the earlier refusal's.
+function isBareDispatcherNext(command: string, powershell: boolean): boolean {
+  let words: string[];
+  // The directory the dispatcher would take the project from, when nothing
+  // names one: a `cd` prelude, else this project.
+  let base = projectDir;
+  if (powershell) {
+    const text = command.trim().replace(/^&\s*/, "").replace(/\s+2>&1$/, "");
+    if (/[;&|<>`\r\n]|\$\(/.test(text)) return false;
+    words = splitKiroCommandArgs(text);
+  } else {
+    const literal = parseLiteralShellInvocation(command);
+    if (literal === null) return false;
+    words = literal.argv;
+    if (literal.directory !== null) base = resolve(projectDir, literal.directory);
+  }
+  let i = 0;
+  if (words[i] === "command" || words[i] === "exec") i++;
+  if (words[i] === "env") i++;
+  // An assignment can name another project (AIDLC_PROJECT_DIR=...); a call
+  // that sets one is not judged here.
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] ?? "")) return false;
+  const name = (word: string | undefined) =>
+    (word ?? "").replaceAll("\\", "/").split("/").pop()?.toLowerCase() ?? "";
+  const viaBun = name(words[i]) === "bun" || name(words[i]) === "bun.exe";
+  if (viaBun) i++;
+  if (viaBun && words[i] === "run") i++;
+  const program = (words[i] ?? "").replaceAll("\\", "/");
+  const dispatcher = viaBun
+    ? /(?:^|\/)\.kiro\/tools\/aidlc\.ts$/i.test(program)
+    : /^aidlc(?:\.cmd|\.exe)?$/.test(name(program));
+  if (!dispatcher) return false;
+  const routeWords = words.slice(i + 1);
+  // The dispatcher resolves a relative --project-dir from where it runs, which
+  // is the `cd` prelude's directory when there is one.
+  const named = routeWords.indexOf("--project-dir");
+  if (named >= 0) base = resolve(base, routeWords[named + 1] ?? "");
+  const action = resolveAction(routeWords, true);
+  if (action.type !== "delegate" || action.tool !== "aidlc-orchestrate.ts") return false;
+  const args: string[] = [];
+  for (let j = 0; j < action.args.length; j++) {
+    const word = action.args[j];
+    if (word === "--project-dir") {
+      j++;
+    } else if (word === "--aidlc-attempt-id") {
+      j++;
+    } else if (!LAUNCHER_GLOBAL_FLAGS.has(word)) {
+      args.push(word);
+    }
+  }
+  // Another project's next is not this latch's to judge.
+  return args.length === 1 && args[0] === "next" && resolve(base) === resolve(projectDir);
+}
+
 function terminalTyped(
   command: TerminalCommand,
   forwarded: string[],
@@ -1704,6 +1771,15 @@ function terminalRefusal(result: TerminalResult): string {
   );
 }
 
+// The terminal command's output already went to the agent to relay, so this
+// names the step and does not hand it over a second time.
+function sameTurnNextRefusal(result: TerminalResult): string {
+  return (
+    `AIDLC already ran \`/aidlc ${result.typed}\` this turn and gave you its output to show the person, ` +
+    "so this `next` would move the workflow on a turn that asked for no workflow work. End the turn.\n"
+  );
+}
+
 if (target === "verb-intercept") {
   // Before a doctor request below runs, so it sees this message.
   recordPreWorkflowHeartbeat(projectDir, "terminal-command");
@@ -1756,7 +1832,15 @@ if (target === "terminal-command-guard") {
   const invocation = toolTerminalInvocation(rawCommand);
   const lowering = loweringGuardInvocation(rawCommand);
   const sessionId = terminalSessionId();
-  const turn = readTurn(sessionId) || bumpTurn(sessionId);
+  // Only a recorded turn can say a latch is this turn's. With the count gone, a
+  // latch left beside it is dropped, so the count started below cannot match it.
+  const recordedTurn = readTurn(sessionId);
+  if (!existsSync(turnCounterPath(sessionId))) {
+    try {
+      rmSync(terminalLatchPath(sessionId), { force: true });
+    } catch { /* best-effort; the latch is then not this turn's */ }
+  }
+  const turn = recordedTurn || bumpTurn(sessionId);
   const refused = invocation !== null ? loweringGuardFlags(invocation.args, false) : lowering;
   if (promptWasEmpty(sessionId, turn) && refused !== null) {
     process.stderr.write(refused === "summary"
@@ -1776,6 +1860,21 @@ if (target === "terminal-command-guard") {
     )
   ) {
     process.stderr.write(terminalRefusal(existing));
+    return 2;
+  }
+  // The same turn's bare `next` through the dispatcher, which the line above
+  // does not read: it would hand out the next stage on a turn that asked only
+  // for a terminal command. A `next` with any argument names work of its own
+  // and runs. Only the chat the payload names is judged; with no session in it,
+  // this stays out. (The engine's own guard for this, Branch 0, reads the
+  // agent-v1 latch only: it finds its chat by process ancestry, which one IDE
+  // window shares.)
+  if (
+    existing !== null && recordedTurn > 0 && existing.turn === recordedTurn &&
+    (ide.sessionId?.trim() ?? "") !== "" &&
+    isBareDispatcherNext(rawCommand, isKiroPowerShellTool(tool))
+  ) {
+    process.stderr.write(sameTurnNextRefusal(existing));
     return 2;
   }
   if (invocation === null) return 0;
