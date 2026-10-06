@@ -69,11 +69,15 @@ caution nor default economy is acceptable.
 
 ## Guard Policy
 
-Every proposal names ONE Guard Policy value with a 1-2 sentence rationale
-naming the fences it lowers and why an input change after approval should
-reopen it, or be recorded and continue. The value decides two things: what
-happens when an input changes after the human approved or confirmed something,
-and how far the automatic checks stand aside for the agents. `strict` lowers
+Every proposal names ONE Guard Policy value with a 1-2 sentence rationale the
+person reads on the gate row: in their words, what happens when an input
+changes after approval, what else the value lets go (off also stands aside the
+checks on how agents move the workflow and what a reviewer reads), and why that
+suits this work, never internal field or tool names such as `custom_start`; a
+team memory file that locks strict is named. The value decides
+two things: what happens when an input changes after the human approved or
+confirmed something, and how far the automatic checks stand aside for the
+agents. `strict` lowers
 no fences and reopens that approval; `relaxed`
 records the change once, tells the human in one line, continues, and stands the
 plan-approval and review-freeze checks aside; `off` does that and stands the
@@ -100,9 +104,10 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
   from chat, never the composer.
 - The human sees the value as its own gate row and can flip it before
   approving a front composition. In-flight, the row is read-only: a
-  recompose lands only stage skips and adds, so the proposal names the routes
-  (raise or lower by typing `/aidlc --guard-policy <value>`, with `$aidlc` on
-  Codex). Changing scope alone never lowers the running policy.
+  recompose lands only stage skips and adds, so the proposal names the route
+  (when the person asks to raise or lower it, the conductor runs
+  `{{INVOKE}} engine config set guard-policy <value>`). Changing scope alone
+  never lowers the running policy.
   A memory layer that declares strict wins over any proposal; the
   validator and the intent-create command both refuse a relaxed or off value
   under it.
@@ -115,8 +120,8 @@ and each pass through a lowered fence records a `GUARD_STOOD_ASIDE` row.
 
 ## Scope settings
 
-The grid decides which stages run; five scope settings decide how much
-ceremony runs inside them. Every front/report proposal names all five in its
+The grid decides which stages run; six scope settings decide how much
+ceremony runs inside them. Every front/report proposal names all six in its
 `scopeSettings` member, in the scope file's own words, with a 1-2 sentence
 `scopeSettingsRationale`:
 
@@ -126,6 +131,7 @@ ceremony runs inside them. Every front/report proposal names all five in its
 | `learnings` | `on`, `off` | The stage learnings read/write ritual |
 | `summary_confirmation` | `on`, `off` | The separate "Looks correct" checkpoint before a stage writes its artifacts |
 | `plan_approval` | `on`, `off` | The person's approval of each code plan before it is built; off builds the plan as written with one line naming it |
+| `collaborators` | `on`, `off` | The support agents (collaborators) a stage dispatches; off runs every stage lead-only — no blind spokes, no mob round, and a pipeline's lead becomes its sole and final link |
 | `review_cap` | `adversarial`, `advisory`, `none` | `advisory`: each stage review becomes one pass whose findings the human reads at the gate; `none`: no stage reviewer is dispatched in the gated flow |
 
 - A matched proposal starts from its stock scope's values (from its `.md`; a
@@ -137,12 +143,12 @@ ceremony runs inside them. Every front/report proposal names all five in its
   Any value can change, reviews included: a review level set for the piece of
   work replaces its scope's ceiling.
 - Validate the final grid with the chosen values and its route (`--matched
-  <scope>` or `--custom`); either flag makes the five settings and the Guard
+  <scope>` or `--custom`); either flag makes the six settings and the Guard
   Policy required, and the validator checks each against the words the scope
   loader accepts.
 - For a custom grid, start from the validator's `custom_start.scope_settings`:
-  the classic scope's values (in core, summary confirmation off, reviews
-  advisory, the rest on), whichever stock scope the plan runs on. The plan
+  the classic scope's values (in core, summary confirmation and collaborators
+  off, reviews advisory, the rest on), whichever stock scope the plan runs on. The plan
   picks its own stages; only the ceremony starts from classic. Without a
   `custom_start` echo, start from the validator's nearest stock scope. A
   matched proposal that the human's edit turns custom keeps the Guard Policy
@@ -164,6 +170,9 @@ ceremony runs inside them. Every front/report proposal names all five in its
     scope's, or a custom plan's `custom_start`). Never propose turning it off:
     the validator rejects off where the scope the plan runs on asks, because
     only the person turns plan approval off.
+  - `collaborators`: keep the value you start from (as shipped, on only for
+    enterprise). Propose `on` only when the person asks for the specialists;
+    off runs every stage with the lead agent only.
   - `review_cap`: `adversarial` when risk or verification entropy is HIGH or
     the work is regulated; `advisory` when both are MED or lower and the human
     will read the findings at the gate; `none` only when both are LOW and the
@@ -172,11 +181,13 @@ ceremony runs inside them. Every front/report proposal names all five in its
   audit trail; `plan_approval: off` removes only the plan stop, and a
   memory-held strict Guard Policy keeps it on. A global kill switch
   (`AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`,
-  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`) still forces its ceremony off
+  `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`,
+  `AIDLC_DISABLE_COLLABORATORS=1`) still forces its ceremony off
   whatever the scope says. The validator names one that forces an `on` value
   off on this machine; mark that value in the gate row, since the scope stores
-  `on` but the ceremony will not run until the switch is cleared.
-- The human sees the five values as one gate row, and whatever they ask for
+  `on` but the ceremony will not run until the switch is cleared. When none is
+  set, the proposal says nothing about kill switches.
+- The human sees the six values as one gate row, and whatever they ask for
   there is done. A change keeps the route and applies to this piece of work;
   only lowering a matched proposal's Guard Policy makes it custom. Plan
   approval keeps the value the plan starts from: only the person turns it
@@ -184,14 +195,14 @@ ceremony runs inside them. Every front/report proposal names all five in its
   approval, the harness records it and creation turns it off, so the proposal
   stays as it is. A plan the person saves as a scope stores the
   values in its frontmatter as `sensors:`, `learnings:`,
-  `summary_confirmation:`, `plan_approval:`, and `review_cap:`.
+  `summary_confirmation:`, `plan_approval:`, `collaborators:`, and `review_cap:`.
 - In-flight, the settings are not part of the recompose. Leave a settings
   request out of the stage delta and return `settingsChanges`, typed values
   the conductor shows on the gate and applies only on the human's approval;
-  return only what the request asks for. The keys are `sensors`, `learnings`, and
-  `summary_confirmation` (`on`/`off`), `plan_approval` (`on` only: the person
-  turns it off in their own words), and `review` (`adversarial`/`advisory`/
-  `none`). Full reviews on a capped scope is `"review": "adversarial"`; no
+  return only what the request asks for. The keys are `sensors`, `learnings`,
+  `summary_confirmation`, and `collaborators` (`on`/`off`), `plan_approval` (`on`
+  only: the person turns it off in their own words), and `review`
+  (`adversarial`/`advisory`/`none`). Full reviews on a capped scope is `"review": "adversarial"`; no
   stage changes. When `engine config get <key>` reports `from env
   AIDLC_DISABLE_<NAME>`, a kill switch on this machine overrides every
   setting: return no change and say in one line that it has to be removed

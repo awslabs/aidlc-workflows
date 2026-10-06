@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { classifyLiveFiles, discoverLiveFiles, FAMILIES, LIVE_MATRICES, LIVE_SHARD_COUNTS, liveFilter, liveMatrix, liveRunnerArgs, liveRunnerCommand, liveRunnerEnvironment, PLATFORM_ONLY, selectedLiveFiles, VERIFICATION_FAMILIES, type LiveFamily, type LiveMatrixKind, type VerificationFamily } from "../../scripts/ci-live-filter.ts";
 import { FULL_SUITE_COVERAGE_POLICY, FULL_SUITE_JOBS, RELEASE_OMITTED_JOBS, FULL_VERIFICATION_OMITTED_JOBS, LIVE_VERIFICATION_OMITTED_JOBS, fullSuiteResult, type SuiteNeeds, type SuitePurpose } from "../../scripts/ci-full-suite-result.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
+import { macosNamedUnitFiles, macosUnitSelection, selectionOutput } from "../../scripts/ci-macos-unit-selection.ts";
 import { brokerChildEnvironment } from "../../scripts/ci-start-credential-broker.ts";
 import { sandboxEnvironment } from "../../scripts/ci-live-sandbox.ts";
 import { discoverClaudeRequiredTests } from "../harness/claude-gate.ts";
@@ -22,6 +23,7 @@ interface Step {
   "timeout-minutes"?: number | string;
   uses?: string;
   if?: string;
+  "continue-on-error"?: boolean | string;
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
@@ -31,7 +33,7 @@ interface Matrix {
   exclude?: string;
   family?: LiveFamily[];
   runner?: string[] | string;
-  suite?: Array<{ name: string; tier: string; shard?: string }>;
+  suite?: Array<{ name: string; tier: string; shard?: string; filter?: string; exclude?: string }>;
 }
 interface Job {
   name?: string;
@@ -58,7 +60,7 @@ const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/
 };
 const deterministic = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/deterministic-tests.yml"), "utf8")) as {
   on: {
-    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string }>; secrets?: unknown; outputs?: unknown };
+    workflow_call: { inputs: Record<string, { type: string; required?: boolean; default?: string | boolean }>; secrets?: unknown; outputs?: unknown };
     workflow_dispatch: { inputs: Record<string, { description?: string; type: string; required?: boolean; default?: string; options?: string[] }> };
   };
   permissions: Record<string, string>;
@@ -74,6 +76,19 @@ const liveJobs = liveKinds.map((kind) => `live_${kind}`);
 
 function steps(job: { steps?: Step[] }): Step[] {
   return job.steps ?? [];
+}
+
+/**
+ * The env for a fixture run of a checked-in step: the parent env without any
+ * variable the step declares, plus `vars`. A CI job running this file has the
+ * step's own variables set (a selected macOS shard sets SELECTION_MODE and
+ * SELECTION_EXCLUDE, and the step rewrites TEST_EXCLUDE), and none of them
+ * may reach the fixture run.
+ */
+function stepRunEnv(step: Step, vars: Record<string, string>, parent: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...parent };
+  for (const key of Object.keys(step.env ?? {})) delete env[key];
+  return { ...env, ...vars };
 }
 
 function aliases(file: string): string[] {
@@ -134,6 +149,49 @@ function runLivePlan(family: string, file: string): Record<string, string> {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+function fixtureGit(root: string, ...args: string[]): void {
+  const result = spawnSync("git", ["-C", root, "-c", "user.name=t345", "-c", "user.email=t345@example.invalid", "-c", "commit.gpgsign=false", ...args], {
+    encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+  });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+}
+
+/** A one-commit repository with the macOS selection script, its sharding library and these unit files. */
+function macosSelectionRepo(root: string, units: Record<string, string>): void {
+  for (const file of ["scripts/ci-macos-unit-selection.ts", "tests/lib/test-sharding.ts"]) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), readFileSync(join(REPO_ROOT, file)));
+  }
+  mkdirSync(join(root, "tests", "unit"), { recursive: true });
+  for (const [name, body] of Object.entries(units)) writeFileSync(join(root, "tests", "unit", name), body);
+  writeFileSync(join(root, "tests", "unit-shard-weights.json"), JSON.stringify({ defaultSeconds: 10, weights: {}, affinityGroups: [] }));
+  fixtureGit(root, "init", "-q");
+  fixtureGit(root, "add", "-A");
+  fixtureGit(root, "commit", "-q", "-m", "base");
+}
+
+/** Runs the checked-in macOS selection step in a repository and returns its GITHUB_OUTPUT entries. */
+function runMacosSelect(root: string, output: string, shard: string): Record<string, string> {
+  const select = steps(deterministic.jobs.test).find((step) => step.id === "select")!;
+  writeFileSync(output, "");
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", select.run!], {
+    cwd: root, encoding: "utf8", timeout: NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
+    env: stepRunEnv(select, {
+      PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+      GITHUB_OUTPUT: output, UNIT_SHARD: shard,
+    }),
+  });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  return outputEntries(readFileSync(output, "utf8"));
+}
+
+function outputEntries(text: string): Record<string, string> {
+  return Object.fromEntries(text.trim().split(/\r?\n/).map((line) => {
+    const index = line.indexOf("=");
+    return [line.slice(0, index), line.slice(index + 1)];
+  }));
 }
 
 function allSuccess(omitted: readonly string[] = RELEASE_OMITTED_JOBS): SuiteNeeds {
@@ -200,7 +258,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "ref", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "exclude", "filter", "macos-merge-selection", "ref", "retry-once", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -212,7 +270,10 @@ describe("t345 complete nightly coverage", () => {
     const bind = setup.findIndex((step) => step.name === "Bind checkout to requested commit");
     const install = setup.findIndex((step) => step.run === "bun install --frozen-lockfile");
     const packageIndex = setup.findIndex((step) => step.run === "bun scripts/package.ts");
-    expect(setup[checkout].with).toEqual({ ref: `\${{ inputs.ref }}`, "persist-credentials": false });
+    expect(setup[checkout].with).toEqual({
+      ref: `\${{ inputs.ref }}`, "persist-credentials": false,
+      "fetch-depth": `\${{ inputs.macos-merge-selection == true && 2 || 1 }}`,
+    });
     expect(bind).toBeGreaterThan(checkout);
     expect(bind).toBeLessThan(install);
     expect(setup[bind].run).toContain('test "$(git rev-parse HEAD)" = "$TEST_REF"');
@@ -220,7 +281,7 @@ describe("t345 complete nightly coverage", () => {
     expect(packageIndex).toBeLessThan(setup.findIndex((step) => step.name === "Run deterministic tier"));
     expect(setup.find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"]).toBe("1.4.2");
     const substrate = setup.find((step) => step.name === "Prepare unit test substrates")!;
-    expect(substrate.if).toBe("inputs.tier == 'unit' && runner.os != 'Windows'");
+    expect(substrate.if).toBe("inputs.tier == 'unit' && runner.os != 'Windows' && steps.select.outputs.mode != 'none'");
     expect(substrate.run).toContain('command -v "$tool"');
     expect(substrate.run).toContain("tmux zsh");
     expect(substrate.run).toContain("sudo apt-get install");
@@ -238,6 +299,8 @@ describe("t345 complete nightly coverage", () => {
       tier: { type: "string", required: true },
       "unit-shard": { type: "string", default: "" },
       "artifact-label": { type: "string", required: true },
+      "evidence-optional": { type: "boolean", default: false },
+      "retry-once": { type: "boolean", default: false },
     });
     expect(callable.inputs.diagnostic_filter).toBeUndefined();
     expect(callable.inputs.diagnostic_backend).toBeUndefined();
@@ -271,13 +334,18 @@ describe("t345 complete nightly coverage", () => {
     expect(evaluateBackend({ diagnostic_backend: "bun" })).toBe("bun");
     expect(evaluateBackend({ diagnostic_backend: "tmux" })).toBe("tmux");
     const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
-    expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.diagnostic_filter || '' }}`);
+    expect(step.env?.TEST_FILTER).toBe(`\${{ inputs.filter || inputs.diagnostic_filter || '' }}`);
     // Exercise the checked-in expression for callers that have no filter input.
     const expression = step.env!.TEST_FILTER.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
     const evaluate = new Function("inputs", `return (${expression});`);
     expect(evaluate({})).toBe("");
     expect(evaluate({ diagnostic_filter: "" })).toBe("");
     expect(evaluate({ diagnostic_filter: "^t-tui-runtime$" })).toBe("^t-tui-runtime$");
+    expect(evaluate({ filter: "" })).toBe("");
+    expect(evaluate({ filter: "^t-scope-run-" })).toBe("^t-scope-run-");
+    expect(step.env?.TEST_EXCLUDE).toBe(`\${{ inputs.exclude || '' }}`);
+    expect(step.run).toMatch(/if \[ -n "\$\{TEST_EXCLUDE:-\}" \]; then/);
+    expect(step.run).toContain('args+=(--exclude "$TEST_EXCLUDE")');
     expect(Object.keys(deterministic.jobs)).toEqual(["test"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     expect(deterministic.jobs.test.permissions).toBeUndefined();
@@ -348,16 +416,49 @@ describe("t345 complete nightly coverage", () => {
         );
       };
       const runners = evaluate(matrix.runner as string) as string[];
-      const excluded = evaluate(matrix.exclude!) as Array<{ suite: { name: string; tier: string } }>;
-      expect(excluded).toEqual(expanded ? [] : [{ suite: { name: "e2e", tier: "e2e" } }]);
-      const suites = matrix.suite!.filter((suite) =>
-        !excluded.some((row) => row.suite.name === suite.name && row.suite.tier === suite.tier));
+      const excluded = evaluate(matrix.exclude!) as Array<{ runner?: string; suite: { name: string; tier: string } }>;
+      // The scope runs stay on Linux in the queue; the nightly runs them on every OS.
+      const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" };
+      expect(excluded).toEqual(expanded
+        ? [{ runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns }]
+        : [{ suite: { name: "e2e", tier: "e2e" } }]);
+      const suitesOn = (runner: string) => matrix.suite!.filter((suite) =>
+        !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
+      const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(8).fill("unit"), "integration", ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
-      expect(new Set(runners.flatMap((runner) => suites.map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 33 : 10);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", "integration", ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(expanded ? 46 : 15);
       if (expanded) expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     }
+    // One integration job runs everything but the scope runs; the other runs only them.
+    const integration = matrix.suite!.filter((suite) => suite.tier === "integration");
+    expect(integration.map(({ name, filter, exclude }) => [name, filter, exclude])).toEqual([
+      ["integration", undefined, "^t-scope-run-"],
+      ["scope-runs", "^t-scope-run-", undefined],
+    ]);
+    // The runner matches a filter against a file's base name, stem and
+    // tier-qualified stem (run-tests.ts matchesE2eFilter): every integration
+    // file lands in exactly one of the two jobs.
+    const names = (file: string) => [file, file.replace(/\.test\.ts$/, ""), `integration-${file.replace(/\.test\.ts$/, "")}`];
+    const files = readdirSync(join(REPO_ROOT, "tests", "integration")).filter((file) => file.endsWith(".test.ts"));
+    const left = new RegExp(integration[0].exclude!);
+    const scoped = new RegExp(integration[1].filter!);
+    for (const file of files) {
+      const inRest = !names(file).some((name) => left.test(name));
+      const inScoped = names(file).some((name) => scoped.test(name));
+      expect([file, inRest !== inScoped], file).toEqual([file, true]);
+      expect([file, inScoped], file).toEqual([file, file.startsWith("t-scope-run-")]);
+    }
+    // An existing caller that names no filter runs its whole tier, as before.
+    expect(deterministic.on.workflow_call.inputs.filter).toMatchObject({ default: "", type: "string" });
+    expect(deterministic.on.workflow_call.inputs.filter.required).toBeUndefined();
+    expect(ci.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
+    expect(workflow.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
+    expect(ci.jobs.deterministic.with?.exclude).toBe(`\${{ matrix.suite.exclude || '' }}`);
+    expect(workflow.jobs.deterministic.with?.exclude).toBe(`\${{ matrix.suite.exclude || '' }}`);
+    expect(deterministic.on.workflow_call.inputs.exclude).toMatchObject({ default: "", type: "string" });
+    expect(matrixOf(workflow.jobs.deterministic).exclude).toBeUndefined();
     expect(ci.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(workflow.jobs.deterministic.with?.diagnostic_filter).toBeUndefined();
     expect(ci.jobs.deterministic.with?.diagnostic_backend).toBeUndefined();
@@ -365,15 +466,227 @@ describe("t345 complete nightly coverage", () => {
     expect(steps(ci.jobs.test_native_terminal).some((step) => step.name === "Run platform regressions on manual dispatch")).toBe(false);
   });
 
-  for (const [tier, shard, filter, expected] of [
-    ["smoke", "", "", ["--smoke"]],
-    ["unit", "3/8", "", ["--unit", "--shard", "3/8"]],
-    ["integration", "", "", ["--integration"]],
-    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"]],
-    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"]],
-    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"]],
+  // macOS runners set the merge queue's pace, so a queued merge commit runs on
+  // macOS only the unit files that name macOS and the ones the change touches.
+  test("only the merge queue's macOS unit shards narrow their files; every other leg and the nightly run in full", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    const value = ci.jobs.deterministic.with?.["macos-merge-selection"] ?? "";
+    const expression = value.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
+    expect(expression, value).toBeDefined();
+    const evaluate = new Function("github", "matrix", `return (${expression});`);
+    for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
+      for (const runner of ["ubuntu-latest", "macos-15", "windows-latest"]) {
+        for (const suite of matrixOf(ci.jobs.deterministic).suite!) {
+          expect(evaluate({ event_name: event }, { runner, suite }), `${event} ${runner} ${suite.name}`)
+            .toBe(event === "merge_group" && runner === "macos-15" && suite.tier === "unit");
+        }
+      }
+    }
+    // The nightly Full Suite never passes the input, so it keeps the full macOS set.
+    expect(workflow.jobs.deterministic.with?.["macos-merge-selection"]).toBeUndefined();
+    expect(deterministic.on.workflow_call.inputs["macos-merge-selection"]).toMatchObject({ type: "boolean", default: false });
+    expect(deterministic.on.workflow_dispatch.inputs["macos-merge-selection"]).toBeUndefined();
+    const setup = steps(deterministic.jobs.test);
+    const select = setup.find((step) => step.id === "select")!;
+    expect(select.if).toBe("inputs.macos-merge-selection == true && inputs.tier == 'unit' && runner.os == 'macOS'");
+    expect(select.run).toContain('--base HEAD^1 --shard "$UNIT_SHARD"');
+    // A shard with nothing selected stops after the selection: no install,
+    // build, run or evidence.
+    expect(setup.indexOf(select)).toBeLessThan(setup.findIndex((step) => step.run === "bun install --frozen-lockfile"));
+    for (const step of setup.slice(setup.indexOf(select) + 1)) {
+      if (step.name === "Prepare Windows native sandbox probe") continue;
+      const condition = step.name === "Upload deterministic evidence" ? "steps.sanitize.outcome == 'success'" : "steps.select.outputs.mode != 'none'";
+      expect(step.if ?? "", step.name).toContain(condition);
+    }
+  });
+
+  test("the macOS selection runs the full shard when the change cannot be diffed or the selection fails", () => {
+    const root = mkdtempSync(join(tmpdir(), "t345-macos-select-"));
+    const repo = join(root, "repo");
+    const output = join(root, "output");
+    try {
+      macosSelectionRepo(repo, { "a.test.ts": 'process.platform === "darwin";\n', "b.test.ts": "// portable\n", "c.test.ts": "// portable\n" });
+      // One commit: there is no first parent to diff against.
+      expect(runMacosSelect(repo, output, "1/1")).toEqual({ mode: "full" });
+      writeFileSync(join(repo, "tests", "unit", "c.test.ts"), "// portable, edited\n");
+      fixtureGit(repo, "commit", "-q", "-am", "change");
+      // The named file and the changed one, spread over the shards; a shard
+      // past the selection runs nothing.
+      const one = runMacosSelect(repo, output, "1/3");
+      const two = runMacosSelect(repo, output, "2/3");
+      expect([one.mode, two.mode, Number(one.count) + Number(two.count)]).toEqual(["selected", "selected", 2]);
+      expect(runMacosSelect(repo, output, "3/3")).toEqual({ mode: "none" });
+      const kept = (exclude: string) => ["a", "b", "c"].filter((stem) => !new RegExp(exclude).test(`${stem}.test.ts`));
+      expect([...kept(one.exclude), ...kept(two.exclude)].sort()).toEqual(["a", "c"]);
+      // A selection that cannot run at all runs the full shard too.
+      writeFileSync(join(repo, "scripts", "ci-macos-unit-selection.ts"), "process.exit(1);\n");
+      expect(runMacosSelect(repo, output, "1/3")).toEqual({ mode: "full" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the macOS unit list is computed from each file's source, never kept by hand", () => {
+    const root = mkdtempSync(join(tmpdir(), "t345-macos-named-"));
+    try {
+      writeFileSync(join(root, "a.test.ts"), 'if (process.platform === "darwin") {}\n');
+      writeFileSync(join(root, "b.test.ts"), "// runs on the macOS runner\n");
+      writeFileSync(join(root, "c.test.ts"), "// portable\n");
+      writeFileSync(join(root, "d-helper.ts"), "// a darwin helper, not a test file\n");
+      expect(macosNamedUnitFiles(root)).toEqual(["a.test.ts", "b.test.ts"]);
+      writeFileSync(join(root, "c.test.ts"), "// now names MacOS\n");
+      expect(macosNamedUnitFiles(root)).toEqual(["a.test.ts", "b.test.ts", "c.test.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    // Here, the twelve shards split the named files exactly once, and each
+    // shard's exclude keeps exactly its share under every name --exclude reads.
+    const named = macosNamedUnitFiles(join(REPO_ROOT, "tests", "unit"));
+    expect(named.length).toBeGreaterThan(0);
+    const all = readdirSync(join(REPO_ROOT, "tests", "unit")).filter((file) => file.endsWith(".test.ts"));
+    const seen: string[] = [];
+    for (let index = 1; index <= 12; index++) {
+      const selection = macosUnitSelection(REPO_ROOT, [], `${index}/12`);
+      expect(selection.mode).not.toBe("full");
+      if (selection.mode !== "selected") continue;
+      seen.push(...selection.files);
+      const exclude = new RegExp(outputEntries(selectionOutput(selection)).exclude);
+      for (const file of all) {
+        const kept = !aliases(`tests/unit/${file}`).some((name) => exclude.test(name));
+        expect([file, kept]).toEqual([file, selection.files.includes(file)]);
+      }
+    }
+    // Plus the rest of any affinity group a named file is in.
+    const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests", "unit-shard-weights.json"), "utf8")) as ShardConfig;
+    const grouped = config.affinityGroups.filter((group) => group.some((file) => named.includes(file))).flat();
+    expect(seen.sort()).toEqual([...new Set([...named, ...grouped])].sort());
+  });
+
+  // This file runs inside the shared step on CI, so a selected macOS shard's
+  // own variables are in its env; a fixture run must not take them.
+  test("a fixture run of the shared tier step never takes the CI job's own step variables", () => {
+    const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
+    const leaked = {
+      ...process.env, SELECTION_MODE: "selected", TEST_FILTER: "^t-leak$", TEST_EXCLUDE: "^t-leak$", UNIT_SHARD: "9/12",
+      SELECTION_EXCLUDE: "^(?!(?:unit-)?(?:t345-full-suite-workflow)(?:\\.test\\.ts)?$)", RETRY_ONCE: "true",
+    };
+    const vars = { TEST_TIER: "unit", UNIT_SHARD: "3/8", TEST_FILTER: "", RETRY_ONCE: "false" };
+    const env = stepRunEnv(step, vars, leaked);
+    expect(["SELECTION_MODE", "SELECTION_EXCLUDE", "TEST_EXCLUDE"].filter((key) => env[key] !== undefined)).toEqual([]);
+    expect(env).toMatchObject(vars);
+    const root = mkdtempSync(join(tmpdir(), "t345-step-env-"));
+    try {
+      mkdirSync(join(root, "tests"));
+      writeFileSync(join(root, "tests/run-tests.sh"), [
+        "#!/bin/bash",
+        'printf "%s\\0" "$@" > "$GITHUB_WORKSPACE/argv.bin"',
+        'stamp="$GITHUB_WORKSPACE/tests/logs/fixture"',
+        'mkdir -p "$stamp"',
+        'echo "Verbose mode: logging to $stamp"',
+        'printf "Test files: 1\\n" > "$stamp/summary.txt"',
+      ].join("\n"));
+      const result = spawnSync("bash", ["-c", step.run!], {
+        cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: stepRunEnv(step, { ...vars, GITHUB_WORKSPACE: root.replaceAll("\\", "/") }, leaked),
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean)).toEqual([
+        "--debug", "-P", "8", "--no-llm", "--unit", "--shard", "3/8", "--file-timeout", "7200", "--run-timeout", "14400",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("the macOS selection keeps affinity groups whole and runs everything for a name it cannot pass on", () => {
+    const root = mkdtempSync(join(tmpdir(), "t345-macos-groups-"));
+    try {
+      mkdirSync(join(root, "tests", "unit"), { recursive: true });
+      for (const name of ["builder.test.ts", "reader.test.ts", "other.test.ts", "mac.test.ts"]) {
+        writeFileSync(join(root, "tests", "unit", name), name === "mac.test.ts" ? "// macOS only\n" : "// portable\n");
+      }
+      writeFileSync(join(root, "tests", "unit-shard-weights.json"), JSON.stringify({
+        defaultSeconds: 10, weights: {}, affinityGroups: [["builder.test.ts", "reader.test.ts"]],
+      }));
+      // A change to the file that reads what the other builds brings its builder, in the same shard.
+      const shards = ["1/2", "2/2"].map((shard) => macosUnitSelection(root, ["reader.test.ts"], shard));
+      const together = shards.find((selection) => selection.mode === "selected" && selection.files.includes("reader.test.ts"));
+      expect(together).toEqual({ mode: "selected", files: ["builder.test.ts", "reader.test.ts"] });
+      expect(shards.flatMap((selection) => selection.mode === "selected" ? selection.files : []).sort())
+        .toEqual(["builder.test.ts", "mac.test.ts", "reader.test.ts"]);
+      // A selected name outside the test-file grammar could break the step's
+      // output lines, so the shard runs every file instead.
+      expect(macosUnitSelection(root, ["odd name.test.ts"], "1/2")).toEqual({ mode: "full" });
+      const unsafe = process.platform === "win32" ? "mac os.test.ts" : "mac\nmode=none\n.test.ts";
+      writeFileSync(join(root, "tests", "unit", unsafe), "// macOS only\n");
+      expect(macosUnitSelection(root, [], "1/2")).toEqual({ mode: "full" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a selected macOS shard runs its share as one whole shard, and an empty selection keeps the shard", () => {
+    const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
+    expect(step.env).toMatchObject({
+      SELECTION_MODE: `\${{ steps.select.outputs.mode || '' }}`,
+      SELECTION_EXCLUDE: `\${{ steps.select.outputs.exclude || '' }}`,
+    });
+    const root = mkdtempSync(join(tmpdir(), "t345-macos-run-"));
+    try {
+      mkdirSync(join(root, "tests"));
+      writeFileSync(join(root, "tests/run-tests.sh"), [
+        "#!/bin/bash",
+        'printf "%s\\0" "$@" > "$GITHUB_WORKSPACE/argv.bin"',
+        'stamp="$GITHUB_WORKSPACE/tests/logs/fixture"',
+        'mkdir -p "$stamp"',
+        'echo "Verbose mode: logging to $stamp"',
+        'printf "Test files: 1\\n" > "$stamp/summary.txt"',
+      ].join("\n"));
+      const exclude = "^(?!(?:unit-)?(?:t1|t2)(?:\\.test\\.ts)?$)";
+      const sharded = ["--unit", "--shard", "3/12", "--file-retries", "1"];
+      for (const [mode, selected, matrixExclude, expected] of [
+        // One whole shard keeps the shard rules, such as required compiled coverage.
+        ["selected", exclude, "", ["--unit", "--shard", "1/1", "--file-retries", "1", "--exclude", exclude]],
+        ["selected", exclude, "^t-slow$", ["--unit", "--shard", "1/1", "--file-retries", "1", "--exclude", `(?:^t-slow$)|${exclude}`]],
+        ["selected", "", "", sharded],
+        ["full", "", "", sharded],
+        ["", "", "", sharded],
+      ] as const) {
+        rmSync(join(root, "tests/logs"), { recursive: true, force: true });
+        const result = spawnSync("bash", ["-c", step.run!], {
+          cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+          env: stepRunEnv(step, {
+            GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: "unit", UNIT_SHARD: "3/12",
+            TEST_FILTER: "", TEST_EXCLUDE: matrixExclude, RETRY_ONCE: "true", SELECTION_MODE: mode, SELECTION_EXCLUDE: selected,
+          }),
+        });
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean), `${mode} ${selected}`).toEqual([
+          "--debug", "-P", "8", "--no-llm", ...expected, "--file-timeout", "7200", "--run-timeout", "14400",
+        ]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  for (const [tier, shard, filter, expected, retry] of [
+    ["smoke", "", "", ["--smoke"], "false"],
+    ["unit", "3/8", "", ["--unit", "--shard", "3/8"], "false"],
+    ["integration", "", "", ["--integration"], "false"],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "false"],
+    ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"], "false"],
+    ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"], "false"],
+    // The merge queue retries smoke, unit and integration files once; isolated
+    // e2e never takes the flag.
+    ["smoke", "", "", ["--smoke", "--file-retries", "1"], "true"],
+    ["unit", "3/12", "", ["--unit", "--shard", "3/12", "--file-retries", "1"], "true"],
+    ["integration", "", "", ["--integration", "--file-retries", "1"], "true"],
+    ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "true"],
   ] as const) {
-    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""} preserves arguments, captured output and failure status`, () => {
+    test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""}${retry === "true" ? " in the merge queue" : ""} preserves arguments, captured output and failure status`, () => {
       const root = mkdtempSync(join(tmpdir(), "t345-shared-tier-"));
       const step = steps(deterministic.jobs.test).find((step) => step.name === "Run deterministic tier")!;
       try {
@@ -395,7 +708,7 @@ describe("t345 complete nightly coverage", () => {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
             cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-            env: { ...process.env, GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit },
+            env: stepRunEnv(step, { GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit }),
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
@@ -764,21 +1077,21 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
     for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
-    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
+    for (const name of ["check", "deterministic", "test_guards", "coverage_ratchet"]) expect(ci.jobs[name].if).toBeUndefined();
     // A skipped need would skip the summary under the default success() gate.
     expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
-    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
     const summary = steps(ci.jobs.test)[0];
     expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
     const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
       encoding: "utf8", timeout: 15_000,
-      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
+      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", COVERAGE_RESULT: "success", ...results },
     }).status;
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
       const expected = event === "pull_request" ? "skipped" : "success";
       const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
       expect(status(event, crossOs), event).toBe(0);
-      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "COVERAGE_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
         for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
       }
       // The merge queue cannot pass on cross-OS jobs that never ran.
@@ -856,13 +1169,80 @@ describe("t345 complete nightly coverage", () => {
     const sharedSteps = steps(deterministic.jobs.test);
     const upload = sharedSteps.find((step) => step.uses?.startsWith("actions/upload-artifact@"))!;
     const sanitize = sharedSteps.find((step) => step.id === "sanitize")!;
-    expect(sanitize.if).toBe(`\${{ always() }}`);
+    expect(sanitize.if).toBe(`\${{ always() && steps.select.outputs.mode != 'none' }}`);
     expect(sanitize.env?.AIDLC_NIGHTLY_UPLOAD_TRACES).toBe(`\${{ vars.AIDLC_NIGHTLY_UPLOAD_TRACES || '1' }}`);
     expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tests/logs");
     expect(sanitize.run).toContain("bun scripts/ci-sanitize-logs.ts tmp/ci-deterministic");
     expect(upload.if).toBe(`\${{ always() && steps.sanitize.outcome == 'success' }}`);
     expect(upload.with).toMatchObject({ "retention-days": 90, "include-hidden-files": true, "if-no-files-found": "error" });
     expect(upload.with?.path).toBe("tests/logs/\ntmp/ci-deterministic/\n");
+  });
+
+  test("a failed CI evidence upload never fails passing tests, and Full Suite evidence stays required", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job & { "continue-on-error"?: unknown }>;
+    };
+    // Only CI opts in. Full Suite verification runs and manual probes never
+    // pass the input, and a missing input compares unequal to true.
+    expect(ci.jobs.deterministic.with?.["evidence-optional"] as unknown).toBe(true);
+    expect(workflow.jobs.deterministic.with?.["evidence-optional"]).toBeUndefined();
+    // Only merge groups retry; PR pushes, dispatches and Full Suite stay strict.
+    expect(ci.jobs.deterministic.with?.["retry-once"]).toBe(`\${{ github.event_name == 'merge_group' }}`);
+    expect(workflow.jobs.deterministic.with?.["retry-once"]).toBeUndefined();
+    expect(deterministic.on.workflow_dispatch.inputs["retry-once"]).toBeUndefined();
+    expect(deterministic.on.workflow_dispatch.inputs["evidence-optional"]).toBeUndefined();
+    // These are the three uploads in the required check's chain; each test step
+    // keeps its own exit code, so a real failure still fails the job.
+    for (const [job, testStep, tolerance] of [
+      [deterministic.jobs.test, "Run deterministic tier", `\${{ inputs.evidence-optional == true }}`],
+      [ci.jobs.test_native_terminal, "Run native terminal contracts", true],
+      [ci.jobs.test_guards, "Exercise recovery with production guards", true],
+    ] as const) {
+      const all = steps(job);
+      const tolerant = all.filter((step) => step["continue-on-error"] !== undefined);
+      expect(tolerant.map((step) => step.uses?.split("@")[0]), testStep).toEqual(["actions/upload-artifact"]);
+      expect(tolerant[0]["continue-on-error"], testStep).toBe(tolerance);
+      expect(tolerant[0].if, testStep).toContain("always()");
+      const run = all.findIndex((step) => step.name === testStep);
+      expect(run, testStep).toBeGreaterThanOrEqual(0);
+      expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
+      expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
+    }
+    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    // Uploads outside the required chain, and every Full Suite upload, stay fatal.
+    const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
+      steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
+    expect(ciTolerant.sort()).toEqual([
+      "test_guards: Preserve guard evidence",
+      "test_native_terminal: Preserve native terminal evidence",
+    ]);
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of steps(job).filter((entry) => entry.uses?.startsWith("actions/upload-artifact@"))) {
+        expect(step["continue-on-error"], step.name).toBeUndefined();
+      }
+    }
+  });
+
+  test("the stale test-weight report is advisory: it runs after the tests and cannot fail a job", () => {
+    const all = steps(deterministic.jobs.test);
+    const index = all.findIndex((step) => step.name === "Report outdated test weights");
+    expect(index).toBeGreaterThan(all.findIndex((step) => step.name === "Run deterministic tier"));
+    expect(index).toBeLessThan(all.findIndex((step) => step.name === "Sanitize deterministic evidence"));
+    const report = all[index];
+    expect(report.if).toBe(`\${{ always() && steps.select.outputs.mode != 'none' && (inputs.tier == 'unit' || inputs.tier == 'integration') }}`);
+    expect(report.env).toEqual({ TEST_TIER: `\${{ inputs.tier }}` });
+    // No continue-on-error (only the evidence upload may carry it); the script
+    // always exits 0 and `|| true` covers a crash of Bun itself.
+    expect(report["continue-on-error"]).toBeUndefined();
+    expect(report.run).toBe('bun scripts/ci-test-weights.ts report "$TEST_TIER" tmp/ci-deterministic/stamp.txt || true');
+    // The flaky-test report follows it with the same never-fails shape.
+    const retries = all[index + 1];
+    expect(retries.name).toBe("Report tests that passed on retry");
+    expect(retries.if).toBe(`\${{ always() && steps.select.outputs.mode != 'none' && inputs.retry-once == true && inputs.tier != 'e2e' }}`);
+    expect(retries["continue-on-error"]).toBeUndefined();
+    expect(retries.run).toBe("bun scripts/ci-retry-report.ts tmp/ci-deterministic/stamp.txt || true");
+    const execution = all.find((step) => step.name === "Run deterministic tier")!;
+    expect(execution.env?.RETRY_ONCE).toBe(`\${{ inputs.retry-once == true }}`);
   });
 
   test("CI model allowlist and Codex profile preserve proxy routing without credential export", () => {
@@ -1088,6 +1468,7 @@ describe("t345 complete nightly coverage", () => {
   test("sandbox env is explicit and excludes runner control-plane and AWS secrets", () => {
     const inherited = {
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: "mint-token", AWS_ACCESS_KEY_ID: "secret-key", GITHUB_TOKEN: "github",
+      AIDLC_CODEX_AWS_PROFILE: "runner-profile",
       AIDLC_BROKER_URL: "http://127.0.0.1:1234", AIDLC_BROKER_IDENTITY: JSON.stringify({ account: "123456789012", arn: "arn:aws:sts::123456789012:assumed-role/ci/test" }),
     };
     for (const family of ["claude-sdk", "claude-tui", "codex", "opencode", "release-contract"] as const) {
@@ -1100,13 +1481,20 @@ describe("t345 complete nightly coverage", () => {
       expect(Object.keys(env).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_CONFIG_FILE", "AWS_PROFILE"] : family === "codex" ? ["AWS_CONFIG_FILE"] : []);
       if (family === "opencode") expect(env.AWS_PROFILE).toBe("broker");
+      if (family === "codex") expect(env.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
+      else expect(env.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(env).toMatchObject(FAMILIES[family].env);
       const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
         ...inherited, PATHEXT: ".UNTRUSTED",
       });
+      // The hook phase trace is on for the Windows live legs only.
+      expect(windows.AIDLC_TEST_HOOK_TRACE).toBe("1");
+      expect(env.AIDLC_TEST_HOOK_TRACE).toBeUndefined();
       // Native `where claude` needs the executable suffix list after scrubbing.
       expect(windows.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
       expect(windows.PATH).toBe("C:\\aidlc-live\\tools");
+      if (family === "codex") expect(windows.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
+      else expect(windows.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(Object.keys(windows).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
         .toEqual(family === "opencode" ? ["AWS_CONFIG_FILE", "AWS_PROFILE"] : family === "codex" ? ["AWS_CONFIG_FILE"] : []);
     }
@@ -1118,6 +1506,35 @@ describe("t345 complete nightly coverage", () => {
     expect(() => sandboxEnvironment("codex", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
       ...inherited, AIDLC_CODEX_BIN: "C:\\runner\\untrusted.cmd",
     })).toThrow("sealed native Codex launcher");
+  });
+
+  test("the Windows wait loop snapshots stalled hooks for live runs only, from process metadata", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+    const snapshot = source.match(/^function Write-HookStallSnapshot\b[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(snapshot).toContain("Get-CimInstance Win32_Process");
+    // Hooks enter the dispatcher both ways; an adapter runs its core hook as a child.
+    expect(snapshot).toContain("Contains('engine hook ')");
+    expect(snapshot).toContain("Contains('engine adapter ')");
+    // Every CIM query is capped at what is left of the snapshot's budget (at
+    // most 15 seconds), so a slow provider cannot hold the wait loop; ownership
+    // is checked for the stalled processes and their parents, not every process.
+    expect(snapshot).toContain("[int]$BudgetSeconds = 60");
+    expect(snapshot).toContain("$remaining = { [int][Math]::Min(15, [Math]::Floor(($budget - [DateTime]::UtcNow).TotalSeconds)) }");
+    const cimCalls = snapshot.match(/(?:Get-CimInstance|Invoke-CimMethod)[^\n]*/g) ?? [];
+    expect(cimCalls.length).toBeGreaterThanOrEqual(3);
+    for (const call of cimCalls) expect(call).toMatch(/-OperationTimeoutSec (?:\$seconds|\(\[Math\]::Max\(1, \(& \$remaining\)\)\))/);
+    expect(snapshot).not.toMatch(/foreach \(\$process in \$processes\) \{[^}]*GetOwnerSid/);
+    // A lookup that reports a failure without throwing is unknown, not "not owned".
+    expect(snapshot).toContain("$owner.ReturnValue -ne 0 -or [string]::IsNullOrEmpty($owner.Sid)) { return $null }");
+    // Reading files the isolated run uses could add a handle to the stall.
+    expect(snapshot).not.toMatch(/Get-Content|ReadAll|OpenRead|::Open\(|Get-ChildItem/);
+    // One call site, gated to the live run's scheduled-task wait and evidence-only.
+    expect(source.match(/Write-HookStallSnapshot \$/g) ?? []).toHaveLength(1);
+    expect(source).toMatch(
+      /if \(\$Label -eq 'run' -and \[DateTime\]::UtcNow -ge \$nextStallCheck\) \{\s+\$nextStallCheck = \[DateTime\]::UtcNow\.AddMinutes\(1\)\s+try \{ Write-HookStallSnapshot \$stallDirectory \$stallSeen /,
+    );
+    // A runner-only sibling of the task's log root, collected with the launch logs.
+    expect(source).toContain("$stallDirectory = Join-Path (Join-Path $tools 'logs') ('hook-stalls-' + $id)");
   });
 
   test("Kiro and Cursor are excluded without exposing vendor API keys", () => {
@@ -1426,12 +1843,16 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     const suites = matrix.suite!;
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
-    expect(suites.filter((suite) => suite.tier === "integration")).toEqual([{ name: "integration", tier: "integration" }]);
+    // Integration runs as two jobs: the scope runs, and everything else.
+    expect(suites.filter((suite) => suite.tier === "integration")).toEqual([
+      { name: "integration", tier: "integration", exclude: "^t-scope-run-" },
+      { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" },
+    ]);
     expect(suites.filter((suite) => suite.tier === "e2e")).toEqual([{ name: "e2e", tier: "e2e" }]);
     expect(suites.some((suite) => suite.tier === "deep")).toBe(false);
     expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);
     const shards = suites.filter((suite) => suite.tier === "unit");
-    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 8 }, (_, index) => `${index + 1}/8`));
+    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
     const files = readdirSync(join(REPO_ROOT, "tests/unit")).filter((file) => file.endsWith(".test.ts")).sort();
     const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests/unit-shard-weights.json"), "utf8")) as ShardConfig;
     const assignments = shards.map((suite) => selectShard(files, parseShardSpec(suite.shard!), config));

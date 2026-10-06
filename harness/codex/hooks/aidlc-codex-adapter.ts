@@ -39,7 +39,8 @@
 //     wrapper (verified live, findings E1) — the shim re-wraps.
 //   - bind-bash-session: POSIX Bash input is rewritten through
 //     hookSpecificOutput.updatedInput so every command inherits the validated
-//     payload session without process inspection.
+//     payload session without process inspection, until a tool has seen
+//     Codex give a command that session as CODEX_THREAD_ID.
 //   - continue-workflow: {"decision":"block","reason"} passes through VERBATIM — the
 //     contract is identical on Codex (stop_hook_active included).
 //   - everything else: advisory; stdout ignored, exit 0.
@@ -66,8 +67,10 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  emptyPickerResult,
   isNonAnswer,
   sessionsDir,
+  codexThreadSessionPath,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -495,11 +498,19 @@ switch (target) {
       typeof codex.tool_input?.command === "string"
         ? codex.tool_input.command
         : "";
+    // Codex gives the command this session as CODEX_THREAD_ID (0.160 and
+    // later); once a tool has seen it there, the command keeps the words the
+    // agent wrote.
+    const threadNoted = (() => {
+      const path = payloadSessionId ? codexThreadSessionPath(projectDir, payloadSessionId) : null;
+      return path !== null && existsSync(path);
+    })();
     if (
       process.platform === "win32" ||
       codex.tool_name !== "Bash" ||
       !payloadSessionId ||
-      !command
+      !command ||
+      threadNoted
     ) {
       persistResponse("", 0);
       return 0;
@@ -814,6 +825,21 @@ switch (target) {
   }
 
   case "record-human-turn": {
+    // Codex's question box runs out after two minutes with no answer. The core
+    // hook records that nobody answered and tells the agent to ask again;
+    // its PostToolUse context goes back to Codex as it is.
+    if (codex.tool_name === "request_user_input" && emptyPickerResult(codex.tool_response)) {
+      const r = runCoreWithStderr("aidlc-record-human-turn.ts", JSON.stringify({
+        hook_event_name: "PostToolUse",
+        ...(codex.session_id ? { session_id: codex.session_id } : {}),
+        tool_name: "request_user_input",
+        tool_input: codex.tool_input,
+        tool_response: { answers: {} },
+      }));
+      persistResponse(r.stdout, 0);
+      if (r.stdout) process.stdout.write(r.stdout);
+      return 0;
+    }
     if (
       codex.tool_name === "request_user_input" &&
       !hasExplicitHumanSelection(codex.tool_response, codex.tool_input)

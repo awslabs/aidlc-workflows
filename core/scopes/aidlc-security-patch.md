@@ -8,12 +8,14 @@ keywords:
   - patch
 description: CVE response
 skeleton: off
+existing_code: true
 runner: true
 guard_policy: off
 sensors: on
 learnings: on
 summary_confirmation: on
 plan_approval: on
+collaborators: off
 ---
 
 # security-patch scope

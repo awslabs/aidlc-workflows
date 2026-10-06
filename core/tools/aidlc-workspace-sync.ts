@@ -36,6 +36,8 @@ import {
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { jsoncSettingValue } from "./aidlc-distribution.ts";
+import { discoverProjectHarnesses } from "./aidlc-runtime-paths.ts";
 import {
   discoverSiblingRepos,
   resolveProjectDir,
@@ -685,12 +687,31 @@ function renderGitignore(
   return `${prefix}${separator}${GITIGNORE_HEADER.join("\n")}\n${block}\n`;
 }
 
-function renderCodeWorkspace(manifest: WorkspaceManifest): string {
+// In a multi-root window VS Code reads window-scoped settings, such as its
+// agent request cap, from the workspace file rather than a folder's
+// .vscode/settings.json, so a Copilot project's generated file carries the
+// cap too (#1411). It is added once: only to a file with no settings yet (a
+// new file, or one written before this release). A settings object already
+// in the file is the team's and is kept as it is, so a key the team removes
+// stays removed.
+export const WORKSPACE_REQUEST_CAP_KEY = "chat.agent.maxRequests";
+
+function copilotProject(root: string): boolean {
+  try {
+    return discoverProjectHarnesses(root).some((harness) => harness.distribution === "copilot");
+  } catch {
+    return false;
+  }
+}
+
+function renderCodeWorkspace(manifest: WorkspaceManifest, existing: string | null, copilot: boolean): string {
   const folders = [
     { path: "." },
     ...manifest.repos.map((repo) => ({ path: repo.name })),
   ];
-  return `${JSON.stringify({ folders }, null, 2)}\n`;
+  const kept = existing === null ? undefined : jsoncSettingValue(existing, "settings");
+  const settings = kept ?? (copilot ? { [WORKSPACE_REQUEST_CAP_KEY]: 200 } : undefined);
+  return `${JSON.stringify(settings === undefined ? { folders } : { folders, settings }, null, 2)}\n`;
 }
 
 function validateOutputPath(path: string): void {
@@ -939,7 +960,11 @@ function applyPlan(
   const gitignoreBefore = snapshotOutput(liveGitignore);
   const codeWorkspaceBefore = snapshotOutput(liveCodeWorkspace);
   const gitignore = renderGitignore(gitignoreBefore.content, manifest);
-  const codeWorkspace = renderCodeWorkspace(manifest);
+  const codeWorkspace = renderCodeWorkspace(
+    manifest,
+    codeWorkspaceBefore.exists ? codeWorkspaceBefore.content : null,
+    copilotProject(root),
+  );
   const transactionDir = mkdtempSync(join(root, ".aidlc-workspace-sync-txn-"));
   const clonesDir = join(transactionDir, "clones");
   const generatedDir = join(transactionDir, "generated");

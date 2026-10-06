@@ -32,9 +32,12 @@ Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.
 If you cannot install a native executable or prefer to manage the project files
 manually, install [Bun](https://bun.sh/), download
 `aidlc-copy-runtime-X.Y.Z.tar.gz` from the
-[release](https://github.com/awslabs/aidlc-workflows/releases/latest), and copy
-the complete `runtime/<harness>/` directory into the project. The manual-copy
-path does not require the native `aidlc` command.
+[release](https://github.com/awslabs/aidlc-workflows/releases/latest), copy
+the complete `runtime/<harness>/` directory into the project, and run its own
+setup once, as [Copy Channel](18-install-and-lifecycle.md#copy-channel) shows.
+A copy never replaces your `.gitignore` or `AGENTS.md`; AI-DLC adds its own
+lines to them. The manual-copy path does not require the native `aidlc`
+command.
 
 ### 2. Configure a project
 
@@ -104,7 +107,7 @@ still apply.
 | --- | --- | --- |
 | Claude Code | Configure a supported provider; AI-DLC preserves the current selection | [Claude setup below](#aws-bedrock-setup) |
 | Kiro CLI >= 2.6 | Sign in with `kiro-cli login` | [Kiro CLI](harnesses/kiro-cli.md) |
-| Kiro IDE | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
+| Kiro IDE >= 1.1.70 (or Kiro CLI >= 2.24.1) | Sign in and open the configured project | [Kiro IDE](harnesses/kiro-ide.md) |
 | Codex CLI >= 0.145.0 | Use a Git repository and approve project hook trust | [Codex CLI](harnesses/codex-cli.md) |
 | Cursor | Sign in to the IDE or CLI | [Cursor](harnesses/cursor.md) |
 | opencode >= 1.17 | Configure the session provider globally | [opencode](harnesses/opencode.md) |
@@ -161,7 +164,9 @@ Claude projects can install the shipped MCP defaults during config:
 aidlc config --harness claude --mcp defaults
 ```
 
-Use `--mcp none` to omit them. The default set is:
+Use `--mcp none` to omit them. A copy-channel install starts without them; run
+`bun .claude/tools/aidlc.ts config project --harness claude --mcp defaults --yes` to add them.
+The default set is:
 
 | Server | Provides | Credentials |
 | --- | --- | --- |
@@ -193,7 +198,7 @@ After config, complete any action named in its output:
 
 | Harness | Typical action |
 | --- | --- |
-| Claude Code | Approve project hooks through `/hooks`, then restart Claude Code |
+| Claude Code | If Claude Code is already open in this folder, exit it and start it again |
 | Kiro CLI | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
@@ -221,9 +226,9 @@ aidlc doctor
 aidlc config
 ```
 
-Config preserves project-owned content and refuses to refresh while a workflow
-is active. Projects using plugins should run `/aidlc plugin sync` after an
-engine refresh.
+Config preserves project-owned content, and a refresh while a workflow is open
+is done and says whether that work carries on. Projects using plugins should run
+`/aidlc plugin sync` after an engine refresh.
 
 For version selection, project pins, offline installation, mirrors, custom CAs,
 release authentication, automation, and uninstall, see

@@ -490,6 +490,11 @@ jobs:
             }
             & $command config --project-dir $project --harness $harness --mcp none --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if ($harness -eq 'cursor') {
+              git init --quiet $project
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             & $command doctor --project-dir $project --quiet
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -629,9 +634,62 @@ jobs:
             fi
             env PATH="/usr/bin:/bin" "$command" config \
               --project-dir "$project" --harness "$harness" --mcp none --quiet
+            # Setup tells a Cursor project outside git to run `git init`; doctor fails it until then.
+            if [ "$harness" = cursor ]; then
+              git init --quiet "$project"
+            fi
             env PATH="/usr/bin:/bin" "$command" doctor \
               --project-dir "$project" --quiet
           done
+
+  # A person on the last stable release types `aidlc update`, gets this build,
+  # and their hooks, project refresh and doctor still work. A failure turns the
+  # run red and opens the preview notes with a warning; the preview still
+  # publishes (release.yml holds a stable release back on it).
+  update-from-previous:
+    needs: [validate, stage-release]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.stage-release.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-candidate
+          path: build/release
+      # The token stays in this step: the releases under test never see it.
+      - name: Find the last stable release
+        id: previous
+        shell: bash
+        env:
+          CANDIDATE_TAG: ${{ needs.validate.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          previous="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 20 --json tagName --jq '[.[].tagName | select(. != env.CANDIDATE_TAG)] | .[0] // empty')"
+          test -n "$previous"
+          echo "tag=$previous" >>"$GITHUB_OUTPUT"
+      - name: Update from the last release
+        shell: bash
+        env:
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
+          bun scripts/ci-update-from-previous.ts --previous "$PREVIOUS_TAG" --candidate build/release
 
   publish:
     needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]
@@ -696,7 +754,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, full_suite, publish]
+    needs: [validate, full_suite, publish, update-from-previous]
     if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     environment: preview
@@ -729,17 +787,19 @@ jobs:
           test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"
           test "$RELEASE_TAG" = "v$(jq -r .version build/release/version.json)"
           (cd build/release && sha256sum -c checksums.txt)
-      # A preview built from a failing Full Suite warns first and ends with the
-      # report, trimmed so the whole body stays within GitHub's release limit.
+      # A preview built from a failing Full Suite or update check warns first and
+      # ends with the report, trimmed so the whole body stays within GitHub's
+      # release limit.
       - name: Stage preview notes
         env:
           FULL_SUITE_RESULT: ${{ needs.full_suite.outputs.result || 'failure' }}
           PREVIEW_PLAN: ${{ needs.validate.outputs.preview_plan }}
+          UPDATE_RESULT: ${{ needs.update-from-previous.result }}
         run: |
           set -euo pipefail
           plan="$RUNNER_TEMP/aidlc-preview-plan.json"
           printf '%s\n' "$PREVIEW_PLAN" >"$plan"
-          if [ "$FULL_SUITE_RESULT" != success ]; then
+          if [ "$FULL_SUITE_RESULT" != success ] || [ "$UPDATE_RESULT" != success ]; then
             bun scripts/ci-preview-test-report.ts --stage-notes "$plan" \
               "$RUNNER_TEMP/preview-test-report/preview-test-report.md"
           fi

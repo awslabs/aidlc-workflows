@@ -38,6 +38,9 @@ export const VERSION_ID = new RegExp(`^${VERSION_ID_PATTERN}$`);
 const PARSED_VERSION = new RegExp(
   `^(${NUMBER})\\.(${NUMBER})\\.(${NUMBER})(?:-${PREVIEW_CHANNEL}\\.(\\d{8})\\.([1-9]\\d*))?$`,
 );
+// Three 16-digit safe integers, plus "-preview.YYYYMMDD." and a fourth
+// 16-digit build counter. Bound untrusted metadata before regexes or diagnostics.
+const VERSION_ID_MAX_LENGTH = 84;
 
 export type ParsedVersion = {
   base: string;
@@ -63,10 +66,19 @@ export function requireReleaseChannel(value: string): ReleaseChannel {
 }
 
 export function requireVersion(value: string): string {
-  if (!VERSION_ID.test(value)) {
+  if (typeof value !== "string" || value.length > VERSION_ID_MAX_LENGTH) {
+    throw new Error(`invalid version: identifier must be at most ${VERSION_ID_MAX_LENGTH} characters`);
+  }
+  const match = PARSED_VERSION.exec(value);
+  if (!match) {
     throw new Error(
       `invalid version "${value}"; expected x.y.z or x.y.z-${PREVIEW_CHANNEL}.YYYYMMDD.N (for example 2.5.0)`,
     );
+  }
+  if ([match[1], match[2], match[3], match[5]].some(
+    (part) => part !== undefined && !Number.isSafeInteger(Number(part)),
+  )) {
+    throw new Error("invalid version: numeric components must be safe integers");
   }
   return value;
 }

@@ -21,8 +21,7 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?",
-        "date -u( .*)?"
+        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?"
       ],
       "deniedCommands": [
         "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
@@ -32,8 +31,6 @@
     },
     "fs_write": {
       "allowedPaths": [
-        ".kiro/scopes/**",
-        ".kiro/tools/data/scope-grid.json",
         "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json"
       ]
     }

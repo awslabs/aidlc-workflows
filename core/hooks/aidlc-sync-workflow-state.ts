@@ -9,8 +9,7 @@
 //      the latest STAGE_STARTED slug from the audit tail instead. Payload-free.
 // In both cases the slug is reconciled into the state file via set-status.
 // Receives JSON on stdin from the adapter / Claude Code.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   hookStandsOutside,
   enterHookWorkflow,
@@ -18,6 +17,7 @@ import {
   getField,
   hookDebug,
   hooksHealthDir,
+  writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
   latestStartedStageSlug,
@@ -85,15 +85,22 @@ if (source === "ide-audit-sync") {
   const audit = readAllAuditShards(projectDir);
   const auditSlug = latestStartedStageSlug(audit);
   hookDebug(projectDir, "sync-workflow-state", "ide-audit-sync", { auditSlug, current, status });
+  // Nothing to do from this record's files: the Kiro IDE front gate skips the
+  // next shell command's call until one of them changes (the mark's name is
+  // aidlc-hook-front-gate.ts noopMarkName; the hook names it without importing).
+  const noop = (): number => {
+    writeHookStatusFile(hooksHealthDir(projectDir), "sync-workflow-state.noop", isoTimestamp());
+    return 0;
+  };
 
   // (a) Only sync a live, running workflow. A completed/parked workflow (Status
   //     != Running) or a cleared pointer (Current Stage none/empty) is ahead of
   //     the audit tail by design — never rewind it.
-  if (status !== "Running") return 0;
-  if (current === "" || current === "none") return 0;
+  if (status !== "Running") return noop();
+  if (current === "" || current === "none") return noop();
   // (b) No audit slug, or it already matches state → nothing to do.
-  if (!auditSlug) return 0;
-  if (current === auditSlug) return 0;
+  if (!auditSlug) return noop();
+  if (current === auditSlug) return noop();
   // (c) Never sync BACKWARD: if the audit slug is a stage the workflow has
   //     already completed or skipped, the state is legitimately ahead of it
   //     (the stage finished; a newer STAGE_STARTED just wasn't the last row).
@@ -105,7 +112,7 @@ if (source === "ide-audit-sync") {
       auditSlug,
       auditState: auditCb.state,
     });
-    return 0;
+    return noop();
   }
   slug = auditSlug;
 } else {
@@ -121,8 +128,7 @@ if (source === "ide-audit-sync") {
 
 // Health heartbeat
 const healthDir = hooksHealthDir(projectDir);
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "sync-workflow-state.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "sync-workflow-state.last", isoTimestamp());
 
 // Update state through the shared implementation; the hook owns this mutation.
 hookDebug(projectDir, "sync-workflow-state", "set-status", { slug });

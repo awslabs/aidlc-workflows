@@ -8,13 +8,15 @@ keywords:
   - bugfix
 description: Fix a specific bug
 skeleton: off
+existing_code: true
 runner: true
 review_cap: advisory
 guard_policy: off
 sensors: on
-learnings: on
-summary_confirmation: on
+learnings: off
+summary_confirmation: off
 plan_approval: on
+collaborators: off
 ---
 
 # bugfix scope
@@ -25,6 +27,14 @@ reverse-engineering to understand the current code, pulls requirements for
 the fix, then generates, tests, and deploys it.
 
 Guard Policy defaults to off: changed inputs are recorded and announced rather than reopening approval; plan approval, review freeze, state transition, and reviewer read scope are lowered for undirected work. Human presence stays up.
+
+Learnings and summary confirmation are off: no "Anything to add for next
+time?" question after each stage, and no summary to confirm before an artifact
+is written. Sensors, every stage approval, and plan approval stay on. Turn
+either back on per intent with `/aidlc --learnings on` or
+`/aidlc --summary-confirmation on`. Collaborators are off, so each stage runs
+with its lead agent only; `/aidlc --collaborators on` brings the support
+agents in.
 
 ## Why these stages, why skip those
 

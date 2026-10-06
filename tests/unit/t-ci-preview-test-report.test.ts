@@ -15,6 +15,7 @@ import {
   collectFailures,
   FAILED_SUITE_POINTER,
   FAILED_SUITE_WARNING,
+  FAILED_UPDATE_WARNING,
   failedJobs,
   jobGroup,
   MAX_REPORT,
@@ -23,6 +24,7 @@ import {
   renderReport,
   type RunFailures,
   stagePreviewNotes,
+  updateReport,
 } from "../../scripts/ci-preview-test-report.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -219,6 +221,18 @@ describe("t-ci-preview-test-report", () => {
     expect(report([], { legs: { plan: "success" } })).toContain("Failed legs: none recorded.");
   });
 
+  test("a leg the suite skips by design is not listed as failed; a required leg that skipped is", () => {
+    // The nightly release-purpose suite omits these two legs, as its result file says.
+    const nightly = { plan: "success", deterministic: "skipped", production_guards: "skipped", live_windows: "failure" };
+    const omittedLegs = ["deterministic", "production_guards"];
+    expect(report([], { legs: nightly, omittedLegs })).toContain("Failed legs: `live_windows` (failure).");
+    expect(report([], { legs: { ...nightly, live_macos: "skipped" }, omittedLegs }))
+      .toContain("Failed legs: `live_windows` (failure), `live_macos` (skipped).");
+    // A result file without the omission list reports every leg that did not pass.
+    expect(report([], { legs: nightly })).toContain(
+      "Failed legs: `deterministic` (skipped), `production_guards` (skipped), `live_windows` (failure).");
+  });
+
   test("names stay inert markup and long reports stay within their budget", () => {
     const hostile = report([parseFailures("unit-1-Linux", [
       "FAIL: t1 (1 failed assertions)",
@@ -281,6 +295,27 @@ describe("t-ci-preview-test-report", () => {
     expect(stagePreviewNotes(oversized, report)).toBe(oversized);
   });
 
+  test("a failed update from the last release warns and keeps its line when a long report is cut", () => {
+    const body = "- change\n\nSource commit: owner/repo@a\n";
+    const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
+    const line = updateReport("https://x/run/9");
+    expect(line).toContain("[the preview run](https://x/run/9)");
+    // A passing suite adds no report of its own, and nothing failed changes nothing.
+    expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false, updateRunUrl: "https://x/run/9" }))
+      .toBe(`${FAILED_UPDATE_WARNING}${body}\n${line}`);
+    expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false })).toBe(body);
+    const both = { suite: true, updateRunUrl: "https://x/run/9" };
+    const full = `${FAILED_SUITE_WARNING}${FAILED_UPDATE_WARNING}${body}\n${line}\n${report}`;
+    expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, both)).toBe(full);
+    const cut = stagePreviewNotes(body, report, full.length - 1, both);
+    expect(cut).toStartWith(`${FAILED_SUITE_WARNING}${FAILED_UPDATE_WARNING}${body}\n${line}\n## Nightly test report\n`);
+    expect(cut).toEndWith("\n- ...report truncated; the run summary has the full report.\n");
+    // With no room for a report the update warning stays beside the pointer.
+    const pointed = "x".repeat(RELEASE_BODY_LIMIT - FAILED_SUITE_POINTER.length - FAILED_UPDATE_WARNING.length);
+    expect(stagePreviewNotes(pointed, report, RELEASE_BODY_LIMIT, both))
+      .toBe(`${FAILED_SUITE_POINTER}${FAILED_UPDATE_WARNING}${pointed}`);
+  });
+
   test("the command stages a failing preview's notes in the plan file", () => {
     const root = fixture();
     const plan = {
@@ -306,7 +341,10 @@ describe("t-ci-preview-test-report", () => {
   test("the command renders the workflow's report from downloaded evidence", () => {
     const root = fixture();
     const evidence = join(root, "evidence");
-    put(evidence, "full-suite-result/full-suite-result.json", JSON.stringify({ legs: { deterministic: "failure" } }));
+    // The result file names the legs its purpose omits; the report reads them from it.
+    put(evidence, "full-suite-result/full-suite-result.json", JSON.stringify({
+      legs: { deterministic: "failure", production_guards: "skipped" }, omittedLegs: ["production_guards"],
+    }));
     put(evidence, "full-suite-deterministic-unit-7-Windows/tests/logs/2026-09-24T21-52-16Z-p7036/failures.txt", OUTER);
     put(root, "jobs.json", JSON.stringify([{ jobs: [{ name: "full_suite / result", conclusion: "failure", html_url: "https://x/1" }] }]));
     const env = {
@@ -323,7 +361,8 @@ describe("t-ci-preview-test-report", () => {
     const rendered = Bun.spawnSync([process.execPath, cli, evidence, join(root, "jobs.json"), output], { env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(rendered.exitCode, rendered.stderr.toString()).toBe(0);
     expect(fs.readFileSync(output, "utf8")).toBe(report([parseFailures("deterministic-unit-7-Windows", OUTER)], {
-      legs: { deterministic: "failure" },
+      legs: { deterministic: "failure", production_guards: "skipped" },
+      omittedLegs: ["production_guards"],
       jobs: [{ name: "result", url: "https://x/1" }],
     }));
 

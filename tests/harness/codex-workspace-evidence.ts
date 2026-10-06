@@ -12,6 +12,10 @@ import { turnEvidence } from "./codex-turn-evidence.ts";
 const UUIDV7_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CODEX_TOOL = /^(?:\.\/)?\.codex\/tools\/aidlc\.ts$|^\/[^\s'"]*\/\.codex\/tools\/aidlc\.ts$/;
 const UNQUOTED_WORD = /^[A-Za-z0-9_./:=@,+%-]+$/;
+// The Bash-matched PreToolUse hook hands each command the chat's session in this
+// exact prefix (aidlc-codex-adapter.ts, bind-bash-session), and Codex reports the
+// command as it ran. Only this prefix, once, at the start, is set aside.
+const SESSION_PREFIX = /^export AIDLC_SESSION_OVERRIDE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' AIDLC_SESSION_OVERRIDE_SOURCE='payload'; /i;
 
 /** The argv of ONE literal `bun .codex/tools/aidlc.ts ...` invocation, or null.
  * Codex reports commands through its own `<shell> -lc '<command>'` wrapper, or
@@ -23,7 +27,7 @@ const UNQUOTED_WORD = /^[A-Za-z0-9_./:=@,+%-]+$/;
  * nothing to attribute the route to. */
 export function exactCodexUtilityArgv(command: string): string[] | null {
   const wrapped = /^(?:(?:\/(?:usr\/)?bin\/)?(?:ba|z)?sh -l?c|"[A-Za-z]:(?:\\\\[^"\\]+)*\\\\pwsh\.exe" (?:-NoProfile )?-Command) (?:'([^']*)'|"((?:[^"\\$`]|\\")*)")$/.exec(command);
-  const text = wrapped ? (wrapped[1] ?? wrapped[2].replaceAll('\\"', '"')) : command;
+  const text = (wrapped ? (wrapped[1] ?? wrapped[2].replaceAll('\\"', '"')) : command).replace(SESSION_PREFIX, "");
   if (/[\0\r\n]/.test(text)) return null;
   const words: string[] = [];
   for (let i = 0; i < text.length;) {

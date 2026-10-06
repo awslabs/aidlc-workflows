@@ -38,15 +38,18 @@
 //                   also fail-closes on any effort-like key in agent JSON,
 //                   so no Kiro agent surface may EVER carry one; a per-model
 //                   effort default can only ride on cli.json
-//                   chat.modelDefaults (see kiroModelDefaults below).
+//                   chat.modelDefaults (see kiroModelDefaults below). The
+//                   session's own model and effort live in the person's
+//                   PERSONAL Kiro settings (aidlc-kiro-session.ts): a project
+//                   chat.modelDefaults replaces that whole map, so none ships.
 //
 // Kiro collapse rule (dormant while no tier pins a Kiro model): two tiers
 // whose Kiro model IDs are equal are the same tier on Kiro (there is no
 // per-agent effort surface to tell them apart). When tiers share a model,
 // the cli.json chat.modelDefaults entry for that model takes the HIGHER
 // tier's effort - kiroModelDefaults() computes this. Today no tier pins a
-// Kiro model, so kiroModelDefaults() contributes no entries and only the
-// authored cli.json entries ship.
+// Kiro model, so kiroModelDefaults() contributes no entries and the shipped
+// cli.json carries no chat.modelDefaults.
 //
 // Tier-ceiling override, resolved at PACK time (runtime composition is out of
 // scope): the space-memory `tier_cap:` frontmatter key on the layered method
@@ -257,9 +260,8 @@ export function projectTier<H extends Harness>(
  *  tier's effort (the Kiro collapse rule - when tiers share a model there is
  *  no per-agent surface to tell them apart, so the more demanding tier's
  *  effort wins). Tiers with no pinned Kiro model (judgment) contribute no
- *  entry. NOTE: the orchestrator's own model entry (claude-opus-4.8 ->
- *  xhigh) is authored in the per-harness kiro settings cli.json, outside
- *  this table - the orchestrator agent is not a tier-carrying persona. */
+ *  entry. The session model's effort is not here: it lives in the person's
+ *  personal Kiro settings (aidlc-kiro-session.ts). */
 export function kiroModelDefaults(
   cap: Tier | null = null,
   additions: readonly { model: string; effort: KiroEffort }[] = [],

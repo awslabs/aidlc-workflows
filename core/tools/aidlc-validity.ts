@@ -5,8 +5,10 @@ import {
   getField,
   parseCheckboxes,
   readAllAuditShards,
+  staleStageLine,
 } from "./aidlc-lib.js";
 import { loadGraph } from "./aidlc-graph.ts";
+import { SLUG_RE as STAGE_SLUG_RE } from "./aidlc-stage-schema.ts";
 import {
   resolveArtifactInstances,
   type ArtifactResolutionOptions,
@@ -294,6 +296,16 @@ function projectTypeFrom(
   return raw === "brownfield" || raw === "greenfield" ? raw : null;
 }
 
+// A project-type change (the person said the work is existing code, or a new
+// project) makes a finished stage stale only when its work follows the type:
+// its inputs change with it (a conditional consume), or it builds (the
+// Construction testing plan and in-place rule follow it). Every other finished
+// stage stays valid, so the advisory names a stage worth redoing.
+function workDependsOnProjectType(stage: StageValidityNode): boolean {
+  return stage.phase === "construction" ||
+    (stage.consumes ?? []).some((consume) => consume.conditional_on !== undefined);
+}
+
 function consumeIsApplicable(
   conditionalOn: string | undefined,
   projectType: "brownfield" | "greenfield" | null,
@@ -572,6 +584,34 @@ function artifactBasisChanges(
   return changes;
 }
 
+// The input and output changes that are only an edit to a document that is
+// still there: same producer, same instances, same presence, other content. A
+// change named by both such an edit and another kind of change stays out.
+function contentOnlyChanges(before: StageValidationBasis, after: StageValidationBasis): Set<string> {
+  const only = new Set<string>();
+  const other = new Set<string>();
+  for (const [label, left, right] of [
+    ["input", before.inputs, after.inputs],
+    ["output", before.outputs, after.outputs],
+  ] as const) {
+    const previous = new Map(left.map((item) => [artifactBasisKey(item), item]));
+    const current = new Map(right.map((item) => [artifactBasisKey(item), item]));
+    for (const key of new Set([...previous.keys(), ...current.keys()])) {
+      const was = previous.get(key);
+      const now = current.get(key);
+      if (canonicalJson(was) === canonicalJson(now)) continue;
+      const change = `${label}:${(now ?? was)!.artifact}`;
+      if (was && now && canonicalJson({ ...was, contentHash: "" }) === canonicalJson({ ...now, contentHash: "" })) {
+        only.add(change);
+      } else {
+        other.add(change);
+      }
+    }
+  }
+  for (const change of other) only.delete(change);
+  return only;
+}
+
 export function diffStageValidationBasis(
   before: StageValidationBasis,
   after: StageValidationBasis,
@@ -702,6 +742,35 @@ export function propagateStageInvalidation(
  * tree, then propagate drift through observed stage-level dependencies.
  * The function is read-only with respect to workflow state.
  */
+/**
+ * A stage as the person hears it named: a shipped stage by its own name, and a
+ * plugin's stage by its slug, the name the person types to go there (its
+ * display name is the plugin's own text). A slug of any other shape is not
+ * named. The engine's advisory and status both name stages this way.
+ */
+export function stageLabel(stage: { slug: string; name: string; plugin?: string } | undefined, slug: string): string | null {
+  if (stage !== undefined && stage.plugin === undefined) return stage.name;
+  const typed = stage?.slug ?? slug;
+  return STAGE_SLUG_RE.test(typed) ? typed : null;
+}
+
+/**
+ * What the person hears about a finished stage that is behind, and the one way
+ * to act on it. When the project type changed to existing code after the stage
+ * ran, the code arriving is the reason it gives; otherwise an input changed.
+ * The engine's advisory and status both say it this way.
+ */
+export function staleStageNote(name: string, issue: Pick<StageValidityIssue, "reasons">, stateContent: string): string {
+  return issue.reasons.includes("project-type") && projectTypeFrom(stateContent) === "brownfield"
+    ? codeArrivedStageLine(name)
+    : staleStageLine(name);
+}
+
+// A finished stage that ran before the project's code was there, and the redo.
+export function codeArrivedStageLine(name: string): string {
+  return `${name} ran before the code was here; say "redo ${name.toLowerCase()}" to include it.`;
+}
+
 export function inspectStageValidity(
   projectDir: string,
   stateContent: string,
@@ -712,6 +781,8 @@ export function inspectStageValidity(
       stage: StageValidityNode,
       stages: readonly StageValidityNode[],
     ) => StageValidationBasis;
+    /** A change to a document's content alone is not raised (Guard Policy relaxed or off). */
+    acceptContentChanges?: boolean;
   } = {},
 ): StageValidityInspection {
   const stages = options.stages ?? loadGraph();
@@ -743,7 +814,11 @@ export function inspectStageValidity(
       );
       continue;
     }
-    const changes = diffStageValidationBasis(previous, current);
+    const contentOnly = options.acceptContentChanges === true
+      ? contentOnlyChanges(previous, current) : new Set<string>();
+    const changes = diffStageValidationBasis(previous, current).filter(
+      (change) => (change !== "project-type" || workDependsOnProjectType(stage)) && !contentOnly.has(change),
+    );
     if (changes.length > 0) directReasons.set(slug, changes);
   }
 

@@ -973,7 +973,7 @@ describe("t299 (5) authored consumers use the same contract", () => {
     ]) {
       const skill = read(`harness/${harness}/skills/aidlc/SKILL.md`);
       expect(skill, harness).toContain(
-        "stage-protocol-construction.md` — load on the first Construction directive of the session and on every `invoke-swarm`",
+        "stage-protocol-construction.md` - load on the first Construction directive of the session and on every `invoke-swarm`",
       );
     }
   });

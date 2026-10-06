@@ -381,7 +381,7 @@ flowchart LR
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-engine/recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it carries on from the checkpoint (the first call is `next --resume`), and the person can ask to redo, jump to a stage, or start fresh at any time. If not found, it creates the first intent. The orchestrator also checks for `.aidlc-engine/recovery.md` to detect possible state corruption from context compaction.
 
 ```mermaid
 flowchart TD
@@ -393,11 +393,8 @@ flowchart TD
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
 
-    RESUME_MENU["AskUserQuestion:\nResume Options"]
-    OPT_RESUME["Resume from\nlast checkpoint"]
-    OPT_REDO["Redo\ncurrent stage"]
-    OPT_JUMP["Jump to\nspecific stage"]
-    OPT_FRESH["Start fresh\n(archive existing)"]
+    CONTINUE["Carry on from the\ncheckpoint:\nnext --resume"]
+    OTHER["Person asks to redo,\njump, or start fresh:\nreport --result resumed"]
 
     STATUS_DISPLAY["Display read-only\nstatus summary"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
@@ -417,23 +414,20 @@ flowchart TD
     STATE_EXISTS -->|No| SCOPE_DETECT
 
     RECOVERY_CHECK -->|Yes| CORRUPTION
-    RECOVERY_CHECK -->|No| RESUME_MENU
-    CORRUPTION -->|Mismatch| WARN --> RESUME_MENU
-    CORRUPTION -->|Match| RESUME_MENU
+    RECOVERY_CHECK -->|No| CONTINUE
+    CORRUPTION -->|Mismatch| WARN --> CONTINUE
+    CORRUPTION -->|Match| CONTINUE
 
-    RESUME_MENU --> OPT_RESUME
-    RESUME_MENU --> OPT_REDO
-    RESUME_MENU --> OPT_JUMP
-    RESUME_MENU --> OPT_FRESH
-
-    OPT_FRESH -->|"archive + confirm"| CREATE
+    CONTINUE -.->|"any time"| OTHER
+    OTHER -->|"start fresh: confirm"| CREATE
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
     CONFIRM_SCOPE --> CREATE
 
     style START fill:#e1bee7,stroke:#7b1fa2,color:#000
-    style RESUME_MENU fill:#bbdefb,stroke:#1565c0,color:#000
+    style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
+    style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
     style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
     style WARN fill:#ffcdd2,stroke:#c62828,color:#000
 ```
@@ -450,7 +444,7 @@ flowchart TD
 
 Each stage loads knowledge in a strict 6-step order. This ensures guardrails take precedence, followed by shared methodology, then agent-specific knowledge, then team customizations, and finally prior stage artifacts. The sequence diagram below shows the loading order for any stage activation.
 
-> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
+> **Note:** Steps 1-5 are agent knowledge loading defined by `stage-protocol.md` Section 5; Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step. On inline stages and for the inline lead of a mob, `inline_context_paths` lists the team knowledge (steps 4-5) right after the personas and before the shared and agent methodology (steps 2-3), and the size cap trims methodology first; dispatched agents load in the order below.
 
 ```mermaid
 sequenceDiagram

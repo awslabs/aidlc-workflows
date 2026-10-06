@@ -43,7 +43,7 @@
 // the run's record shows when the bound bit; audit failures never change the
 // decision.
 
-import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
@@ -54,8 +54,10 @@ import {
   type ClaudeCodeHookInput,
   decideFence,
   errorMessage,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   hooksHealthDir,
+  writeHookStatusFile,
   recordGuardStoodAside,
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
@@ -72,6 +74,7 @@ import {
   toPosix,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
+import { writeTargets } from "./review-freeze-command.ts";
 
 const HOOK_NAME = "reviewer-scope";
 
@@ -838,7 +841,9 @@ function reviewerScopeStandsAside(
   }
   if (gate.decision !== "stand-aside") return false;
   const detail = `${target} (unit ${unit})`;
-  writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  if (guardStandAsideSpeaks(gate)) {
+    writeGuardStoodAside(guardStoodAsideLine("reviewer-scope", gate.source, detail));
+  }
   recordGuardStoodAside(projectDir, {
     fence: "reviewer-scope",
     authority: gate.authority,
@@ -945,8 +950,7 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
   if (!outside) {
     try {
       const healthDir = hooksHealthDir(projectDir);
-      mkdirSync(healthDir, { recursive: true });
-      writeFileSync(join(healthDir, `${HOOK_NAME}.last`), isoTimestamp(), "utf-8");
+      writeHookStatusFile(healthDir, `${HOOK_NAME}.last`, isoTimestamp());
     } catch {
       // Heartbeat failure is non-fatal - never let it affect the decision.
     }
@@ -983,18 +987,19 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
     unitScope &&
     ["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash"].includes(toolName)
   ) {
-    let scopedVerdict: ScopeVerdict;
+    let scopedVerdict: ScopeVerdict = { block: false };
     try {
       const cwdField = (parsed as { cwd?: unknown }).cwd;
-      scopedVerdict = evaluateReviewerScope(
-        toolName,
-        toolInput,
-        { unit: unitScope.unit, exempt: [] },
-        {
-          recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
-          cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
-        },
-      );
+      const context = {
+        recordRoot: dirname(dirname(reviewerDispatchPath(projectDir))),
+        cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+      };
+      // A shell call that writes nothing (a read, a listing, a search) is the
+      // checkout owner's own: only a command that writes is held to this Unit.
+      const writes = toolName !== "Bash" || writeTargets("Bash", toolInput, context.cwd).length > 0;
+      if (writes) {
+        scopedVerdict = evaluateReviewerScope(toolName, toolInput, { unit: unitScope.unit, exempt: [] }, context);
+      }
     } catch (e) {
       recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
       return 0;
@@ -1015,7 +1020,9 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
       process.stderr.write(
-        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}.\n`,
+        `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}. ` +
+          `This checkout changes only Unit "${unitScope.unit}"'s files: make that change from the project's main checkout, ` +
+          "or ask whoever claimed that Unit.\n",
       );
       return 2;
     }
@@ -1051,10 +1058,11 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
           toPosix(c.text).includes("construction/"),
         );
         if (touchesConstruction && perUnitReviewOwed(projectDir, stateContent)) {
-          const marker = join(hooksHealthDir(projectDir), `${HOOK_NAME}.missing-record.last`);
+          const markerName = `${HOOK_NAME}.missing-record.last`;
+          const marker = join(hooksHealthDir(projectDir), markerName);
           const fresh = existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 10 * 60 * 1000;
           if (!fresh) {
-            writeFileSync(marker, isoTimestamp(), "utf-8");
+            writeHookStatusFile(hooksHealthDir(projectDir), markerName, isoTimestamp());
             recordHookDrop(
               projectDir,
               HOOK_NAME,

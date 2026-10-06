@@ -30,7 +30,12 @@ import {
   machineTransactionRoot,
   windowsUninstallFencePath,
 } from "./aidlc-install-paths.ts";
-import { runWithOwnerStampedLock, withAuditLock } from "./aidlc-lib.ts";
+import {
+  processGeneration,
+  processStartedAtMs,
+  runWithOwnerStampedLock,
+  withAuditLock,
+} from "./aidlc-lib.ts";
 
 export type TransactionOperation =
   | { kind: "write"; path: string; data: string; mode?: number; expected?: string | "absent" }
@@ -339,6 +344,27 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+// A killed holder's PID can pass to a later process, which cannot hold a lock
+// written before it started. Locks record the holder's process generation;
+// a lock from a release that recorded none is judged by when it was written,
+// with a margin for timestamp rounding and small clock steps.
+const LATER_PROCESS_MARGIN_MS = 2_000;
+
+function heldByLaterProcess(pid: number, recorded: unknown, ownerPath: string): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2_147_483_647) return false;
+  if (typeof recorded === "string" && recorded) {
+    const observed = processGeneration(pid);
+    return observed !== null && observed !== recorded;
+  }
+  const started = processStartedAtMs(pid);
+  if (started === null) return false;
+  try {
+    return started > lstatSync(ownerPath).mtimeMs + LATER_PROCESS_MARGIN_MS;
+  } catch {
+    return false;
+  }
+}
+
 function clearStaleLock(lockPath: string): void {
   const directory = pathExists(lockPath) && lstatSync(lockPath).isDirectory();
   const ownerPath = directory ? join(lockPath, "owner.json") : lockPath;
@@ -352,7 +378,13 @@ function clearStaleLock(lockPath: string): void {
     if (!directory && (error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw new Error(`cannot verify transaction lock ${lockPath}`);
   }
-  let lock: { schemaVersion?: unknown; pid?: unknown; host?: unknown; token?: unknown } = {};
+  let lock: {
+    schemaVersion?: unknown;
+    pid?: unknown;
+    host?: unknown;
+    token?: unknown;
+    processGeneration?: unknown;
+  } = {};
   try {
     lock = JSON.parse(raw) as typeof lock;
   } catch {
@@ -377,7 +409,11 @@ function clearStaleLock(lockPath: string): void {
       "directory locking requires one host and one shared mount",
     );
   }
-  if (typeof lock.pid === "number" && processIsAlive(lock.pid)) {
+  if (
+    typeof lock.pid === "number" &&
+    processIsAlive(lock.pid) &&
+    !heldByLaterProcess(lock.pid, lock.processGeneration, ownerPath)
+  ) {
     throw new Error(`another AI-DLC mutation holds ${lockPath}`);
   }
   const moved = join(dirname(lockPath), `.aidlc-lock-dead-${randomUUID()}`);
@@ -402,6 +438,9 @@ function clearStaleLock(lockPath: string): void {
     throw new Error(`another AI-DLC mutation holds ${lockPath}`);
   }
   rmSync(moved, { recursive: directory, force: true });
+  process.stderr.write(
+    "aidlc: an earlier AI-DLC command stopped before it finished, so its lock was cleared.\n",
+  );
 }
 
 type HeldLock =
@@ -465,6 +504,12 @@ function transactionHostIdentity(): string {
   return transactionHost;
 }
 
+// Omitted where the platform has no generation; older releases ignore it.
+function processGenerationField(): { processGeneration?: string } {
+  const generation = processGeneration(process.pid);
+  return generation ? { processGeneration: generation } : {};
+}
+
 function acquireDirectoryLock(root: string, lockPath: string, staging: string): HeldLock {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -482,6 +527,7 @@ function acquireDirectoryLock(root: string, lockPath: string, staging: string): 
       host: transactionHostIdentity(),
       token: randomUUID(),
       staging: basename(staging),
+      ...processGenerationField(),
     })}\n`;
     let descriptor: number | null = null;
     try {
@@ -689,7 +735,11 @@ function acquireLock(root: string, lockPath: string, staging: string): HeldLock 
     let descriptor: number | null = null;
     try {
       descriptor = openSync(candidate, "wx", 0o600);
-      const identity = `${JSON.stringify({ pid: process.pid, staging: basename(staging) })}\n`;
+      const identity = `${JSON.stringify({
+        pid: process.pid,
+        staging: basename(staging),
+        ...processGenerationField(),
+      })}\n`;
       writeSync(descriptor, identity);
       fsyncSync(descriptor);
       linkTransactionLock(root, candidate, lockPath);
@@ -725,11 +775,43 @@ function quarantineOrphanStaging(root: string, current: string): void {
       entry !== basename(current) &&
       /^\.aidlc-txn-[0-9a-f]{8}-[0-9a-f-]{27}$/.test(entry)
     ) {
+      // A committed plan's staging folder holds nothing to recover.
+      if (existsSync(join(root, entry, STAGING_COMMITTED))) {
+        removeStaging(join(root, entry));
+        continue;
+      }
       renameSync(
         join(root, entry),
         join(root, `.aidlc-recovery-${Date.now()}-${randomUUID()}`),
       );
       syncPath(root);
+    }
+  }
+}
+
+// Marks a staging folder whose plan committed, so a folder left behind is
+// removed by the next run instead of kept as recovery evidence.
+const STAGING_COMMITTED = "committed";
+const BUSY_REMOVE_CODES = new Set(["EBUSY", "EPERM", "EACCES", "ENOTEMPTY"]);
+const STAGING_REMOVE_ATTEMPTS = 30;
+const STAGING_REMOVE_RETRY_MS = 100;
+
+// On Windows an editor's file watcher or a virus scan can hold a file in the
+// staging folder for a moment after the plan committed. Bun's rmSync ignores
+// maxRetries, so retry here. False when the folder is still there.
+function removeStaging(staging: string): boolean {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(staging, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      if (
+        !BUSY_REMOVE_CODES.has((error as NodeJS.ErrnoException).code ?? "") ||
+        attempt >= STAGING_REMOVE_ATTEMPTS
+      ) {
+        return false;
+      }
+      Bun.sleepSync(STAGING_REMOVE_RETRY_MS);
     }
   }
 }
@@ -817,6 +899,9 @@ export function executePlan(
   const staging = join(root, `.aidlc-txn-${randomUUID()}`);
   withTransactionLock(root, staging, (lock) => {
   let preserveStaging = false;
+  // Every operation is in place: what is left in the staging folder is only
+  // its scratch, and a failure to remove it never undoes or fails the plan.
+  let committedPlan = false;
   const committed: Array<{
     rel: string;
     existed: boolean;
@@ -831,7 +916,7 @@ export function executePlan(
       pendingWindowsUninstallBlocks(root)
     ) {
       throw new Error(
-        "a pending Windows uninstall blocks machine mutation; run aidlc doctor",
+        "a pending Windows uninstall blocks machine mutation; run doctor to see what is pending",
       );
     }
     quarantineOrphanStaging(root, staging);
@@ -914,7 +999,7 @@ export function executePlan(
     failpoint(options, "before-committed-validation");
     options.validateCommitted?.();
     failpoint(options, "after-committed-validation");
-    rmSync(staging, { recursive: true, force: true });
+    committedPlan = true;
   } catch (error) {
     const rollbackErrors: unknown[] = [];
     for (const entry of [...committed].reverse()) {
@@ -950,7 +1035,18 @@ export function executePlan(
     }
     throw error;
   } finally {
-    if (!preserveStaging) rmSync(staging, { recursive: true, force: true });
+    if (committedPlan) {
+      try {
+        writeFileSync(join(staging, STAGING_COMMITTED), "");
+      } catch {
+        // Unmarked, a folder left behind is kept as recovery evidence instead.
+      }
+      removeStaging(staging);
+    } else if (!preserveStaging) {
+      // A busy folder must not hide the error that stopped the plan; one left
+      // here is unmarked, so the next run keeps it as recovery evidence.
+      removeStaging(staging);
+    }
   }
   });
 }

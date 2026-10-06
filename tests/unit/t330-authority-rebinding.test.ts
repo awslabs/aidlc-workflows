@@ -480,7 +480,7 @@ describe("t330 (2) the state digest the active directive binds to", () => {
     ["without section separators", STATE.replace(/\n\n/g, "\n")],
   ]) {
     test(`Unit lifecycle mirror insertion and removal preserve authority ${layout}`, () => {
-      const fields = ["Active Unit", "Unit State", "Unit Pause Reason", "Unit Next Action"];
+      const fields = ["Active Unit", "Unit Stage", "Unit State", "Unit Pause Reason", "Unit Next Action"];
       const idle = fields.reduce((state, field) => removeField(state, field), initial);
       const digest = stateDigest(idle);
       let state = idle;
@@ -491,6 +491,7 @@ describe("t330 (2) the state digest the active directive binds to", () => {
       // Repeated lifecycles accumulate separator lines in the serialized state.
       for (let cycle = 0; cycle < 2; cycle++) {
         mirror("Active Unit", "alpha");
+        mirror("Unit Stage", "code-generation");
         mirror("Unit State", "in-progress");
         mirror("Unit State", "paused");
         mirror("Unit Pause Reason", "session ending");

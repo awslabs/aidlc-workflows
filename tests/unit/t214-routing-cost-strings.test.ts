@@ -144,7 +144,8 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
     const bf = counts(GRID.bugfix.stages, true);
-    expect(q).toContain(costClause(bf));
+    // bugfix asks no learnings question and no summary confirmation, and says so up front.
+    expect(q).toContain(`${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only.`);
     expect(q).not.toContain("per unit of work");
   });
 
@@ -183,6 +184,44 @@ describe("t214 compose offer carries the example counts (no feature-workflow tra
   });
 });
 
+describe("t214 every plan the offer lists carries the engine's own count", () => {
+  // A host that shows the other plans as choices shows these numbers, so the
+  // choices agree with the question ("classic = 17" in the question, "18 of 33
+  // stages" on the classic choice was the agent's own count).
+  function rowsAgree(d: Record<string, unknown>, greenfield: boolean): void {
+    const rows = d.scope_commands as Array<{ scope: string; stages?: string }>;
+    for (const [scope, entry] of Object.entries(GRID)) {
+      const c = counts(entry.stages, greenfield);
+      expect(rows.find((row) => row.scope === scope)?.stages, scope).toBe(`${c.execute} of ${c.total} stages`);
+    }
+  }
+
+  test("the compose offer's plans, on a new project", () => {
+    proj = createTestProject();
+    const d = directiveOf(runNext(proj, ["build a distributed cache layer with consistency guarantees"]).out);
+    expect(d.ask_type).toBe("compose-offer");
+    rowsAgree(d, true);
+    expect(String(d.question)).toContain(`classic = ${counts(GRID.classic.stages, true).execute}`);
+    // Every count the question names is its plan's row count, so a choice that
+    // shows a row's number can only differ from the question in wording.
+    const rows = d.scope_commands as Array<{ scope: string; stages?: string }>;
+    const named = [...String(d.question).matchAll(/\b([a-z][a-z-]*) = (?:all )?(\d+)\b/g)];
+    expect(named.map(([, scope]) => scope)).toEqual(["bugfix", "express", "classic", "feature"]);
+    for (const [, scope, n] of named) {
+      expect(rows.find((row) => row.scope === scope)?.stages, scope).toStartWith(`${n} of `);
+    }
+  });
+
+  test("the plan offer's other plans, on existing code", () => {
+    proj = createTestProject();
+    writeFileSync(join(proj, "app.ts"), "export const existing = true;\n");
+    const d = directiveOf(runNext(proj, ["fix login bug"]).out);
+    expect(d.ask_type).toBe("scope-confirm");
+    rowsAgree(d, false);
+    expect(String(d.question)).toContain(costClause(counts(GRID.bugfix.stages)));
+  });
+});
+
 describe("t214 creation print carries the cost parenthetical", () => {
   test("next bugfix prints intent-create AND the computed cost", () => {
     proj = createTestProject();
@@ -193,7 +232,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
-    expect(m).toContain(`(${costClause(bf)})`);
+    expect(m).toContain(`(${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only)`);
     expect(m).not.toContain("per unit of work");
   });
 
@@ -209,7 +248,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const message = String(d.message);
     expect(message).toContain("--summary-confirmation on");
     // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
-    expect(message).not.toContain("; no ");
+    expect(message).toContain("; lead agent only");
   });
 
   test("feature creation preview discloses the environment sensor kill switch", () => {
@@ -221,7 +260,7 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(result.rc, result.out).toBe(0);
     const d = directiveOf(result.out);
     expect(d.kind).toBe("print");
-    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors");
+    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors; lead agent only");
   });
 
   for (const scope of ["classic", "feature"]) {
@@ -236,24 +275,25 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(String(d.message)).toContain("per unit of work");
       if (scope === "classic") {
         expect(String(d.message)).toContain(
-          "; no summary confirmation",
+          "; no summary confirmation; lead agent only",
         );
       } else {
-        expect(String(d.message)).not.toContain("; no ");
+        // feature keeps the first four ceremonies on but ships collaborators off.
+        expect(String(d.message)).toContain("; lead agent only");
       }
     });
   }
 });
 
-describe("t214 scope-change stdout carries the Approval gates line", () => {
-  test("scope change --scope mvp prints Stages in scope AND Approval gates", () => {
+describe("t214 scope-change stdout carries the stage and gate counts", () => {
+  test("scope change --scope mvp says its stages and approval gates in one line", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);
     expect(r.rc).toBe(0);
     // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
     const mvp = counts(GRID.mvp.stages, true);
-    expect(r.out).toContain(`Stages in scope: ${mvp.execute}`);
-    expect(r.out).toContain(`Approval gates: ${mvp.gates}`);
+    expect(r.out).toContain(`Switched to mvp: ${mvp.execute} stages (`);
+    expect(r.out).toContain(`, ${mvp.gates} approval gates`);
   });
 });

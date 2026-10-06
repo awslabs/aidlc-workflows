@@ -164,7 +164,7 @@ Twenty-nine stages use inline execution, including all three Initialization stag
 
 **Subagent stages** -- The conductor prepares context (prior artifacts, project description, workspace findings) and delegates to a Claude Code Task tool subagent. The subagent executes autonomously and returns a structured summary. This is used for stages that benefit from focused, independent work without user interaction during execution. If a subagent call fails, the conductor retries once with a reduced-context prompt, then offers the user inline execution or skip-and-revisit as fallback options.
 
-Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
+Four stages use dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — developer scan then architect synthesis-and-write), Practices Discovery (2.2, `mode: subagent` — pipeline-deploy lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration), User Stories (2.4, `mode: mob` — product lead draft plus design/developer/quality contribution rounds), and Code Generation (3.5, focused developer subagent). With collaborators off (every shipped scope except `enterprise`), the first three run their lead agent alone. The complete topology is 29 inline / 2 subagent / 1 pipeline / 1 mob. Workspace Detection (0.2) runs deterministically inside `aidlc-utility intent-create`, not as a subagent.
 
 ```mermaid
 flowchart LR
@@ -267,6 +267,9 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
                        #   writes both channels; `--check` builds twice and compares
+scripts/package-sources.ts # content fingerprint of the build's inputs, recorded
+                       #   per harness in dist/.package-sources.json; tools that
+                       #   read dist/ (the coverage generator) refuse a stale tree
 scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
                        #   per-target executable + runtime/<harness>/ bundles
                        #   under ignored build/binaries/
@@ -334,7 +337,8 @@ fixed number of renders; lines it cannot place stay `unknown`.
 
 Two consumers fail closed where a line is misread or left unplaced. The
 summary digest ends the excluded `Assumption Confirmation` section at any line
-spelled as a top-level `## Q<n>` or `## Requested Changes Feedback` heading,
+spelled as a top-level `## Q<n>` (with or without a leading emoji decoration)
+or `## Requested Changes Feedback` heading,
 even one the adapter reads as raw HTML or code, so a hidden heading can only
 widen the confirmed content. The claim-sources sensor reads a nonblank line the
 adapter could not place as its own claim.
@@ -361,8 +365,22 @@ under `tools/data/`:
   version, distribution, and harness directory.
 - `aidlc-projection.json` is the exhaustive install descriptor. It classifies
   every top-level output as a framework-managed directory or a root integration
-  with one typed merge policy (`managed-block`, `json-map`, `json-array`, or
-  `whole-file`). Optional integrations and exact legacy hashes are declared
+  with one typed merge policy (`managed-block`, `json-map`, `json-array`,
+  `whole-file`, `jsonc-settings`, which edits an editor's JSONC settings
+  file key by key: it adds a shipped key only when absent, keeps every other
+  key and comment, and is left out of the copy runtime, or `json-entries`,
+  which does the same at any depth for a team's JSON file such as
+  `opencode.json`: AI-DLC's values and array strings are added when absent and
+  followed or removed only while unchanged, its part ships in root-blocks, and
+  the copy runtime leaves the file out). A 2.10.0 install
+  refuses a release whose descriptor names a policy it does not know, so a
+  policy added since (`jsonc-settings`, `json-entries`) is written as
+  `whole-file` with the real one in `extendedPolicy`, and every reader puts it back
+  (`writtenRootIntegration` and `readRootIntegrations` in
+  `core/tools/aidlc-distribution.ts`;
+  `tests/unit/t-previous-release-validates-runtime.test.ts` runs 2.10.0's own
+  check against every runtime tree). Optional
+  integrations and exact legacy hashes are declared
   here; an unclassified top-level entry makes packaging or loading fail.
 
 `aidlc config` validates the stamp and descriptor before planning. It writes a
@@ -373,7 +391,12 @@ optional-integration mode. Refresh uses that
 baseline to update unchanged framework bytes, preserve local modifications,
 merge root integrations, and remove retired owned content. Copy-channel hashes
 recorded in the native descriptor allow an exact, unmodified legacy copy install
-to be adopted; unknown bytes are never inferred as framework-owned.
+to be adopted; unknown bytes are never inferred as framework-owned. A
+project's own files under the harness directory (a team skill, a composed
+scope, a plugin sidecar) are staged for the compile but never recorded, and the
+manifest marks this with `shippedOnly`. A manifest without the mark may still
+record such files, so refresh keeps any recorded file there that the release
+does not ship and stops recording it.
 
 ### Model policy projection
 
@@ -449,7 +472,11 @@ User `Path`; macOS `getconf PATH` plus `/etc/paths` and `/etc/paths.d`; Linux
 `/etc/login.defs`, and `environment.d`), resolves only the commands required by
 the installed hook bytes, and probes the selected harness CLI. The recorded
 absolute paths are diagnostic evidence, not rewritten hook commands: host
-allowlists and Codex trust hashes bind the bare command prefix.
+allowlists and Codex trust hashes bind the bare command prefix. The doctor's
+runtime row also reads the project's hook heartbeats: a command found only on
+the current shell's PATH passes when those hooks fired in the last ten minutes
+(not stale, and with no `session-end` heartbeat newer than the last
+`session-start`), since they ran through it.
 
 Provider detection reads local AWS environment, profile, credential, role, and
 SSO-cache evidence only. Bedrock region and profile answers are applied to the
@@ -465,8 +492,11 @@ action ID; the record stores only the ID and pending or done status.
 
 Trust diagnostics read the existing host surfaces. Codex checks the complete
 project-specific seed set in the user config, Kiro IDE checks the installed
-trusted command entry, and every harness checks required sibling directories.
-No trust seed or permission-rule generator is called by config trust.
+trusted command entry, Copilot checks the Copilot CLI's `trustedFolders`, and
+every harness checks required sibling directories. No trust seed or
+permission-rule generator is called by config trust, and it never writes the
+Copilot CLI's `config.json`: it points the person at the CLI's own trust
+prompt.
 
 Every successful non-dry-run config transaction then runs a cheap post-apply
 sweep against the installed bytes. The runtime leg resolves only the binary
@@ -503,8 +533,9 @@ otherwise higher precedence than the record.
 `aidlc config project` stores MCP and completion answers in a schema-versioned
 `project` record while continuing to store plugin selection in the established
 top-level `plugins` array. Installed plugins are discovered from graph, scope,
-and plugin sidecar data. The normal refresh guard protects all project choice
-mutations from changing a live workflow plan.
+and plugin sidecar data. A project choice changed while a workflow is open is
+done like any refresh, and its output names the open work and the command that
+puts the earlier choice back.
 
 Recorded MCP consent feeds the existing root-integration merge mode during the
 same transaction and on later plain refreshes for Claude's consent-managed
@@ -563,9 +594,14 @@ owner-stamped directory when hard links are unavailable. Both use
 fallback. The receipt-managed `withAuditLock` helper supplies a dedicated local
 gate in the temporary directory, keyed by canonical root, around transaction
 execution, including
-acquisition, stale-owner recovery, and ownership-checked release. Directory
-recovery requires a matching host/boot identity and a dead owner PID; unknown,
-foreign, or incomplete directory owners are retained for manual diagnosis.
+acquisition, stale-owner recovery, and ownership-checked release. Recovery
+treats an owner as gone when its PID is dead or now runs a later process: both
+lock forms record the holder's process generation (the OS start record the
+gate's reaper also compares), and a lock from a release that recorded none is
+judged by whether the live process started more than 2 s after the lock was
+written. Each recovery prints one line on stderr. Directory recovery also
+requires a matching host/boot identity; unknown, foreign, or incomplete
+directory owners are retained for manual diagnosis.
 
 The coordination contract covers cooperating processes on one continuously
 running mount on one host with a common local temporary directory (`TMPDIR` on
@@ -602,7 +638,12 @@ out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
 `aidlc-runtime-X.Y.Z.tar.gz`, and emits the flat `version.json` plus
 `checksums.txt`, both installers, and binaries. The staging job re-verifies and
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
-its checksums and test it. `publish` downloads the same candidate, re-verifies
+its checksums and test it. The `update-from-previous` job, on Linux, macOS and
+Windows, installs the last stable release with its own installer, sets up a
+project for every harness, runs `aidlc update` to the candidate, and checks that
+each project's hooks, `aidlc config --yes` refresh and doctor still work. A
+stable release does not publish when it fails; a preview publishes with a
+warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
 the complete inventory, and uploads one `attested-release` workflow artifact.
 `release` rechecks the tag and checksums, creates the GitHub Release in this
@@ -753,8 +794,8 @@ aidlc/                                    # neutral, harness-independent, commit
 ```
 
 **Resolution.** Workflow identity is resolved at one library chokepoint with
-precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > PID ancestry >
-none`. Hook payload identity uses the in-process option and is authoritative.
+precedence `in-process sessionId > AIDLC_SESSION_OVERRIDE > CODEX_THREAD_ID
+(Codex tools only) > PID ancestry > none`. Hook payload identity uses the in-process option and is authoritative.
 An invalid environment value is ignored. A valid environment override that
 differs from ancestry throws a typed refusal before a binding or workflow record
 path is derived. Explicit selectors and the resulting machine-local session
@@ -850,7 +891,7 @@ workflow selection is session-bound across spaces, while simultaneous
 multi-space ambient method delivery can still race.
 
 **Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
-The split (`harness/claude/dot-gitignore:34-54`): the two cursors
+The split (`harness/claude/dot-gitignore`): the two cursors
 (`active-space`, `active-intent`), per-clone runtime (`.aidlc-clone-id`,
 `.aidlc-sessions/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
 record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
@@ -858,6 +899,12 @@ record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
 `audit/` shards, and artifacts are **committed**. Audit is committed as per-clone
 shards (`audit/<host>-<clone>.md`) precisely so git never has to merge concurrent
 appends — there is intentionally no `merge=union` attribute.
+Both name parts come from `.aidlc-clone-id` (the token, and the host recorded
+when it was minted), so a clone keeps one shard when the machine's name changes
+or the folder is copied to another machine. Shard files that start with the same
+first row are copies of one file (a sync tool's conflict copy, a hand copy);
+readers read the rows they share once (`copiedAuditBlocks` in
+`core/tools/aidlc-lib.ts`).
 
 ## Key Design Decisions
 
@@ -883,13 +930,13 @@ appends — there is intentionally no `merge=union` attribute.
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 110-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 113-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 
-14. **Four-option session resume** -- Resume from checkpoint, redo current stage, jump to a specific stage, or start fresh (with archive confirmation). Gives users fine-grained control over workflow navigation without manual state file editing.
+14. **Session resume** -- Bare `/aidlc` in a new session carries on from the checkpoint; the person can ask to redo the current stage, jump to a specific stage, or start fresh (a new intent alongside). Gives users fine-grained control over workflow navigation without manual state file editing.
 
-15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
+15. **Stage/Phase jump commands** -- `--stage <slug|#>` and `--phase <name|#>` jump directly to a specific stage or phase. `--scope <scope>` sets or overrides the workflow scope. Forward jumps mark intermediate stages as `[S]` (skipped); under solo unit-major Construction a jump to the step the walk is on just continues it, once a Unit has finished work a jump to a later per-unit step moves only the Unit in flight on, and any other forward jump names what it skips or starts over; backward jumps reset downstream stages to `[ ]` and replay forward from the target. Composable with each other.
 
 ## Directory Structure: Tests
 
@@ -897,9 +944,8 @@ appends — there is intentionally no `merge=union` attribute.
 tests/
 +-- run-tests.ts              # Native Bun test runner (all levels, flag-selectable)
 +-- run-tests.sh              # POSIX compatibility wrapper for run-tests.ts
-+-- gen-coverage-registry.ts  # Generates .coverage-registry.json from covers: headers
-+-- .coverage-registry.json   # Machine-checked coverage index (units x test files)
-+-- .coverage-ratchet.json    # Coverage floor the registry --check enforces
++-- gen-coverage-registry.ts  # Builds the coverage registry fresh from covers: headers; --check --base is CI's ratchet
++-- .coverage-registry.json   # Local only (gitignored): the registry a plain generator run writes
 +-- README.md                 # Discoverable suite index + quick reference
 +-- lib/
 |   +-- bun-junit-to-meta.ts  # Bun JUnit -> runner metadata glue

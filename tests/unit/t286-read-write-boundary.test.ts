@@ -1,4 +1,4 @@
-// covers: function:readRegularFileNoFollowOrThrow function:writeBufferAtomic function:validSpaceFlag function:assertNoSymlinkInChainOrThrow function:SPACE_NAME_REGEX
+// covers: function:readRegularFileNoFollowOrThrow function:writeBufferAtomic function:validSpaceFlag function:assertNoSymlinkInChainOrThrow
 //
 // t286 - the shared read/write boundary primitives DocumentKB indexing is built
 // on. All four arrive in this slice: three ported from the unmerged #660 line

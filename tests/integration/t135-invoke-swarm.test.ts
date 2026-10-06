@@ -65,7 +65,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterAll, afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -93,6 +93,7 @@ import {
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+import { approveSuppliedCheckCommand, approveVerificationCommand } from "../harness/verification-command.ts";
 import {
   worktreePath,
   artifactFilename,
@@ -121,6 +122,13 @@ resetAidlcEnv();
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
+
+// A swarm call that supplies a check command runs it only once the person has
+// approved it, so the fixture records that one approval first.
+function swarmSpawn(args: string[], options: SpawnSyncOptionsWithStringEncoding): SpawnSyncReturns<string> {
+  approveSuppliedCheckCommand(args[args.indexOf("--project-dir") + 1], args);
+  return spawnSync(BUN, args, options);
+}
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 // ---------------------------------------------------------------------------
@@ -275,6 +283,8 @@ function seedRefereeProject(units: string[]): string {
     ].join("\n"),
   );
   seedBoltDag(proj, units);
+  // The workflow is started and the person has approved its check command once.
+  approveVerificationCommand(proj, "true");
   spawnSync("git", ["add", "-A"], { cwd: proj });
   spawnSync(
     "git",
@@ -510,8 +520,7 @@ function finalizeWithNotReady(iteration: number): {
     );
   }
   logWorktreeReview(proj, unit, true, "NOT-READY", iteration);
-  const result = spawnSync(
-    BUN,
+  const result = swarmSpawn(
     [
       SWARM_TOOL,
       "--project-dir",
@@ -552,8 +561,7 @@ function setupReferee(): void {
 
   // Conductor step 3: finalize claiming BOTH (the conductor wrongly claims
   // lose). finalize re-verifies, refuses lose, returns the baton.
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "win,lose", "--claimed", "win,lose",
@@ -574,8 +582,7 @@ function setupReviewRefusal(): void {
   const proj = seedRefereeProject(["unreviewed"]);
   reviewRefusalProj = proj;
   prepareRefereeProject(proj, "unreviewed");
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "unreviewed", "--claimed", "unreviewed",
@@ -606,8 +613,7 @@ function setupStaleReviewRefusal(): void {
   logWorktreeReview(proj, "stale");
   writeFileSync(artifact, "changed after review\n");
 
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "stale", "--claimed", "stale",
@@ -626,8 +632,7 @@ function setupMissingArtifactsRefusal(): void {
   missingArtifactsProj = proj;
   prepareRefereeProject(proj, "missing");
   logWorktreeReview(proj, "missing", false);
-  const fin = spawnSync(
-    BUN,
+  const fin = swarmSpawn(
     [
       SWARM_TOOL, "--project-dir", proj, "finalize",
       "--batch", "1", "--units", "missing", "--claimed", "missing",
@@ -898,8 +903,7 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     // receipt-bound snapshot exists, but dual-write did not yet create the
     // committed evidence file.
     rmSync(join(wtUnitRecord, evidenceName));
-    const result = spawnSync(
-      BUN,
+    const result = swarmSpawn(
       [SWARM_TOOL, "--project-dir", proj, "finalize", "--batch", "1", "--units", unit, "--claimed", unit, "--check-cmd", "true"],
       { encoding: "utf-8", env: identityFreeGitEnv(proj) },
     );
@@ -975,7 +979,7 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
   test("9: a claimed unit whose artifact changed after review is refused before merge", () => {
     setupStaleReviewRefusal();
     expect(staleReviewStatus).toBe(2);
-    expect(staleReviewOut).toContain("current artifact fingerprint");
+    expect(staleReviewOut).toContain("Code Generation documents changed after its review");
     expect(staleReviewOut).toContain('"converged": 0');
     expect(staleReviewOut).toContain('"failed": 1');
     expect(staleReviewAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");

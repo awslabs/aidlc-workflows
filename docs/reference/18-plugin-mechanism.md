@@ -225,21 +225,29 @@ The host owns published-versus-installed state. AIDLC compares that installed
 state with project-local composition state, entirely offline:
 
 - Claude reads schema-v2 `~/.claude/plugins/installed_plugins.json` and
-  `enabledPlugins` from `~/.claude/settings.json`.
+  `enabledPlugins` from `~/.claude/settings.json`. A Claude `local` or
+  `project` install counts only in its own project, the one that contains the
+  record's `projectPath` (the folder the install ran in, which can be a
+  subdirectory), except that a `project` install also counts in a clone or
+  worktree that has no record of its own when its `.claude/settings.json`
+  enables the plugin, as Claude Code loads it there. When the registry exists
+  but that settings file cannot be read, Claude falls back to the current root
+  and `plugin list` and doctor flag the file as needing attention. Without a
+  registry the settings file is not read (see the fallback below).
 - Codex reads only plugin IDs declared in `~/.codex/config.toml`, then inspects
   their exact cache paths under
   `~/.codex/plugins/cache/<marketplace>/<plugin>/<version-or-local>/`.
-- Kiro has no proved host store. It accepts only the plugin root injected into
-  the current hook and reports aggregate inventory unavailable outside that
-  invocation. Claude and Codex use the same fallback if their registry source
-  disappears.
-- OpenCode has a generated compose projection, but `aidlc-plugin.ts` does not
-  yet model `.opencode-plugin` as an inventory kind. Its portable composer is
-  covered independently; do not interpret `plugin list` as a proved aggregate
-  OpenCode inventory.
+- Kiro, Cursor, Copilot, and OpenCode have no proved host store. They accept
+  only the plugin root injected into the current hook. Outside that invocation
+  a plugin composed into the project is listed as not compared (no host
+  plugin list), never as missing, and doctor passes with the composed plugins
+  and their versions. Claude and Codex use the same fallback if their registry
+  source disappears.
 
-Each adapter reads one host-native manifest (`.claude-plugin/plugin.json`,
-`.codex-plugin/plugin.json`, or `.kiro-plugin/plugin.json`). Owned manifests
+Each adapter reads one host-native manifest: `.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, `.kiro-plugin/plugin.json` (Kiro and Kiro IDE),
+`.cursor-plugin/plugin.json`, Copilot's `.plugin/plugin.json`, or
+`.opencode-plugin/plugin.json`. Owned manifests
 must use `name: aidlc-<key>`, a safe key, and a semver version. Duplicate
 identities are rejected with every source path; no adapter recursively scans a
 home or cache directory.
@@ -253,21 +261,27 @@ edits and path-only renames are visible.
 
 `aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
 stamps. Default output deliberately has only three actions: `current`,
-`run: aidlc engine plugin sync`, or `needs attention: <remediation>`. Verbose and JSON
-output retain the internal reason: version differs, source changed, not
-composed, legacy unstamped, disabled, missing, invalid/ambiguous, or inventory
-unavailable.
+`run: aidlc config`, or `needs attention: <remediation>`. On a host with no
+plugin list, a composed plugin reads `not compared: no host plugin list` and
+needs nothing. Verbose and JSON output retain the internal reason: version differs,
+source changed, not composed, legacy unstamped, disabled, missing,
+invalid/ambiguous, or inventory unavailable.
 
 `aidlc engine plugin sync` composes every enabled installed plugin in a staged project,
 regenerates graph and runner surfaces, writes composition and ownership records,
 diffs the staged project, and submits one project transaction. Expected-state
 checks reject concurrent live edits; a commit failure rolls back all bytes,
-modes, stamps, and ownership records. A supported host hook with an injected
-current root uses the same implementation for only that plugin. Plain sync never
+modes, stamps, and ownership records. The staged copy holds no links: a link on
+the way to or inside AI-DLC's own folders, or on the way to a file sync would
+write, stops sync before anything changes and names the link, or the AI-DLC
+folder that holds it when the link sits deeper inside. A supported host
+hook with an injected current root uses the same implementation for only that
+plugin. Plain sync never
 deletes content for a missing installed source. Explicit
 `aidlc engine plugin sync --prune-missing` requires a proved full inventory,
-confirmation (`--yes` when non-interactive), and hash-proven ownership; it
-refuses locally modified or unowned paths.
+`--yes` when non-interactive, and hash-proven ownership; it refuses locally
+modified or unowned paths. At a terminal it asks nothing: it names the plugins
+it prunes and how to get them back, then prunes.
 
 Neither list, doctor, nor sync checks a remote plugin registry. The host remains
 responsible for published-version discovery.
@@ -285,11 +299,15 @@ the valid roots, and exits 0.
 An enabled plugin may ship `tools/<plugin>-doctor.ts`. `/aidlc --doctor`
 discovers that script in the composed harness tools directory and runs it
 directly with Bun, no shell, with `AIDLC_PROJECT_DIR`, `AIDLC_HARNESS_DIR`, and
-`AIDLC_PLUGIN_NAME` set. A disabled plugin's script remains inert. When
-`harness.json` has no `plugins` selection, every installed plugin known from the
-full stage/scope metadata is eligible. Discovery requires that the plugin own at
-least one stage or scope; a plugin that ships only tools, sensors, or knowledge
-does not contribute an identity that doctor can discover.
+`AIDLC_PLUGIN_NAME` set. On a native install that Bun is the `aidlc` binary
+run with `BUN_BE_BUN=1`, which the script inherits, so an `aidlc` command the
+script runs would start Bun instead: check with Bun APIs, not by running
+`aidlc`. A disabled plugin's script remains inert. When
+`harness.json` has no `plugins` selection, every installed plugin is eligible:
+one that owns a stage or scope, or one whose composition left a sidecar under
+`tools/data/` (`plugin-contrib-`, `plugin-owned-`, or `plugin-compose-<plugin>.json`).
+A plugin that ships only sensors or overlays is therefore discoverable and
+selectable once it is composed.
 
 The script writes one JSON object to stdout:
 
@@ -367,7 +385,8 @@ ones), but doctor lists such dropped edges as an advisory.
 `select-plugins` also refuses a change that would strand an active workflow:
 disabling the plugin that owns a running workflow's scope, or one that owns a
 pending EXECUTE stage in its plan, is rejected naming each dependency (complete
-or park the workflow first, or keep the plugin enabled). Doctor hard-fails on a
+or archive the workflow first, since a parked workflow still needs its plugin
+when it resumes, or keep the plugin enabled). Doctor hard-fails on a
 selection that already strands one.
 
 Composing a plugin does not auto-enable it when a selection already exists. The

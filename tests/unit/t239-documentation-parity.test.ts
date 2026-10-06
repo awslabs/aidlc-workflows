@@ -234,7 +234,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("event count and user-guide taxonomy match VALID_EVENT_TYPES", () => {
-    expect(eventTypes.length).toBe(110);
+    expect(eventTypes.length).toBe(113);
 
     const guide = read("docs", "guide", "10-state-and-audit.md");
     const guideTaxonomy = sliceBetween(
@@ -587,6 +587,32 @@ describe("documentation parity derives current behavior from authored implementa
         frontmatterScalar(scopeFile, "testStrategy") ?? depth,
       );
     }
+  });
+
+  test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
+    // It runs under strict only; relaxed and off accept the change with one line.
+    const stale = /exception holds under every (?:Guard Policy|value)/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
+  });
+
+  test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
+    const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
+      .replace(/\s+/g, " ");
+    expect(reviewer).toContain(
+      "**A review the person asks for.** When the person asks for a review of a stage, or of a Unit they already " +
+        "approved, record it through AI-DLC the first time they ask, under every Guard Policy",
+    );
+    expect(reviewer).toContain("Never write a review file by hand, and never offer to change the Guard Policy to get a review.");
+    expect(reviewer).toContain(
+      "the engine asks for no recovery review on its own (a review the person asks for still runs, as above)",
+    );
+    // A live agent read this pairing as "no recorded review under relaxed or off".
+    const stale = /the receipt stays valid and no recovery review is requested/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
   });
 
   test("documented Guard Policy defaults match every core scope's frontmatter", () => {
@@ -1023,6 +1049,7 @@ describe("documentation parity derives current behavior from authored implementa
       read("core", "tools", "aidlc-utility.ts"),
       read("core", "tools", "aidlc-doctor.ts"),
       read("core", "tools", "aidlc-init.ts"),
+      read("core", "tools", "aidlc-model-policy.ts"),
       read("core", "tools", "aidlc-config-diagnostics.ts"),
       read("core", "tools", "aidlc-plugin.ts"),
       read("core", "tools", "aidlc-state.ts"),
@@ -1031,14 +1058,16 @@ describe("documentation parity derives current behavior from authored implementa
     for (const phrase of [
       "Setup check - ",
       "hook PATH ready",
+      "on this shell's PATH only",
+      "every agent uses your ",
+      "session's model and effort",
       "Runtime hook PATH",
-      " need attention",
-      "host inventory unavailable; run sync through the host SessionStart adapter",
       "Hooks last fired: ",
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
       "Human-turn receipts: 0 HUMAN_TURN rows",
       "Plan Approval authority is ambiguous or stale",
+      "cannot select one approval target",
       "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",
     ]) {
@@ -1046,7 +1075,10 @@ describe("documentation parity derives current behavior from authored implementa
       expect(printed, `tools print ${phrase}`).toContain(phrase);
     }
 
-    // The claims these pages used to make are gone.
+    // The claims these pages used to make are gone. Doctor no longer warns
+    // about plugins on a host that keeps no plugin list.
+    expect(flat).not.toContain("Plugins: 1 need attention");
+    expect(flat).not.toContain("run sync through the host SessionStart adapter");
     const onboarding = read("docs", "guide", "onboarding.md");
     expect(onboarding).not.toContain("never trapped");
     expect(onboarding).not.toContain("None is a bug");

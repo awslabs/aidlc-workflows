@@ -758,6 +758,40 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // With Guard Policy off a file that moves while the build starts is no
+  // different from one that moved before it: the start goes ahead.
+  test("with Guard Policy off, a write crossing generation publication does not stop the start", async () => {
+    const project = createProject();
+    const statePath = join(seededRecordDir(project), "aidlc-state.md");
+    const off = readFileSync(statePath, "utf-8")
+      .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: off (set by you)");
+    expect(off).toContain("- **Guard Policy**: off (set by you)");
+    writeFileSync(statePath, off, "utf-8");
+    writeActiveDirectiveMarker(project, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(off) });
+    const questions = seedPlan(project);
+    approve(project, questions, "publication-race-off");
+    const barrier = publicationBarrier();
+    const begin = Bun.spawn(
+      [BUN, join(DIST_ROOT, "tools", "aidlc-testing-posture.ts"), "begin", "--stage-level", "--project-dir", project],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER: barrier },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const publicationDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.published`) && Date.now() < publicationDeadline) {
+      await Bun.sleep(10);
+    }
+    expect(existsSync(`${barrier}.published`)).toBe(true);
+    writeFileSync(join(project, "src", "zz-written-during-start.ts"), "export const raced = true;\n");
+    writeFileSync(`${barrier}.release`, "release\n");
+    const [exit, stderr] = await Promise.all([begin.exited, new Response(begin.stderr).text()]);
+    expect(exit, stderr).toBe(0);
+    expect(stderr).not.toContain("Source files changed while code generation was starting");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("active directive publication cannot retire authority during generation start", async () => {
     const project = createProject();
     const questions = seedPlan(project);
@@ -1470,7 +1504,17 @@ describe("t328 human-only break-glass override", () => {
       }, UNBINDABLE_ENV);
       expect(guarded.exitCode, guarded.stderr).toBe(0);
     }
-    expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({ ...receipt, status: "generation" });
+    // The build started on the edited plan, which the receipt keeps beside the
+    // approval so an interrupted build of it picks up.
+    const started = readFileSync(planPath, "utf-8");
+    const startedFingerprint = approvalFingerprint(
+      started,
+      readFileSync(join(codeGenerationRecordDir(project, null), "unit-test-instructions.md"), "utf-8"),
+      resolveTestingPosture(project).contract_sha256,
+      resolveCodeGenerationAuthority(project, { unit: null }),
+    );
+    expect(startedFingerprint).not.toBe(receipt.fingerprint);
+    expect(JSON.parse(readFileSync(receiptPath, "utf-8"))).toEqual({ ...receipt, startedFingerprint, status: "generation" });
     expect(readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED")).toEqual(approvalRows);
     expect(readFileSync(questions, "utf-8")).toBe(originalQuestions);
     expect(readFileSync(statePath, "utf-8")).toBe(state);
@@ -1491,12 +1535,11 @@ describe("t328 human-only break-glass override", () => {
       "Approve Plan,Request Changes",
     ];
     expect(runLog(project, decision).exitCode).toBe(0);
-    // The human's reply chose nothing, so the conductor's receipt refuses.
-    expect(humanPrompt(project, session, "hmm, not sure").exitCode).toBe(0);
+    // No reply from the person has arrived, so the conductor's receipt refuses.
     markAnswered(questions);
     const refused = runLog(project, ["answer", ...identity, "--details", "Approve Plan"]);
     expect(refused.exitCode).not.toBe(0);
-    expect(refused.stderr?.toString() ?? "").toContain("actual offered choice from this prompt and session");
+    expect(refused.stderr?.toString() ?? "").toContain("requires the person's reply to this prompt, in this session");
     // Nothing is recorded under this session, so the refusal also says the
     // session value itself may be the cause and how to recover on any harness.
     expect(refusalMessage(refused)).toContain(
@@ -1509,7 +1552,7 @@ describe("t328 human-only break-glass override", () => {
     expect(minted.exitCode, minted.stderr).toBe(0);
     const output = JSON.parse(minted.stdout) as { override: boolean; failed_checks: string[] };
     expect(output.override).toBe(true);
-    expect(output.failed_checks.join("\n")).toContain("actual offered choice from this prompt and session");
+    expect(output.failed_checks.join("\n")).toContain("requires the person's reply to this prompt, in this session");
     expect(evaluateCodeGenerationApproval(project, { unit: null })).toMatchObject({
       ok: true,
       reason: "approved",
@@ -1748,7 +1791,7 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     expect(refused.exitCode).not.toBe(0);
     const stderr = refused.stderr?.toString() ?? "";
     expect(stderr).toContain("hooks are not firing in this session");
-    expect(stderr).toContain("Run /hooks to check hook approval and policy state");
+    expect(stderr).toContain("false in this project's .claude/settings.local.json; it works in the same chat");
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     expect(
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),
@@ -1920,14 +1963,14 @@ describe("t328 plan-approval session resolution", () => {
 
     const unanswered = answer();
     expect(unanswered.exitCode).not.toBe(0);
-    expect(refusalMessage(unanswered)).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(refusalMessage(unanswered)).toContain("The person has not replied to this question yet");
     expect(refusalMessage(unanswered)).toContain(`"${session}" may not be this conversation's session.`);
     expect(refusalMessage(unanswered)).toContain("start a new chat session and run /aidlc");
 
     expect(humanPrompt(project, session, "Request Changes").exitCode).toBe(0);
     const otherChoice = answer();
     expect(otherChoice.exitCode).not.toBe(0);
-    expect(refusalMessage(otherChoice)).toContain('recorded as "Request Changes"; record that choice instead.');
+    expect(refusalMessage(otherChoice)).toContain('The person picked "Request Changes" for this question; record that choice instead');
     // A recorded answer shows the session is right, so no session recovery.
     expect(refusalMessage(otherChoice)).not.toContain("start a new chat session");
 
@@ -1940,7 +1983,7 @@ describe("t328 plan-approval session resolution", () => {
       `${JSON.stringify({ ...response, challengeId: `${response.challengeId}-earlier`, choice: "Approve Plan" }, null, 2)}\n`,
     );
     const stale = refusalMessage(answer());
-    expect(stale).toContain("Nothing the human said has been recorded as a choice yet");
+    expect(stale).toContain("The person has not replied to this question yet");
     expect(stale).toContain(`"${session}" may not be this conversation's session.`);
     expect(receiptSessions(project)).toEqual([]);
   }, 30000);

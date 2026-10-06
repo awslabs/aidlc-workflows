@@ -14,6 +14,7 @@ sensors: on
 learnings: on
 summary_confirmation: on
 plan_approval: off
+collaborators: off
 ---
 
 # poc scope

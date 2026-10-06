@@ -42,16 +42,43 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, machineReachingTools, resolveAction } from "../../core/tools/aidlc.ts";
+import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
+import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+// Every read form agents were seen running for "show my settings", "what
+// version", "is my setup healthy" and "what is my status", pinned on their own
+// so the list cannot lose one.
+const SEEN_READ_FORMS = [
+  "--status",
+  "--version",
+  "version",
+  "config --help",
+  "doctor",
+  "--doctor",
+  "doctor --verbose",
+  "--doctor --verbose",
+  "config --show",
+  "config --show --json",
+  ...CONFIG_SECTIONS.flatMap((section) => [
+    `config ${section} --show`,
+    `config ${section} --show --json`,
+    `config ${section} --help`,
+  ]),
+];
+
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -219,14 +246,169 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
     }
   });
 
-  test("6: cli.json pre-approves exactly Shell(bun) at the project level", () => {
+  const SHIPPED_ALLOW = [
+    "Shell(bun:.cursor/tools/aidlc.ts engine *)",
+    ...copyChannelDispatcherCommands().map((command) => `Shell(bun:.cursor/tools/aidlc.ts ${command})`),
+    ...copyChannelToolScripts().flatMap((tool) => [`Shell(bun:.cursor/tools/${tool})`, `Shell(bun:.cursor/tools/${tool} *)`]),
+  ];
+  const SHIPPED_DENY: string[] = [];
+
+  test("6: cli.json pre-approves only AI-DLC's own workflow commands at the project level", () => {
     const cli = JSON.parse(readFileSync(join(ENGINE, "cli.json"), "utf-8")) as {
       permissions?: { allow?: string[]; deny?: string[] };
     };
     // Project-level cli.json is permissions-only (Cursor's documented
-    // contract); the shipped allowlist is the engine runner and nothing else.
-    expect(cli.permissions?.allow).toEqual(["Shell(bun)"]);
-    expect(cli.permissions?.deny).toEqual([]);
+    // contract); the shipped allowlist is the dispatcher's engine namespace,
+    // its doctor, version, status and read-only config forms exactly as
+    // AI-DLC runs them, and each of AI-DLC's tool scripts but the ones behind
+    // a machine-changing command, nothing else bun can run.
+    expect(cli.permissions?.allow).toEqual(SHIPPED_ALLOW);
+    expect(cli.permissions?.deny).toEqual(SHIPPED_DENY);
+    expect(machineReachingTools()).toEqual(expect.arrayContaining(["aidlc-lifecycle.ts", "aidlc-machine-config.ts"]));
+    for (const tool of machineReachingTools()) {
+      expect(cli.permissions?.allow?.some((entry) => entry.includes(tool)), tool).toBe(false);
+    }
+  });
+
+  // Cursor CLI's documented matching: `Shell(commandBase:args)`, the command's
+  // first token against commandBase and the rest against the args glob (`*`
+  // matches any text); deny beats allow; a command no entry names asks.
+  function cursorShellEffect(cli: { allow: string[]; deny: string[] }, command: string): "deny" | "allow" | "ask" {
+    const [base, ...rest] = command.split(" ");
+    const args = rest.join(" ");
+    const hits = (entries: string[]) => entries.some((entry) => {
+      const m = /^Shell\(([^:)]+)(?::(.*))?\)$/.exec(entry);
+      if (!m || m[1] !== base) return false;
+      if (m[2] === undefined) return true;
+      const glob = m[2].replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*");
+      return new RegExp(`^${glob}$`).test(args);
+    });
+    if (hits(cli.deny)) return "deny";
+    return hits(cli.allow) ? "allow" : "ask";
+  }
+
+  test("6b: AI-DLC's own commands run with no prompt; anything that changes the machine or a setting shows Cursor's prompt", () => {
+    const cli = { allow: SHIPPED_ALLOW, deny: SHIPPED_DENY };
+    for (const command of [
+      "bun .cursor/tools/aidlc.ts engine orchestrate next",
+      "bun .cursor/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input 'Approve (Recommended)'",
+      "bun .cursor/tools/aidlc.ts config models --show --json",
+      "bun .cursor/tools/aidlc.ts config providers --help",
+      "bun .cursor/tools/aidlc.ts doctor",
+      "bun .cursor/tools/aidlc.ts version",
+      "bun .cursor/tools/aidlc.ts --doctor",
+      "bun .cursor/tools/aidlc.ts status",
+      // The utility spellings agents also use, and config's own help.
+      "bun .cursor/tools/aidlc.ts --status",
+      "bun .cursor/tools/aidlc.ts --version",
+      "bun .cursor/tools/aidlc.ts config --help",
+      "bun .cursor/tools/aidlc-utility.ts",
+      "bun .cursor/tools/aidlc-utility.ts codekb-path",
+      "bun .cursor/tools/aidlc-log.ts answers --stage x",
+      // Turning a recorded check back on, in the one form the skills name.
+      ...RECORDABLE_PROJECT_BYPASSES.map((name) => `bun .cursor/tools/aidlc.ts config flags --clear-bypass ${name} --yes`),
+    ]) {
+      expect(cursorShellEffect(cli, command), command).toBe("allow");
+    }
+    // The verbs and the scripts behind them fall to Cursor's own prompt.
+    for (const command of [
+      "bun .cursor/tools/aidlc.ts use 2.10.0",
+      "bun .cursor/tools/aidlc.ts update",
+      "bun .cursor/tools/aidlc.ts rollback",
+      "bun .cursor/tools/aidlc.ts uninstall --yes",
+      "bun .cursor/tools/aidlc.ts system config global set offline on",
+      "bun .cursor/tools/aidlc.ts --yes update",
+      ...machineReachingTools().map((tool) => `bun .cursor/tools/${tool} use 2.10.0`),
+      // Any config change, a machine-wide flag however it is spelled included,
+      // and a read that only looks like the shipped forms.
+      "bun .cursor/tools/aidlc.ts config --pin 2.10.0",
+      // The guided setup, which changes the project.
+      "bun .cursor/tools/aidlc.ts config",
+      "bun .cursor/tools/aidlc.ts config --yes",
+      "bun .cursor/tools/aidlc.ts config --unpin",
+      "bun .cursor/tools/aidlc.ts config --channel",
+      "bun .cursor/tools/aidlc.ts config --channel preview",
+      "bun .cursor/tools/aidlc.ts config project --plugins all --download --yes",
+      "bun .cursor/tools/aidlc.ts config models --deciding-effort high --global --yes",
+      'bun .cursor/tools/aidlc.ts config models --deciding-effort high --gl"obal" --yes',
+      "bun .cursor/tools/aidlc.ts config models --deciding-effort high --project --yes",
+      "bun .cursor/tools/aidlc.ts config models --show --json --global",
+      "bun .cursor/tools/aidlc.ts doctor --fix",
+      // Turning a check off, and a form that changes something else as well.
+      "bun .cursor/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
+      "bun .cursor/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --bypass AIDLC_DISABLE_SENSORS --yes",
+      "bun .cursor/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_SENSORS --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --bypass AIDLC_DISABLE_SENSORS",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --question-retention-days 1",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes --global",
+      "bun .cursor/tools/aidlc.ts config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+      // A file whose name only starts with a tool script's.
+      "bun .cursor/tools/aidlc-log.tsx answers --stage x",
+      "bun .cursor/tools/aidlc-log.ts.bak answers --stage x",
+    ]) {
+      expect(cursorShellEffect(cli, command), command).toBe("ask");
+    }
+  });
+
+  // The native release runs AI-DLC through the installed `aidlc` command. It
+  // pre-approves the engine prefix and, exactly as written, the same read-only
+  // and turn-back-on commands as the copy channel; any change still asks.
+  test("6c: the native release runs the read-only and turn-back-on commands with no prompt; any change asks", () => {
+    const shipped = JSON.parse(readFileSync(join(CURSOR_RELEASE_ROOT, ".cursor", "cli.json"), "utf-8")) as {
+      permissions: { allow: string[]; deny?: string[] };
+    };
+    const cli = { allow: shipped.permissions.allow, deny: shipped.permissions.deny ?? [] };
+    expect(cli.allow.filter((entry) => entry.includes("aidlc"))).toEqual([
+      "Shell(aidlc:engine *)",
+      ...copyChannelDispatcherCommands().map((command) => `Shell(aidlc:${command})`),
+    ]);
+    const check = "AIDLC_DISABLE_REVIEW_FREEZE_HOOK";
+    const copy = { allow: SHIPPED_ALLOW, deny: SHIPPED_DENY };
+    for (const form of SEEN_READ_FORMS) {
+      expect(cursorShellEffect(cli, `aidlc ${form}`), form).toBe("allow");
+      expect(cursorShellEffect(copy, `bun .cursor/tools/aidlc.ts ${form}`), form).toBe("allow");
+    }
+    for (const form of ["config", "config --yes", "--config", "config models --show --global"]) {
+      expect(cursorShellEffect(cli, `aidlc ${form}`), form).not.toBe("allow");
+      expect(cursorShellEffect(copy, `bun .cursor/tools/aidlc.ts ${form}`), form).not.toBe("allow");
+    }
+    for (const command of [
+      "aidlc engine orchestrate next",
+      "aidlc doctor",
+      "aidlc --doctor",
+      "aidlc status",
+      "aidlc --status",
+      "aidlc version",
+      "aidlc --version",
+      "aidlc config --help",
+      "aidlc config models --show --json",
+      "aidlc config flags --help",
+      ...RECORDABLE_PROJECT_BYPASSES.map((name) => `aidlc config flags --clear-bypass ${name} --yes`),
+    ]) {
+      expect(cursorShellEffect(cli, command), command).toBe("allow");
+    }
+    for (const command of [
+      "aidlc config",
+      "aidlc config --yes",
+      "aidlc config --pin 2.10.0",
+      "aidlc config --channel preview",
+      "aidlc config models --show --json --global",
+      "aidlc config models --deciding-effort high --project --yes",
+      `aidlc config flags --bypass ${check} --local --yes`,
+      `aidlc config flags --bypass ${check} --yes`,
+      `aidlc config flags --clear-bypass ${check} --bypass AIDLC_DISABLE_SENSORS --yes`,
+      `aidlc config flags --clear-bypass ${check} --yes --bypass AIDLC_DISABLE_SENSORS`,
+      `aidlc config flags --clear-bypass ${check} --yes --global`,
+      "aidlc config flags --clear-bypass AIDLC_NOT_A_SWITCH --yes",
+      "aidlc doctor --fix",
+      "aidlc update",
+      "aidlc use 2.10.0",
+      "aidlc uninstall --yes",
+      "aidlc system config global set offline on",
+    ]) {
+      expect(cursorShellEffect(cli, command), command).not.toBe("allow");
+    }
   });
 
   test("7: shipped cursor prose names no other harness's engine dir", () => {
@@ -261,7 +443,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(r.stdout).toContain("ok    aidlc-cursor-adapter.ts present");
       expect(r.stdout).toContain("ok    hooks.json present (hook wiring)");
-      expect(r.stdout).toContain("ok    cli.json present (Shell(bun) permission pre-approval)");
+      expect(r.stdout).toContain("ok    cli.json present (AI-DLC command permission pre-approval)");
       expect(r.stdout).toContain(
         "ok    rules/aidlc.mdc present (standing method rule (alwaysApply read instruction))",
       );
@@ -270,6 +452,22 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
           `ok    rules/aidlc-phase-${phase.toLowerCase()}.mdc present (${phase} phase rule (agent-decided read instruction))`,
         );
       }
+      // When Cursor refuses every tool call because the hooks cannot start,
+      // the always-applied rule sends the person here: this doctor run prints
+      // the Runtime hook PATH line the rule names, and `aidlc doctor` routes.
+      expect(r.stdout).toContain("Runtime hook PATH");
+      // Each install names its own doctor: the copied one runs it through Bun.
+      for (const [tree, doctor] of [
+        [CURSOR_ROOT, "run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),"],
+        [CURSOR_RELEASE_ROOT, "run `aidlc doctor`,"],
+      ] as const) {
+        const standing = readFileSync(join(tree, ".cursor", "rules", "aidlc.mdc"), "utf-8");
+        expect(standing, tree).toContain("If every tool call here is refused before it runs");
+        expect(standing, tree).toContain(`${doctor}\nwhose Runtime hook PATH line names what to fix`);
+        expect(standing, tree).not.toContain("bun --version");
+        expect(standing, tree).toContain("quit Cursor fully and\nopen this folder again");
+      }
+      expect(resolveAction(["doctor"]).type).not.toBe("error");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -291,7 +489,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       writeFileSync(
         join(cursorDir, "cli.json"),
         `${JSON.stringify({
-          permissions: { allow: ["Shell(git)"], deny: ["Shell(rm)"] },
+          // Shell(bun) is the entry earlier releases shipped; refresh drops it.
+          permissions: { allow: ["Shell(git)", "Shell(bun)"], deny: ["Shell(rm)"] },
           projectSetting: true,
         }, null, 2)}\n`,
       );
@@ -323,8 +522,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         projectSetting: boolean;
       };
       expect(cli.projectSetting).toBe(true);
-      expect(cli.permissions.allow).toEqual(["Shell(git)", "Shell(bun)"]);
-      expect(cli.permissions.deny).toEqual(["Shell(rm)"]);
+      expect(cli.permissions.allow).toEqual(["Shell(git)", ...SHIPPED_ALLOW]);
+      expect(cli.permissions.deny).toEqual(["Shell(rm)", ...SHIPPED_DENY]);
       expect(readFileSync(join(cursorDir, ".gitignore"), "utf-8")).toBe(
         "project-cursor-cache\n",
       );
@@ -474,8 +673,21 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(install.status).toBe(1);
       expect(install.stderr).toContain("refusing to overwrite");
       expect(install.stderr).toContain(".cursor/rules/aidlc.mdc");
+      expect(install.stderr).toContain(
+        "To keep your changes, move these files somewhere else, then run the installer again.",
+      );
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe("# Keep me\n");
       expect(existsSync(join(project, ".cursor", "tools"))).toBe(false);
+      // The step it names: with the file moved aside, the installer runs.
+      renameSync(join(project, ".cursor", "rules", "aidlc.mdc"), join(project, "my-aidlc.mdc"));
+      const again = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(again.status, again.stderr).toBe(0);
+      expect(existsSync(join(project, ".cursor", "tools"))).toBe(true);
+      expect(readFileSync(join(project, "my-aidlc.mdc"), "utf-8")).toBe("project-owned\n");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -801,8 +1013,21 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       expect(fileInstall.status).toBe(1);
       expect(fileInstall.stderr).toContain("symlinked installer targets");
       expect(fileInstall.stderr).toContain("AGENTS.md");
+      expect(fileInstall.stderr).toContain(
+        "Replace that link with a regular file or folder, then run the installer again.",
+      );
       expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
       expect(existsSync(join(fileProject, ".cursor", "tools"))).toBe(false);
+      // The step it names: with a regular file in place of the link, it runs.
+      unlinkSync(join(fileProject, "AGENTS.md"));
+      writeFileSync(join(fileProject, "AGENTS.md"), "# Outside\n");
+      const replaced = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+      });
+      expect(replaced.status, replaced.stderr).toBe(0);
+      expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
 
       const externalCursor = join(root, "external-cursor");
       mkdirSync(externalCursor);
@@ -861,6 +1086,8 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       ).toBe(0);
 
       const receiptPath = join(project, ".cursor", "aidlc-install.json");
+      // The pointer names a space only when the project has it.
+      mkdirSync(join(project, "aidlc", "spaces", "myspace", "memory"), { recursive: true });
       writeFileSync(join(project, "aidlc", "active-space"), "myspace\n");
       expect(
         spawnSync("bun", [installer, project], {

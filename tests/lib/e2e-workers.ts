@@ -336,7 +336,9 @@ export function createE2eNativeRoot(artifactDir: string): string {
       failures.push(error);
     }
   }
-  throw new AggregateError(failures, "e2e needs an OS temporary directory with trusted native root ancestors");
+  // The runner prints only the aggregate's message, so carry each base's reason.
+  const reasons = failures.map((error) => `- ${error instanceof Error ? error.message : String(error)}`);
+  throw new AggregateError(failures, `e2e needs an OS temporary directory with trusted native root ancestors:\n${reasons.join("\n")}`);
 }
 
 export async function e2eWorkerEnvironment(
@@ -396,6 +398,9 @@ export async function e2eWorkerEnvironment(
   }
   // An inherited explicit trace path would make unrelated workers overwrite it.
   delete env.AIDLC_SDK_TRACE_FILE;
+  // The Windows live legs switch on the hook phase trace (scripts/ci-live-sandbox.ts);
+  // each file's hooks write into its own artifacts, so a stall names its test.
+  if (env.AIDLC_TEST_HOOK_TRACE === "1") env.AIDLC_HOOK_TRACE_DIR = join(artifactDir, "hook-trace");
   return env;
 }
 

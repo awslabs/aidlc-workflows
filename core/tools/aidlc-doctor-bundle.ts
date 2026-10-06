@@ -74,7 +74,7 @@ import {
   stateFilePath,
   stopHookDir,
 } from "./aidlc-lib.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
@@ -506,6 +506,18 @@ function extractStatus(stateContent: string): string {
   return m ? m[1] : UNKNOWN;
 }
 
+// The state field where `intent archive` keeps the Status it replaced.
+export const ARCHIVED_FROM_FIELD = "Archived From";
+
+// Whether the state agrees with a recorded WORKFLOW_COMPLETED: Completed, or a
+// completed workflow the person archived. Both doctor surfaces read it.
+export function stateShowsCompletion(stateContent: string): boolean {
+  const status = extractStatus(stateContent);
+  if (status === "Completed") return true;
+  const from = stateContent.match(new RegExp(`^- \\*\\*${ARCHIVED_FROM_FIELD}\\*\\*:\\s*(\\S+)`, "m"))?.[1];
+  return status === "Archived" && from === "Completed";
+}
+
 function extractCurrentStage(stateContent: string): string {
   const m = stateContent.match(/^- \*\*Current Stage\*\*:\s*(\S+)/m);
   return m ? m[1] : UNKNOWN;
@@ -582,6 +594,9 @@ function gateOutcome(
     if (e.event === "GATE_APPROVED") latest = "approved";
     else if (e.event === "GATE_REJECTED") latest = "rejected";
     else if (e.event === "STAGE_AWAITING_APPROVAL") latest = "awaiting";
+    // A stage skipped while its gate was open (a forward jump or a scope
+    // change) has no gate left to answer.
+    else if (e.event === "STAGE_SKIPPED" && latest === "awaiting") latest = null;
   }
   if (latest === "approved") return "approved";
   if (latest === "rejected") return "rejected";
@@ -672,7 +687,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
         completed: s.completedRaw,
       },
       remedy:
-        "The workflow is waiting at an approval gate. Resolve it with `/aidlc` " +
+        `The workflow is waiting at an approval gate. Resolve it with \`${entrySkillInvocation()}\` ` +
         "(answer the open question / approve or reject the stage), then continue.",
       safeToAutomate: false,
     });
@@ -747,7 +762,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
   // reconstructTimeline's latest-run scoping guards against).
   if (timeline.workflowCompleted && stateContent) {
     const status = extractStatus(stateContent);
-    if (status !== "Completed" && status !== UNKNOWN) {
+    if (status !== UNKNOWN && !stateShowsCompletion(stateContent)) {
       findings.push({
         id: "state-audit-drift",
         severity: "error",
@@ -844,8 +859,8 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       remedy:
         `The compiled runtime graph is out of date. Re-run \`${
           aidlcToolInvocation("runtime")
-        } compile\`; if this recurs, the ` +
-        "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
+        } compile\`. If it goes out of date again, AI-DLC's hooks are not running here: ` +
+        "doctor's hooks check says what to do.",
       safeToAutomate: true,
     });
   } else if (
@@ -864,7 +879,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       evidence: { runtimeGraphExists: false },
       remedy:
         `No compiled runtime graph. Re-run \`${aidlcToolInvocation("runtime")} compile\`. ` +
-        "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
+        "If it goes missing again, AI-DLC's hooks are not running here: doctor's hooks check says what to do.",
       safeToAutomate: true,
     });
   }
@@ -918,7 +933,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       summary: ".aidlc-engine/plan.json is present but not parseable.",
       evidence: { planExists: true, planParseable: false },
       remedy:
-        "The resolve output is corrupt. Re-run the resolve step (`/aidlc` will " +
+        `The resolve output is corrupt. Re-run the resolve step (\`${entrySkillInvocation()}\` will ` +
         "recompute the plan), or remove .aidlc-engine/plan.json to force a fresh resolve.",
       safeToAutomate: false,
     });
@@ -1009,6 +1024,7 @@ const STATE_ALLOWLIST = [
   "Parked",
   "Parked At Stage",
   "Active Unit",
+  "Unit Stage",
   "Unit State",
   "Unit Pause Reason",
   "Unit Next Action",

@@ -22,8 +22,8 @@
 // Plan Approval off the record that it was not asked is written when the build
 // is handed over, so the worker brief and the guard let the build start.
 //
-// A project configured by an older release has no budget in its harness.json,
-// and `aidlc config` will not refresh it while a workflow runs. A native engine
+// A project configured by an older release has no budget in its harness.json
+// until the next `aidlc config` refreshes it. A native engine
 // reads that project file, so after `aidlc update` it takes the budget from the
 // copy of the same harness in the runtime it ships beside itself. A Bun engine
 // reads all of its data from its own tree, so it needs nothing more.

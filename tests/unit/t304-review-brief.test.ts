@@ -565,6 +565,12 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain(`**Review outcome:** ${verdict}`);
       if (verdict === "NOT-READY") expect(rendered).toContain("R-01");
+      // Approve accepts open findings only when there are some.
+      expect(rendered).toContain(
+        verdict === "READY"
+          ? "- **Approve** - continue; no findings are open."
+          : "- **Approve** - continue with the open findings accepted.",
+      );
     }
   });
 
@@ -1022,6 +1028,39 @@ describe("t304 executable review brief scenarios", () => {
         `${artifacts.get("unit-b")}#R-02`,
       ]),
     );
+  });
+
+  // A Unit's own approval, its Construction checkpoint, covers only that Unit,
+  // so its brief shows only that Unit's review: a live run showed Unit 1's
+  // review table at Unit 2's approval. The stage's own brief shows every Unit.
+  test("a Unit's own approval brief shows only that Unit's review", () => {
+    const units = ["u1-note-store", "u2-note-tags"];
+    const { proj, artifacts } = perUnitReviewProject("code-generation", units);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        /^(- \*\*Scope\*\*:.*)$/m,
+        "$1\n- **Construction Iteration**: unit-major\n- **Construction Checkpoints**: enabled",
+      ),
+      "utf-8",
+    );
+    const brief = (extra: string[]): string => {
+      const rendered = run(
+        REVIEW_BRIEF,
+        ["review", "--stage", "code-generation", "--why", "first", ...extra],
+        proj,
+      );
+      expect(rendered.status, rendered.out).toBe(0);
+      return rendered.stdout;
+    };
+    const own = brief(["--unit", "u2-note-tags"]);
+    expect(own).toContain(`**Review artifact:** \`${artifacts.get("u2-note-tags")}\``);
+    expect(own).not.toContain("u1-note-store");
+    const stage = brief([]);
+    for (const unit of units) {
+      expect(stage).toContain(`**Review artifact:** \`${artifacts.get(unit)}\``);
+    }
   });
 
   test("Unit-end disposition readback follows Gate Stages and Unit scope", () => {
@@ -2267,6 +2306,47 @@ describe("t304 engine-owned report replay and compatibility", () => {
         { id: "R-01", now: reading, severity: "", note: "" },
       ]);
     }
+  });
+
+  // A first review that wrote an empty placeholder row under Prior findings
+  // was sent back for a full second review, though the row says nothing.
+  test("an all-empty row in either table reads as no row", () => {
+    const blank = "|  |  |  |  |";
+    for (const [prior, added] of [[[blank], []], [[], [blank]], [[blank], [blank]]] as const) {
+      const report = reviewReportMarkdown("READY", [...prior], [...added]);
+      expect(readFindingsTable(report, "requirements.md", "READY").unreadable).toBeNull();
+      expect(parseReviewerFindingsReport(report)).toEqual({ prior: [], newFindings: [] });
+    }
+    // The review exactly as a reviewer wrote it in a live run.
+    const live = readFileSync(join(import.meta.dir, "..", "fixtures", "review-blank-prior-row.md"), "utf-8");
+    const read = readFindingsTable(live, "src/cli.js", "READY");
+    expect(read.unreadable).toBeNull();
+    expect(read.report?.prior).toEqual([]);
+    expect(read.report?.newFindings.map((row) => row.location)).toEqual([
+      "src/cli.js > `readVersion` and entry-block `catch`",
+      "test/cli.test.js > `copyCliWithManifest`",
+    ]);
+  });
+
+  test("a NOT-READY review whose only rows are blank still has to record a finding", () => {
+    const report = reviewReportMarkdown("NOT-READY", ["|  |  |  |  |"], ["|  |  |  |  |"]);
+    expect(readFindingsTable(report, "requirements.md", "NOT-READY").unreadable).toBe(
+      "a NOT-READY review with a findings report must record at least one finding in it",
+    );
+  });
+
+  test("a row with any filled cell is still read and checked", () => {
+    for (const report of [
+      reviewReportMarkdown("READY", ["| R-01 |  |  |  |"], []),
+      reviewReportMarkdown("READY", ["|  | Fixed |  |  |"], []),
+      reviewReportMarkdown("READY", [], ["| Minor |  |  |  |"]),
+      reviewReportMarkdown("READY", [], ["| - | - | No findings | - |"]),
+    ]) {
+      expect(() => parseReviewerFindingsReport(report)).toThrow("the findings report could not be read");
+    }
+    expect(parseReviewerFindingsReport(reviewReportMarkdown("READY", ["| R-01 | Fixed |  |  |"], []))?.prior).toEqual([
+      { id: "R-01", now: "fixed", severity: "", note: "" },
+    ]);
   });
 
   test("You upgrade mid-workflow: a list seeds from an older release's records, keeping IDs and decisions without asking again", () => {

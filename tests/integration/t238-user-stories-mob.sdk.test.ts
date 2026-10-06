@@ -100,6 +100,7 @@ function userStoriesState(projectDir: string): string {
 - **Stages to Skip**: 2.1, 2.5, 2.6, 2.7, 2.8, 2.9, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7
 - **Depth**: Minimal
 - **Test Strategy**: Minimal
+- **Collaborators**: on (set by you)
 
 ## Workspace State
 - **Project Root**: ${projectDir}
@@ -530,7 +531,13 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         // confused with the timeout that previously occurred during trailing
         // reviewer work under suite contention.
         expect(result.timedOut).toBe(false);
-        expect(result.stoppedAfterToolResult).toBe(true);
+        // Every question the lead asked, with the answer it got, so an
+        // unexpected judgement question shows in the failure, not only the trace.
+        const asked = result.askedQuestions.map((menu) => ({
+          headers: menu.questions.map((question) => question.header ?? question.question),
+          answers: menu.answers,
+        }));
+        expect(result.stoppedAfterToolResult, JSON.stringify(asked)).toBe(true);
         expect(result.stoppedAfterAskUserQuestion).toBe(false);
 
         const commands = result.toolResults

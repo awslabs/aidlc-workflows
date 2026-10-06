@@ -44,10 +44,11 @@
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   aidlcToolInvocation,
+  refuseLinkOnTheWay,
   resolveDistributionPath,
   resolveHarnessPath,
   runtimeProjectDir,
@@ -105,6 +106,8 @@ import {
   stageEnabledBySelection,
   toPosix,
   validScopes,
+  isScopeName,
+  SCOPE_NAME_RULE,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -281,8 +284,9 @@ export interface ScopeValidation {
 export const SCOPE_SETTING_KEYS = [...CEREMONY_KEYS, "review_cap"] as const;
 export type ScopeSettings = Record<CeremonyKey, CeremonySetting> & { review_cap: ReviewClass };
 // Per-work setting changes as typed values: each key maps to one fixed flag
-// (`--sensors`, `--learnings`, `--summary-confirmation`, `--review`), so no
-// command text ever travels between the composer and the conductor.
+// (`--sensors`, `--learnings`, `--summary-confirmation`, `--plan-approval`,
+// `--review`), so no command text ever travels between the composer and the
+// conductor.
 export type SettingsChanges = Partial<Record<CeremonyKey, CeremonySetting> & { review: ReviewClass }>;
 
 // --- Module-local state ---
@@ -537,6 +541,17 @@ export interface ComposedScopeRecord {
   stages: Record<string, "EXECUTE" | "SKIP">;
 }
 
+export { isScopeName };
+
+/** `file` inside `dir`, or a throw when the joined path would land anywhere else. */
+function fileInside(dir: string, file: string): string {
+  const path = join(dir, file);
+  if (dirname(resolve(path)) !== resolve(dir)) {
+    throw new Error(`Refusing to write ${path}: it is not inside ${dir}.`);
+  }
+  return path;
+}
+
 /** Split a record body into its harness projection and its grid. Throws with the
  *  offending path named on any malformed input: a record is user data whose whole
  *  purpose is to survive, so a silent skip would reintroduce exactly the quiet
@@ -550,6 +565,11 @@ export function parseComposedScopeRecord(
   const name = scalarField(fm, "name");
   if (!name) {
     throw new Error(`Composed scope record ${filePath} missing required frontmatter: name`);
+  }
+  if (!isScopeName(name)) {
+    throw new Error(
+      `Composed scope record ${filePath} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`,
+    );
   }
   // Exactly one sentinel pair, or refuse. Duplicates would make the split
   // ambiguous, and an ambiguous split is how a wrong grid gets adopted silently —
@@ -679,8 +699,10 @@ export function loadComposedScopeRecords(): Record<string, ComposedScopeRecord> 
  *  fallbacks and must never be written to (same discipline as
  *  mutableScopeGridPath). */
 function mutableComposedScopesDir(projectDir: string): string {
-  return process.env.AIDLC_COMPOSED_SCOPES_DIR
-    ?? join(projectDir, ...COMPOSED_SCOPES_SEGMENTS);
+  if (process.env.AIDLC_COMPOSED_SCOPES_DIR) return process.env.AIDLC_COMPOSED_SCOPES_DIR;
+  const dir = join(projectDir, ...COMPOSED_SCOPES_SEGMENTS);
+  refuseLinkOnTheWay(projectDir, dir);
+  return dir;
 }
 
 function mutableScopesDir(projectDir: string): string {
@@ -751,7 +773,7 @@ export function materializeComposedScopeIdentities(projectDir: string): string[]
     if (harnessScopeFileFor(projectDir, name) !== null) continue;
     const dir = mutableScopesDir(projectDir);
     mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, `aidlc-${name}.md`), records[name].identity);
+    writeFileAtomic(fileInside(dir, `aidlc-${name}.md`), records[name].identity);
     written.push(name);
   }
   return written;
@@ -780,11 +802,12 @@ export function backfillComposedScopeRecords(
   const dir = mutableComposedScopesDir(projectDir);
   const written: string[] = [];
   for (const name of [...gridOnlyNames].sort()) {
+    if (!isScopeName(name)) continue;
     const stages = grid[name]?.stages;
     if (stages === undefined) continue;
     const identityPath = harnessScopeFileFor(projectDir, name);
     if (identityPath === null) continue;
-    const recordPath = join(dir, `${name}.md`);
+    const recordPath = fileInside(dir, `${name}.md`);
     if (existsSync(recordPath)) continue;
     mkdirSync(dir, { recursive: true });
     writeFileAtomic(
@@ -1772,6 +1795,7 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
     learnings: meta.ceremony?.learnings ?? "on",
     summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
     plan_approval: meta.ceremony?.plan_approval ?? "on",
+    collaborators: meta.ceremony?.collaborators ?? "on",
     review_cap: meta.reviewCap ?? "adversarial",
   };
 }
@@ -1872,13 +1896,16 @@ export function creationSettingsFor(stockScope: string, settings: ScopeSettings)
  *  the base's own default or raises it; any stock scope serves a strict plan. The base
  *  must also add nothing the gate does not show: no walking-skeleton checkpoint,
  *  and no test strategy other than the plan's `depth`, so tests follow that
- *  depth. Null, with the reason, when none
+ *  depth. A new project's plan runs on a scope meant for new work when one
+ *  qualifies, so the work is not labelled a bug fix; otherwise on the nearest
+ *  that does. Null, with the reason, when none
  *  qualifies or the plan changes an initialization stage. */
 export function customPlanBase(
   grid: Record<string, string>,
   guardPolicy: GuardPolicy,
   nearest: ReadonlyArray<{ scope: string; diff: number; differs: string[] }>,
   depth?: string,
+  projectType?: "brownfield" | "greenfield",
 ): { scope: string; changes: PlanChanges } | { error: string } {
   const init = loadGraph()
     .filter((s) => s.phase === "initialization" && grid[s.slug] !== "EXECUTE")
@@ -1892,11 +1919,11 @@ export function customPlanBase(
     return mapping[scope]?.skeleton !== true &&
       (testStrategy === undefined || testStrategy === depth?.toLowerCase());
   };
-  const base = nearest.find(
-    (candidate) =>
-      guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(candidate.scope)) &&
-      addsNothing(candidate.scope),
-  );
+  const qualifies = (scope: string): boolean =>
+    guardPolicyAtLeast(guardPolicy, scopeGuardPolicyDefault(scope)) && addsNothing(scope);
+  const fitsNewWork = (scope: string): boolean => projectType !== "greenfield" || mapping[scope]?.existingCode !== true;
+  const base = nearest.find((candidate) => qualifies(candidate.scope) && fitsNewWork(candidate.scope)) ??
+    nearest.find((candidate) => qualifies(candidate.scope));
   if (base === undefined) {
     return {
       error:
@@ -2219,7 +2246,7 @@ export function composedFoldBack(
   );
   const gridOnlyNames = new Set(
     [...composedScopeNames(onDiskJson, stockScopeNames)].filter(
-      (name) => installedScopeNames.has(name) && !recordNames.has(name),
+      (name) => isScopeName(name) && installedScopeNames.has(name) && !recordNames.has(name),
     ),
   );
   let onDisk: Record<string, unknown> = {};
@@ -3536,7 +3563,10 @@ const COMMANDS: Record<string, Handler> = {
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(readFileSync(proposalPath, "utf-8"));
+      // A proposal piped in (`--proposal /dev/stdin` or `-`) is read from the
+      // command's own input to its end, whatever kind of pipe carries it.
+      const fromStdin = proposalPath === "/dev/stdin" || proposalPath === "-";
+      parsed = JSON.parse(readFileSync(fromStdin ? 0 : proposalPath, "utf-8"));
     } catch (err) {
       console.error(
         `validate-grid: cannot read ${proposalPath}: ${errorMessage(err)}` +
@@ -3642,7 +3672,7 @@ const COMMANDS: Record<string, Handler> = {
         r.errors.push("A custom proposal must carry its depth: a depth member of minimal, standard, or comprehensive.");
       }
       const base = routeErrors.length === 0 && matched === undefined && r.guard_policy !== undefined && planDepth !== undefined
-        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [], planDepth)
+        ? customPlanBase(grid, r.guard_policy, r.nearest_stock ?? [], planDepth, projectType)
         : null;
       if (base !== null && "error" in base) r.errors.push(base.error);
       if (base !== null && !("error" in base)) {

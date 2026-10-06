@@ -9,6 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -89,11 +90,10 @@ function workspaceRoot(projectDir: string): string {
 
 function activeSpace(projectDir: string): string {
   try {
-    const value = readFileSync(
-      join(workspaceRoot(projectDir), "active-space"),
-      "utf-8",
-    ).trim();
-    if (value) return value;
+    return knownActiveSpace(
+      workspaceRoot(projectDir),
+      readFileSync(join(workspaceRoot(projectDir), "active-space"), "utf-8"),
+    );
   } catch {
     // The default space is valid on a fresh shell.
   }
@@ -448,6 +448,71 @@ function agentDisplayMap(projectDir: string): Record<string, string> {
   };
 }
 
+// The step the person is on. Working one Unit at a time, Current Stage stays
+// on the block's first stage while the person is at a later step of a Unit:
+// that step is the Unit Stage field, or else the one the engine last put to
+// them, from its active-directive file when nothing has written the state
+// since (the lib's digest check is too heavy for this hot path).
+function shownStep(stateFile: string, state: string, stage: string): { stage: string; unit: string } {
+  const slug = /^[a-z0-9][a-z0-9-]*$/;
+  const unitStage = extractField(state, "Unit Stage");
+  if (slug.test(unitStage)) return { stage: unitStage, unit: "" };
+  try {
+    const path = join(dirname(stateFile), ".aidlc-engine", "active-directive.json");
+    if (statSync(path).mtimeMs < statSync(stateFile).mtimeMs) return { stage, unit: "" };
+    const marker = JSON.parse(readFileSync(path, "utf-8")) as { stage?: unknown; unit?: unknown; delivery?: unknown };
+    if (typeof marker.stage !== "string" || !slug.test(marker.stage) || marker.delivery === "superseded") {
+      return { stage, unit: "" };
+    }
+    // The file is writable, so only a real Unit name reaches the line.
+    const unit = typeof marker.unit === "string" && marker.unit.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(marker.unit)
+      ? marker.unit
+      : "";
+    return { stage: marker.stage, unit };
+  } catch {
+    return { stage, unit: "" };
+  }
+}
+
+// Working one Unit at a time, the stage checkboxes tick only once every Unit
+// has finished a stage, so the stage count reads 0 until the last Unit. While
+// a Unit is still open the line counts Units instead: the one the person is
+// on, of the Units planned. The Units are the names in the Unit DAG's edge
+// block; a Unit counts as done from its approval (GATE_APPROVED at the
+// construction-unit checkpoint) until a later rejection of it.
+function unitProgress(stateFile: string, state: string): { current: number; total: number } | null {
+  if (extractField(state, "Construction Iteration") !== "unit-major") return null;
+  const record = dirname(stateFile);
+  try {
+    const dag = readFileSync(join(record, "inception", "units-generation", "unit-of-work-dependency.md"), "utf-8");
+    const block = /## Machine-Readable Edge Block[\s\S]*?```ya?ml\r?\n([\s\S]*?)```/.exec(dag)?.[1] ?? "";
+    const units = [...block.matchAll(/^\s*-\s+name:\s*([A-Za-z0-9][A-Za-z0-9._-]{0,63})\s*$/gm)].map((m) => m[1]);
+    if (units.length === 0) return null;
+    const rows: Array<{ at: string; approved: boolean; unit: string }> = [];
+    const auditDir = join(record, "audit");
+    for (const name of readdirSync(auditDir).filter((file) => file.endsWith(".md"))) {
+      for (const entry of readFileSync(join(auditDir, name), "utf-8").split(/\n## /)) {
+        if (!/^\*\*Checkpoint\*\*: construction-unit$/m.test(entry)) continue;
+        const event = /^\*\*Event\*\*:\s*(\S+)/m.exec(entry)?.[1] ?? "";
+        if (event !== "GATE_APPROVED" && event !== "GATE_REJECTED") continue;
+        const unit = /^\*\*Unit\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";
+        const at = /^\*\*Timestamp\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";
+        rows.push({ at, approved: event === "GATE_APPROVED", unit });
+      }
+    }
+    const done = new Set<string>();
+    for (const row of rows.sort((a, b) => a.at.localeCompare(b.at))) {
+      if (!units.includes(row.unit)) continue;
+      if (row.approved) done.add(row.unit);
+      else done.delete(row.unit);
+    }
+    if (done.size >= units.length) return null;
+    return { current: done.size + 1, total: units.length };
+  } catch {
+    return null;
+  }
+}
+
 function extractField(text: string, label: string): string {
   // Match the Markdown list field pattern used throughout aidlc-state.md:
   //   - **Lifecycle Phase**: IDEATION
@@ -666,8 +731,12 @@ async function main(stdinText: string): Promise<void> {
   const statusMatch = state.match(/^-\s*\*\*Status\*\*:\s*(.+)$/m);
   const status = statusMatch ? statusMatch[1].replace(/\r$/, "").trim() : "";
 
-  const stageDisplay = STAGE_DISPLAY[stage] ?? stage;
-  const agentDisplay = agentDisplayMap(projectDir)[agent] ?? agent;
+  const shown = shownStep(stateFile, state, stage);
+  const stageDisplay = shown.stage === ""
+    ? ""
+    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}`;
+  // Active Agent follows Current Stage, so it is not shown beside another step.
+  const agentDisplay = shown.stage === stage ? agentDisplayMap(projectDir)[agent] ?? agent : "";
   const { done, total } = phaseProgress(state, phase);
   const bar = total > 0 ? progressBar(done, total) : "";
   const phaseProg = total > 0 ? `${done}/${total}` : "";
@@ -690,8 +759,13 @@ async function main(stdinText: string): Promise<void> {
   }
 
   let output = `[AIDLC] ${prefix}${phase}`;
-  if (bar) output += ` ${bar}`;
-  if (phaseProg) output += ` ${phaseProg}`;
+  const units = phase === "CONSTRUCTION" ? unitProgress(stateFile, state) : null;
+  if (units) {
+    output += ` Unit ${units.current} of ${units.total}`;
+  } else {
+    if (bar) output += ` ${bar}`;
+    if (phaseProg) output += ` ${phaseProg}`;
+  }
   if (stageDisplay) output += ` > ${stageDisplay}`;
   if (agentDisplay) output += ` -- ${agentDisplay}`;
 

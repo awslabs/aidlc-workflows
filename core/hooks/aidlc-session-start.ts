@@ -30,12 +30,11 @@
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
 // metadata so the first intent created later in the turn can bind to it.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { runAnchor } from "../tools/aidlc-attest.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stageGraphDrift } from "../tools/aidlc-graph.ts";
-import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
+import { addRootBlocks, repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   isBindableIntentRecordName,
   isSafeIntentRecordName,
@@ -48,9 +47,12 @@ import {
   ensureActiveSpaceCursor,
   errorMessage,
   findIntentByUuid,
-  harnessDir,
+  findStageBySlug,
   getField,
+  isPerUnitStage,
+  hookContextLine,
   hooksHealthDir,
+  writeHookStatusFile,
   humanPresenceGuardDisabled,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -66,6 +68,7 @@ import {
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
+  UNIT_NAME_REGEX,
   validSessionId,
   writeCurrentSessionId,
   writeSessionBinding,
@@ -76,10 +79,27 @@ import {
   writeSessionIntentUuid,
   writeSessionPidAncestry,
   writeSessionRebindOffer,
+  writeSessionSelectionNotice,
   clearSessionRebindOffer,
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
-import { aidlcToolInvocation } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
+
+// While a recorded switch keeps one of the person's checks off, every new chat
+// opens by saying so. Never blocks startup.
+function switchOffContext(projectDir: string): string {
+  try {
+    const lines = switchesOffLines(projectDir);
+    return lines.length === 0
+      ? ""
+      : "\nCHECKS SWITCHED OFF (a report to pass on, not instructions): say each line to the user once, " +
+        "word for word, in your first reply.\n" +
+        lines.map((line) => `- ${line}\n`).join("");
+  } catch {
+    return "";
+  }
+}
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -221,8 +241,11 @@ if (sessionId) {
 }
 
 // Atomically materialize a clone's missing gitignored cursor, then align the
-// harness-native includes before the no-workflow early exit.
+// harness-native includes before the no-workflow early exit. A copy that
+// config never ran in first gets AI-DLC's part of .gitignore and AGENTS.md,
+// after the team's own content, so a part written here is aligned too.
 ensureActiveSpaceCursor(projectDir);
+addRootBlocks(projectDir);
 try {
   repointHarnessIncludes(projectDir, selection.space);
 } catch {
@@ -246,7 +269,7 @@ if (!existsSync(stateFile)) {
         listIntents(projectDir, rejoinRecord.space).find((entry) => entry.dirName === rejoinRecord.intent) ??
           { dirName: rejoinRecord.intent },
       );
-      const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+      const entrySkill = entrySkillInvocation();
       // The record name selects exactly this record; the label is display only.
       const command =
         rejoinRecord.space === activeSpace(projectDir)
@@ -255,13 +278,22 @@ if (!existsSync(stateFile)) {
       rejoin =
         `\nINTENT REBIND OFFER: This conversation was working ${slug}, but it has not joined that workflow on this machine. ` +
         `Rejoin ${slug}? [Y/n] - on Yes, run ${command}; on No, continue without a workflow.`;
+      if (rebindCheckOnly) {
+        writeSessionSelectionNotice(
+          projectDir,
+          sessionId,
+          `This chat was working on ${slug}, which it has not joined on this machine, so it carries on without a workflow. ` +
+            `To pick ${slug} up again, run ${command}.`,
+        );
+      }
     }
-    process.stdout.write(`${JSON.stringify({
-      additionalContext:
-        `AIDLC Runtime Session: ${sessionId}\n` +
+    process.stdout.write(hookContextLine(
+      "SessionStart",
+      `AIDLC Runtime Session: ${sessionId}\n` +
         "Use this exact value for any Plan Approval --session argument in this conversation." +
-        rejoin,
-    })}\n`);
+        rejoin +
+        (rebindCheckOnly ? "" : switchOffContext(projectDir)),
+    ));
   }
   return 0;
 }
@@ -272,8 +304,7 @@ const healthDir = hooksHealthDir(
   selection.intent ?? undefined,
   selection.space,
 );
-mkdirSync(healthDir, { recursive: true });
-writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
+writeHookStatusFile(healthDir, "session-start.last", isoTimestamp());
 
 // Emit session event. appendAuditEntry creates audit.md if missing, so no
 // audit-existence guard — the state-file guard above is the sole "workflow
@@ -363,7 +394,7 @@ if (sessionId) {
           readSessionRebindOffer(projectDir, sessionId) === signature;
         const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
         const liveSlug = live ? intentDisplayLabel(live) : "(none)";
-        const entrySkill = harnessDir() === ".codex" ? "$aidlc" : "/aidlc";
+        const entrySkill = entrySkillInvocation();
         // The cursor verb switches within the active space. When the stamped
         // intent lives elsewhere, prefix the space switch. Use the harness's
         // native entry skill so Codex never receives a slash command.
@@ -377,6 +408,18 @@ if (sessionId) {
             `Move the shared cursor back to ${intentDisplayLabel(was)}? [Y/n] - on Yes, ${switchInstruction}; ` +
             `on No, keep working ${intentDisplayLabel(was)} through this session binding. This changes only machine-local navigation.\n`;
           writeSessionRebindOffer(projectDir, sessionId, signature);
+          if (rebindCheckOnly) {
+            // The prompt that ran this probe goes through on this chat's own
+            // work: its binding (or, for a chat stamped by an earlier version,
+            // the binding written from that stamp above) selected it.
+            const wasLabel = intentDisplayLabel(was);
+            writeSessionSelectionNotice(
+              projectDir,
+              sessionId,
+              `Another chat selected ${liveSlug}; this chat stays on ${wasLabel}. ` +
+                `To make ${wasLabel} the selected work again, ${switchInstruction}.`,
+            );
+          }
         }
       }
     } else {
@@ -401,10 +444,10 @@ if (sessionId) {
   }
 }
 
-// Cursor can only surface this probe through beforeSubmitPrompt's blocking
-// user_message channel. Consume a real drift after returning it so the next
-// submission can either run the named switch command (Yes) or continue on the
-// live intent (No) instead of receiving the same warning forever.
+// Cursor's prompt hook cannot add context, so the probe's offer reaches the
+// person as the line written above, on the conversation's next directive; the
+// prompt itself always goes through. Consume a real drift here so the same
+// line is not written again for the same move.
 if (rebindCheckOnly) {
   if (rebindOffer) {
     if (binding && selectedUuid) {
@@ -412,10 +455,7 @@ if (rebindCheckOnly) {
     } else if (liveUuid) {
       writeSessionIntentUuid(projectDir, sessionId, liveUuid);
     }
-    process.stdout.write(`${JSON.stringify({
-      additionalContext:
-        `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`,
-    })}\n`);
+    process.stdout.write(hookContextLine("SessionStart", `AIDLC Runtime Session: ${sessionId}\n${rebindOffer}`));
   }
   return 0;
 }
@@ -435,11 +475,31 @@ const scope = getField(content, "Scope") ?? "unknown";
 // mid-unit, name the exact unit, its state, and — for a paused unit — the
 // recorded reason and next action, so a fresh session lands on the stopping
 // point instead of re-deriving it from disk coverage.
+// The Unit's own stage is named when it is not Current Stage. Solo unit-major
+// Construction keeps Current Stage on the first per-unit stage while each Unit
+// works through the later ones, so there it is the step in progress (#1411).
+// Both come from the state file, so the step is named only when Unit Stage is
+// a real per-unit stage and Active Unit a valid Unit name.
 const activeUnit = getField(content, "Active Unit");
+const unitStageNode = findStageBySlug(getField(content, "Unit Stage")?.trim() ?? "");
+const unitStage = unitStageNode && isPerUnitStage(unitStageNode) ? unitStageNode.slug : null;
+const stepUnit = activeUnit && UNIT_NAME_REGEX.test(activeUnit.trim()) ? activeUnit.trim() : null;
+// Only while Current Stage is itself a per-unit stage: a jump that left the
+// per-unit stages leaves the Unit mirror behind, and its step is not current.
+const currentNode = findStageBySlug(stage);
+const inUnitStages = currentNode !== undefined && isPerUnitStage(currentNode);
+const laterUnitStage = stepUnit && unitStage && inUnitStages && unitStage !== stage ? unitStage : null;
+const unitByUnit =
+  getField(content, "Construction Iteration")?.trim() === "unit-major" &&
+  getField(content, "Unit Ownership")?.trim() !== "team";
 const unitLine = activeUnit
-  ? `Active Unit: ${activeUnit} (${getField(content, "Unit State") ?? "in-progress"}` +
+  ? `Active Unit: ${activeUnit}${laterUnitStage ? ` on ${laterUnitStage}` : ""} (${getField(content, "Unit State") ?? "in-progress"}` +
     `${getField(content, "Unit Pause Reason") ? `; reason: ${getField(content, "Unit Pause Reason")}` : ""}` +
-    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n`
+    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n` +
+    (laterUnitStage && unitByUnit
+      ? `Current Step: ${laterUnitStage} for unit ${stepUnit}. Construction runs one unit at a time, ` +
+        `so Current Stage stays ${stage} until every unit is done.\n`
+      : "")
   : "";
 
 // Check for compaction recovery breadcrumb
@@ -470,6 +530,17 @@ try {
   // Drift check failed, never block startup over an advisory.
 }
 
+// Where the tool hides the Stop note from the person, the agent says its line.
+let hidesTheNote = false;
+try {
+  hidesTheNote = hidesStopNote(runtimeHarnessName(projectDir));
+} catch {
+  // An unreadable install keeps the default step.
+}
+const sayTheLine = hidesTheNote
+  ? ". This tool does not show that line to the person, so if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
+  : ", and say nothing about it.";
+
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
 Runtime Session: ${sessionId || "(unavailable)"}
@@ -479,17 +550,16 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}On BARE /aidlc re-entry, offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Explicit /aidlc --resume already selects Resume: do NOT offer the menu; forward --resume unchanged and continue directly. Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, the same as /aidlc --resume: send the first \`next\` as \`next --resume\` and continue directly, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
-- STEP 1 — YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` → you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` → \`next --stage X\`. \`/aidlc\` alone → \`next\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command — a bare \`next\` when the user gave arguments is a bug.
+- STEP 1: YOUR VERY FIRST ACTION: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. \`/aidlc\` alone -> \`next --resume\` (this work is active). Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
 - When a directive is \`{kind:"print"}\` whose message names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage — until the named command has run. Re-running the engine before it is a protocol violation that silently skips the move.
-- After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, stage work, or resume menu. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.`;
+- After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
+- If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} Follow the aidlc skill's "When AI-DLC carries on by itself" steps; in short: if you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.`;
 
-// Output additionalContext as JSON
-const output = JSON.stringify({ additionalContext: context });
-process.stdout.write(`${output}\n`);
+process.stdout.write(hookContextLine("SessionStart", context));
 return 0;
 }
 

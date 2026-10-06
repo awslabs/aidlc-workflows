@@ -115,15 +115,16 @@ const COMMON_EXPECTED_SKILLS = [
   COMPOSE_RUNNER_SKILL,
 ].sort();
 
-const FRESH_SESSION_TEXT: Record<string, string> = {
-  claude: "use `/clear` (or restart Claude Code)",
-  codex: "exit or restart Codex CLI and start a new session",
-  cursor: "start a new Cursor chat (IDE) or restart agent (CLI)",
-  kiro: "exit or restart Kiro CLI and start a new session",
-  "kiro-ide": "open a new Kiro IDE chat or start a new Kiro CLI session",
-  opencode: "exit or restart OpenCode and start a new session",
-  copilot: "start a new Copilot CLI session or open a new VS Code agent chat",
-};
+// The old hand-off that stopped new work for a restarted session, per harness.
+const RETIRED_FRESH_SESSION_TEXT: readonly string[] = [
+  "use `/clear` (or restart Claude Code)",
+  "exit or restart Codex CLI and start a new session",
+  "start a new Cursor chat (IDE) or restart agent (CLI)",
+  "exit or restart Kiro CLI and start a new session",
+  "open a new Kiro IDE chat or start a new Kiro CLI session",
+  "exit or restart OpenCode and start a new session",
+  "start a new Copilot CLI session or open a new VS Code agent chat",
+];
 const CURSOR_SHORTCUT_SKILLS = ["aidlc-jump", "aidlc-scope", "aidlc-status"];
 
 function expectedSkills(harnessName: string): string[] {
@@ -186,14 +187,14 @@ describe("t123 (smoke) skills-spec conformance — every shipped skill set", () 
       );
       const entrySkill = harness.name === "codex" ? "$aidlc" : "/aidlc";
       expect(runner).toContain(`Packaging over \`${entrySkill} --scope bugfix\``);
-      expect(runner).toContain(`invoke \`${entrySkill}\` to begin the`);
+      expect(runner).toContain("carry on into the new work's first stage in this chat");
       expect(runner).toContain("`intent-create` command");
       // Guard generated prose from resurfacing the retired command.
       const retiredIntentCommand = "intent-" + "b" + "irth";
       expect(runner).not.toContain(`\`${retiredIntentCommand}\``);
-      expect(runner).toContain("**STOP**");
-      expect(runner).toContain("fresh session");
-      expect(runner).toContain(FRESH_SESSION_TEXT[harness.name]);
+      expect(runner).not.toContain("**STOP**");
+      expect(runner).not.toContain("fresh session");
+      for (const retired of RETIRED_FRESH_SESSION_TEXT) expect(runner).not.toContain(retired);
       if (harness.name === "codex") {
         expect(runner).not.toContain("run `/aidlc`");
       }

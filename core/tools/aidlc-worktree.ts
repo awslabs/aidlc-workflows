@@ -34,6 +34,7 @@ import {
   filteredRawIndexEntries,
   findAllEvents,
   getField,
+  guardPolicyAcceptsChanges,
   GIT_PLATFORM_ARGS,
   legacyBoltIdentity,
   gitCommitSourceListing,
@@ -52,6 +53,8 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   readStateFile,
+  recordAcceptedChanges,
+  renderChangedPaths,
   recoveryRepoCandidates,
   relativeRecordDir,
   relativeRecordDirForSelection,
@@ -76,12 +79,14 @@ import {
   workspaceSourceFingerprint,
   workspaceSourceExclusionPathspecs,
   workspaceSourcePathIsExcluded,
+  unmergedRootSettingsNotices,
   workspaceSourceState,
   worktreePath,
   worktreesDir,
   worktreeStateFilePath,
   writeFileAtomic,
   REPO_NAME_REGEX,
+  entrySkillInvocation,
 } from "./aidlc-lib.js";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
@@ -2024,6 +2029,20 @@ function assertAggregateSourceBeforeMerge(
 } | null {
   if (!record || record.kind === "bypass") return null;
   const current = workspaceSourceState(pd, intent, space);
+  // Under relaxed or off the person's own edits to the main checkout during
+  // the build are kept: the merge starts from the checkout as it is, and the
+  // change is recorded once so the merge chain stays readable.
+  const keepChange = (recorded: string, changed: string[] | null) => {
+    const notice = changed && changed.length > 0
+      ? `You changed ${renderChangedPaths(changed)} during the build; kept them and merged unit ${record.unit}.`
+      : `The main checkout changed during the build; kept it and merged unit ${record.unit}.`;
+    for (const line of recordAcceptedChanges(pd, [{
+      checkpoint: "swarm-batch", stage: record.stage, unit: record.unit, changed,
+      recorded, current: current!.fingerprint, notice,
+    }], { intent, space })) process.stderr.write(`note: ${line}\n`);
+    return { state: current!, openingFingerprint: current!.fingerprint };
+  };
+  const acceptsChanges = current !== null && guardPolicyAcceptsChanges(pd, undefined, { selection: { intent, space } });
   if (current === null) {
     errorWithSlug(
       slug,
@@ -2050,9 +2069,12 @@ function assertAggregateSourceBeforeMerge(
       );
     }
     if (!sameWorkspaceSource(chain.fingerprint, current.fingerprint)) {
+      if (acceptsChanges) return keepChange(chain.fingerprint, null);
       errorWithSlug(
         slug,
-        "refusing to merge: the main checkout source changed after the previous reviewed-source merge",
+        "refusing to merge: the main checkout source changed after the previous reviewed-source merge. " +
+          "Undo those changes in the main checkout and run the merge again, or say 'guard policy relaxed' " +
+          "for this piece of work to keep them, then run the merge again.",
       );
     }
     return {
@@ -2085,18 +2107,22 @@ function assertAggregateSourceBeforeMerge(
       current.listing,
       openingListing,
     );
+    if (acceptsChanges) return keepChange(opening.fingerprint, changed);
     errorWithSlug(
       slug,
-      `refusing to merge: the main checkout source changed since the stage-entry baseline (${changed.join(", ") || "unknown paths"})`,
+      `refusing to merge: the main checkout source changed since the stage-entry baseline (${renderChangedPaths(changed) || "unknown paths"}). ` +
+        "Undo those changes and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
     );
   }
   if (
     opening.source === "prior-accepted" &&
     !sameWorkspaceSource(opening.fingerprint, current.fingerprint)
   ) {
+    if (acceptsChanges) return keepChange(opening.fingerprint, null);
     errorWithSlug(
       slug,
-      "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate",
+      "refusing to merge: the main checkout source does not match the prior attempt's final reviewed aggregate. " +
+        "Undo the changes made since then and run the merge again, or say 'guard policy relaxed' for this piece of work to keep them, then run the merge again.",
     );
   }
   return {
@@ -2582,6 +2608,23 @@ function handleMerge(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const selection = resolveWorkflowSelection(pd, { intent: flags.intent, space: flags.space });
+  // An archived workflow's Bolt work stays on disk as it is, and lands nowhere
+  // until the person brings the workflow back.
+  if (selection.intent !== null) {
+    let parentState = "";
+    try {
+      parentState = readStateFile(pd, selection.intent, selection.space);
+    } catch {
+      // No parent state to read: the checks below decide.
+    }
+    if (getField(parentState, "Status") === "Archived") {
+      errorWithSlug(
+        slug,
+        "Cannot merge a Bolt for an Archived workflow. Bring it back first with " +
+          `\`${entrySkillInvocation()} intent unarchive ${selection.intent}\`.`,
+      );
+    }
+  }
   const identity = resolveCommandBoltIdentity(pd, slug, selection);
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
@@ -3016,6 +3059,10 @@ function handleMerge(args: string[]): void {
     }
   }
   assertBoltBranchOwnedHere(repoCwd, identity, cleanupTag);
+  // A setting changed in the worktree did not land and goes with it: say so
+  // before the checkout is reset.
+  const notices = sourceRecord?.kind === "bound" ? unmergedRootSettingsNotices(wtPath) : [];
+  for (const notice of notices) process.stderr.write(`note: ${notice}\n`);
   // A swarm snapshot does not move the Bolt branch, so reviewed application
   // files may still be modified/untracked in this disposable checkout. Once
   // that immutable source has landed, align the checkout to it before forced
@@ -3156,6 +3203,7 @@ function handleMerge(args: string[]): void {
       strategy,
       commit_sha: commitSha,
       audit_timestamp: auditTs,
+      ...(notices.length > 0 ? { notices } : {}),
     })
   );
 }

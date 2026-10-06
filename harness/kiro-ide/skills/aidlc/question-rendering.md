@@ -1,7 +1,7 @@
 # Question Rendering — Kiro IDE harness annex
 
 This file defines how THIS harness renders the structured questions that
-`aidlc-common/protocols/stage-protocol.md` § "Structured questions" requires.
+`{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md` section "Structured questions" requires.
 The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
@@ -163,12 +163,16 @@ request through composer/creation handoffs until successful intent creation.
 
 For `unit-paused` (`response_route: "command"`), execute `resume_command`
 verbatim only when the human chooses to resume, then re-run `next`; otherwise
-take no engine action and wait for their direction. `claim` follows the Unit
+take no engine action and wait for their direction. For `project-type`
+(`response_route: "command"`), execute `existing_code_command` verbatim when
+the person says the folder holds existing code to work on, or
+`new_project_command` when they say it is a new project, and act on the
+directive it returns; when the reply says neither, ask again. `claim` follows the Unit
 claim contract and
 `execute-remedy` follows only the human-selected executable guard remedy's
 command or action; empty remedies remain terminal. These routes do not fall
-back to reporting an ask answer. The prompt-rendered resume menu alone uses
-non-stage `report --result resumed --user-input "<answer>"`; explicit
+back to reporting an ask answer. A redo, jump, or start-fresh request on re-entry alone
+uses non-stage `report --result resumed --choice <redo|jump|fresh>`; explicit
 guard-remedy stage reports retain their existing contract.
 
 ## Mandatory consolidated-summary checkpoint
@@ -205,8 +209,9 @@ Then map the response back to the exact option label, persist `[Answer]: Looks
 correct` or `[Answer]: Request changes`, and run the matching checkpoint-specific `aidlc-log.ts answer`
 command. Strip any source letter, numbered-prose index, punctuation, and option
 description before writing. `[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`,
-and a self-selected answer are invalid. On Request changes, ask
-**"What should change?"** and END THE TURN again; do not update any answer
+and a self-selected answer are invalid. On Request changes, when their reply
+already says what should change, those words are the feedback; otherwise ask
+**"What should change?"** and END THE TURN again, and do not update any answer
 until that feedback arrives. Then record the feedback, update the affected
 answers, reset this tag to blank, and present the consolidated summary again.
 Do not generate the artifact until the file contains the human's explicit
@@ -216,8 +221,10 @@ checkpoint with the later reviewer, learnings, or approval steps.
 Rules:
 
 - **Approval gate `[next stage]`**: on an approval question, render the
-  `Continue to [next stage]` placeholder from the run-stage directive's
-  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Continue to [next stage]` placeholder from the `next_stage` field verbatim
+  (e.g. `Continue to NFR Requirements`): the one on the reply that opened the
+  gate (`report --result awaiting-approval` or `revised`), which includes any
+  plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
@@ -235,9 +242,11 @@ Rules:
 - **multiSelect: true** → say "Reply with all numbers that apply (e.g. 1, 3)."
 - **Answer capture**: map the user's number back to the exact option `label`
   and record that label verbatim (protocol: never summarize User Input). A
-  free-text reply that clearly matches an option counts as that option;
-  anything else is an "Other" answer — treat it per the protocol (discuss,
-  then re-ask for a final pick).
+  free-text reply that clearly matches an option counts as that option. A
+  reply in their own words that answers the question is their answer: record
+  it as the "Other" answer, in their words. Only a reply that asks about the
+  question or wants to talk it through is discussed first; then take what they
+  settle on.
 - **File-backed questions**: retain A-E and X labels in the markdown source,
   but remap those choices to numbered prose when presenting them in chat.
   Preserve source order and map the selected number back to the stored label.

@@ -61,6 +61,11 @@ workflow triggers, but no push-to-`main` trigger. CI does not run again on
   documentation or its build inputs change on `main`.
 - Preview Release runs contract checks and Full Suite for its selected source
   commit, without repeating the PR CI test matrix.
+- [Merge queue runner notice](.github/workflows/merge-queue-notice.yml) runs
+  after each merge-queue CI run. When the queue dropped a PR only because a
+  GitHub-hosted runner failed, it comments on the PR so the author knows it
+  was not their change and a maintainer can add it back; it never changes the
+  queue.
 
 For explicitly approved full-suite testing before merge, a maintainer can run:
 
@@ -131,7 +136,7 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 ```
 
 The manual-only `diagnostic_filter` is a filename regex. The unit tier requires
-`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/8`
+`unit-shard=N/M`; use `1/1` to select all unit files before filtering, or `7/12`
 without a filter to repeat a whole unit shard. For smoke, integration or e2e,
 omit `unit-shard`; its default is empty. Each dispatch uses one runner, closes
 model gates, checks out the immutable source and retains sanitized logs under
@@ -156,7 +161,9 @@ The workflow:
    Deterministic tiers and production guards run in PR/merge CI and remain
    available through manual `full_verification`.
 3. Builds the release assets, checks native binaries and installer lifecycles,
-   verifies checksums, and generates build provenance.
+   checks that an install of the last stable release updates to the new build
+   with every harness project's hooks, refresh and doctor still working
+   (`update-from-previous`), verifies checksums, and generates build provenance.
 4. Publishes a GitHub **prerelease** for preview users after the gates pass.
    Preview publication leaves stable release discovery unchanged.
 
@@ -166,6 +173,15 @@ jobs, and failing test cases. The published preview's notes open with a warning
 and end with the same report. Full Suite retains its failed status in its own
 run. **Release result** requires successful preview publication (or an
 intentional skip), without requiring Full Suite to pass.
+
+A failing `update-from-previous` job does not stop the preview either: the run
+turns red, and the notes open with a warning and gain a line in the report. In
+a stable release it holds publication back, like the lifecycle checks. Its log
+names the harness and step that failed. Rerun the job only for a passing
+problem such as a download that failed. A stable release runs on its tagged
+commit, so a fault in the build needs the fix on `main` and a new
+release-preparation PR, version and tag; the next nightly preview runs the
+check again on its own.
 
 PR/merge CI and manual Full Suite `full_verification` share
 [one deterministic test definition](.github/workflows/deterministic-tests.yml).

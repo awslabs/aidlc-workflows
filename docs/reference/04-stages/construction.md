@@ -44,7 +44,8 @@ They complete one Unit's applicable design and source-producing stages before
 the next. Preserve an explicit stage-major choice. Design-only and no-Unit
 workflows retain their existing stage flow; team-owned work uses `unit_gate`.
 Existing workflows without the checkpoint setting keep the legacy first-stage
-review and late per-stage gate cascade.
+review; their late stage approvals, like those of work with checkpoints off, come
+as one question.
 
 For eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
@@ -59,9 +60,9 @@ project scan. Before presenting the command, write it to
 `<record>/verification-command.txt` with the harness's file-write tool
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
 be interpolated into a shell line, where substitutions could execute before
-approval. Use the invoking SessionStart session ID: both `log decision` and
-`log answer` require
-`--checkpoint verification-command --command-file verification-command.txt --session "<session ID>"`.
+approval. Both `log decision` and `log answer` take
+`--checkpoint verification-command --command-file verification-command.txt` and
+find the session they run in.
 Copy the complete canonical command exactly from the `command` field in the
 `decision` tool's JSON output into the verification-command question's code span;
 never abbreviate it. Choose a delimiter that preserves any command backticks.
@@ -104,6 +105,14 @@ After the per-unit work:
 
 **Route checkpoints before bodies.** A `construction_checkpoint` directive
 verifies and approves existing Unit work; it does not rerun Code Generation.
+When it carries `rereview`, the Unit's code or documents changed since their review: run that
+request at once, without asking, then verify and ask the one approval question.
+Only Guard Policy `strict` re-checks: under `relaxed` and `off` there is no
+`rereview`, a change to the Unit's code or documents is accepted with one line,
+and the Unit's approval stands. The same holds with reviews off: the line comes
+from the next checkpoint's `verify` or the Construction stage's own check, or,
+for a change made between the approval question and the person's answer, from
+their `approve`.
 With `command_authorized: false`, ask the verification-command question before
 any `verify`, complete the human decision/answer/setter flow, then call `next`.
 Show "Verified with `<full command>` (exit 0)" in the approval question;
@@ -112,15 +121,15 @@ A `swarm_checkpoint` handles a completed batch before later batch work. After
 verification, approval, or rejection, call `next`, never approve the whole stage for one Unit or batch.
 Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true`, open the human Unit/skeleton approval question with
-`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> --session "<session ID>"`;
+`aidlc engine bolt checkpoint --action ask --unit "<unit>" --kind <unit|skeleton>`;
 `ask` refuses an unready or unverified checkpoint. For a human batch question,
 only after status reports `ready: true`, run
-`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>" --session "<session ID>"`.
+`aidlc engine bolt swarm-checkpoint --action ask --batch <N> --units "<Units>"`.
 Then present **Approve** / **Request Changes** and wait. The human's exact reply
 in that session, to this checkpoint question, authorizes the matching action;
 an unrelated reply, another session's reply, or a reply to a different question
-does not. Pass that same `--session` on approval/rejection and never pass
-`--user-input` the human did not choose. Consent is one-shot and bound to the
+does not. These commands find their own session; never pass `--user-input`
+the human did not choose. Consent is one-shot and bound to the
 current checkpoint fingerprint, verification proof ID, and authorized command
 digest (batch questions bind the fingerprint and per-Unit `Command SHA-256` set).
 Re-running `verify` or swarm `finalize` withdraws every open checkpoint question
@@ -151,7 +160,9 @@ before the Unit can be approved. `GATE_APPROVED` binds `Verification Command SHA
 to the proof's digest.
 The verifier records a tool-owned `CHECKPOINT_VERIFICATION_RECORDED` receipt
 alongside the proof file, and approval requires that receipt; a hand-written
-proof file cannot verify a Unit.
+proof file cannot verify a Unit. On a checkout with no proof file at all (a
+fresh clone, another machine), that receipt stands in for the proof of a Unit
+already approved whose evidence is unchanged, so nothing runs again.
 
 Code Generation's Plan Approval remains a human stop before generation for every
 Unit. Grouped Plan Approval may present the exact live swarm Unit set together,
@@ -920,14 +931,17 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook reads the reply in the person's own words, from any chat
-   on this piece of work, takes the fingerprint of the files as they are then,
-   and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED` row. The
+   The human-turn hook keeps the person's reply, from any chat on this piece of
+   work; the conductor reads it and records their choice with `answer
+   --checkpoint plan-approval`, which takes the fingerprint of the files as they
+   are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
+   row with the person's words. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
-   files or writes their answer in the questions file and says done; the guard
-   refuses the conductor's writes to those files meanwhile. A plan that is not
+   files or writes their answer in the questions file and says done, and the
+   conductor reads what they wrote and records their choice; the guard refuses
+   the conductor's writes to those files meanwhile. A plan that is not
    ready is never asked about: `next` names the repair instead.
 
    A postapproval plan, instruction, or Testing Contract edit for the same
@@ -982,9 +996,17 @@ This stage has a **two-part structure**: planning followed by generation.
 
 #### PART 2 -- Generation (Steps 4-7)
 
-4. **Generate Code** -- Before delegating, display to the user:
-   "Generating code for [N] plan steps. This may take several minutes
-   depending on project complexity. I'll show a summary when complete."
+4. **Generate Code** -- The directive's `narration` is the user's line for
+   this build, said once before delegating. The engine counts the plan from
+   the plan file, once for both lines:
+   "Generating unit-2's code for 9 plan steps. This may take several minutes
+   depending on project complexity. I'll show a summary when complete." at
+   the start, and where an interrupted build picks up ("Picking up unit-2's
+   code at step 5 of 9 (1-4 done)."). When the plan groups its tasks under
+   "Step N" headings, both lines count the tasks and name the heading
+   ("Generating unit-2's code for the 19 tasks in 4 plan steps ...", "Picking
+   up unit-2's code at task 7 of 19, in Step 3 (tasks 1-6 done)."). The agent
+   never counts the steps itself.
 
    Delegate to Task tool with the aidlc-developer-agent subagent
    (subagent_type="aidlc-developer-agent").
@@ -1011,10 +1033,29 @@ This stage has a **two-part structure**: planning followed by generation.
      excludes the appendix, so it is not work to execute; with its fence on,
      the dispatch guard refuses a handoff that quotes it. After permitted
      postapproval edits, use the current brief without calling the edits approved
+   - When a build of the same plan was interrupted, that output also
+     carries a `## Progress before the interruption` section after its marker
+     lines: the steps the plan file ticks (or, with none ticked, the steps
+     whose named files changed since the build started), each file a done step
+     names in a code span that is not in the project (a bare file name counts
+     when a file of that name is anywhere in it), stated as a fact for the
+     worker to judge, and the step to continue at. It appears only when the
+     build already started on the plan and instructions as they are now (the
+     receipt for this target, stage attempt, and approved content is at
+     `generation`, and the content on disk is the approved content or, when
+     the fence was lowered for a plan edited after its approval, the edited
+     content generation start kept on that receipt); a Redo, a rejected gate,
+     a new approval, or a plan edited after the build started starts the steps
+     fresh. When a build starts
+     under a new approval, the engine sets the plan file's task markers back to
+     `[ ]` (nothing else in the file changes, and the fingerprint is the same),
+     so ticks from before never count. A swarm batch keeps its own
+     continuation rule. The section is a hint, never evidence for a gate,
+     review, or receipt, and ticks stay outside the fingerprint
    - Project workspace details (languages, frameworks, conventions from
      aidlc-state.md)
    - Instructions to execute each plan step sequentially and mark checkboxes
-     as completed
+     as completed, starting where that progress section says when present
    - The Testing Contract in the current brief is authoritative. The subagent
      does not independently re-resolve memory; it executes that contract's TDD, BDD, ATDD,
      test-after, or custom/mixed profile exactly.

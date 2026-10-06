@@ -162,7 +162,7 @@ describe("t336 (1) validate-grid checks the proposal's Guard Policy value", () =
       const refused = runValidateGrid(proj, { stages: featureGrid(), guardPolicy: value });
       expect(refused.rc, value).toBe(1);
       expect(validation(refused.stdout).errors).toContain(
-        `Guard Policy is set to strict in ${memory} (section: Guard Policy), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
+        `Your team set Guard Policy to strict in ${memory} (section: Guard Policy), so it stays strict for everyone on this repo. Changing that line there changes it.`,
       );
     }
     const allowed = runValidateGrid(proj, { stages: featureGrid(), guardPolicy: "strict" });
@@ -176,7 +176,7 @@ describe("t336 (1) validate-grid checks the proposal's Guard Policy value", () =
     const refused = runValidateGrid(proj, { stages: featureGrid() }, ["--guard-policy", "relaxed"]);
     expect(refused.rc).toBe(1);
     expect(validation(refused.stdout).errors).toContain(
-      `Guard Policy is set to strict in ${memory} (section: Change Control), so it cannot be changed from chat. Edit that line to change it for everyone on this repo.`,
+      `Your team set Guard Policy to strict in ${memory} (section: Change Control), so it stays strict for everyone on this repo. Changing that line there changes it.`,
     );
   });
 });
