@@ -1162,7 +1162,7 @@ When the directive carries `artifact_reuse` (the person asked to redo this Unit'
 When a stage detects existing output artifacts in its artifact directory:
 
 1. List the existing artifacts found
-2. When the person's request already chose (they asked to redo the current stage on re-entry, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
+2. When the person's request already chose (they asked to redo the current stage on re-entry, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question, the option you recommend first, its label ending in "(Recommended)" and its description saying why (for example Keep when the artifacts are complete and nothing they were built from changed, Redo from scratch when one is missing and nothing else holds what it said):
    - **Keep** — Accept existing artifacts as-is, skip this stage's generation steps, proceed to approval gate
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.

@@ -190,7 +190,7 @@ If a stage references prior artifacts that do not exist on disk:
 3. If the producer IS on the scope path, check if it is marked complete in state
 4. If marked complete but artifacts missing:
    - Tell the user: "[X] is recorded as finished, but the files it should have produced are not on disk."
-   - Offer two options: re-run the stage, or provide the artifacts manually
+   - Offer two options, the option you recommend first, its label ending in "(Recommended)" and its description saying why: re-run the stage, or provide the artifacts (for example, restore them from the last commit when it still has them, which is the one to recommend then)
 5. If not marked complete, simply run the stage normally
 
 ### Error Severity Levels
