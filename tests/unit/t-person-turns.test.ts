@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { cleanupTestProject, createTestProject, seedBoltDag, seededAuditShard } from "../harness/fixtures.ts";
 import {
   nextPersonTurnCarriesPicks,
@@ -449,6 +449,36 @@ describe("person-turn check", () => {
     expect(unbackedTuiDecisions(dir)).toEqual([]);
     expect(unbackedFailure("The TUI drive", problems).message)
       .toStartWith("The TUI drive recorded 1 decision(s) as the person's that no turn from them backs:\n  GATE_APPROVED");
+  });
+
+  // An unbacked decision fails the drive after the project is removed, so the
+  // run's only record of the order is what the check keeps: the turn ledger
+  // and the project's audit trail, in the test's log folder that CI uploads.
+  test("an unbacked decision keeps the turn ledger and the audit trail in the test's log folder", () => {
+    ledgerFolder();
+    const dir = project();
+    const logs = mkdtempSync(join(tmpdir(), "t-person-turns-logs-"));
+    folders.push(logs);
+    const before = process.env.AIDLC_TEST_LOG_DIR;
+    process.env.AIDLC_TEST_LOG_DIR = logs;
+    try {
+      const session = `t-person-turns-evidence-${process.pid}`;
+      startPersonTurnSession(session, dir);
+      submittedToPersonTurnSession(session, "/aidlc --scope mvp");
+      row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "team-formation" });
+      row(dir, "GATE_APPROVED", { Stage: "team-formation", "User Input": "Approve" });
+      expect(unbackedTuiDecisions(dir)).toHaveLength(1);
+      const kept = readdirSync(logs).filter((name) => name.startsWith("unbacked-decisions-"));
+      expect(kept).toHaveLength(1);
+      const evidence = join(logs, kept[0]);
+      expect(readFileSync(join(evidence, "turn-ledger.jsonl"), "utf-8")).toContain("/aidlc --scope mvp");
+      const shard = seededAuditShard(dir);
+      const copied = join(evidence, relative(dir, shard));
+      expect(readFileSync(copied, "utf-8")).toBe(readFileSync(shard, "utf-8"));
+    } finally {
+      if (before === undefined) delete process.env.AIDLC_TEST_LOG_DIR;
+      else process.env.AIDLC_TEST_LOG_DIR = before;
+    }
   });
 
   test("a TUI form's Submit backs one answer per pick on it; a pick on one of its tabs backs none", () => {

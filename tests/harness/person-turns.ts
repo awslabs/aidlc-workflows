@@ -15,6 +15,7 @@
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -25,7 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import type { AuditShardEvent } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 type AuditReader = Pick<
@@ -464,10 +465,43 @@ export function unbackedTuiDecisions(projectDir: string): string[] {
   const turns = lines.filter((line) => line.kind === "turn")
     .map((line) => ({ words: line.words, cursor: new Map(line.cursor), selections: line.selections }));
   if (!start || turns.length < sent) {
+    keepUnbackedEvidence(projectDir, text);
     throw new Error(
       `${record} holds ${turns.length} of the ${sent} turn(s) the driver sent${start ? "" : " and no session start"}, ` +
         "so the run cannot show who made its decisions.",
     );
   }
-  return existsSync(projectDir) ? unbackedDecisions(projectDir, new Map(start.cursor), turns) : [];
+  const problems = existsSync(projectDir) ? unbackedDecisions(projectDir, new Map(start.cursor), turns) : [];
+  if (problems.length > 0) keepUnbackedEvidence(projectDir, text);
+  return problems;
+}
+
+/**
+ * A failed check is thrown after the project is removed, so keep what shows
+ * the order of events: the turn ledger and every intent's audit trail and
+ * state, copied into the test's log folder (CI uploads it). Best effort: a
+ * copy that fails never hides the check's own failure.
+ */
+function keepUnbackedEvidence(projectDir: string, ledger: string): void {
+  const logDir = process.env.AIDLC_TEST_LOG_DIR;
+  if (!logDir) return;
+  try {
+    const dir = join(logDir, `unbacked-decisions-${fileName(projectDir).slice(0, 12)}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "turn-ledger.jsonl"), ledger);
+    const spaces = join(projectDir, "aidlc", "spaces");
+    if (!existsSync(spaces)) return;
+    for (const space of readdirSync(spaces)) {
+      const intents = join(spaces, space, "intents");
+      if (!existsSync(intents)) continue;
+      for (const intent of readdirSync(intents)) {
+        for (const kept of ["audit", "aidlc-state.md"]) {
+          const from = join(intents, intent, kept);
+          if (existsSync(from)) cpSync(from, join(dir, relative(projectDir, from)), { recursive: true });
+        }
+      }
+    }
+  } catch (error) {
+    process.stderr.write(`person-turns: could not keep the evidence for ${projectDir}: ${String(error)}\n`);
+  }
 }

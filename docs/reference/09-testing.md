@@ -237,7 +237,10 @@ and files, never prose:
 
 - the stages that run and the ones skipped match the stage files' `scopes:` lists;
 - every decision recorded as the person's is backed by a turn the person script
-  sent (`tests/harness/person-turns.ts`);
+  sent (`tests/harness/person-turns.ts`); when one is not, the turn ledger and
+  each intent's audit trail and state are kept under
+  `unbacked-decisions-<id>/` in the test's log folder, so the order of events
+  survives the fixture's removal;
 - the scope file's switches show in state and directives;
 - the run ends done, with every output on disk.
 
