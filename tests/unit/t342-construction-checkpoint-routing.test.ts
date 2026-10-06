@@ -2323,6 +2323,54 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(after, JSON.stringify(after).slice(0, 800)).toMatchObject({ stage: "functional-design", unit: "beta" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The same, after alpha already used its one stale-review recovery: its
+  // design was edited after its review and reviewed again. The remade
+  // document differs from what that recovery reviewed, and the redo's review
+  // is still its own recovery.
+  test("a deleted design document is reviewed again after the Unit used its one recovery before", () => {
+    const p = fixture({ scope: "classic" });
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Review Override**: none", "- **Review Override**: advisory")
+      .replace("- **Change Control**: strict", "- **Guard Policy**: off (set by you)"));
+    for (const slug of stages) {
+      cover(p, "alpha", [slug], false);
+      const reviewed = reviewThroughLog(p, [
+        "review", "--stage", slug, "--reviewer", findStageBySlug(slug)!.reviewer!, "--unit", "alpha", "--iteration", "1",
+      ]);
+      expect(reviewed.status, reviewed.out).toBe(0);
+      cover(p, "alpha", [slug]);
+    }
+    const design = findStageBySlug("functional-design")!;
+    const designDir = join(seededRecordDir(p), "construction", "alpha", design.slug);
+    const review = (iteration: string) => reviewThroughLog(p, [
+      "review", "--stage", design.slug, "--reviewer", design.reviewer!, "--unit", "alpha", "--iteration", iteration,
+    ]);
+    const first = join(designDir, artifactFilename(design.produces![0]));
+    writeFileSync(first, `${readFileSync(first, "utf-8")}- edited after its review\n`);
+    const recovered = review("2");
+    expect(recovered.status, recovered.out).toBe(0);
+    expect(recovered.request?.recovery).toBe("stale-receipt");
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    for (const name of design.produces ?? []) rmSync(join(designDir, artifactFilename(name)), { force: true });
+
+    expect(next(p)).toMatchObject({ stage: design.slug, unit: "alpha" });
+    const started = tool(p, "state", ["unit", "start", "--stage", design.slug, "--unit", "alpha"]);
+    expect(started.status, started.out).toBe(0);
+    cover(p, "alpha", [design.slug], false);
+    const redone = review("3");
+    expect(redone.status, redone.out).toBe(0);
+    const completed = tool(p, "state", ["unit", "complete", "--stage", design.slug, "--unit", "alpha"]);
+    expect(completed.status, completed.out).toBe(0);
+    // The walk carries on: to alpha's checkpoint (its documents changed since
+    // the person approved it), or to beta's step.
+    const after = next(p);
+    const where = after.construction_checkpoint
+      ? `checkpoint ${after.construction_checkpoint.unit}`
+      : `${after.stage} ${after.unit}`;
+    expect(["checkpoint alpha", "functional-design beta"], JSON.stringify(after).slice(0, 800)).toContain(where);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A Unit built as a run records it: each stage's outputs, its review through
   // the logger, then its completion. `edit` runs before the Code Generation
   // review, as the Unit's own build would, and stays. `asRun` records each

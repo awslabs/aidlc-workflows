@@ -1715,18 +1715,20 @@ describe("AttemptView projections and refusal streaks", () => {
 
   // A solo unit-major walk hands a Unit's finished step back when its work is
   // gone, and the Unit starts the step again: that run gets the stage's review
-  // passes again, whether the step was finished one Unit at a time or in a
-  // wave. The passes keep their numbers and the attempt stays the same.
+  // passes and its one stale-review recovery again, whether the step was
+  // finished one Unit at a time or in a wave. The passes keep their numbers and
+  // the attempt stays the same.
   test("a Unit that starts a finished step again has the stage's review passes again", () => {
     const fd = { Stage: "functional-design", Unit: "alpha" };
-    const request = (timestamp: string, iteration: string, pos: number) => event("REVIEW_REQUESTED", timestamp, {
+    const request = (timestamp: string, iteration: string, pos: number, recovery = false) => event("REVIEW_REQUESTED", timestamp, {
       Stage: "functional-design", Reviewer: "reviewer", Unit: "alpha", Iteration: iteration,
       "Artifact Fingerprint": `sha256:${"a".repeat(64)}`,
+      ...(recovery ? { Recovery: "stale-receipt" } : {}),
     }, "main.md", 0, pos);
     for (const finished of [{}, { Mode: "wave" }] as Record<string, string>[]) {
       const rows = [
         event("WORKFLOW_STARTED", "2026-08-28T00:00:00Z", {}, "main.md", 0, 0),
-        request("2026-08-28T00:00:01Z", "1", 1),
+        request("2026-08-28T00:00:01Z", "1", 1, true),
         event("UNIT_COMPLETED", "2026-08-28T00:00:02Z", { ...fd, ...finished }, "main.md", 0, 2),
         event("UNIT_STARTED", "2026-08-28T00:00:03Z", { ...fd, Unit: "beta" }, "main.md", 0, 3),
         event("UNIT_STARTED", "2026-08-28T00:00:04Z", fd, "main.md", 0, 4),
@@ -1745,9 +1747,10 @@ describe("AttemptView projections and refusal streaks", () => {
       };
       const label = JSON.stringify(finished);
       // Another Unit's start is not this Unit's.
-      expect(accounting(4), label).toMatchObject({ requestCount: 1, budgetCount: 1 });
+      expect(accounting(4), label).toMatchObject({ requestCount: 1, budgetCount: 1, recoverySpent: true });
+      // The first run's stale-review recovery is the first run's.
       const again = accounting(5);
-      expect(again, label).toMatchObject({ requestCount: 1, budgetCount: 0 });
+      expect(again, label).toMatchObject({ requestCount: 1, budgetCount: 0, recoverySpent: false, recoveryIteration: null });
       expect(again.floor, label).toBe(accounting(4).floor);
       // Team-owned Units keep their Bolt floors.
       expect(accounting(5, "alpha", `${state("-")}- **Unit Ownership**: team\n`).budgetCount, label).toBe(1);
