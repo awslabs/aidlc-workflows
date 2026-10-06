@@ -123,6 +123,14 @@ function personaFrontmatter(agent: string): string[] {
   ];
 }
 
+// The one Kiro IDE step for AI-DLC that is not running in this window, word
+// for word wherever it appears (doctor, the refusals, the missed-reply line).
+const KIRO_IDE_TRUST_STEP =
+  "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you " +
+  "trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: " +
+  "Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say " +
+  "carry on.";
+
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
@@ -165,17 +173,13 @@ const manifest: HarnessManifest = {
   // " In Kiro CLI," alone, so that sentence keeps its place and spelling.
   hookActivation: {
     recovery:
-      "In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you " +
-      "trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: " +
-      "Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say " +
-      "carry on. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive " +
+      `${KIRO_IDE_TRUST_STEP} In Kiro CLI, quit Kiro and start \`kiro-cli\` again in this folder. If you drive ` +
       "Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
-    // Says what happened and asks for nothing again; it adds no step to the
-    // refusal it joins.
+    // Says what happened, asks for nothing again, and gives the person the same
+    // Kiro IDE step, in fixed words the agent relays without explaining why.
     missedReply:
-      "If the person already replied, that reply was not recorded. Do not ask them to answer " +
-      "again. Tell them that, and that `/aidlc --doctor` shows whether AI-DLC's hooks run in " +
-      "this window.",
+      "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
+      `Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don't need to answer again. ${KIRO_IDE_TRUST_STEP}"`,
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:

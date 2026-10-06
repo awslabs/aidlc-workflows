@@ -275,9 +275,9 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
 
   // A refusal for a reply that was not recorded never asks the person to answer
   // again. Claude's tools (its shipped hookActivation) give the agent's own
-  // step and the one line to show; Kiro IDE's, whose only measured cause runs
-  // no command at all, point to doctor.
-  test("A2: Claude's refusal gives its own step, Kiro IDE's points to doctor, and neither asks again", () => {
+  // step and the one line to show; Kiro IDE's give the words to relay with its
+  // trust step, the one doctor names, and nothing about how AI-DLC works.
+  test("A2: Claude's refusal gives its own step, Kiro IDE's gives its trust step, and neither asks again", () => {
     const slug = field(proj, "Current Stage"); // feasibility
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
@@ -295,8 +295,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(refusal).toContain(
       "If the person already replied, that reply was not recorded. Do not ask them to answer again.",
     );
-    expect(refusal).toContain("`/aidlc --doctor` shows whether AI-DLC's hooks run in this window.");
-    expect(refusal).not.toContain("Reload Window");
+    expect(refusal).toContain(
+      'Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don\'t need to answer again. In Kiro IDE, trust this folder: choose Trust Folder & Continue when Kiro asks whether you trust it, or select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say carry on."',
+    );
+    expect(refusal).not.toContain("hooks");
+    expect(refusal).not.toContain("Kiro CLI");
     expect(refusal).not.toContain("agent picker");
     expect(refusal).not.toContain("clientCapabilities");
     expect(eventCount(proj, "GATE_APPROVED")).toBe(0);

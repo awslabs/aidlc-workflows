@@ -5584,6 +5584,23 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
     expect(activation.recovery.split(" In Kiro CLI,").length).toBe(2);
   });
 
+  // The state tool's refusal for a reply that was not recorded (missedReply)
+  // says what happened, not to ask again, and the same Kiro IDE step, word for
+  // word, with nothing about how AI-DLC works.
+  test("the missed-reply line gives the Kiro IDE trust step, not how AI-DLC works", () => {
+    const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
+      hookActivation: { recovery: string; missedReply: string };
+    }).hookActivation;
+    const ideStep = activation.recovery.slice(0, activation.recovery.indexOf(" In Kiro CLI,"));
+    expect(activation.missedReply).toBe(
+      "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
+        `Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don't need to answer again. ${ideStep}"`,
+    );
+    for (const machinery of ["hook", "Kiro CLI", "ACP", "human turn"]) {
+      expect(activation.missedReply).not.toContain(machinery);
+    }
+  });
+
   // Measured on Kiro IDE: trusting the folder from the Restricted Mode banner
   // runs no AI-DLC hook until Developer: Reload Window. Every copy of the trust
   // step the person or the agent reads (doctor, the refusals, the skill, the
@@ -5597,6 +5614,7 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
       "then **Trust**. 2. Say carry on",
       "says what it must send for AI-DLC's hooks to run",
       "tell them that, and this: ",
+      "shows whether AI-DLC's hooks run in this window",
     ];
     const roots = [
       KIRO_IDE_TREE,
