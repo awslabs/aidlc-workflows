@@ -444,11 +444,27 @@ describe("t117 init-stage jump guard", () => {
     expect(directive(r.stdout).kind).toBe("error");
   });
 
+  // --- Test 16b: with work under way, the refusal names the rescan, and it runs ---
+  test("16b: an init-stage jump on running work names the rescan, which the engine accepts", () => {
+    const p = proj("state-jumped.md");
+    for (const args of [["--stage", "workspace-detection"], ["--phase", "initialization"], ["--stage", "workspace-detection", "--single"]]) {
+      const r = next(args, p);
+      expect(directive(r.stdout).kind, args.join(" ")).toBe("error");
+      expect(r.out, args.join(" ")).toContain("--project-type brownfield");
+    }
+    // The named step is accepted: it routes to the rescan, not an error.
+    const rescan = next(["--project-type", "brownfield"], p);
+    expect(directive(rescan.stdout).kind).not.toBe("error");
+    expect(rescan.out).toContain("workspace reclassify");
+  });
+
   // --- Test 17: init-stage jump guard holds on the no-state path too ---
   test("17: jump to init stage (no state) → error (guard holds)", () => {
     const p = proj(); // no state seeded
     const r = next(["--stage", "workspace-scaffold"], p);
     expect(r.out).toContain("Cannot jump to initialization stages");
     expect(directive(r.stdout).kind).toBe("error");
+    // Nothing is set up yet, so there is nothing to scan again.
+    expect(r.out).not.toContain("--project-type");
   });
 });

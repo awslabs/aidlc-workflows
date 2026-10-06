@@ -703,7 +703,8 @@ describe("t296 first-run config setup walk", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toBe(
       `configured ${path} for Claude Code ${AIDLC_VERSION}; ` +
-        "next: open Claude Code in this project and run `/aidlc --doctor`\n",
+        "next: open Claude Code in this project (if it is already open in this folder, exit it and start it " +
+        "again) and run `/aidlc --doctor`\n",
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

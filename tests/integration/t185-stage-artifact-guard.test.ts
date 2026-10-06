@@ -103,6 +103,7 @@ function reviewStage(
   stage: string,
   reviewer: string,
   unit?: string,
+  iteration = 1,
 ): void {
   const artifact =
     stage === "intent-capture"
@@ -170,7 +171,7 @@ function reviewStage(
     "--reviewer",
     reviewer,
     "--iteration",
-    "1",
+    String(iteration),
     "--project-dir",
     proj,
   ];
@@ -199,7 +200,7 @@ function reviewStage(
       "**Verdict:** READY",
       `**Reviewer:** ${reviewer}`,
       "**Date:** 2026-08-26T00:00:00Z",
-      "**Iteration:** 1",
+      `**Iteration:** ${iteration}`,
       "",
     ].join("\n"),
   );
@@ -214,12 +215,13 @@ function reviewStage(
   }
 }
 
-function reviewCodeGen(proj: string, unit?: string): void {
+function reviewCodeGen(proj: string, unit?: string, iteration = 1): void {
   reviewStage(
     proj,
     "code-generation",
     "aidlc-architecture-reviewer-agent",
     unit,
+    iteration,
   );
 }
 
@@ -609,6 +611,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     resetAidlcEnv();
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+    // The fixture scope ships collaborators off, which would collapse the
+    // reverse-engineering pipeline to the developer lead alone and drop the
+    // architect link the codekb-placement cases record. Pin the switch on.
+    const sp = seededStateFile(proj);
+    writeFileSync(sp, `${readFileSync(sp, "utf-8")}- **Collaborators**: on (set by you)\n`);
   });
 
   afterEach(() => cleanupTestProject(proj));
@@ -2052,6 +2059,33 @@ X. Other (please specify)
       const r = approveCodeGen();
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("workspace_requires");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The code went in an earlier commit and a docs-only commit landed after
+    // it. The refusal names the ways forward that keep the check: a source
+    // change not committed yet counts, and the same approve then goes through.
+    test("names the way forward when the last commit is docs only, and that step is accepted", () => {
+      initGitRepo();
+      writeWorkspaceFile(proj, "src/legacy/old.ts");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "baseline brownfield code"]);
+      stageCodeGenDocsOnly();
+      writeWorkspaceFile(proj, "src/auth/login.ts");
+      git(["add", "src"]);
+      git(["commit", "-q", "-m", "the code"]);
+      git(["add", "aidlc"]);
+      git(["commit", "-q", "-m", "record docs only"]);
+      const refused = approveCodeGen();
+      expect(refused.rc).not.toBe(0);
+      expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
+      expect(refused.out).toContain("choose Request Changes and say what is missing");
+      expect(refused.out).not.toContain("--bypass");
+      // The step it names: new source, reviewed again as any change is, and
+      // the same approve goes through.
+      writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
+      reviewCodeGen(proj, UNIT, 2);
+      const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(approved.rc, approved.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     // Uncommitted/untracked new source this session -> PASS.

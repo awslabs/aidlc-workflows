@@ -283,7 +283,7 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 
 The gate's audit trail is report-owned:
 1. Before presenting the gate, `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`)
-2. After the response, `report --result approved|rejected --user-input "<the choice they made>"` (`"Approve"` or `"Request Changes"`) records that choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
+2. After the response, `report --result approved|rejected --user-input '<the choice they made>'` (`"Approve"` or `"Request Changes"`) records that choice (`GATE_APPROVED`/`GATE_REJECTED`); no separate log entry is added for the gate prompt or choice
 
 ### Part 1: Announcement
 
@@ -387,9 +387,15 @@ modes mid-stage.
   User must see every option. File retains full option set.
 - Built-in "Other" takes an answer in the user's own words as their answer,
   or opens a discussion when they ask about the question. Tell user before
-  first batch: "Select 'Other' on any question to answer in your own words or
-  to discuss it."
+  first batch, naming that row as their tool labels it (Claude Code: "Type
+  something"; Codex's question tool: "None of the above"; a numbered row:
+  "Other"): "Pick "[that row]" on any question to answer in your own words or
+  talk it through."
 - After each batch, IMMEDIATELY write answers to the questions file
+- A resumed stage whose questions file still has a blank answer carries
+  `kept_replies` on its `run-stage`: what the person replied that no answer
+  holds yet, in order, after the stage's answers already on record. Record
+  those answers first; never ask them again
 - Log each batch with fresh ISO timestamp
 - Only when `directive.ceremony.summary_confirmation === "on"`, present a consolidated answer summary, then print
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
@@ -478,9 +484,16 @@ ask targeted follow-up. Do NOT proceed until resolved.
   previously defined quality target (for example, a test coverage threshold)
   instead of meeting it
 - When the user leaves a choice to the agent ("up to you", "whatever you think
-  is best"), the agent decides: it picks the option that best fits what they
-  have said, records it as their answer with a note that they left it to the
-  agent, and says in one line what it chose, why, and that they can change it.
+  is best", or "choose the recommended answers" for this stage), the agent
+  decides: it picks the option that best fits what they have said and records
+  it with `log answer --on-instruction '<their words>'` (single-quoted, like
+  every piece of the person's text on a command line), so the record shows
+  the agent chose it as they asked. It then says one line: "You left <the
+  question> to me, so I chose <the choice>. Say if you want something else."
+  (for several questions, "You left <Stage>'s <N> questions to me, so I chose
+  the recommended answers: ... Say if you want any of them changed."), and
+  once per piece of work: "Approvals are still yours: I'll stop at each stage
+  for you to approve." A checkpoint or an approval is never left to the agent.
 
 ### Plan and Question File Location
 
@@ -544,10 +557,11 @@ Update immediately after completing each step.
 
 ### Timestamps
 
-The audit trail is stamped by the tools and hooks that append to it; no
-`date -u` call is involved. When an artifact template asks for a UTC
-timestamp (a review file's `Date` field), generate it via
-`date -u +"%Y-%m-%dT%H:%M:%SZ"`. Never date-only.
+The audit trail is stamped by the tools and hooks that append to it. When an
+artifact template asks for a UTC timestamp (a review file's `Date` field, a
+diary entry's prefix), the agent pastes what `aidlc engine now` prints, for
+example `2026-05-20T10:14:32Z`: the engine's own clock, in UTC on every shell,
+and pre-approved wherever engine commands are. Never date-only.
 
 ### Audit Trail Rules
 
@@ -624,9 +638,10 @@ dynamic per workflow position.
 1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
    every substantive active-space rule as content and re-runs on every stage.
 2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
-   the lead only for `mob` because mob supports are dispatched. Persona and
-   knowledge remain path-loaded. Show any `context_warnings` verbatim and
-   continue with the readable roster. Agent names alone are not loaded context.
+   the lead's persona and knowledge for `mob` because mob supports are
+   dispatched. Persona and knowledge remain path-loaded. Show any
+   `context_warnings` verbatim and continue with the readable roster. Agent
+   names alone are not loaded context.
 3. Apply every loaded perspective during execution. Do not omit support-agent
    perspectives on `inline` or the lead's on `mob`.
 
@@ -675,7 +690,9 @@ mutually blind quality, developer, and devsecops contributions, human interview,
 then lead integration. Its gate offers **Approve** / **Request Changes**; after
 Approve, `practices-promote` must commit both the affirmed timestamp and a
 `PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
-conductor reports the stage approved.
+conductor reports the stage approved. With collaborators off (the scope setting,
+shipped on only for `enterprise`), the directive lists no support agents and each
+of these stages runs its lead alone (`stage-protocol-ensemble.md`, section 5).
 
 ### The 11 Domain Agents
 
@@ -710,7 +727,7 @@ and reconcile the other sources against the event timeline on disagreement.
 
 When `aidlc-state.md` exists at session start, the conductor reads it to
 determine completed stages (`[x]`), current/next stage, and artifact
-existence, then offers to resume from the last incomplete stage.
+existence, then carries on from the last incomplete stage with no resume menu.
 
 ### Resume Context Loading by Phase
 
@@ -1204,7 +1221,22 @@ exception is a terminal receipt invalidated by a later reviewed-output write: th
 first request after stale evidence is exactly one marked recovery request at
 the next ordinal, even when normal adversarial budget remained. Either
 recovery verdict is terminal; a second invalidation requires human reset
-instead of another request. Autonomous Units halt before `finalize` and
+instead of another request. With Construction checkpoints on, a Unit whose
+code or documents changed after their review gets that recovery again each
+time the person approves the Unit, and under `relaxed` and `off`, where such a
+change is accepted, a review of that Unit is the same one recovery. A review
+the person asked for (they spoke since the last decision and since that review
+was last requested) is never refused, under every Guard Policy: the conductor
+records it the first time they ask, and the budget and the recovery bound only
+the passes the conductor starts on its own.
+When Construction runs one Unit at a time and a Unit's finished step loses its
+work, the walk hands the step back and the Unit starts it again (`unit start`
+after its `UNIT_COMPLETED`, a wave completion included). That run of the step
+gets the stage's budget and its one stale-review recovery again, so a redo the
+engine asked for finishes under any review setting. Its passes keep their
+numbers (the redo's first request is the next ordinal), and team-owned Units
+keep their Bolt floors.
+Autonomous Units halt before `finalize` and
 restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire
 for stages without a `reviewer` field. See the `reviewer` /

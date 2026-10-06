@@ -41,15 +41,27 @@ import {
   warnVerdict,
 } from "./aidlc-color.ts";
 import {
+  AIDLC_HOOK_ENTRY_PREFIX,
+  aidlcHookRegistrationHashes,
+  aidlcHookRegistrations,
+  aidlcHookTarget,
   assertProjectionPathHasNoSymlinks,
   hostToolPath,
+  emptyJsonObject,
   insertJsoncSetting,
+  type JsonEntriesOwnership,
+  jsonFileText,
+  isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
+  legacyAidlcHookTarget,
   mergeBlock,
+  mergeJsonEntries,
   type ProjectionDescriptor,
   projectionFiles,
+  readJsonFile,
   readRootIntegrations,
+  removeJsonEntries,
   removeJsoncSetting,
   replaceJsoncSetting,
   copyStartsWithout,
@@ -60,6 +72,7 @@ import {
   unionBlocks,
   validateProjectionDescriptor,
   walkFiles,
+  withoutBom,
 } from "./aidlc-distribution.ts";
 import {
   activeVersion,
@@ -124,6 +137,7 @@ import {
 } from "./aidlc-lib.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import {
+  activeWorkflowPluginDependencies,
   canonicalScopeTableRegion,
   canonicalStageTableRegion,
   renderScopeTable,
@@ -266,7 +280,10 @@ type RootContribution =
   | { policy: "whole-file"; hash: string }
   // Only the settings AI-DLC itself added, with the value it wrote; created
   // records that the file did not exist before.
-  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean };
+  | { policy: "jsonc-settings"; entries: Record<string, string>; added?: string[]; created?: boolean }
+  // Each entry AI-DLC owns in a team's JSON file (opencode.json), with the
+  // value hash it wrote; created records that AI-DLC created the file.
+  | { policy: "json-entries"; entries: Record<string, string>; created?: boolean };
 
 type Baseline = {
   schemaVersion: 1;
@@ -286,6 +303,7 @@ type PreparedRefreshSource = {
   root: string;
   cleanup?: string;
   regenerated: Set<string>;
+  retiredManagedFiles: Set<string>;
   projectOverlays?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
@@ -834,7 +852,24 @@ function validateChannelConfigArgs(argv: readonly string[]): string | null {
   return validateConfigOutputMode(argv);
 }
 
+// `config --show [--json]` reads every section and changes nothing, so it takes
+// only the flags that shape its output and --project-dir.
+const ROOT_SHOW_BARE_FLAGS = new Set(["--show", "--json", "--no-color", "--help"]);
+
+function validateRootShowArgs(argv: readonly string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === "--project-dir") {
+      i++;
+      continue;
+    }
+    if (!ROOT_SHOW_BARE_FLAGS.has(token)) return `${token} cannot be combined with config --show`;
+  }
+  return argv.filter((token) => token === "--show").length > 1 ? "--show may be specified only once" : null;
+}
+
 function validateRootConfigArgs(argv: readonly string[]): string | null {
+  if (argv.includes("--show")) return validateRootShowArgs(argv);
   const hasPin = argv.includes("--pin");
   const hasUnpin = argv.includes("--unpin");
   if (hasPin && hasUnpin) return "--pin and --unpin are mutually exclusive";
@@ -1021,12 +1056,17 @@ function modelStateData(
   };
 }
 
+// A printed config command about one harness of the project names that
+// harness when the project has more than one, since config would otherwise
+// ask which.
+function namedHarness(projectDir: string, harness: string | undefined): string {
+  return harness && discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
+}
+
 // A `config models` command about one harness of the project, run as shown
-// from where the user is: it names that harness when the project has more
-// than one, since config would otherwise ask which.
+// from where the user is.
 function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
-  const named = discoverProjectHarnesses(projectDir).length > 1 ? ` --harness ${harness}` : "";
-  return `${configInvocationFor(projectDir)} config models ${args}${named}${projectTarget(projectDir)}`;
+  return `${configInvocationFor(projectDir)} config models ${args}${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
 }
 
 function showModels(
@@ -2894,6 +2934,11 @@ function validateChoiceArgs(
     invalidKnownMessage: (flag) => `${flag} is not valid for config ${section}`,
   });
   if (grammar) return grammar;
+  // Nobody is there to ask for a check off on an unattended run. Turning one
+  // back on is always done.
+  if (section === "flags" && process.env.AIDLC_UNATTENDED === "1" && valuesAfter(argv, "--bypass").length > 0) {
+    return "An unattended run does not turn a check off (AIDLC_UNATTENDED=1 is set): run it from an attended session.";
+  }
   const mutationFlags = section === "flags"
     ? [
         "--bypass",
@@ -3922,6 +3967,8 @@ function contributionValid(entry: unknown): boolean {
       return isStringMap(entry.entries) &&
         (entry.added === undefined || (Array.isArray(entry.added) && entry.added.every((key) => typeof key === "string"))) &&
         (entry.created === undefined || typeof entry.created === "boolean");
+    case "json-entries":
+      return isStringMap(entry.entries) && (entry.created === undefined || typeof entry.created === "boolean");
     default:
       return false;
   }
@@ -4534,6 +4581,38 @@ const CLAUDE_SHIPPED_KEYS = [
   "hooks",
 ];
 
+// Exact Claude dist bytes present in version tags before these direct hooks
+// were retired. A manifestless file is removable only when its hash is here;
+// names, imports, and other source heuristics never establish ownership.
+const RELEASED_LEGACY_CLAUDE_HOOK_HASHES: Readonly<Record<string, ReadonlySet<string>>> = {
+  "audit-logger": new Set([
+    "sha256:064eac85c2f71d9832fc93c65a36b22a0af795539b349c9400952d25c66647f7",
+    "sha256:3294da0207cf7d18e48872ffc2efbfb910baacbd4ba18392807a731e9cac801a",
+  ]),
+  "mint-presence": new Set([
+    "sha256:ff7556c56f6bebe0bc447be6632ccc34d14bb68b11220ad8e36bfd0bc37d2b90",
+  ]),
+  "runtime-compile": new Set([
+    "sha256:8a54c7bad431576d829597ecfa02447a74d13e09d0fb878fc37a69e0486efd6a",
+    "sha256:f1bb53cfefb4d9be8b238dbcd080001dc8d68a5a3c120459b0eb73670d63c965",
+    "sha256:fc754dd871fb86b94ca870b486dc0ed2f3bd842168ffa95655f6dfc2d93c7838",
+  ]),
+  "sensor-fire": new Set([
+    "sha256:c88f3c8817ad5864b895185858d9006fb81ebf50644ac3f160a8bbd10c0a0a51",
+    "sha256:fe4d6f041236d5a3f04c6dd7da78beb9afaef02c0543ba49e77853441a714d79",
+  ]),
+  stop: new Set([
+    "sha256:00cfdd6fb288ed3b1317dd0b1fd7b5850992683f9d1fea96b8eee3b3695d3cb5",
+    "sha256:3cdb0888452c13c1706490be0c9b4948ae0a73d0fdc09ff1aff8ee00b1158fe8",
+    "sha256:4aee4a7bc1d8b6bc9ad50513630e2f3d37ab44e7cea810d756a0355c881d07fa",
+    "sha256:71fb8ef269917355b6bbd37392df751947283e54af6fe437552e24d6c63253cc",
+  ]),
+  "sync-statusline": new Set([
+    "sha256:35a7c593e6f05768bc92ceaa9596f4112aecad8c8820a5e9f7b32eb090f9871e",
+    "sha256:549109978d1f335cc1ac530a1381f06b0d5dab29edbeff72565563d8cc66d682",
+  ]),
+};
+
 function preserveClaudeProviderFields(
   projectDir: string,
   stagedRoot: string,
@@ -4542,27 +4621,137 @@ function preserveClaudeProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
-): boolean {
+  notes: string[],
+): Set<string> {
+  const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
   const currentPath = join(projectDir, relative);
   const stagedPath = join(stagedRoot, relative);
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return false;
-  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
-  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
-  const pristine = sha256File(currentPath) === prior?.files[relative];
+  if (!regularFile(currentPath) || !regularFile(stagedPath)) return retiredManagedFiles;
+  const currentText = readFileSync(currentPath, "utf-8");
+  const current = JSON.parse(withoutBom(currentText)) as Record<string, unknown>;
+  const staged = readJsonFile(stagedPath) as Record<string, unknown>;
   const priorEntries = prior?.entries?.[relative];
-  const frameworkOwnedClean = priorEntries
-    ? CLAUDE_SHIPPED_KEYS.every((key) => {
-      const priorHash = priorEntries[key];
-      if (!priorHash) return !Object.hasOwn(current, key);
-      return Object.hasOwn(current, key) &&
-        sha256Bytes(canonical(current[key])) === priorHash;
-    })
-    : pristine;
+  const incomingHookHashes = aidlcHookRegistrationHashes(staged.hooks);
+  const recordedHookTargets = Object.keys(priorEntries ?? {})
+    .filter((key) => key.startsWith(AIDLC_HOOK_ENTRY_PREFIX))
+    .map((key) => key.slice(AIDLC_HOOK_ENTRY_PREFIX.length));
+  const registeredLegacyTargets = new Set<string>();
+  for (const groups of Object.values(isRecord(current.hooks) ? current.hooks : {})) {
+    if (!Array.isArray(groups)) continue;
+    for (const group of groups) {
+      if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
+      for (const item of group.hooks) {
+        if (!isRecord(item) || typeof item.command !== "string") continue;
+        const target = legacyAidlcHookTarget(item.command);
+        if (target !== null) registeredLegacyTargets.add(target);
+      }
+    }
+  }
+  const attributableLegacyTargets = [...registeredLegacyTargets].filter((target) => {
+    const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+    if (prior?.files[hookRelative] !== undefined) return true;
+    if (prior !== null) return false;
+    const hookPath = join(projectDir, hookRelative);
+    if (!regularFile(hookPath)) return false;
+    return RELEASED_LEGACY_CLAUDE_HOOK_HASHES[target]?.has(
+      sha256File(hookPath),
+    ) ?? false;
+  });
+  const ownedHookTargets = new Set([
+    ...Object.keys(incomingHookHashes),
+    ...recordedHookTargets,
+    ...attributableLegacyTargets,
+  ]);
+  if (prior === null) {
+    for (const target of attributableLegacyTargets) {
+      if (Object.hasOwn(incomingHookHashes, target)) continue;
+      const hookRelative = `${harnessDir}/hooks/aidlc-${target}.ts`;
+      if (!regularFile(join(stagedRoot, hookRelative))) {
+        retiredManagedFiles.add(hookRelative);
+      }
+    }
+  }
+  // Start with the shipped object's key order so a pristine refresh is byte-identical.
+  if (canonical(current.hooks) !== canonical(staged.hooks)) {
+    const currentOwnedHooks = aidlcHookRegistrations(
+      current.hooks,
+      ownedHookTargets,
+      projectDir,
+    );
+    const currentOwnedHash = sha256Bytes(canonical(currentOwnedHooks));
+    const hadLocalHookDrift = priorEntries?.hooksAidlc !== undefined
+      ? currentOwnedHash !== priorEntries.hooksAidlc
+      : priorEntries?.hooks !== undefined
+      ? currentOwnedHash !== priorEntries.hooks
+      : canonical(currentOwnedHooks) !==
+        canonical(aidlcHookRegistrations(staged.hooks, ownedHookTargets));
+    if (hadLocalHookDrift) {
+      // A settings file the project wrote before AI-DLC has none of its hooks yet.
+      notes.push(Object.keys(currentOwnedHooks).length === 0
+        ? "added the AI-DLC hook registrations to .claude/settings.json; your own settings were kept."
+        : "restored the AI-DLC hook registrations in .claude/settings.json (they had been changed); your own hook entries were kept.");
+    }
+    const hooks = isRecord(staged.hooks) ? { ...staged.hooks } : {};
+    for (const [event, groups] of Object.entries(isRecord(current.hooks) ? current.hooks : {})) {
+      if (!Array.isArray(groups)) continue;
+      const userGroups = groups.flatMap((group: unknown) => {
+        if (!isRecord(group) || !Array.isArray(group.hooks)) return [group];
+        const items = group.hooks.filter((item: unknown) =>
+          !isRecord(item) || typeof item.command !== "string" ||
+          !ownedHookTargets.has(aidlcHookTarget(item.command, projectDir) ?? "")
+        );
+        return items.length > 0 ? [{ ...group, hooks: items }] : [];
+      });
+      if (userGroups.length > 0) {
+        hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...userGroups];
+      }
+    }
+    staged.hooks = hooks;
+  }
+  const permissions = isRecord(current.permissions) ? current.permissions : {};
+  const shippedPermissions = isRecord(staged.permissions) ? staged.permissions : {};
+  const shippedAllow = Array.isArray(shippedPermissions.allow) ? shippedPermissions.allow : [];
+  const userAllow = Array.isArray(permissions.allow) ? permissions.allow : [];
+  if (shippedAllow.some((entry: unknown) => !userAllow.includes(entry))) {
+    notes.push(
+      "added the AI-DLC command allow entries that were missing from .claude/settings.json; your other permissions were kept.",
+    );
+  }
+  staged.permissions = {
+    ...permissions,
+    allow: [...shippedAllow, ...userAllow.filter((entry: unknown) => !shippedAllow.includes(entry))],
+  };
+  // A kept personal value is reported only when this release ships a different
+  // value than the one recorded last time; otherwise the choice stands silently.
+  const shippedChanged = (key: string): boolean =>
+    priorEntries?.[key] === undefined ||
+    sha256Bytes(canonical(staged[key])) !== priorEntries[key];
+  if (
+    Object.hasOwn(current, "statusLine") &&
+    isCustomClaudeStatusLine(current.statusLine, projectDir)
+  ) {
+    if (shippedChanged("statusLine")) {
+      notes.push(
+        "kept your statusLine in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.statusLine = current.statusLine;
+  }
+  if (
+    Object.hasOwn(current, "companyAnnouncements") &&
+    sha256Bytes(canonical(current.companyAnnouncements)) !== priorEntries?.companyAnnouncements
+  ) {
+    if (shippedChanged("companyAnnouncements")) {
+      notes.push(
+        "kept your companyAnnouncements in .claude/settings.json; this release ships a different one. Delete the key and refresh to take it.",
+      );
+    }
+    staged.companyAnnouncements = current.companyAnnouncements;
+  }
   for (const [key, value] of Object.entries(current)) {
     if (key === "env") continue;
-    // Preserve project-owned additions. Shipped enforcement keys remain
-    // baseline-owned so drift conflicts and --force restores them.
+    // Every other top-level setting belongs to the project.
     if (!CLAUDE_SHIPPED_KEYS.includes(key)) {
       staged[key] = value;
     }
@@ -4625,8 +4814,8 @@ function preserveClaudeProviderFields(
     delete currentEnv.AWS_AIDLC_DEFAULT_SCOPE;
   }
   staged.env = { ...stagedEnv, ...currentEnv };
-  writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
-  return frameworkOwnedClean;
+  writeFileSync(stagedPath, jsonFileText(staged, currentText));
+  return retiredManagedFiles;
 }
 
 const CODEX_FRAMEWORK_TABLES = new Set([
@@ -4817,19 +5006,43 @@ function preserveCodexProviderFields(
   return merged.frameworkOwnedClean;
 }
 
+// True when the staged release merges opencode.json per entry: the team's
+// provider block is then never copied into AI-DLC's part, so it is never read
+// as AI-DLC's.
+function stagedOpenCodeJsonEntries(stagedRoot: string): boolean {
+  try {
+    const descriptor = readJsonFile(join(stagedRoot, ".aidlc", "tools", "data", "aidlc-projection.json")) as {
+      rootIntegrations?: unknown;
+    };
+    const integrations = readRootIntegrations(descriptor.rootIntegrations);
+    return Array.isArray(integrations) && integrations.some((integration) =>
+      isRecord(integration) && integration.path === "opencode.json" && integration.policy === "json-entries"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function preserveOpenCodeProviderFields(
   projectDir: string,
   stagedRoot: string,
 ): void {
   const currentPath = join(projectDir, "opencode.json");
   const stagedPath = join(stagedRoot, "opencode.json");
-  if (!regularFile(currentPath) || !regularFile(stagedPath)) return;
-  const current = JSON.parse(readFileSync(currentPath, "utf-8")) as Record<string, unknown>;
+  if (!regularFile(currentPath) || !regularFile(stagedPath) || stagedOpenCodeJsonEntries(stagedRoot)) return;
+  const currentText = readFileSync(currentPath, "utf-8");
+  const current = JSON.parse(withoutBom(currentText)) as Record<string, unknown>;
   if (!current.provider || typeof current.provider !== "object" ||
       Array.isArray(current.provider)) {
+    // The release copy takes the mark the person's file has, so a mark alone
+    // is never read as their change.
+    const stagedText = readFileSync(stagedPath, "utf-8");
+    if (currentText.startsWith("\uFEFF") && !stagedText.startsWith("\uFEFF")) {
+      writeFileSync(stagedPath, `\uFEFF${stagedText}`);
+    }
     return;
   }
-  const staged = JSON.parse(readFileSync(stagedPath, "utf-8")) as Record<string, unknown>;
+  const staged = readJsonFile(stagedPath) as Record<string, unknown>;
   const stagedProviders = staged.provider && typeof staged.provider === "object" &&
       !Array.isArray(staged.provider)
     ? staged.provider as Record<string, unknown>
@@ -4838,7 +5051,7 @@ function preserveOpenCodeProviderFields(
     ...stagedProviders,
     ...current.provider as Record<string, unknown>,
   };
-  writeFileSync(stagedPath, `${JSON.stringify(staged, null, 2)}\n`);
+  writeFileSync(stagedPath, jsonFileText(staged, currentText));
 }
 
 function preserveUserProviderFields(
@@ -4850,9 +5063,12 @@ function preserveUserProviderFields(
   nextProvider: ProvidersRecord | null,
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
+  notes: string[],
+  retiredManagedFiles: Set<string>,
 ): boolean {
   if (harness === "claude") {
-    return preserveClaudeProviderFields(
+    // Claude settings merge per entry, so the refreshed file always applies.
+    for (const rel of preserveClaudeProviderFields(
       projectDir,
       stagedRoot,
       harnessDir,
@@ -4860,7 +5076,9 @@ function preserveUserProviderFields(
       nextProvider,
       projectFlags,
       prior,
-    );
+      notes,
+    )) retiredManagedFiles.add(rel);
+    return true;
   } else if (harness === "codex") {
     return preserveCodexProviderFields(projectDir, stagedRoot, harnessDir, prior);
   } else if (harness === "opencode") {
@@ -4880,7 +5098,7 @@ function unrecordedLegacyProviderMigration(
     const relative = `${harnessDir}/settings.json`;
     const path = join(projectDir, relative);
     if (!regularFile(path)) return null;
-    const settings = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    const settings = readJsonFile(path) as Record<string, unknown>;
     const env = settings.env && typeof settings.env === "object" &&
         !Array.isArray(settings.env)
       ? settings.env as Record<string, unknown>
@@ -4922,6 +5140,10 @@ function prepareRefreshSource(
       CLAUDE_SHIPPED_KEYS.filter((key) => Object.hasOwn(settings, key))
         .map((key) => [key, sha256Bytes(canonical(settings[key]))]),
     );
+    entries[rel].hooksAidlc = sha256Bytes(canonical(aidlcHookRegistrations(settings.hooks)));
+    for (const [target, hash] of Object.entries(aidlcHookRegistrationHashes(settings.hooks))) {
+      entries[rel][`${AIDLC_HOOK_ENTRY_PREFIX}${target}`] = hash;
+    }
   } else if (!projectProjection && entries && descriptor.distribution === "codex") {
     const rel = `${descriptor.harnessDir}/config.toml`;
     const config = readFileSync(join(sourceRoot, rel), "utf-8");
@@ -4948,12 +5170,28 @@ function prepareRefreshSource(
     projectFlags === null &&
     diagnosticsOverride === undefined
   ) {
-    return { root: sourceRoot, regenerated: new Set(), entries, notes };
+    return { root: sourceRoot, regenerated: new Set(), retiredManagedFiles: new Set(), entries, notes };
   }
   const cleanup = mkdtempSync(join(tmpdir(), "aidlc-init-refresh-"));
   try {
   const root = join(cleanup, "projection");
   cpSync(sourceRoot, root, { recursive: true, preserveTimestamps: true });
+  // A copy runtime leaves the team's json-entries file out; AI-DLC's part
+  // (root-blocks) stands in for it, so a provider answer lands in that part.
+  for (const integration of descriptor.rootIntegrations) {
+    if (integration.policy !== "json-entries" || pathPresent(join(root, integration.path))) continue;
+    const part = rootBlockPath(join(root, descriptor.harnessDir), integration);
+    if (regularFile(part)) cpSync(part, join(root, integration.path), { preserveTimestamps: true });
+  }
+  // A project's own tree holds the team's AGENTS.md or .gitignore
+  // with AI-DLC's part merged in, markers and all; the staged release takes
+  // AI-DLC's part alone from root-blocks, so a refresh never wraps that part
+  // in a second pair of markers.
+  for (const integration of descriptor.rootIntegrations) {
+    if (integration.policy !== "managed-block") continue;
+    const part = rootBlockPath(join(root, descriptor.harnessDir), integration);
+    if (regularFile(part)) cpSync(part, join(root, integration.path), { preserveTimestamps: true });
+  }
   const regenerated = new Set<string>();
   const stagedHarness = join(root, descriptor.harnessDir);
   const beforeGeneratedWrites = new Map<string, string>();
@@ -5085,7 +5323,9 @@ function prepareRefreshSource(
     }
   }
   // Preserve project-owned provider/model fields and unrelated additions.
-  // Framework-owned enforcement entries remain tied to the baseline.
+  // Claude's AI-DLC entries are refreshed in place; Codex's framework-owned
+  // entries remain tied to the baseline.
+  const retiredManagedFiles = new Set<string>();
   const configurationOwnershipClean = preserveUserProviderFields(
     projectDir,
     root,
@@ -5095,6 +5335,8 @@ function prepareRefreshSource(
     normalizeProvidersRecord(staged.providers),
     projectFlags,
     prior,
+    notes,
+    retiredManagedFiles,
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -5256,12 +5498,17 @@ function prepareRefreshSource(
     "AIDLC_COMPOSED_SCOPES_DIR",
     "AIDLC_SENSORS_DIR",
     "AIDLC_AGENTS_DIR",
+    "AIDLC_HARNESS_NAME",
   ] as const;
   const saved = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   try {
     process.env.AIDLC_RUNTIME_PROJECT_DIR = root;
     process.env.AIDLC_PROJECT_DIR = root;
     process.env.AIDLC_HARNESS_DIR = descriptor.harnessDir;
+    // Copilot and opencode share the .aidlc folder, so the harness is named:
+    // the regenerated scope runners then say how to start a new chat in it,
+    // as the shipped ones do.
+    process.env.AIDLC_HARNESS_NAME = descriptor.distribution;
     process.env.AIDLC_RUNTIME_HARNESS_ROOT = stagedHarness;
     process.env.AIDLC_RULES_DIR = join(root, "aidlc", "spaces", "default", "memory");
     process.env.AIDLC_STAGE_GRAPH = join(stagedHarness, "tools", "data", "stage-graph.json");
@@ -5348,72 +5595,11 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, projectOverlays, entries, notes };
+  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
   }
-}
-
-function assertRefreshSafe(projectDir: string): void {
-  const activeWorkflows = activeWorkflowDescriptions(projectDir);
-  if (activeWorkflows.length === 0) return;
-  throw new Error(
-    `refusing to refresh while ${activeWorkflows.length} workflow(s) are active: ${
-      activeWorkflows.join(", ")
-    }. Complete the workflow before rerunning aidlc config; update and use do not modify project files.`,
-  );
-}
-
-// Each copied harness runs its own engine and hooks against the project's
-// running workflows, so a harness added under one belongs on the release the
-// installed ones are on. That release can be fetched only when they all record
-// it and it lets harnesses share a project (their .gitignore block is shared).
-function runningAddRelease(
-  projectDir: string,
-  distribution: string,
-  installed: readonly ProjectHarness[],
-): { workflows: string[]; others: ProjectHarness[]; version?: string } | null {
-  const others = installed.filter((harness) => harness.distribution !== distribution);
-  if (others.length === 0) return null;
-  const workflows = activeWorkflowDescriptions(projectDir);
-  if (workflows.length === 0) return null;
-  const versions = new Set(others.map((harness) => harness.frameworkVersion));
-  const [version] = versions;
-  const shared = others.every((harness) =>
-    siblingDescriptor(harness)?.rootIntegrations.some((integration) =>
-      integration.path === ".gitignore" && integration.shared === "union"
-    )
-  );
-  return { workflows, others, version: versions.size === 1 && shared ? version : undefined };
-}
-
-function assertHarnessAddKeepsVersion(
-  projectDir: string,
-  adding: { distribution: string; frameworkVersion: string },
-  installed: readonly ProjectHarness[],
-  fromFiles: boolean,
-): void {
-  const running = runningAddRelease(projectDir, adding.distribution, installed);
-  if (!running || running.others.every((harness) => harness.frameworkVersion === adding.frameworkVersion)) return;
-  if (running.version) {
-    throw new NeedsRelease({
-      cause: "running",
-      version: running.version,
-      distribution: adding.distribution,
-      current: fromFiles ? adding.frameworkVersion : undefined,
-      workflows: running.workflows,
-    });
-  }
-  const from = running.others.map((harness) =>
-    `${harness.distribution} ${harness.frameworkVersion ?? "(an earlier aidlc that did not record its version)"}`
-  ).join(", ");
-  throw new Error(
-    `refusing to add ${adding.distribution} ${adding.frameworkVersion} while ${running.workflows.length} workflow(s) are active: ${
-      running.workflows.join(", ")
-    }. The installed harnesses are on ${from} and cannot be refreshed until the workflow completes, so the ` +
-      "new harness's hooks would run a different version against the same workflow.",
-  );
 }
 
 // An earlier release put a generic template (node_modules, dist, editor
@@ -5529,7 +5715,7 @@ function holdsProjection(root: string): boolean {
 function materializeSource(
   path: string,
   distribution?: string,
-): { root: string; cleanup?: string; note?: string } {
+): { root: string; cleanup?: string; note?: string; holds?: string[] } {
   const absolute = isAbsolute(path) ? path : resolve(process.cwd(), path);
   if (!existsSync(absolute)) throw new Error(`init source does not exist: ${absolute}`);
   let root = absolute;
@@ -5569,6 +5755,7 @@ function materializeSource(
         throw new Error(`${path} does not include the ${pick} harness; it has ${available.join(", ")}`);
       }
       root = join(runtimes, pick);
+      return { root, cleanup, note, holds: available };
     }
     return { root, cleanup, note };
   } catch (error) {
@@ -5603,6 +5790,8 @@ type ConfigSource = {
   stamp: ReturnType<typeof projectionFiles>["stamp"];
   descriptor: ReturnType<typeof projectionFiles>["descriptor"];
   projectProjection?: boolean;
+  // The harnesses the files passed to --from hold beside this one.
+  holds?: readonly string[];
 };
 
 function installedSourceCandidates(
@@ -5645,16 +5834,13 @@ type ReleaseNeed = {
   distribution: string;
   // The project's directory for this harness, when it already has one.
   harnessDir?: string;
-  // The release those files are, when a pin or a running workflow asks for
-  // another.
+  // The release those files are, when a pin asks for another.
   current?: string;
-  cause: "pin" | "pin-missing" | "add" | "switch" | "running" | "restore" | "refresh" | "mcp" | "from";
+  cause: "pin" | "pin-missing" | "add" | "switch" | "restore" | "refresh" | "mcp" | "from";
   // For "switch": the installed row the run replaces in the same directory.
   switchingFrom?: string;
   // For "mcp": the project has no .mcp.json at all, rather than an emptied one.
   absent?: boolean;
-  // For "running": the workflows the installed harnesses are running.
-  workflows?: string[];
 };
 
 // Whether a copied project's own files can apply its project choices. Plugins
@@ -5676,7 +5862,7 @@ function ownFilesCoverChoices(
   if (regularFile(rootBlockPath(join(projectDir, descriptor.harnessDir), integration))) return true;
   let servers: unknown;
   try {
-    servers = (JSON.parse(readFileSync(join(projectDir, integration.path), "utf-8")) as Record<string, unknown>)[
+    servers = (readJsonFile(join(projectDir, integration.path)) as Record<string, unknown>)[
       integration.jsonKey
     ];
   } catch {
@@ -5707,12 +5893,6 @@ function releaseNeedSentence(need: ReleaseNeed): string {
       return `Adding ${need.distribution} needs the ${need.version} release files.`;
     case "switch":
       return `Switching ${dir} from ${need.switchingFrom} to ${need.distribution} needs the ${need.version} release files.`;
-    case "running": {
-      const workflows = (need.workflows ?? []).join(", ");
-      return need.current
-        ? `The files passed to --from are ${need.current}, but the workflow running in this project (${workflows}) uses ${need.version}.`
-        : `Adding ${need.distribution} while a workflow runs in this project (${workflows}) needs the ${need.version} release files it uses.`;
-    }
     case "restore":
       return `${dir} is missing aidlc/spaces/default/memory/.`;
     case "refresh":
@@ -5740,7 +5920,6 @@ function releaseNeedDownload(need: ReleaseNeed, host: string, form: "ask" | "sta
         ? `Download and install ${need.version} from ${host}`
         : `This first downloads and installs ${need.version} from ${host}`;
     case "add":
-    case "running":
       return `${fetch} and ${add} ${need.distribution}`;
     case "switch":
       return `${fetch} and ${switchTo} ${need.harnessDir} to ${need.distribution}`;
@@ -7747,7 +7926,7 @@ function holdsShippedServers(projectDir: string, descriptor: Pick<ProjectionDesc
     const path = join(projectDir, integration.path);
     try {
       if (!lstatSync(path).isFile()) continue;
-      const map = (JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>)[integration.jsonKey ?? ""];
+      const map = (readJsonFile(path) as Record<string, unknown>)[integration.jsonKey ?? ""];
       if (!isRecord(map)) continue;
       for (const [entry, hashes] of Object.entries(integration.legacySignatures?.jsonEntryHashes ?? {})) {
         if (entry in map && hashes.includes(sha256Bytes(canonical(map[entry])))) return true;
@@ -7757,6 +7936,15 @@ function holdsShippedServers(projectDir: string, descriptor: Pick<ProjectionDesc
     }
   }
   return false;
+}
+
+// Two JSON texts with the same value, byte order mark and layout aside.
+function sameJsonText(left: string, right: string): boolean {
+  try {
+    return canonical(JSON.parse(withoutBom(left))) === canonical(JSON.parse(withoutBom(right)));
+  } catch {
+    return false;
+  }
 }
 
 function planRootIntegrations(
@@ -7949,7 +8137,7 @@ function planRootIntegrations(
       let targetValue: unknown;
       let sourceValue: unknown;
       try {
-        targetValue = current ? JSON.parse(current) : {};
+        targetValue = current ? JSON.parse(withoutBom(current)) : {};
         sourceValue = JSON.parse(readFileSync(sourcePath, "utf-8"));
         // Claude's copy in the harness folder takes the recorded region here.
         if (
@@ -8057,11 +8245,11 @@ function planRootIntegrations(
         entries: nextEntries,
         key: integration.jsonKey,
       };
-      const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(current) : {});
+      const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(withoutBom(current)) : {});
       if (!semanticChanged) {
         actions.push({ path: integration.path, action: "preserve" });
       } else {
-        const value = `${JSON.stringify(target, null, 2)}\n`;
+        const value = jsonFileText(target, current);
         operations.push(writeOperation(integration.path, value, expected(targetPath)));
         actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
       }
@@ -8140,11 +8328,56 @@ function planRootIntegrations(
       }
       continue;
     }
+    if (integration.policy === "json-entries") {
+      // A team's own JSON file (opencode.json): AI-DLC adds its entries that
+      // are absent, follows the ones it wrote while nobody changed them, and
+      // removes only those it no longer ships. The team's keys, values,
+      // comments, and layout stay as they are.
+      const shippedText = readFileSync(sourcePath, "utf-8");
+      const legacy = integration.legacySignatures?.wholeFileHashes ?? [];
+      const currentHash = sha256Bytes(current);
+      const bareHash = sha256Bytes(withoutBom(current));
+      const legacyMatch = legacy.includes(currentHash) || legacy.includes(bareHash);
+      let ownership: JsonEntriesOwnership;
+      if (priorContribution?.policy === "json-entries") {
+        ownership = { kind: "recorded", entries: priorContribution.entries };
+      } else if (priorContribution?.policy === "whole-file") {
+        // A file AI-DLC wrote whole: still as written, or edited since.
+        ownership = priorContribution.hash === currentHash || priorContribution.hash === bareHash || legacyMatch
+          ? { kind: "whole" }
+          : { kind: "matching" };
+      } else {
+        ownership = legacyMatch || sameJsonText(current, shippedText) ? { kind: "whole" } : { kind: "none" };
+      }
+      const merged = mergeJsonEntries(current, shippedText, ownership, force);
+      if ("conflict" in merged) {
+        actions.push({ path: integration.path, action: "conflict", detail: merged.conflict });
+        continue;
+      }
+      const created = !targetExists || priorContribution?.policy === "whole-file" ||
+        (priorContribution?.policy === "json-entries" && priorContribution.created === true);
+      contributions[integration.path] = {
+        policy: "json-entries",
+        entries: merged.entries,
+        ...(created ? { created: true } : {}),
+      };
+      if (merged.text === current) {
+        actions.push({ path: integration.path, action: "preserve" });
+      } else {
+        operations.push(writeOperation(integration.path, merged.text, expected(targetPath)));
+        actions.push({
+          path: integration.path,
+          action: !targetExists ? "create" : merged.whole ? "update" : "merge",
+          detail: legacyMatch && priorContribution?.policy !== "json-entries" ? "adopted exact legacy signature" : undefined,
+        });
+      }
+      continue;
+    }
     if (integration.policy === "json-array") {
       let targetValue: unknown;
       let sourceValue: unknown;
       try {
-        targetValue = current ? JSON.parse(current) : {};
+        targetValue = current ? JSON.parse(withoutBom(current)) : {};
         sourceValue = JSON.parse(readFileSync(sourcePath, "utf-8"));
       } catch {
         actions.push({ path: integration.path, action: "conflict", detail: "malformed JSON" });
@@ -8191,13 +8424,13 @@ function planRootIntegrations(
         entries: nextEntries,
         key,
       };
-      const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(current) : {});
+      const semanticChanged = canonical(targetValue) !== canonical(current ? JSON.parse(withoutBom(current)) : {});
       if (!semanticChanged) {
         actions.push({ path: integration.path, action: "preserve" });
       } else {
         operations.push(writeOperation(
           integration.path,
-          `${JSON.stringify(targetValue, null, 2)}\n`,
+          jsonFileText(targetValue, current),
           expected(targetPath),
         ));
         actions.push({ path: integration.path, action: targetExists ? "merge" : "create" });
@@ -8210,8 +8443,10 @@ function planRootIntegrations(
       ? priorContribution.hash
       : undefined;
     const currentHash = sha256Bytes(current);
+    // A byte order mark the person's editor added is not their change.
+    const owned = currentHash === priorHash || (withoutBom(current) !== current && sha256Bytes(withoutBom(current)) === priorHash);
     const adoptedLegacy = integration.legacySignatures?.wholeFileHashes?.includes(currentHash) ?? false;
-    if (!retainBaseline || currentHash === priorHash) {
+    if (!retainBaseline || owned) {
       contributions[integration.path] = { policy: "whole-file", hash: shippedHash };
     } else if (priorContribution) {
       contributions[integration.path] = priorContribution;
@@ -8219,7 +8454,7 @@ function planRootIntegrations(
     if (
       !recordOnly &&
       targetExists &&
-      currentHash !== priorHash &&
+      !owned &&
       currentHash !== shippedHash &&
       !adoptedLegacy
     ) {
@@ -8291,7 +8526,7 @@ function planRemovedRootIntegrations(
     if (contribution.policy === "json-map") {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text);
+        parsed = JSON.parse(withoutBom(text));
       } catch {
         actions.push({ path, action: "conflict", detail: "retired JSON integration is malformed" });
         continue;
@@ -8315,7 +8550,7 @@ function planRemovedRootIntegrations(
         actions.push({ path, action: "conflict", detail: "retired JSON entry was locally modified" });
         continue;
       }
-      operations.push(writeOperation(path, `${JSON.stringify(parsed, null, 2)}\n`, expected(targetPath)));
+      operations.push(writeOperation(path, jsonFileText(parsed, text), expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
       continue;
     }
@@ -8338,10 +8573,26 @@ function planRemovedRootIntegrations(
       }
       continue;
     }
+    if (contribution.policy === "json-entries") {
+      // Remove only the entries AI-DLC wrote and nobody has changed since.
+      const value = removeJsonEntries(text, contribution.entries, force);
+      if (value === null) {
+        actions.push({ path, action: "conflict", detail: "retired JSON integration is malformed" });
+      } else if (value === text) {
+        actions.push({ path, action: "preserve", detail: "retired entries were changed or already removed" });
+      } else if (contribution.created && emptyJsonObject(value)) {
+        operations.push({ kind: "remove", path, expected: expected(targetPath) });
+        actions.push({ path, action: "remove", detail: NO_LONGER_SHIPPED });
+      } else {
+        operations.push(writeOperation(path, value, expected(targetPath)));
+        actions.push({ path, action: "merge", detail: "removed retired JSON entries" });
+      }
+      continue;
+    }
     if (contribution.policy === "json-array") {
       let parsed: unknown;
       try {
-        parsed = JSON.parse(text);
+        parsed = JSON.parse(withoutBom(text));
       } catch {
         actions.push({ path, action: "conflict", detail: "retired JSON integration is malformed" });
         continue;
@@ -8357,7 +8608,7 @@ function planRemovedRootIntegrations(
         sha256Bytes(canonical(value)) !== contribution.entries[value]
       );
       if ((parsed[contribution.key] as unknown[]).length === 0) delete parsed[contribution.key];
-      operations.push(writeOperation(path, `${JSON.stringify(parsed, null, 2)}\n`, expected(targetPath)));
+      operations.push(writeOperation(path, jsonFileText(parsed, text), expected(targetPath)));
       actions.push({ path, action: "merge", detail: "removed retired JSON array entries" });
       continue;
     }
@@ -9198,7 +9449,11 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
 // A setting that was not there before has no flag that removes it, so its undo
 // is the section's --reset, offered only when that resets nothing else the
 // file records; otherwise the line says it was not set there before.
-function settingsChangeLines(projectDir: string, mutations: readonly SettingsMutation[]): string[] {
+function settingsChangeLines(
+  projectDir: string,
+  mutations: readonly SettingsMutation[],
+  harness?: string,
+): string[] {
   const fileOf = (target: SettingsTarget): string => {
     const path = settingsPathForTarget(projectDir, target);
     return target === "global" ? path : relative(projectDir, path);
@@ -9206,7 +9461,7 @@ function settingsChangeLines(projectDir: string, mutations: readonly SettingsMut
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget): string =>
     `${configInvocationFor(projectDir)} config ${section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    } --${target} --yes${projectTarget(projectDir)}`;
+    } --${target} --yes${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
@@ -9286,7 +9541,7 @@ function recordChangeLines(projectDir: string, context: DiagnosticsMutationConte
   const command = (args: string[]): string =>
     `${configInvocationFor(projectDir)} config ${context.section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    } --yes${projectTarget(projectDir)}`;
+    } --yes${namedHarness(projectDir, context.harness)}${projectTarget(projectDir)}`;
   if (context.previous === null) {
     return [`Recorded the ${context.section} answer in ${file}. To undo: ${command(["--reset"])}`];
   }
@@ -9386,6 +9641,168 @@ function openWorkflowLine(projectDir: string, mutations: readonly SettingsMutati
   return outranked
     ? `${who} ${verb("run")} as before, because the settings ${open.length === 1 ? "it reads" : "they read"} did not change (\`${configInvocationFor(projectDir)} config ${outranked} --show${projectTarget(projectDir)}\` shows which file sets each).`
     : null;
+}
+
+// A refresh that brings in release files is done while work is open too: one
+// line says so, and when it moved the project to another release, how to go
+// back. Natively a pin brings the earlier release back; a copied project takes
+// that release's files again. A harness added beside open work has no command
+// that removes it, so its line names the folder it added. A switch is undone
+// by switching back, which the summary line already names, so it has no
+// release line.
+function refreshDoneLines(
+  projectDir: string,
+  change: {
+    added?: string;
+    switched: boolean;
+    from?: string;
+    to: string;
+    pinned: boolean;
+    copyChannel: boolean;
+    releaseBaseUrl?: string;
+    harness: string;
+    // Open work that needs a plugin this change turned off, by plugin.
+    pluginsOff: ReadonlyArray<{ plugin: string; workflow: string }>;
+  },
+): string[] {
+  const open = activeWorkflowDescriptions(projectDir);
+  if (open.length === 0) return [];
+  const listed = (items: readonly string[]): string =>
+    items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  const stopped = [...new Set(change.pluginsOff.map((item) => item.workflow))].sort();
+  const plugins = [...new Set(change.pluginsOff.map((item) => item.plugin))].sort();
+  const going = open.filter((name) => !stopped.includes(name));
+  const carriesOn = stopped.length === 0
+    ? `Your open work (${open.join(", ")}) carries on.`
+    : `${going.length > 0 ? `Your open work (${going.join(", ")}) carries on. ` : ""}${stopped.join(", ")} ${
+      stopped.length === 1 ? "needs" : "need"
+    } the ${listed(plugins)} plugin${plugins.length === 1 ? "" : "s"}, which ${plugins.length === 1 ? "is" : "are"} now off, so ${
+      stopped.length === 1 ? "it continues" : "they continue"
+    } once ${plugins.length === 1 ? "it is" : "they are"} on again.`;
+  if (change.added) return [`Added ${change.added}. ${carriesOn}`];
+  if (change.switched) return [`Updated. ${carriesOn}`];
+  // The earlier version is read from the project's committed manifest, so it
+  // is printed only when it is a release id.
+  if (!change.from || change.from === change.to || !VERSION_ID.test(change.from)) return [`Updated. ${carriesOn}`];
+  const command = (args: string): string => `\`${configInvocationFor(projectDir)} config ${args}${projectTarget(projectDir)}\``;
+  return [
+    `Updated. ${carriesOn}`,
+    change.copyChannel
+      ? `To go back: get ${copyRuntimeUrl(change.from, change.releaseBaseUrl)} and its .sha256 into one folder, then run ${
+        command(`--from <that file> --yes${namedHarness(projectDir, change.harness)}`)
+      }.`
+      : change.pinned
+      ? `To go back: ${command(`--pin ${quoteCommandArgument(change.from)} --yes`)}.`
+      : `To go back: ${command(`--pin ${quoteCommandArgument(change.from)} --yes`)} (this pins the version for everyone on the project; ${
+        command("--unpin")
+      } removes the pin).`,
+  ];
+}
+
+// A run that wrote one harness tree from a release names every other tree in
+// the project on another release, with the command that brings it to the
+// release just written: the plain command when it takes that release, else the
+// same --from files when they hold that harness. Otherwise a copied project
+// gets the copy runtime first (a copied tree's --download fetches its own
+// release), and a native one the pin that installs that release; a pinned
+// release without that harness has no command to name.
+function treesLeftBehindLines(
+  projectDir: string,
+  written: { distribution: string; harnessDir: string; version: string },
+  source: {
+    from?: string;
+    holds?: readonly string[];
+    requiredVersion?: string;
+    copyChannel: boolean;
+    releaseBaseUrl?: string;
+  },
+): string[] {
+  if (!VERSION_ID.test(written.version)) return [];
+  const behind = discoverProjectHarnesses(projectDir).filter((tree) =>
+    tree.distribution !== written.distribution && tree.frameworkVersion !== written.version
+  );
+  if (behind.length === 0) return [];
+  // The run is already done, so a source that cannot be listed only means no
+  // plain command is named.
+  let installed: InstalledSourceCandidate[];
+  try {
+    installed = installedSourceCandidates(source.requiredVersion);
+  } catch {
+    installed = [];
+  }
+  // A copied project runs the written tree's own tool: it is on that release,
+  // and an older tool may not read its files.
+  const tool = source.copyChannel
+    ? `bun ${
+      quoteCommandArgument(
+        ranFromProject(projectDir)
+          ? `${written.harnessDir}/tools/aidlc.ts`
+          : join(projectDir, written.harnessDir, "tools", "aidlc.ts"),
+      )
+    }`
+    : configInvocationFor(projectDir);
+  const command = (args: string): string => `\`${tool} config ${args}${projectTarget(projectDir)}\``;
+  return behind.map((tree) => {
+    const name = `${projectionProductName(tree.root, tree.distribution)} (${tree.harnessDir})`;
+    const on = tree.frameworkVersion === undefined
+      ? "is still on an earlier aidlc that did not record its version"
+      : predatesFrameworkVersion(tree.frameworkVersion, written.version)
+      ? `is still on ${tree.frameworkVersion}`
+      : `is on ${tree.frameworkVersion}`;
+    const harness = `--harness ${tree.distribution}`;
+    const plain = installed.filter((candidate) => candidate.stamp.distribution === tree.distribution);
+    // A copied tree no config run has recorded the files of reads every file
+    // as unowned against another release, so it first records them at its
+    // own, as doctor's row says.
+    const record = source.copyChannel && !existsSync(join(tree.root, "tools", "data", "aidlc-manifest.json"))
+      ? `${command(`${harness} --download`)}, then `
+      : "";
+    const step = plain.length === 1 && plain[0].stamp.frameworkVersion === written.version
+      ? `${record}${command(harness)}`
+      : source.from && source.holds?.includes(tree.distribution) && printableArgs([source.from])
+      ? `${record}${command(`${harness} --from ${quoteCommandArgument(source.from)}`)}`
+      : source.copyChannel
+      ? `get ${copyRuntimeUrl(written.version, source.releaseBaseUrl)} and its .sha256 into one folder, then run ${record}${
+        command(`${harness} --from <that file>`)
+      }`
+      : source.requiredVersion === undefined
+      ? `${command(`--pin ${quoteCommandArgument(written.version)} --yes`)} (this pins the version for everyone on the project), then ${
+        command(harness)
+      }`
+      : null;
+    return step ? `${name} ${on}. To bring it to ${written.version}: ${step}.` : `${name} ${on}.`;
+  });
+}
+
+// What a project choice changed, with the command that puts the earlier one
+// back when one command can say it exactly.
+function projectChangeLines(projectDir: string, context: ChoicesMutationContext): string[] {
+  const before = context.previous as ProjectChoicesRecord | null;
+  const after = context.next as ProjectChoicesRecord | null;
+  const pluginsChanged = canonical(context.previousPlugins) !== canonical(context.nextPlugins);
+  if (canonical(before) === canonical(after) && !pluginsChanged) return [];
+  const file = `${context.harnessDir}/tools/data/harness.json`;
+  let undo: string[] | null = [];
+  if (before === null && context.previousPlugins === null) {
+    undo = ["--reset"];
+  } else {
+    if (pluginsChanged) {
+      undo = context.previousPlugins === null
+        ? ["--plugins", "all"]
+        : context.previousPlugins.length > 0
+        ? ["--plugins", context.previousPlugins.join(",")]
+        : null;
+    }
+    for (const [key, flag] of [["mcp", "--mcp"], ["completions", "--completions"]] as const) {
+      if (!undo || before?.[key] === after?.[key]) continue;
+      const earlier = before?.[key];
+      undo = earlier ? [...undo, flag, earlier] : null;
+    }
+  }
+  if (!undo || !printableArgs(undo)) return [`Changed the project choices in ${file}.`];
+  return [`Changed the project choices in ${file}. To undo: ${configInvocationFor(projectDir)} config project ${
+    undo.map((arg) => quoteCommandArgument(arg)).join(" ")
+  } --yes${namedHarness(projectDir, context.distribution)}${projectTarget(projectDir)}`];
 }
 
 // The machine settings file lives outside the project, so its change runs as
@@ -9563,6 +9980,83 @@ function recordBypassesOnly(
   }
 }
 
+// `config --show [--json]`: each section's own `--show`, in CONFIG_SECTIONS
+// order, run in this process with its output gathered, so every block is
+// exactly what that section prints. A section that cannot answer here (no
+// installed harness yet) answers with its own message, and the read still
+// succeeds: agents run this first for "show my settings".
+async function showEverySection(
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+  internal: ConfigMainInternal,
+): Promise<void> {
+  const projectDir = valueAfter(argv, "--project-dir");
+  const shared = [
+    ...(projectDir === undefined ? [] : ["--project-dir", projectDir]),
+    ...(argv.includes("--no-color") ? ["--no-color"] : []),
+    ...(options.mode === "json" ? ["--json"] : []),
+  ];
+  const answers: Array<{ section: string; stdout: string; output: string; code: number }> = [];
+  for (const section of CONFIG_SECTIONS) {
+    answers.push({ section, ...(await gatherConfigOutput([section, "--show", ...shared], internal)) });
+  }
+  if (options.mode === "json") {
+    const sections = Object.fromEntries(answers.map(({ section, stdout, code }) => {
+      try {
+        return [section, JSON.parse(stdout) as unknown];
+      } catch {
+        return [section, { ok: false, code, status: "failed", message: stdout.trim() }];
+      }
+    }));
+    emitResult(success("settings for every config section", { sections }), options);
+    return;
+  }
+  process.stdout.write(
+    answers.map(({ section, output }) => `${heading(section, process.stdout)}\n${output.replace(/\n*$/, "\n")}`)
+      .join("\n"),
+  );
+  process.exitCode = EXIT.ok;
+}
+
+// Runs one config command in this process and hands back what it printed
+// (stdout alone, and both streams in order) and its exit code, leaving the
+// caller's exit code as it was.
+async function gatherConfigOutput(
+  args: string[],
+  internal: ConfigMainInternal,
+): Promise<{ stdout: string; output: string; code: number }> {
+  const stdout: string[] = [];
+  const output: string[] = [];
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
+  const gather = (toStdout: boolean) =>
+    ((chunk: unknown, ...rest: unknown[]) => {
+      if (toStdout) stdout.push(text(chunk));
+      output.push(text(chunk));
+      const done = rest.find((item) => typeof item === "function") as (() => void) | undefined;
+      done?.();
+      return true;
+    }) as typeof process.stdout.write;
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  const exitCode = process.exitCode;
+  process.exitCode = undefined;
+  process.stdout.write = gather(true);
+  process.stderr.write = gather(false);
+  try {
+    await main(args, internal);
+  } catch (error) {
+    output.push(`error: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = EXIT.failure;
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+  const code = typeof process.exitCode === "number" ? process.exitCode : EXIT.ok;
+  process.exitCode = exitCode;
+  return { stdout: stdout.join(""), output: output.join(""), code };
+}
+
 export async function main(
   input: string[],
   internal: ConfigMainInternal = {},
@@ -9629,6 +10123,10 @@ export async function main(
     const validation = validateRootConfigArgs(argv);
     if (validation) {
       emitResult(usage(validation, configCommand("--help")), options);
+      return;
+    }
+    if (argv.includes("--show") && !argv.includes("--help")) {
+      await showEverySection(argv, options, internal);
       return;
     }
   }
@@ -9742,7 +10240,16 @@ export async function main(
     return;
   }
   if (argv.includes("--pin") || argv.includes("--unpin")) {
-    emitResult(await configureProjectPin(argv, { activeWorkflows: activeWorkflowDescriptions }), options);
+    emitResult(await configureProjectPin(argv, {
+      activeWorkflows: activeWorkflowDescriptions,
+      // A project with several harnesses refreshes each one by name.
+      refreshCommands: (dir) => {
+        const harnesses = discoverProjectHarnesses(dir).map((harness) => harness.distribution).sort();
+        return harnesses.length > 1
+          ? harnesses.map((name) => `${configInvocationFor(dir)} config --harness ${name}${projectTarget(dir)}`)
+          : [`${configInvocationFor(dir)} config${projectTarget(dir)}`];
+      },
+    }), options);
     return;
   }
   const requestedHarnesses = valuesAfter(argv, "--harness");
@@ -9870,8 +10377,6 @@ export async function main(
       // The same order as the checks after source selection.
       assertHooksDirReviewable(projectDir, `${switchOccupant.harnessDir}/hooks`, switchOccupant.harnessDir, requestedHarness);
       assertSwitchBaseline(switchOccupant, requestedHarness);
-      // Refused under an active workflow before any release is fetched for it.
-      if (!argv.includes("--dry-run")) assertRefreshSafe(projectDir);
     }
     const pinPath = join(projectDir, ".aidlc-version");
     if (pathPresent(pinPath) && !regularFile(pinPath)) {
@@ -9902,13 +10407,6 @@ export async function main(
     const pendingConfirm = modelsContext?.confirm ??
       diagnosticsContext?.confirm ??
       choicesContext?.confirm;
-    // A copied harness added while a workflow runs comes from the release the
-    // installed ones are on, as a pin would choose it.
-    // A switch replaces the installed harness rather than adding one beside it.
-    const runningAdd = copyChannel && requiredVersion === undefined && !existing.distribution &&
-        !switchOccupant && requestedHarness
-      ? runningAddRelease(projectDir, requestedHarness, projectHarnesses)
-      : null;
     let need: ReleaseNeed | null = null;
     // What this run will also do before the change itself, said in the
     // question and done only once it is answered.
@@ -9971,7 +10469,7 @@ export async function main(
           requestedHarness,
           from,
           existing.distribution,
-          requiredVersion ?? runningAdd?.version,
+          requiredVersion,
         );
       } catch (error) {
         // Natively and unpinned, a missing harness means the active runtime
@@ -10021,22 +10519,18 @@ export async function main(
           }
         }
         if (!selected && !need) {
-          const running = !harness && runningAdd?.version !== undefined && runningAdd.version !== AIDLC_VERSION;
           need = {
             version: requiredVersion ?? harness?.frameworkVersion ??
               (switchOccupant?.frameworkVersion && VERSION_ID.test(switchOccupant.frameworkVersion)
                 ? switchOccupant.frameworkVersion
                 : undefined) ??
-              runningAdd?.version ?? AIDLC_VERSION,
+              AIDLC_VERSION,
             distribution: error.distribution,
             harnessDir: harness?.harnessDir ?? switchOccupant?.harnessDir,
             current: harness?.frameworkVersion,
-            workflows: running ? runningAdd?.workflows : undefined,
             ...(switchOccupant ? { switchingFrom: switchOccupant.distribution } : {}),
             cause: !copyChannel
               ? "pin-missing"
-              : running
-              ? "running"
               : !harness && switchOccupant
               ? "switch"
               : !harness
@@ -10136,7 +10630,7 @@ export async function main(
     const installed = discoverProjectHarnesses(projectDir);
     // The harness this run replaces in its own directory, if any. A switch is
     // a refresh of that directory: it plans from the occupant's ownership
-    // baseline and is refused under an active workflow like any refresh.
+    // baseline and, like any refresh, is done while work is open.
     let switchingFrom: ProjectHarness | undefined;
     if (!existing.distribution) {
       const collision = installed.find(
@@ -10217,26 +10711,12 @@ export async function main(
         }
       }
     }
-    // A dry run prints the transaction plan and writes nothing, so the
-    // active-workflow refusal does not apply to it: the apply path keeps its
-    // own assertRefreshSafe inside the audit lock, which is what actually
-    // stops a refresh from moving project files under a live workflow. A
-    // settings change read from the project's own files brings nothing in, so
-    // it is the person's to make whenever they ask.
-    if (refreshing && !argv.includes("--dry-run") && !recordOnly) {
-      assertRefreshSafe(projectDir);
-    }
     if (requiredVersion !== undefined && requiredVersion !== stamp.frameworkVersion) {
       throw new MissingInstalledSource(
         `project pin requires ${requiredVersion}, but source is ${stamp.frameworkVersion}; run aidlc config --pin ${requiredVersion}`,
         stamp.distribution,
         requiredVersion,
       );
-    }
-    // Natively every harness runs the hooks of the engine serving the project,
-    // which is the release an add without --from takes its files from.
-    if (copyChannel && !refreshing && !argv.includes("--dry-run")) {
-      assertHarnessAddKeepsVersion(projectDir, stamp, installed, Boolean(from));
     }
     // Checked again just before planning: the baseline the switch plans from
     // is the one this check accepted, even after a long download.
@@ -10335,6 +10815,16 @@ export async function main(
       retainBaseline,
       prepared.projectOverlays,
     );
+    for (const rel of prepared.retiredManagedFiles) {
+      const target = join(projectDir, rel);
+      if (!pathPresent(target)) continue;
+      operations.push({ kind: "remove", path: rel, expected: expected(target) });
+      actions.push({
+        path: rel,
+        action: "remove",
+        detail: "retired attributable manifestless hook",
+      });
+    }
     if (!selected.projectProjection) {
       planRootIntegrations(
         projectDir,
@@ -10417,11 +10907,32 @@ export async function main(
           actions.filter((item) => item.action === name).length,
         ]),
       );
+      // The refusal keeps the person's edits; the way forward is theirs. Moving
+      // a cited file aside clears every kind of conflict; --force clears only
+      // an edit to a file AI-DLC owns, so it is named only when that is all.
+      const forceable = (detail: string | undefined): boolean =>
+        /^(?:managed path is not a regular file|locally modified or unowned|removed upstream but locally modified|root integration is not a regular file|managed block was locally modified|managed block has no ownership baseline|retired managed block was locally modified|retired JSON entry was locally modified|retired whole-file integration was locally modified)$/
+          .test(detail ?? "") || /is missing its shipped block copy/.test(detail ?? "");
+      const cited = [...new Set(conflicts.map((item) => item.path))];
+      const broken = [...new Set(conflicts.filter((item) => !forceable(item.detail)).map((item) => item.path))];
+      const one = cited.length === 1;
+      const listed = (paths: string[]): string => paths.length === 1 ? paths[0] : paths.join(", ");
+      const forward = broken.length === 0
+        ? `to keep your version, move ${one ? cited[0] : "those files"} somewhere else and run ` +
+          `the same command again; to take the shipped ${one ? "version" : "versions"} over ` +
+          `${one ? "it" : "them"}, run it again with --force. ` +
+          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`
+        : broken.length < cited.length
+        ? `move ${listed(cited)} somewhere else (or fix ${listed(broken)} in place instead of moving ` +
+          `${broken.length === 1 ? "it" : "them"}), then run the same command again. ` +
+          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`
+        : `fix ${listed(broken)} in place, or move ${one ? "it" : "them"} somewhere else, then run the same ` +
+          `command again. \`${configCommand("--dry-run --verbose")}\` lists every change first.`;
       emitResult({
         ...failure(
           `${conflicts.length} config conflict(s): ${conflicts.map((item) => `${item.path} (${item.detail})`).join(", ")}`,
           EXIT.integrity,
-          configCommand("--dry-run --verbose"),
+          forward,
         ),
         data: { projectDir, distribution: stamp.distribution, counts, actions },
       }, options);
@@ -10707,23 +11218,18 @@ export async function main(
     const hookChecks = hookGate
       ? { validateLocked: () => checkHooks(false), validateCommitted: () => checkHooks(true) }
       : {};
+    // Open work that needs a plugin this change turns off stops until it is on
+    // again; the same check select-plugins uses, read before the plugin's
+    // stages leave the graph.
+    const pluginsOff = choicesContext?.section === "project" && choicesContext.nextPlugins !== null &&
+        canonical(choicesContext.previousPlugins) !== canonical(choicesContext.nextPlugins)
+      ? activeWorkflowPluginDependencies(projectDir, new Set(choicesContext.nextPlugins))
+      : [];
     if (refreshing) {
       withAuditLock(
         projectDir,
         () => {
-          if (!recordOnly) assertRefreshSafe(projectDir);
           executeSettingsAndProjectMutation(settingsMutation, plan, hookChecks);
-        },
-        undefined,
-        undefined,
-        600,
-      );
-    } else if (copyChannel && discoverProjectHarnesses(projectDir).length > 0) {
-      withAuditLock(
-        projectDir,
-        () => {
-          assertHarnessAddKeepsVersion(projectDir, stamp, discoverProjectHarnesses(projectDir), Boolean(from));
-          executeSettingsAndProjectMutation(settingsMutation, plan);
         },
         undefined,
         undefined,
@@ -10795,7 +11301,7 @@ export async function main(
     // What a recorded setting changed, the command that undoes it, and who
     // picks it up.
     const changes = [
-      ...(settingsMutation ? settingsChangeLines(projectDir, [settingsMutation]) : []),
+      ...(settingsMutation ? settingsChangeLines(projectDir, [settingsMutation], descriptor.distribution) : []),
       ...(diagnosticsContext ? recordChangeLines(projectDir, diagnosticsContext) : []),
     ];
     // A model policy reaches running work only through the agent files it
@@ -10804,10 +11310,36 @@ export async function main(
       !modelsContext ||
       actions.some((item) => item.path.startsWith(`${descriptor.harnessDir}/agents/`) && item.action !== "preserve")
     );
+    if (choicesContext?.section === "project") changes.push(...projectChangeLines(projectDir, choicesContext));
     const openLine = recordOnly && reachesWork && settingsMutation
       ? openWorkflowLine(projectDir, [settingsMutation])
       : null;
     if (openLine) changes.push(openLine);
+    if (!recordOnly) {
+      changes.push(...refreshDoneLines(projectDir, {
+        added: existing.distribution || switchingFrom ? undefined : descriptor.harnessDir,
+        switched: switchingFrom !== undefined,
+        from: prior?.frameworkVersion,
+        to: stamp.frameworkVersion,
+        pinned: requiredVersion !== undefined,
+        copyChannel,
+        releaseBaseUrl: releaseSettings.baseUrl,
+        harness: descriptor.distribution,
+        pluginsOff,
+      }));
+      changes.push(...treesLeftBehindLines(
+        projectDir,
+        { distribution: stamp.distribution, harnessDir: descriptor.harnessDir, version: stamp.frameworkVersion },
+        {
+          // Only files the person named can be named back to them.
+          from: internal.sourceRoot === undefined ? valueAfter(argv, "--from") : undefined,
+          holds: selected.holds,
+          requiredVersion,
+          copyChannel,
+          releaseBaseUrl: releaseSettings.baseUrl,
+        },
+      ));
+    }
     if (options.mode === "human") writeMenuLines("", changes.map((line) => `  ${line}`));
     // Cursor may skip project hooks in a folder outside any git repository
     // (issue #976), so such a project gets `git init` as its first next step,
@@ -10946,8 +11478,7 @@ export async function main(
     const rawMessage = error instanceof Error ? error.message : String(error);
     const copyChannel = aidlcInvocation() !== "aidlc";
     // A pin refusing the files named by --from wants the pinned release itself,
-    // fetched instead of those files; so does a running workflow refusing them
-    // for the release its harnesses are on.
+    // fetched instead of those files.
     const pinMismatch = error instanceof MissingInstalledSource && from ? error : null;
     const needed: ReleaseNeed | null = error instanceof NeedsRelease
       ? error.need
@@ -11006,7 +11537,7 @@ export async function main(
             input,
             projectDir,
             ["--download"],
-            pinMismatch || release.cause === "running" ? ["--from"] : [],
+            pinMismatch ? ["--from"] : [],
           ),
       ), options);
       return;
@@ -11057,15 +11588,7 @@ export async function main(
       /pass (?:one )?--harness|--harness requires|multi-harness config/.test(rawMessage)
         ? EXIT.usage
         : EXIT.integrity,
-      // The active-workflow refusal is about workflow state, not about the
-      // source or the harness. Preserve the invocation's section, project,
-      // source and policy options: a bare config --dry-run can target another
-      // project or fail to select the same source in a copied installation.
-      /refusing to refresh while \d+ workflow\(s\) are active/.test(rawMessage)
-        ? "Rerun this command with --dry-run to preview the refresh without writing; apply it after the workflow completes"
-        : /refusing to add \S+ \S+ while \d+ workflow\(s\) are active/.test(rawMessage)
-        ? "Complete the workflow, then add this harness; or run this command with --dry-run to preview the add without writing"
-        : error instanceof SwitchRefusal
+      error instanceof SwitchRefusal
         ? error.remedy.kind === "update"
           ? "update AI-DLC to the release that wrote this baseline, then run the switch again"
           : error.remedy.kind === "text"

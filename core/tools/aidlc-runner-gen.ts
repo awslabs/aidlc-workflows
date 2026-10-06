@@ -63,11 +63,13 @@ import {
   frontmatterBlock,
   hasRunnerGenMarker,
   isPluginEnabled,
+  isScopeName,
   loadScopeMetadataAll,
   loadStageGraphAll,
   pluginsEnabled,
   runnerFrontmatterAdditions,
   scopeGridPath,
+  SCOPE_NAME_RULE,
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
 import {
@@ -558,6 +560,11 @@ function readScopeFront(path: string): ScopeFront {
   if (fm === null) throw new Error(`Scope file missing frontmatter: ${path}`);
   const name = scalarField(fm, "name");
   if (!name) throw new Error(`Scope file ${path} missing required frontmatter: name`);
+  if (!isScopeName(name)) {
+    throw new Error(
+      `Scope file ${path} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`,
+    );
+  }
   const plugin = scalarField(fm, "plugin");
   const runnerRaw = scalarField(fm, "runner");
   let runner: boolean | undefined;
@@ -620,29 +627,7 @@ function scopeRunnerDirName(scope: string, front: Pick<ScopeFront, "plugin">): s
 export function renderRunner(scope: string, description: string): string {
   const front = discoverScopes()[scope];
   const dir = scopeRunnerDirName(scope, front ?? {});
-  const activeHarnessDir = harnessDir();
-  const harnessName = process.env.AIDLC_HARNESS_NAME?.trim();
   const entrySkill = entrySkillInvocation();
-  const freshSessionFlow = (() => {
-    if (harnessName === "claude") return "use `/clear` (or restart Claude Code)";
-    if (harnessName === "codex") return "exit or restart Codex CLI and start a new session";
-    if (harnessName === "kiro") return "exit or restart Kiro CLI and start a new session";
-    if (harnessName === "kiro-ide") return "open a new Kiro IDE chat or start a new Kiro CLI session";
-    if (harnessName === "opencode") return "exit or restart OpenCode and start a new session";
-    if (harnessName === "cursor") {
-      return "start a new Cursor chat (IDE) or restart agent (CLI)";
-    }
-    if (harnessName === "copilot") {
-      return "start a new Copilot CLI session or open a new VS Code agent chat";
-    }
-    if (harnessName === "cursor") return "start a new Cursor chat session";
-    if (activeHarnessDir === ".claude") return "use `/clear` (or restart Claude Code)";
-    if (activeHarnessDir === ".codex") return "exit or restart Codex CLI and start a new session";
-    if (activeHarnessDir === ".kiro") {
-      return "start a new Kiro CLI session or open a new Kiro IDE chat";
-    }
-    return "exit or restart the current harness and start a new session";
-  })();
   // Normalise the scope's one-line description into a sentence (trailing period)
   // so it reads cleanly when stitched between the lead-in and the packaging note.
   const raw = (description || `Run the AI-DLC workflow with the ${scope} scope`).trim();
@@ -710,7 +695,7 @@ ahead of that run-stage. Adopt it for the whole run.
    Legacy Plan Approval recovery keeps its explicit bare-\`next\` choice.
    Never use \`report\` as a fallback for an engine ask answer; a selected guard
    remedy may still explicitly name a stage report.
-3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. The prompt-rendered resume menu is the sole non-stage report round-trip and uses \`report --result resumed --user-input "<choice>"\`.
+3. \`${aidlcToolInvocation("orchestrate")} report --stage <directive.stage> --result <outcome> [--user-input "<text>"]\` only after acting on a stage directive. A redo, jump, or start-fresh request on re-entry is the sole non-stage report round-trip and uses \`report --result resumed --choice <redo|jump|fresh>\`.
 4. Pass \`$ARGUMENTS\` only to the first \`next\` in step 1: every later pass runs
    bare \`${aidlcToolInvocation("orchestrate")} next\`, with no \`--scope\` and no
    \`$ARGUMENTS\` (repeating them would redo a jump or a setting the person
@@ -752,8 +737,8 @@ preserving any \`--request\` id rather than rebuilding the request.
   \`${scope}\` (the new work is likely the same flavour that made the user reach for
   this command), but if the new work clearly fits a DIFFERENT scope, propose that
   instead, and name it so the human can correct it. **Lead the affirmative option
-  with "Yes"** (e.g. "Yes, start a second intent"). Starting a workflow is a
-  mutation gated on a human yes.
+  with "Yes"** (e.g. "Yes, start a second intent"). Never create it without
+  their explicit yes.
 - **On CONFIRM**, re-run \`next\` with \`--new-intent\`, the confirmed scope, and the
   new-work text:
 
@@ -763,11 +748,10 @@ preserving any \`--request\` id rather than rebuilding the request.
 
   The engine returns a \`print\` directive naming the \`intent-create\` command
   (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
-  as the loop's \`print\` handling describes: create the intent, then, because this is
-  a NEW, unrelated intent and this session still carries the previous intent's
-  context, **STOP** and follow the directive's hand-off: tell the user to start a
-  fresh session (${freshSessionFlow}) and invoke \`${entrySkill}\` to begin the
-  new intent with a clean slate. Nothing is lost; the intent is saved on disk.
+  as the loop's \`print\` handling describes: create the intent, then re-run
+  \`next\` and carry on into the new work's first stage in this chat. Say the
+  narration's line about starting it in a clean chat once: it is an option for
+  the person, never a stop.
 - **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }

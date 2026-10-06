@@ -157,9 +157,11 @@ describe("t126 emitter-pairing co-fire (metamorphic invariant, sdk)", () => {
         seedPocState(proj);
 
         const witness = gateWitness(proj);
+        // The questions are answered by the driver's menus, as a person answers
+        // them: an answer chosen up front would be the agent's, not the person's.
         const r = await driveAidlc(
           "/aidlc poc Build a local CLI that converts CSV input to formatted JSON output. " +
-            "Use the simplest sensible stack, choose the recommended answers, and approve each gate.",
+            "Use the simplest sensible stack, and approve each gate.",
           {
           projectDir: proj,
           timeoutMs: remainingWorkMs(),

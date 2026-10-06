@@ -130,6 +130,12 @@ function run(
 // pipeline recorded only the developer handoff, not the architect's.
 function pipelineProject(mode: Mode): string {
   const proj = project("state-brownfield-init-done.md");
+  // The fixture scope ships collaborators off, which would collapse the
+  // reverse-engineering pipeline to the developer lead alone and drop the
+  // architect link this parity check depends on. Pin the switch on so both
+  // links are required and the ensemble-evidence bypass is what's under test.
+  const statePath = seededStateFile(proj);
+  writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}- **Collaborators**: on (set by you)\n`);
   if (mode === "recorded") recordProjectBypass(proj, "AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
   const codekb = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", basename(proj));
   mkdirSync(codekb, { recursive: true });

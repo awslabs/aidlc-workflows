@@ -386,9 +386,8 @@ export function packagedDistributionRoot(
 /**
  * The running release's own copy of a project harness's tools/data/harness.json,
  * or null. A native engine reads the project's file, which an older release may
- * have written and `aidlc config` will not refresh while a workflow runs; the
- * runtime it ships beside itself holds the same harness as this release writes
- * it. The harness is the one the project's file names. A Bun engine reads its
+ * have written and which stays so until the next `aidlc config`; the runtime it
+ * ships beside itself holds the same harness as this release writes it. The harness is the one the project's file names. A Bun engine reads its
  * own tree already and ships no such copy. Any failure reads as no copy.
  */
 export function releasedHarnessData(projectHarnessData: string): Record<string, unknown> | null {

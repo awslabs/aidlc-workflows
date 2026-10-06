@@ -10,29 +10,22 @@
 //
 // WHY IT EXISTS. A new arg-dispatch case, a new VALID_EVENT_TYPES member, or a
 // new scope-mapping.json key changes the enumerated universe. If nobody wrote a
-// `covers:` claim for it, the unit lands status=UNCOVERED, the regenerated
-// registry differs from the committed one, and `--check` exits 1 naming the
-// gap. Coverage cannot silently rot because the universe is recomputed from
-// source on every CI run.
+// `covers:` claim for it, the unit lands status=UNCOVERED and `--check --base`
+// lists it. The universe is recomputed from source on every run, so the
+// registry is never committed: CI builds it fresh.
 //
-// THE FRESHNESS-DIFF IDIOM (borrowed from aidlc-graph.ts compile/export
-// --check, :1127 / :1142). `--check` regenerates the registry in memory, diffs
-// it against the committed tests/.coverage-registry.json, and exits 1 with the
-// diff on any mismatch. Same shape as the proven stage-graph drift guard.
+// THE RATCHET. `--check --base <commit>` also builds that commit's registry
+// fresh (its own tree, packager and generator, in a temp dir) and fails, naming
+// each unit, when a unit the base covers is still enumerated here but no longer
+// covered: monotonic anti-regression. You can only ever cover MORE; you cannot
+// quietly drop a claim and stay green. A new unit with no claim is listed,
+// never a failure, and a unit whose code was deleted or renamed is no loss. CI
+// runs it against the merge's first parent (`--base HEAD^1`). `--baseline
+// <file>` compares against a registry file instead.
 //
-// THE RATCHET. The committed registry is its own baseline: `--check` also
-// fails, naming each unit, when a unit the committed registry records as
-// covered is no longer covered by a fresh build: monotonic anti-regression.
-// You can only ever cover MORE; you cannot quietly drop a claim and stay green.
-// Dropping one needs a regenerated registry, where the unit visibly flips to
-// UNCOVERED in review.
-//
-// NO DERIVED TOTALS ARE COMMITTED. Per-class counts in the file change in every
-// PR that adds or covers a unit, so two queued PRs either conflict on them or,
-// when both change a count by the same amount, merge cleanly into a stale
-// file. The file holds only per-unit entries, each spanning several lines
-// whose unchanged identity lines keep neighbouring edits apart, so two PRs
-// that add or cover different units merge into exactly the regenerated file.
+// NOTHING IS COMMITTED. A committed registry changed in nearly every PR, so
+// queued PRs collided on it or had to regenerate it after each rebase. A plain
+// run still writes tests/.coverage-registry.json for reading; git ignores it.
 // Totals are computed when printed.
 //
 // TWO ANTI-ROT GUARDS (mandatory, run inside --check and in the test):
@@ -44,16 +37,23 @@
 //       block. Catches a parser that silently stops seeing a tool.
 //
 // Run:
-//   bun tests/gen-coverage-registry.ts            # regenerate + write the registry
-//   bun tests/gen-coverage-registry.ts --check     # CI drift guard (exit 1 on drift)
-//   bun tests/gen-coverage-registry.ts --print      # regenerate to stdout, write nothing
+//   bun tests/gen-coverage-registry.ts                  # regenerate + write the local registry
+//   bun tests/gen-coverage-registry.ts --check          # anti-rot guards on a fresh build
+//   bun tests/gen-coverage-registry.ts --check --base origin/main
+//                                                       # ...and fail if coverage dropped
+//   bun tests/gen-coverage-registry.ts --print          # regenerate to stdout, write nothing
 
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,10 +68,10 @@ const TESTS_DIR = __FILE_DIR;
 // ENV-VAR SEAMS (mirrors aidlc-graph.ts's AIDLC_EXPORT_FIXTURE pattern, :1172).
 // Tests point these at a temp tree to PROVE the ratchet: copy the shipped
 // source, inject a fake new audit event / subcommand, and run `--check` against
-// the temp roots + a temp committed registry without mutating real source.
+// the temp roots + a temp baseline without mutating real source.
 //   AIDLC_COVERAGE_SRC_ROOT  — repo root containing dist/claude/ (source)
 //   AIDLC_COVERAGE_TESTS_DIR — dir containing the test tiers to scan for claims
-//   AIDLC_COVERAGE_REGISTRY  : committed .coverage-registry.json to diff and ratchet against
+//   AIDLC_COVERAGE_REGISTRY  : where a plain run writes .coverage-registry.json
 const REPO_ROOT = process.env.AIDLC_COVERAGE_SRC_ROOT ?? join(TESTS_DIR, "..");
 const CLAIMS_TESTS_DIR = process.env.AIDLC_COVERAGE_TESTS_DIR ?? TESTS_DIR;
 const TOOLS_DIR = join(
@@ -1277,30 +1277,19 @@ export function subcommandCrossCheck(): Array<{
 }
 
 // ===========================================================================
-// --check : the freshness-diff + ratchet CI guard.
+// --check : the anti-rot guards, and the ratchet against a base.
 // ===========================================================================
-
-function lineDiff(expected: string, actual: string): string {
-  const e = expected.split("\n");
-  const a = actual.split("\n");
-  const max = Math.max(e.length, a.length);
-  const out: string[] = [];
-  for (let i = 0; i < max; i++) {
-    if (e[i] !== a[i]) {
-      if (e[i] !== undefined) out.push(`- ${e[i]}`);
-      if (a[i] !== undefined) out.push(`+ ${a[i]}`);
-    }
-  }
-  return out.slice(0, 80).join("\n");
-}
 
 export interface CheckResult {
   ok: boolean;
   messages: string[];
+  /** Information only: units new since the base that no claim covers. */
+  notes: string[];
 }
 
-export function runCheck(): CheckResult {
+export function runCheck(base?: RegistryRow[]): CheckResult {
   const messages: string[] = [];
+  const notes: string[] = [];
   let ok = true;
 
   const { rows } = buildRegistry();
@@ -1330,56 +1319,87 @@ export function runCheck(): CheckResult {
     }
   }
 
-  // FRESHNESS DIFF: committed registry must match the freshly generated one.
-  const actual = registryJson(rows);
-  if (!existsSync(REGISTRY_PATH)) {
-    ok = false;
-    messages.push(
-      `FRESHNESS DIFF FAILED: ${REGISTRY_PATH} does not exist. ` +
-        `Generate it with: bun tests/gen-coverage-registry.ts`,
-    );
-  } else {
-    const committed = readFileSync(REGISTRY_PATH, "utf-8");
-    // RATCHET: no unit the committed registry covers may lose its claim.
-    let committedRows: RegistryRow[] | undefined;
-    try {
-      committedRows = (JSON.parse(committed) as { units?: RegistryRow[] }).units;
-    } catch {
-      committedRows = undefined;
-    }
-    if (!Array.isArray(committedRows)) {
+  if (base) {
+    // RATCHET: no unit the base covers may lose its claim.
+    for (const lost of lostClaims(base, rows)) {
       ok = false;
       messages.push(
-        `RATCHET FAILED: ${REGISTRY_PATH} is not a readable registry. ` +
-          `Regenerate it with: bun tests/gen-coverage-registry.ts`,
+        `COVERAGE DROPPED: ${lost.unitClass} unit "${lost.unitId}" is covered ` +
+          `on the base but now ${lost.status}: its covers: claim is gone or ` +
+          `too weak. Restore the claim, or cover the unit from another test.`,
       );
-    } else {
-      for (const lost of lostClaims(committedRows, rows)) {
-        ok = false;
-        messages.push(
-          `RATCHET FAILED: ${lost.unitClass} unit "${lost.unitId}" is covered ` +
-            `in the committed registry but now ${lost.status}: its covers: ` +
-            `claim is gone or too weak. Restore the claim, or, if the loss is ` +
-            `intended, regenerate the registry in a reviewed commit: ` +
-            `bun tests/gen-coverage-registry.ts`,
-        );
+    }
+    const known = new Set(base.map((r) => `${r.unitClass}\u0000${r.unitId}`));
+    for (const r of rows) {
+      if (r.status !== "covered" && !known.has(`${r.unitClass}\u0000${r.unitId}`)) {
+        notes.push(`new ${r.unitClass} unit "${r.unitId}" has no covers: claim (${r.status}); not a failure`);
       }
-    }
-    if (committed !== actual) {
-      ok = false;
-      messages.push(
-        `FRESHNESS DIFF FAILED: the enumerated universe changed but ` +
-          `tests/.coverage-registry.json was not regenerated. A new unit ` +
-          `(arg-dispatch case, audit event, scope, stage, hook, or exported ` +
-          `fn) with no covers: claim lands UNCOVERED. Regenerate with: ` +
-          `bun tests/gen-coverage-registry.ts\n` +
-          `--- committed / +++ fresh ---\n${lineDiff(committed, actual)}`,
-      );
     }
   }
 
+  return { ok, messages, notes };
+}
 
-  return { ok, messages };
+/** A registry file's rows, or null when the text is not a registry. */
+export function registryRowsFromText(text: string): RegistryRow[] | null {
+  try {
+    const units = (JSON.parse(text) as { units?: unknown }).units;
+    return Array.isArray(units) ? (units as RegistryRow[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Another commit's registry, built fresh: its tree is exported to a temp dir
+ *  and packaged and enumerated there by that commit's own packager and
+ *  generator, so a generator change here never misreads an older tree. The
+ *  checkout's work tree and index are never touched. */
+export function baseRegistryRows(ref: string): { rows: RegistryRow[] } | { error: string } {
+  const failed = (what: string) => ({ error: `COVERAGE BASE FAILED: ${what}` });
+  const sha = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
+    cwd: REPO_ROOT,
+    encoding: "utf-8",
+  }).stdout?.trim();
+  if (!sha) return failed(`the base "${ref}" is not a commit in this repository.`);
+  // The base reads its own tree, never this run's seams.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith("AIDLC_COVERAGE_")),
+  );
+  const temp = mkdtempSync(join(tmpdir(), "aidlc-coverage-base-"));
+  try {
+    const tree = join(temp, "tree");
+    mkdirSync(tree);
+    const archive = spawnSync("git", ["archive", "--format=tar", sha], {
+      cwd: REPO_ROOT,
+      maxBuffer: 1024 * 1024 * 1024,
+    });
+    if (archive.status !== 0) return failed(`git archive ${sha.slice(0, 12)} failed: ${String(archive.stderr ?? archive.error).trim()}`);
+    // The archive goes in on stdin, so no tar reads a drive-letter path.
+    const steps: Array<{ cmd: string; args: string[]; input?: Buffer }> = [
+      { cmd: "tar", args: ["-xf", "-"], input: archive.stdout },
+      { cmd: process.execPath, args: ["scripts/package.ts", "claude"] },
+      { cmd: process.execPath, args: ["tests/gen-coverage-registry.ts", "--print"] },
+    ];
+    let printed = "";
+    for (const step of steps) {
+      const r = spawnSync(step.cmd, step.args, {
+        cwd: tree,
+        env,
+        input: step.input,
+        encoding: "utf-8",
+        maxBuffer: 256 * 1024 * 1024,
+      });
+      if (r.status !== 0) {
+        const said = `${r.stderr ?? ""}${r.stdout ?? ""}`.trim().split("\n").slice(-20).join("\n") || String(r.error ?? "");
+        return failed(`building the base ${sha.slice(0, 12)} stopped at \`${[basename(step.cmd), ...step.args].join(" ")}\`:\n${said}`);
+      }
+      printed = r.stdout;
+    }
+    const rows = registryRowsFromText(printed);
+    return rows ? { rows } : failed(`the base ${sha.slice(0, 12)}'s generator printed no registry.`);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 }
 
 // ===========================================================================
@@ -1408,12 +1428,45 @@ async function main(): Promise<void> {
   }
 
   if (args.includes("--check")) {
-    const r = runCheck();
+    const value = (flag: string): string | undefined => {
+      const at = args.indexOf(flag);
+      if (at < 0) return undefined;
+      const given = args[at + 1];
+      if (given === undefined || given.startsWith("--")) {
+        console.error(`coverage registry: ${flag} needs a value.`);
+        process.exit(1);
+      }
+      return given;
+    };
+    const baseRef = value("--base");
+    const baselineFile = value("--baseline");
+    let base: RegistryRow[] | undefined;
+    if (baseRef !== undefined) {
+      const built = baseRegistryRows(baseRef);
+      if ("error" in built) {
+        console.error(built.error);
+        process.exit(1);
+      }
+      base = built.rows;
+    } else if (baselineFile !== undefined) {
+      const rows = existsSync(baselineFile) ? registryRowsFromText(readFileSync(baselineFile, "utf-8")) : null;
+      if (!rows) {
+        console.error(`COVERAGE BASE FAILED: ${baselineFile} is not a readable registry.`);
+        process.exit(1);
+      }
+      base = rows;
+    }
+    const r = runCheck(base);
+    for (const note of r.notes) console.log(note);
     if (!r.ok) {
       for (const m of r.messages) console.error(m);
       process.exit(1);
     }
-    console.log("coverage registry: OK (fresh, guards green, ratchet held)");
+    console.log(
+      base
+        ? `coverage registry: OK (guards green, no unit lost coverage against ${baseRef ?? baselineFile})`
+        : "coverage registry: OK (guards green)",
+    );
     return;
   }
 

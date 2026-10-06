@@ -21,7 +21,24 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "codex",
   productName: "Codex CLI",
-  configNextStep: "run `codex`, then `$aidlc --doctor`",
+  configNextStep: "run `codex` (when it asks about hooks, choose Trust all and continue), then `$aidlc --doctor`",
+  // Its matcher-free PreToolUse groups beat in the record before each engine
+  // command. Codex runs a project's hooks only once the person trusts them in
+  // its /hooks screen, which nothing outside Codex can do for them; measured
+  // live, the trust counts for the next message in the same chat.
+  hookActivation: {
+    recovery: "In Codex, type /hooks, press t to trust all, then press Esc. Then carry on in the same chat.",
+    // The human-turn hook leaves a heartbeat on every message, before the
+    // first workflow too.
+    notRunYet:
+      "This is expected before your first Codex chat in this folder. If you already started one, type /hooks " +
+      "in Codex, press t to trust all, then press Esc, and run doctor again.",
+    agentStep:
+      "Codex has not been allowed to run this project's AI-DLC steps. Only the person can allow " +
+      "it, inside Codex: do not edit any Codex config and do not restart Codex. Their next " +
+      "message counts in this same chat. Show the person this line and end your turn: " +
+      '"In Codex, type /hooks, press t to trust all, then press Esc. Then carry on here."',
+  },
   harnessDir: ".codex",
   orchestratorSkillPath: ".agents/skills/aidlc/SKILL.md",
   tierFlavor: "codex",
@@ -75,6 +92,8 @@ const manifest: HarnessManifest = {
           "sha256:87563548299dd2a0c1fcd3cde480b612bd1ec767a2550dbc05a6a041a3d7f522",
           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
           "sha256:c7843449d549d4226be39169a9c31bf89694cd0b0754cb1ee68bdf61759538ce",
+          // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
+          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
         ],
       },
     },

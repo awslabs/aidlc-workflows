@@ -207,8 +207,8 @@ function submitCommandChoice(project: string, session: string, prompt: string, e
   expect(submitted.status, `${submitted.stdout}${submitted.stderr}`).toBe(0);
 }
 
-function recordCommand(project: string, command: string): void {
-  if (authorizedVerificationCommand(project, readFileSync(seededStateFile(project), "utf-8"))?.command === command) return;
+function recordCommand(project: string, command: string): string {
+  if (authorizedVerificationCommand(project, readFileSync(seededStateFile(project), "utf-8"))?.command === command) return "";
   const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", command, "--session", "t341-command"];
   for (const args of [
     ["decision", ...identity, "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"],
@@ -220,6 +220,7 @@ function recordCommand(project: string, command: string): void {
   }
   const result = cli(project, "state", ["set-construction-verification-command", command]);
   expect(result.code, result.out).toBe(0);
+  return result.out;
 }
 
 function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha") {
@@ -268,10 +269,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const repeated = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(repeated.fingerprint).toBe(approved.fingerprint);
     expect(repeated.approved).toBe(true);
+    // A new command keeps the approval given under the earlier one.
     recordCommand(dir, "exit 0");
-    const stale = resolveConstructionCheckpoint(dir, "alpha", "unit");
-    expect(stale.verified).toBe(false);
-    expect(stale.approved).toBe(false);
+    const kept = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(kept.verified).toBe(true);
+    expect(kept.approved).toBe(true);
+    // Checking the Unit again with the new command asks for its approval again.
     const differentCheck = verifyConstructionCheckpoint(dir, "alpha", "unit");
     expect(differentCheck.verified).toBe(true);
     expect(differentCheck.approved).toBe(false);
@@ -485,6 +488,94 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     expect(result.verification!.evidence_unchanged).toBe(false);
     expect(result.verified).toBe(false);
     expect(result.approved).toBe(false);
+    // It ran twice and changed the files both times; the proof says what to do.
+    const receipts = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+    expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "false"]);
+    expect(result.verification!.error).toBe(
+      "The check changed this Unit's files each time it ran, so no one version of them passed. " +
+        "Use a check that leaves the files as they are, then verify again.",
+    );
+    // The step it names works: a check that leaves the files alone verifies.
+    expect(pass(dir).verified).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("an approved Unit keeps its approval when the person approves a new command, and the next Unit is checked with it", () => {
+    const dir = project();
+    pass(dir);
+    human(dir);
+    expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
+    const newCommand = `${writeCheck(dir, "console.log('new check passed');\n")} --new`;
+    const setter = JSON.parse(recordCommand(dir, newCommand).trim().split("\n").at(-1)!);
+    expect(setter.notice).toBe(`Using \`${newCommand}\` from here on.`);
+    const kept = resolveConstructionCheckpoint(dir, "alpha", "unit");
+    expect(kept.approved).toBe(true);
+    expect(kept.verified).toBe(true);
+    const next = verifyConstructionCheckpoint(dir, "beta", "unit");
+    expect(next.verified, JSON.stringify(next.verification)).toBe(true);
+    expect(next.verification!.command_sha256).toBe(verificationCommandDetails(newCommand).sha256);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a check that formats the Unit's files once verifies on its second run", () => {
+    const dir = project();
+    recordCommand(dir, writeCheck(dir,
+      "const fs = require('node:fs');\n" +
+      "const text = fs.readFileSync('src/alpha.ts', 'utf8');\n" +
+      "if (!text.includes('// formatted')) fs.writeFileSync('src/alpha.ts', text + '// formatted\\n');\n" +
+      "console.log('formatted and checked');\n"));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified, JSON.stringify(result.verification)).toBe(true);
+    expect(result.verification!.evidence_unchanged).toBe(true);
+    expect(result.verification!.error).toBeNull();
+    expect(readFileSync(join(dir, "src", "alpha.ts"), "utf-8")).toBe("export const alpha = 1;\n// formatted\n");
+    const receipts = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+    expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "true"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a fixer that fails once it fixed the Unit's files verifies on its second run", () => {
+    const dir = project();
+    recordCommand(dir, writeCheck(dir,
+      "const fs = require('node:fs');\n" +
+      "const text = fs.readFileSync('src/alpha.ts', 'utf8');\n" +
+      "if (!text.includes('// fixed')) { fs.writeFileSync('src/alpha.ts', text + '// fixed\\n'); process.exit(1); }\n" +
+      "console.log('clean');\n"));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified, JSON.stringify(result.verification)).toBe(true);
+    expect(result.verification!.exit_code).toBe(0);
+    const receipts = readAuditShardEvents(dir).filter((row) => row.event === "CHECKPOINT_VERIFICATION_RECORDED");
+    expect(receipts.map((row) => auditBlockField(row.block, "Verified"))).toEqual(["false", "true"]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a fixer that changes the Unit's files and fails on both runs names the step that works", () => {
+    const dir = project();
+    recordCommand(dir, writeCheck(dir,
+      "require('node:fs').appendFileSync('src/alpha.ts', '// touched\\n');\n" +
+      "process.exit(1);\n"));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified).toBe(false);
+    expect(result.verification!.exit_code).toBe(1);
+    expect(result.verification!.error).toBe(
+      "The check changed this Unit's files each time it ran, so no one version of them passed. " +
+        "Use a check that leaves the files as they are, then verify again.",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a passing check that prints more than a megabyte still verifies", () => {
+    const dir = project();
+    const size = 3 * 1024 * 1024;
+    recordCommand(dir, writeCheck(dir,
+      `process.stdout.write('a'.repeat(${size}) + '\\nverbose suite passed\\n');\n` +
+      `process.stderr.write('w'.repeat(${size}));\n`));
+    const result = verifyConstructionCheckpoint(dir, "alpha", "unit");
+    expect(result.verified, JSON.stringify({ ...result.verification })).toBe(true);
+    const expected = `${"a".repeat(size)}\nverbose suite passed\n`;
+    expect(result.verification!.exit_code).toBe(0);
+    expect(result.verification!.error).toBeNull();
+    expect(result.verification!.stdout_bytes).toBe(Buffer.byteLength(expected));
+    expect(result.verification!.stdout_sha256).toBe(createHash("sha256").update(expected).digest("hex"));
+    expect(result.verification!.stdout_tail.endsWith("verbose suite passed\n")).toBe(true);
+    expect(result.verification!.stdout_tail.length).toBe(2048);
+    expect(result.verification!.stderr_bytes).toBe(size);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("stage artifacts, claimed source, and manifest edits invalidate verification", () => {
@@ -494,8 +585,12 @@ describe("t341 Construction checkpoint verification and evidence", () => {
     const original = readFileSync(path, "utf-8");
     writeFileSync(path, `${original}\nChanged requirement\n`);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
-    expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("completion");
+    // A document changed after its stage completed is checked again as it is
+    // now, and the person is asked about it (t-checkpoint-wave-edit).
+    expect(verifyConstructionCheckpoint(dir, "alpha", "unit")).toMatchObject({ verified: true, approved: false });
     writeFileSync(path, original);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
+    pass(dir);
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(true);
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 2;\n");
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").verified).toBe(false);
@@ -924,6 +1019,41 @@ describe("t341 verification command consent", () => {
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Like a Unit's checkpoint, the command question finds the session it runs
+  // in, so the agent never goes looking for one (on Kiro that was a permission
+  // prompt to read the person's environment).
+  test("asking and answering the command question need no --session", () => {
+    const dir = project();
+    const own = "t341-own-command-session";
+    const env = { ...process.env, AIDLC_SESSION_OVERRIDE: own, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0"];
+    const asked = cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(dir, own)).not.toBeNull();
+    submitCommandChoice(dir, own, "Approve", env);
+    const answered = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
+    expect(answered.code, answered.out).toBe(0);
+    expect(readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")
+      .map((row) => auditBlockField(row.block, "Session"))).toEqual([own]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("no shipped step or doc asks the agent for a session to ask or answer the command question", () => {
+    const root = join(import.meta.dir, "..", "..");
+    const files = (dir: string): string[] => fs.readdirSync(join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return files(rel);
+      return /\.(md|ts)$/.test(entry.name) ? [rel] : [];
+    });
+    const asksForSession = /--checkpoint verification-command\b.*--session/;
+    // The guides say it in prose that wraps, so the old wording is matched across lines too.
+    const proseAsksForSession = /session ID\s+for\s+both\s+log\s+calls/;
+    const hits = ["core", "harness", "docs"].flatMap(files).filter((rel) => {
+      const text = readFileSync(join(root, rel), "utf-8");
+      return text.split("\n").some((line) => asksForSession.test(line)) || proseAsksForSession.test(text);
+    });
+    expect(hits).toEqual([]);
+  });
+
   test("numbered and Recommended-decorated choices retain the Plan Approval matching rules", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
@@ -1270,8 +1400,9 @@ describe("t341 review evidence is independent of project check success", () => {
     }
   }
 
-  for (const changeControl of ["strict", "relaxed"]) {
-    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit asks again (${changeControl})`, () => {
+  for (const changeControl of ["strict", "relaxed", "off"]) {
+    const edit = changeControl === "strict" ? "asks again" : "is accepted too";
+    test(`a later Unit's reviewed build of a shared file keeps an approved Unit approved; a person's edit ${edit} (${changeControl})`, () => {
       const dir = project();
       writeFileSync(seededStateFile(dir), setField(setField(state(), "Review Override", "advisory"),
         "Change Control", changeControl));
@@ -1288,13 +1419,28 @@ describe("t341 review evidence is independent of project check success", () => {
       expect(current.errors).toEqual([]);
       expect(current.fingerprint).toBe(approved.fingerprint);
       expect(current.approved).toBe(true);
-      // An edit after that matches no review, so alpha's approval no longer holds.
+      expect(current.rereview).toBeFalsy();
+      // An edit after that matches no review. Under relaxed and off it is an
+      // accepted change and alpha's approval stands; under strict the
+      // checkpoint names the one review that re-checks alpha's code.
       writeFileSync(join(dir, "src", "shared.ts"), "export const shared = 3;\n");
-      expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(false);
+      const edited = resolveConstructionCheckpoint(dir, "alpha", "unit");
+      if (changeControl !== "strict") {
+        expect(edited.errors).toEqual([]);
+        expect(edited.fingerprint).toBe(approved.fingerprint);
+        expect(edited.approved).toBe(true);
+        expect(edited.rereview).toBeFalsy();
+        return;
+      }
+      expect(edited.approved).toBe(false);
+      expect(edited.errors).toEqual(["code-generation: current artifact/source-bound terminal review evidence is required."]);
+      expect(edited.rereview).toMatchObject({ stage: "code-generation", iteration: 2 });
+      expect(edited.rereview?.command).toContain("--unit alpha --iteration 2");
+      expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow(edited.rereview!.command);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  test("requires current paired reviews and claimed source even under relaxed Change Control", () => {
+  test("requires current paired reviews; relaxed accepts a later edit of claimed source, strict re-checks it", () => {
     const dir = project();
     writeFileSync(seededStateFile(dir), setField(state(), "Review Override", "advisory"));
     expect(resolveConstructionCheckpoint(dir, "alpha", "unit").ready).toBe(false);
@@ -1329,6 +1475,9 @@ describe("t341 review evidence is independent of project check success", () => {
     writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"),
       "Change Control", "relaxed"));
     writeFileSync(join(dir, "src", "alpha.ts"), "export const alpha = 99;\n");
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
+    writeFileSync(seededStateFile(dir), setField(readFileSync(seededStateFile(dir), "utf-8"),
+      "Change Control", "strict"));
     expect(() => verifyConstructionCheckpoint(dir, "alpha", "unit")).toThrow("review");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -1782,4 +1931,45 @@ describe("t341 a checkpoint finds the session it runs in", () => {
     expect(readProtectedQuestion(pd, "t341-other")).toBeNull();
     expect(readProtectedQuestion(pd, "t341-owner")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // When no session can be found, the agent retries the same action with the
+  // session it asked in; the reply the person already gave is never asked again.
+  test.each([
+    ["approve", "Approve", "GATE_APPROVED"],
+    ["reject", "Request Changes", "GATE_REJECTED"],
+  ] as const)("with no session to find, a recorded reply to %s goes through on a retry with --session", (action, reply, event) => {
+    const pd = project();
+    pass(pd);
+    const { AIDLC_SESSION_OVERRIDE: _session, AIDLC_SESSION_OVERRIDE_SOURCE: _source, ...outside } = process.env;
+    const named = "t341-named-session";
+    const asked = cli(pd, "bolt", route("ask", "--session", named), outside);
+    expect(asked.code, asked.out).toBe(0);
+    submitCommandChoice(pd, named, reply, outside);
+    const answer = ["--user-input", reply, ...(action === "reject" ? ["--reason", "rename the store"] : [])];
+    const missed = cli(pd, "bolt", route(action, ...answer), outside);
+    expect(missed.code).not.toBe(0);
+    expect(missed.out).toContain("Could not tell which session this is.");
+    expect(missed.out).not.toContain("Re-ask");
+    expect(readProtectedResponse(pd, named)).not.toBeNull();
+    const retried = cli(pd, "bolt", route(action, ...answer, "--session", named), outside);
+    expect(retried.code, retried.out).toBe(0);
+    expect(readAuditShardEvents(pd).filter((row) => row.event === event)
+      .map((row) => auditBlockField(row.block, "Session"))).toEqual([named]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The checkpoint finds its own session, so no shipped step or doc may tell the
+  // agent to pass one: an agent told to pass one goes looking for it, and on Kiro
+  // that was a permission prompt to read the person's environment.
+  test("no shipped step or doc asks the agent for a session to ask, approve, or reject a checkpoint", () => {
+    const root = join(import.meta.dir, "..", "..");
+    const files = (dir: string): string[] => fs.readdirSync(join(root, dir), { withFileTypes: true }).flatMap((entry) => {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) return files(rel);
+      return /\.(md|ts)$/.test(entry.name) ? [rel] : [];
+    });
+    const asksForSession = /checkpoint --action (?:ask|approve|reject)\b.*--session/;
+    const hits = ["core", "harness", "docs"].flatMap(files).filter((rel) =>
+      readFileSync(join(root, rel), "utf-8").split("\n").some((line) => asksForSession.test(line)));
+    expect(hits).toEqual([]);
+  });
 });

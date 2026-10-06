@@ -425,9 +425,7 @@ describe("the person already answered: the refusal does not send the agent back 
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     const write = said(writeSource(proj));
-    expect(write).toContain("The plan is waiting for the person to approve it.");
-    expect(write).toContain("when they reply, record the choice they made");
-    expect(write).toContain(`then run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}`);
+    expect(write.trim()).toBe("Nothing is built or changed while the plan waits for your approval.");
   });
 
   test("approved while the question is open, then a handoff naming two targets: no claim it is unapproved", () => {
@@ -578,8 +576,8 @@ describe("while the rules arrive in parts", () => {
 // not approval evidence: a ledger that cannot take it never refuses the build.
 describe("a lowered fence never refuses because its audit row could not be written", () => {
   // Approved, built, then edited: with the fence lowered the edited plan builds.
-  function editedAfterApproval(): string {
-    const proj = project("off");
+  function editedAfterApproval(mode: "off" | "relaxed" = "off"): string {
+    const proj = project(mode);
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     reply(proj, "approve");
@@ -598,17 +596,22 @@ describe("a lowered fence never refuses because its audit row could not be writt
     expect(stoodAside(proj)).toBe(before + 1);
   });
 
-  test("the ledger cannot take it: the build still goes on, and the line and the doctor say so", () => {
-    const proj = editedAfterApproval();
+  test.each(["relaxed", "off"] as const)("the ledger cannot take it under %s: the build still goes on, and the doctor says so", (mode) => {
+    const proj = editedAfterApproval(mode);
     const shard = auditFilePath(proj);
     expect(existsSync(shard)).toBe(true);
     renameSync(shard, `${shard}.away`);
     const write = guardOut(proj, "Write", { file_path: join(proj, "src", "slugify.ts"), content: "x\n" });
     expect(write.code, write.stderr).toBe(0);
-    expect(write.stdout).toContain(
-      "Not recorded in the audit trail, which was busy or could not be written; " +
-        "`bun .claude/tools/aidlc.ts doctor` lists it",
-    );
+    if (mode === "relaxed") {
+      expect(write.stdout).toContain(
+        "Not recorded in the audit trail, which was busy or could not be written; " +
+          "`bun .claude/tools/aidlc.ts doctor` lists it",
+      );
+    } else {
+      // Off says nothing; the doctor still lists the row it could not write.
+      expect(write.stdout).not.toContain("Continuing past");
+    }
     expect(readFileSync(join(hooksHealthDir(proj), "plan-approval-guard.drops"), "utf-8"))
       .toContain("GUARD_STOOD_ASIDE row not recorded");
     // The brief for the edited plan goes through the same way.

@@ -11,7 +11,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   type AcceptedChange,
   authorityFor,
@@ -30,6 +30,8 @@ import {
   docsRoot,
   errorMessage,
   getField,
+  guardPolicyAcceptsChanges,
+  guardStandAsideSpeaks,
   guardStoodAsideLine,
   gitCommitSourceListing,
   isoTimestamp,
@@ -64,6 +66,7 @@ import {
   recordGuardStoodAside,
   recordHookDrop,
   renderChangedPaths,
+  renderSourcePathKeys,
   governedChangeControl,
   intentRepos,
   resolveBoltDag,
@@ -81,6 +84,7 @@ import {
   sourceListingSha256,
   parseSourceListing,
   structuredField,
+  structuredFieldSpan,
   toPosix,
   stripRecommendedDecorator,
   sameWorkspaceSource,
@@ -348,7 +352,7 @@ export function planSourceDriftStrictMessage(paths: string[] | null, unbound = f
 /** The relaxed human sentence for source drift after the plan was approved. */
 export function planSourceDriftRelaxedNotice(paths: string[] | null, unbound = false): string {
   return (
-    `${describeSourceDrift(paths, unbound)} Continuing (Guard Policy: relaxed or off). ` +
+    `${describeSourceDrift(paths, unbound)} Carrying on. ` +
     "Say 'review the plan again' to reopen approval."
   );
 }
@@ -427,6 +431,30 @@ function generationSourceUnavailableMessage(): string {
   return `Code Generation cannot start because the workspace source cannot be bound${workspaceSourceFailureSuffix()}. ` +
     "Repair the source boundary and retry generation; the earlier approval and plan-approval setting are unchanged. " +
     PLAN_APPROVAL_BREAK_GLASS_REMEDY;
+}
+
+/**
+ * With the plan-approval check standing aside (Guard Policy relaxed or off),
+ * or plan approval off for this plan, a project whose files cannot all be read
+ * is built without a record of where the build started, instead of stopping:
+ * that record only serves a comparison those settings do not make. The
+ * approval stays the person's own.
+ */
+export function codeGenerationBuildsWithoutSource(
+  projectDir: string,
+  target: CodeGenerationTarget,
+  planApprovalSkipped = false,
+): boolean {
+  if (planApprovalSkipped) return true;
+  try {
+    return codeGenerationPlanApprovalFence(projectDir, target).decision === "stand-aside";
+  } catch {
+    return false;
+  }
+}
+
+export function buildWithoutSourceNotice(): string {
+  return `Building without a check of the project's files: they could not all be read${workspaceSourceFailureSuffix()}.`;
 }
 
 // Re-baseline the `[Planned Source]` tag in a questions file to `fingerprint`.
@@ -580,6 +608,65 @@ function structuredMethodology(value: string): TestingMethodology {
   throw new Error(
     `Invalid Testing Posture Methodology "${value}". Expected one of: tdd, bdd, atdd, test-after, custom.`,
   );
+}
+
+// A Methodology value that leads with one of the five and then explains it:
+// "test-after (evidence and org default agree - ...)".
+const METHODOLOGY_WITH_REASONS =
+  /^[`*_]*(tdd|bdd|atdd|test-after|custom)[`*_]*(?=$|[\s(:;,])[\s:;,]*(.*)$/i;
+// Reasons that name a second methodology describe a mix ("tdd for the domain,
+// test-after for adapters"), which is `custom`, so they are never split.
+const METHODOLOGY_NAME = /(?<![\w-])(tdd|bdd|atdd|test[- ]after|custom)(?![\w-])/gi;
+
+// A practices draft's Testing Posture section made readable by the renderer
+// before practices-promote writes it to team.md: the Methodology field must be
+// one bare value. A value that leads with one and then gives its reasons
+// becomes that value, and the reasons move to a `Methodology evidence` line,
+// which the renderer does not read. `problem` says what to fix when the field
+// cannot be read even so; nothing is rewritten then.
+export function promotableTestingPosture(
+  section: string,
+): { section: string; problem: string | null } {
+  const value = structuredField(classifiablePostureText(section), "Methodology");
+  if (value === null) return { section, problem: null };
+  try {
+    structuredMethodology(value);
+    return { section, problem: null };
+  } catch {
+    // Not one bare value: try to split off the reasons below.
+  }
+  const unreadable = {
+    section,
+    problem:
+      `The Testing Posture Methodology "${value}" is not one of tdd, bdd, atdd, test-after, custom. ` +
+      "Write the Methodology line as one of those values and nothing else (custom for a mix of them, " +
+      'with the order in the Ordering line), and put the reasons in a separate "Methodology evidence" line.',
+  };
+  const lead = value.trim().match(METHODOLOGY_WITH_REASONS);
+  const span = structuredFieldSpan(section, "Methodology");
+  if (!lead || !span || span.value !== value) return unreadable;
+  const named = lead[1].toLowerCase();
+  for (const other of lead[2].matchAll(METHODOLOGY_NAME)) {
+    if (other[1].toLowerCase().replace(" ", "-") !== named) return unreadable;
+  }
+  const lines = section.split(/\r?\n/);
+  const head = lines[span.start].match(/^(.*?Methodology(?:\*\*)?[ \t]*:)/i);
+  if (!head) return unreadable;
+  let reasons = lead[2].trim();
+  const wrapped = reasons.match(/^\((.*)\)\.?$/s);
+  if (wrapped) reasons = wrapped[1].trim();
+  const field = [`${head[1]} ${named}`];
+  if (reasons) {
+    field.push(`${head[1].replace(/Methodology/i, (word) => `${word} evidence`)} ${reasons}`);
+  }
+  lines.splice(span.start, span.end - span.start, ...field);
+  const reduced = lines.join("\n");
+  try {
+    classifyPosture(reduced);
+  } catch {
+    return unreadable;
+  }
+  return { section: reduced, problem: null };
 }
 
 function defaultOrdering(methodology: TestingMethodology): string {
@@ -1177,7 +1264,6 @@ export function parseTestingContract(plan: string): TestingPostureContract | nul
  */
 export function testingContractDefectMessage(
   defect: TestingContractDefect,
-  detail?: string,
   then = "re-run the fingerprint command",
 ): string {
   const render = `\`${aidlcToolInvocation("testing-posture")} render\``;
@@ -1191,7 +1277,9 @@ export function testingContractDefectMessage(
       return `code-generation-plan.md has no \`\`\`json block under a ${heading} heading. ` +
         `Run ${render}, paste its complete output into the plan unchanged, then ${then}.`;
     case "invalid-json":
-      return `the ${heading} block in code-generation-plan.md is not valid JSON${detail ? ` (${detail})` : ""}. ${replace}`;
+      // The parser's own message can quote the plan's text, so it stays out:
+      // the repair is the same whatever the parser saw.
+      return `the ${heading} block in code-generation-plan.md is not valid JSON. ${replace}`;
     case "mismatch":
       return `the ${heading} block in code-generation-plan.md changed after it was rendered, ` +
         "so its contract_sha256 no longer matches its content. Do not edit the contract or recompute the hash by hand. " +
@@ -1202,7 +1290,7 @@ export function testingContractDefectMessage(
 // The embedded contract's problem in words, or null when it reads cleanly.
 function testingContractDefectReason(plan: string): string | null {
   const read = readTestingContract(plan);
-  return "defect" in read ? testingContractDefectMessage(read.defect, read.detail) : null;
+  return "defect" in read ? testingContractDefectMessage(read.defect) : null;
 }
 
 /** Hash validity alone does not make a contract executable. */
@@ -1445,7 +1533,7 @@ export function workerBrief(
     brief,
     appendixStripped: planReviewAppendix(plan.replace(/^\uFEFF/, "")).length > 0,
     ...(continuation ? {
-      changeNotices: [recordCodeGenerationContinuation(projectDir, continuation, "brief")],
+      changeNotices: recordCodeGenerationContinuation(projectDir, continuation, "brief"),
     } : {}),
   };
 }
@@ -1458,8 +1546,14 @@ export function workerBrief(
 // again from step 1 by the next worker. When the brief is for a build that
 // already started under the approval that is current now, the plan file's ticks
 // are that build's progress, and the brief says so: which steps are ticked,
-// which of those name files that are no longer there (those are redone), and
-// the step to continue at. The person hears one line saying the same.
+// which files they name are not in the project, and the step to continue at.
+// Whether a named file that is not there means the step must be redone is the
+// worker's call: a step can name a file it says not to add. The person hears
+// one line saying only what is certain: what is done and where it picks up.
+//
+// A worker that built steps without ticking them leaves no ticks. Then the
+// files the steps name are the record: the furthest step whose named files all
+// changed since the build started is where the build got to.
 //
 // "Started under the approval that is current now" is the receipt the approval
 // check validates, at status `generation`. Its key binds the target, the stage
@@ -1489,19 +1583,25 @@ export interface PlanStep {
   ticked: boolean;
   /** Paths the step (its line and the lines indented under it) names in code spans. */
   paths: string[];
+  /** The "Step N" heading the step sits under, when the plan groups its steps under such headings. */
+  heading?: string;
 }
 
 export interface CodeGenerationResume {
   steps: PlanStep[];
-  /** 1-based numbers of the ticked steps. */
+  /** 1-based numbers of the steps done: ticked, or (with none ticked) whose named files were written. */
   ticked: number[];
-  /** Ticked steps with named files missing on disk, which are redone. */
-  redo: Array<{ step: number; missing: string[] }>;
-  /** The first unticked step, or null when every step is ticked. */
+  /** How the done steps are known: the plan file's ticks, or the files the steps name. */
+  from: "ticks" | "files";
+  /** Done steps naming files that are not in the project: a fact for the worker to judge. */
+  missing: Array<{ step: number; paths: string[] }>;
+  /** The first step not done, or null when every step is done. */
   next: number | null;
 }
 
 const PLAN_TASK_LINE_RE = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX-])\](?=[ \t]|$)/;
+const PLAN_HEADING_RE = /^ {0,3}#{1,6}[ \t]+(.*)$/;
+const PLAN_STEP_HEADING_RE = /^[*_]{0,2}step[ \t]+(\d+)\b/i;
 // A bare file name the engine treats as a path: a common source or configuration
 // extension. With a directory in it, any extension (or a trailing slash) will do.
 const NAMED_FILE_RE =
@@ -1529,6 +1629,7 @@ export function planSteps(plan: string): PlanStep[] {
   const body = contentBeforeTerminalReviewAppendix(plan.replace(/^\uFEFF/, ""));
   const steps: PlanStep[] = [];
   let open = -1;
+  let heading: string | undefined;
   for (const line of visibleMarkdownLines(body, { preserveIndentedCode: true })) {
     if (line.trim().length === 0) continue;
     const indent = (/^[ \t]*/.exec(line)?.[0] ?? "").replace(/\t/g, "    ").length;
@@ -1536,13 +1637,38 @@ export function planSteps(plan: string): PlanStep[] {
       steps[steps.length - 1].paths.push(...namedPaths(line));
       continue;
     }
+    const title = PLAN_HEADING_RE.exec(line);
+    if (title) {
+      // A "## Step 3: Tests" heading groups the tasks under it; any other
+      // heading ends the group.
+      const number = PLAN_STEP_HEADING_RE.exec(title[1])?.[1];
+      heading = number === undefined ? undefined : `Step ${number}`;
+      open = -1;
+      continue;
+    }
     const task = PLAN_TASK_LINE_RE.exec(line);
     open = task ? indent : -1;
     if (!task) continue;
     const text = line.slice(task[0].length).trim();
-    steps.push({ text, ticked: task[1] === "x" || task[1] === "X", paths: namedPaths(text) });
+    steps.push({
+      text,
+      ticked: task[1] === "x" || task[1] === "X",
+      paths: namedPaths(text),
+      ...(heading !== undefined ? { heading } : {}),
+    });
   }
   return steps;
+}
+
+/**
+ * The "Step N" headings of a plan whose every task sits under one and that
+ * has fewer headings than tasks, in order; null otherwise. The person reads
+ * those headings as the plan's steps, so the lines name tasks within them.
+ */
+function stepHeadings(steps: PlanStep[]): string[] | null {
+  if (steps.length === 0 || steps.some((step) => step.heading === undefined)) return null;
+  const headings = [...new Set(steps.map((step) => step.heading as string))];
+  return headings.length < steps.length ? headings : null;
 }
 
 /**
@@ -1553,12 +1679,15 @@ export function planSteps(plan: string): PlanStep[] {
 export function codeGenerationResume(
   projectDir: string,
   target: CodeGenerationTarget,
-  known: { plan?: string; approval?: CodeGenerationApproval } = {},
+  known: { plan?: string; approval?: CodeGenerationApproval; issued?: CodeGenerationIssuance } = {},
 ): CodeGenerationResume | null {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
-    if (readActiveDirectiveMarker(projectDir, state)?.kind === "invoke-swarm") return null;
-    const authority = resolveCodeGenerationAuthority(projectDir, target);
+    // While `next` issues a run-stage, that directive, not the one on disk
+    // (a pause, an error, a question), says which build this is.
+    const kind = known.issued?.kind ?? readActiveDirectiveMarker(projectDir, state)?.kind;
+    if (kind === "invoke-swarm") return null;
+    const authority = resolveCodeGenerationAuthority(projectDir, target, known.issued);
     const questionsPath = join(authority.stageDir, "code-generation-questions.md");
     const fingerprint = existsSync(questionsPath)
       ? questionsFileApprovalFingerprint(readFileSync(questionsPath, "utf-8")) : null;
@@ -1566,23 +1695,61 @@ export function codeGenerationResume(
       ? readPlanApprovalReceipt(projectDir, { targetId: authority.targetId, runFloor: authority.runFloor, fingerprint })
       : null;
     if (receipt?.status !== "generation" || receipt.delegation !== undefined) return null;
-    const approval = known.approval ?? evaluateCodeGenerationApproval(projectDir, target);
+    const approval = known.approval ?? evaluateCodeGenerationApproval(projectDir, target, known.issued);
     if (!approval.ok || approval.approvalFingerprint !== fingerprint) return null;
     const steps = planSteps(known.plan ?? readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8"));
-    const ticked = steps.flatMap((step, index) => step.ticked ? [index + 1] : []);
-    if (ticked.length === 0) return null;
+    let ticked = steps.flatMap((step, index) => step.ticked ? [index + 1] : []);
+    let next: number | null = steps.findIndex((step) => !step.ticked) + 1 || null;
+    let from: CodeGenerationResume["from"] = "ticks";
+    if (ticked.length === 0) {
+      const written = stepsWithWrittenFiles(projectDir, receipt.certifiedSourceSha256, steps);
+      if (written === 0) return null;
+      ticked = Array.from({ length: written }, (_, index) => index + 1);
+      next = written < steps.length ? written + 1 : null;
+      from = "files";
+    }
     // A multi-repo intent's plan may name paths inside a repository, and a step
-    // may name one of this stage's own record files.
+    // may name one of this stage's own record files. A bare file name (no
+    // folder) is in the project when a file of that name is anywhere in it.
     const roots = [projectDir, ...intentRepos(projectDir).map((repo) => join(projectDir, repo)), authority.stageDir];
-    const redo = ticked.flatMap((step) => {
-      const missing = steps[step - 1].paths.filter((path) => !roots.some((root) => existsSync(join(root, path))));
-      return missing.length > 0 ? [{ step, missing }] : [];
+    let names: Set<string> | null = null;
+    const anywhere = (name: string): boolean => {
+      names ??= new Set(renderSourcePathKeys(workspaceSourceState(projectDir)?.listing.keys() ?? []).map((path) => basename(path)));
+      return names.has(name);
+    };
+    const present = (path: string): boolean =>
+      roots.some((root) => existsSync(join(root, path))) || (!path.includes("/") && anywhere(path));
+    const missing = ticked.flatMap((step) => {
+      const paths = steps[step - 1].paths.filter((path) => !present(path));
+      return paths.length > 0 ? [{ step, paths }] : [];
     });
-    const next = steps.findIndex((step) => !step.ticked);
-    return { steps, ticked, redo, next: next < 0 ? null : next + 1 };
+    return { steps, ticked, from, missing, next };
   } catch {
     return null;
   }
+}
+
+/**
+ * With no step ticked: the furthest step whose named files all changed since
+ * the build started (the source its receipt certified at generation start), or
+ * 0 when none did or the start's file listing was not kept. A bare file name
+ * matches a changed file of that name in any folder.
+ */
+function stepsWithWrittenFiles(projectDir: string, startedSource: string, steps: PlanStep[]): number {
+  const current = workspaceSourceState(projectDir);
+  const changed = workspaceSourceChangedPaths(projectDir, CODE_GENERATION_STAGE, startedSource, current);
+  if (changed === null || changed.length === 0) return 0;
+  const names = new Set(changed.map((path) => basename(path)));
+  const wrote = (path: string): boolean => path.endsWith("/")
+    ? changed.some((file) => file.startsWith(path) || file.includes(`/${path}`))
+    : path.includes("/")
+      ? changed.some((file) => file === path || file.endsWith(`/${path}`))
+      : names.has(path);
+  let furthest = 0;
+  steps.forEach((step, index) => {
+    if (step.paths.length > 0 && step.paths.every(wrote)) furthest = index + 1;
+  });
+  return furthest;
 }
 
 /**
@@ -1662,7 +1829,16 @@ function progressSection(resume: CodeGenerationResume): string {
   const total = resume.steps.length;
   const lines = ["", "## Progress before the interruption", ""];
   const unticked = "the approved plan below shows none ticked, because ticks are not part of the approval";
-  if (resume.next === null) {
+  if (resume.from === "files") {
+    lines.push(
+      `This plan's build stopped part way. The plan file ticks none of its ${total} steps, but the files ` +
+        `${resume.next === null ? "every step names" : `steps ${stepRanges(resume.ticked)} name`} changed since the build started:`,
+      "",
+      ...resume.ticked.map((step) => `${step}. ${resume.steps[step - 1].text}`),
+      "",
+      "Check each of those steps and tick the box of each one that is done.",
+    );
+  } else if (resume.next === null) {
     lines.push(`This plan's build stopped part way. All ${total} steps are ticked in the plan file (${unticked}).`, "");
   } else {
     lines.push(
@@ -1672,21 +1848,25 @@ function progressSection(resume: CodeGenerationResume): string {
       "",
     );
   }
-  // The plan runs in order: a ticked step before the resume point is redone
-  // first, one after it when the worker reaches it.
-  const files = (missing: string[]): string =>
-    `${missing.map((path) => `\`${path}\``).join(", ")} ${missing.length === 1 ? "is" : "are"} missing`;
-  const before = resume.redo.filter(({ step }) => resume.next === null || step < resume.next);
-  const after = resume.redo.filter(({ step }) => resume.next !== null && step > resume.next);
-  for (const { step, missing } of before) lines.push(`Redo step ${step}: ${files(missing)}.`);
+  // The plan runs in order: a done step before the resume point is looked at
+  // first, one after it when the worker reaches it. A named file that is not in
+  // the project is a fact; the worker reads the step and decides.
+  const names = (paths: string[]): string =>
+    `names ${paths.map((path) => `\`${path}\``).join(", ")}, which ${paths.length === 1 ? "is" : "are"} not in the project`;
+  const it = (paths: string[]): string => paths.length === 1 ? "that file" : "those files";
+  const before = resume.missing.filter(({ step }) => resume.next === null || step < resume.next);
+  const after = resume.missing.filter(({ step }) => resume.next !== null && step > resume.next);
+  for (const { step, paths } of before) {
+    lines.push(`Step ${step} ${names(paths)}: redo step ${step} first if it should have made ${it(paths)}.`);
+  }
   if (resume.next !== null) {
     lines.push(
       `${before.length > 0 ? "Then continue" : "Continue"} at step ${resume.next} of ${total}: ` +
         `"${resume.steps[resume.next - 1].text}".`,
     );
   }
-  for (const { step, missing } of after) {
-    lines.push(`Step ${step} is ticked, but ${files(missing)}: redo it when you reach it.`);
+  for (const { step, paths } of after) {
+    lines.push(`Step ${step} is ticked and ${names(paths)}: when you reach it, redo it if it should have made ${it(paths)}.`);
   }
   lines.push(
     "Before you skip any other ticked step, check that the files it names exist; redo any ticked step whose files are missing." +
@@ -1697,22 +1877,49 @@ function progressSection(resume: CodeGenerationResume): string {
 
 /**
  * The one line the person hears when an interrupted build is picked up, or null
- * when there is nothing to pick up. Says where it picks up, what is done, and
- * which steps are redone because their files are missing.
+ * when there is nothing to pick up. Says only what is certain: where it picks
+ * up and what is done. Whether a step is redone is the worker's call, said by
+ * the agent when it redoes one.
  */
-export function codeGenerationResumeNarration(projectDir: string, unit: string | null): string | null {
-  const resume = codeGenerationResume(projectDir, { unit });
+export function codeGenerationResumeNarration(
+  projectDir: string,
+  unit: string | null,
+  issued?: CodeGenerationIssuance,
+): string | null {
+  const resume = codeGenerationResume(projectDir, { unit }, issued ? { issued } : {});
   if (resume === null) return null;
   const whose = unit === null ? "the code" : `${unit}'s code`;
-  const redone = resume.redo.map(({ step }) => step);
-  const redo = redone.length === 0
-    ? ""
-    : `redoing ${stepRanges(redone)}, ${redone.length === 1 ? "its" : "their"} files were missing`;
   const total = resume.steps.length;
+  const written = resume.from === "files";
+  // A plan grouped under "Step N" headings counts its tasks, and names the
+  // heading the next one sits under, so every number matches the plan file.
+  const grouped = stepHeadings(resume.steps) !== null;
+  const item = grouped ? "task" : "step";
   if (resume.next === null) {
-    return `Picking up ${whose}: all ${total} steps are done${redo ? `; ${redo}` : ", checking their files"}.`;
+    return `Picking up ${whose}: all ${total} ${item}s ${written ? "wrote their files, checking them" : "are done, checking their files"}.`;
   }
-  return `Picking up ${whose} at step ${resume.next} of ${total} (${stepRanges(resume.ticked)} done${redo ? `; ${redo}` : ""}).`;
+  const where = grouped ? `, in ${resume.steps[resume.next - 1].heading}` : "";
+  const done = `${grouped ? "tasks " : ""}${stepRanges(resume.ticked)} ${written ? "wrote their files" : "done"}`;
+  return `Picking up ${whose} at ${item} ${resume.next} of ${total}${where} (${done}).`;
+}
+
+/**
+ * The line the person hears as an approved build starts, counted from the plan
+ * file the way the pick-up line counts it, or null when the plan has no steps.
+ */
+export function codeGenerationStartNarration(projectDir: string, unit: string | null): string | null {
+  try {
+    const steps = planSteps(readFileSync(join(codeGenerationRecordDir(projectDir, unit), "code-generation-plan.md"), "utf-8"));
+    if (steps.length === 0) return null;
+    const headings = stepHeadings(steps);
+    const count = headings !== null
+      ? `the ${steps.length} tasks in ${headings.length} plan steps`
+      : `${steps.length} plan ${steps.length === 1 ? "step" : "steps"}`;
+    return `Generating ${unit === null ? "code" : `${unit}'s code`} for ${count}. ` +
+      "This may take several minutes depending on project complexity. I'll show a summary when complete.";
+  } catch {
+    return null;
+  }
 }
 
 function isPlanApprovalLabel(value: string): boolean {
@@ -2269,7 +2476,8 @@ function earlierPlanApproval(
 ): { authority: CodeGenerationAuthority; receipt: PlanApprovalRuntimeReceipt } | null {
   const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
   const questionsPath = join(authority.stageDir, "code-generation-questions.md");
-  const questions = readFileSync(questionsPath, "utf-8");
+  // A checkout that changed its line endings has not changed the answer.
+  const questions = readFileSync(questionsPath, "utf-8").replace(/\r\n/g, "\n");
   const fingerprint = questionsFileApprovalFingerprint(questions);
   if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
   const promptSha256 = createHash("sha256")
@@ -2284,7 +2492,13 @@ function earlierPlanApproval(
     promptSha256,
   };
   const receipt = readPlanApprovalReceipt(projectDir, identity);
-  if (receipt?.choice !== "Approve Plan" || !runtimeIdentityMatches(receipt, identity)) return null;
+  // A lowered fence continues past a changed questions file too (a note, a
+  // reformat): the approval is of the plan content and attempt the receipt
+  // names, and only this machine's own receipt counts.
+  if (
+    receipt?.choice !== "Approve Plan" ||
+    !runtimeIdentityMatches(receipt, { ...identity, promptSha256: receipt.promptSha256 })
+  ) return null;
   const violation = readPlanApprovalViolation(projectDir);
   if (violation?.version === 1 && violation.markerRevision === authority.markerRevision) return null;
   return { authority, receipt };
@@ -2305,8 +2519,10 @@ function continuationMaterial(
     !usableTestingContract(parseTestingContract(artifacts.plan))) return null;
   let sourceChange: AcceptedChange | undefined;
   if (receipt.status !== "generation" && receipt.override === undefined) {
+    // The fence is lowered here, so a project whose files cannot all be read
+    // builds without the comparison (generation start says so in one line).
     const current = workspaceSourceState(projectDir);
-    if (current === null) return null;
+    if (current === null) return { artifacts };
     if (!sameWorkspaceSource(receipt.certifiedSourceSha256, current.fingerprint)) {
       const judged = judgePlanSourceDrift(
         projectDir, authority.unit, receipt.certifiedSourceSha256, current, false, true, true,
@@ -2388,7 +2604,7 @@ function recordCodeGenerationContinuation(
   projectDir: string,
   continuation: CodeGenerationContinuation,
   operation: string,
-): string {
+): string[] {
   const detail = `${operation} for ${continuation.authority.targetId} using current content; the earlier approval is unchanged`;
   const recorded = recordGuardStoodAside(projectDir, {
     fence: "plan-approval",
@@ -2403,7 +2619,10 @@ function recordCodeGenerationContinuation(
   if (!recorded) {
     recordHookDrop(projectDir, "testing-posture", `GUARD_STOOD_ASIDE row not recorded (audit ledger busy or not writable): ${detail}`);
   }
-  return guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded);
+  // Under Guard Policy off the row is the whole account; nothing is said.
+  return guardStandAsideSpeaks(continuation.fence)
+    ? [guardStoodAsideLine("plan-approval", continuation.fence.source, detail, recorded)]
+    : [];
 }
 
 export interface LegacyPlanApprovalGuardState {
@@ -3914,7 +4133,17 @@ function approvedWorktreeSource(
     }
     return { parentSource, expectedBytes: discarded.expectedBytes };
   }
-  if (!parentSource || (!approved.continuing && !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint))) {
+  // Worktrees are made from the parent's files, so they must be readable even
+  // when a single-checkout build could go ahead without that record.
+  if (!parentSource) throw new Error(generationSourceUnavailableMessage());
+  // Under a relaxed or off Guard Policy, parent source that moved after Plan
+  // Approval is kept, as on the single-agent path: generation start records it
+  // and says it in one line.
+  if (
+    !approved.continuing &&
+    !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
+    !guardPolicyAcceptsChanges(parent)
+  ) {
     throw new Error("Parent source has changed since Plan Approval or cannot be bound. Re-present and approve the plan against the current parent source.");
   }
   const prefix = `${repo.repo ?? ""}\0`;
@@ -4218,7 +4447,7 @@ export function evaluateCodeGenerationApproval(
       candidate.choice === "Approve Plan" && runtimeIdentityMatches(candidate, recordedIdentity) &&
       candidate.status !== "generation" && candidate.override === undefined
       ? workspaceSourceState(projectDir) : undefined;
-    if (currentSource === null) {
+    if (currentSource === null && !codeGenerationBuildsWithoutSource(projectDir, target, candidate?.skipped !== undefined)) {
       empty.executionFailure = generationSourceUnavailableMessage();
       empty.reason = empty.executionFailure;
       return empty;
@@ -4287,8 +4516,9 @@ export function evaluateCodeGenerationApproval(
       violation?.version === 1 &&
       violation.markerRevision === authority.markerRevision
     ) {
-      empty.reason =
-        `legacy Plan Approval authority was poisoned by unsupported write target "${violation.target}"`;
+      // The target is a file name from the workspace, so it stays out of the
+      // refusal: the way on is the same whatever the file was.
+      empty.reason = "legacy Plan Approval authority was poisoned by an unsupported write target";
       return empty;
     }
     const receipt = readPlanApprovalReceipt(projectDir, identity);
@@ -4305,7 +4535,8 @@ export function evaluateCodeGenerationApproval(
       receipt !== null &&
       receipt.status !== "generation" &&
       receipt.override === undefined &&
-      (currentSource ?? workspaceSourceState(projectDir)) === null
+      (currentSource ?? workspaceSourceState(projectDir)) === null &&
+      !codeGenerationBuildsWithoutSource(projectDir, target, receipt.skipped !== undefined)
     ) {
       empty.executionFailure = generationSourceUnavailableMessage();
       empty.reason = empty.executionFailure;
@@ -4376,7 +4607,7 @@ function publishCodeGenerationStart(
 ): string[] {
   const { authority, receipt, continuation } = prepared;
   const changeNotices: string[] = continuation && options.recordContinuation !== false
-    ? [recordCodeGenerationContinuation(projectDir, continuation, "begin")] : [];
+    ? recordCodeGenerationContinuation(projectDir, continuation, "begin") : [];
   if (receipt.status === "generation") return changeNotices;
   originals.push(receipt);
   if (receipt.override !== undefined) {
@@ -4391,7 +4622,17 @@ function publishCodeGenerationStart(
   const stateBefore = workspaceSourceState(projectDir);
   const sourceBefore = stateBefore?.fingerprint ?? null;
   if (sourceBefore === null) {
-    throw new Error(generationSourceUnavailableMessage());
+    if (!codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined)) {
+      throw new Error(generationSourceUnavailableMessage());
+    }
+    // Nothing to compare at the start or after it: the build begins from the
+    // files as they are, said in one line.
+    writePlanApprovalReceipt(projectDir, {
+      ...receipt,
+      certifiedSourceSha256: UNBINDABLE_FINGERPRINT,
+      status: "generation",
+    });
+    return [...changeNotices, buildWithoutSourceNotice()];
   }
   if (!sameWorkspaceSource(receipt.certifiedSourceSha256, sourceBefore)) {
     // A raised strict fence refuses and KEEPS the receipt: deleting the human's recorded
@@ -4442,11 +4683,15 @@ function publishCodeGenerationStart(
     }
   }
   const sourceAfter = workspaceSourceFingerprint(projectDir);
-  if (sourceAfter === null || sourceAfter !== sourceBefore) {
+  if (
+    (sourceAfter === null || sourceAfter !== sourceBefore) &&
+    !codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined)
+  ) {
     // Revert the generation boundary rather than delete the approval: the
     // human's decision is still a fact, only the start is not. This is the
-    // race window, not the governed drift, so both Change Control values
-    // ask for the step again.
+    // race window, not the governed drift, so strict asks for the step again.
+    // With the plan-approval check lowered a file that moves during the start
+    // is the same accepted change as one that moved before it.
     throw new Error(
       "Source files changed while code generation was starting. Retry the step.",
     );
@@ -4465,7 +4710,9 @@ export function beginCodeGenerationBatch(
     withActiveDirectiveLock(projectDir, () => {
       const selected = [...new Map(targets.map((target) => [codeGenerationTargetId(target), target])).values()];
       const prepared = selected.map((target) => prepareCodeGenerationStart(projectDir, target));
-      const needsSource = prepared.some(({ receipt }) => receipt.status !== "generation" && receipt.override === undefined);
+      const needsSource = prepared.some(({ authority, receipt }) =>
+        receipt.status !== "generation" && receipt.override === undefined &&
+        !codeGenerationBuildsWithoutSource(projectDir, { unit: authority.unit }, receipt.skipped !== undefined));
       const sourceBefore = needsSource ? workspaceSourceFingerprint(projectDir) : null;
       if (needsSource && sourceBefore === null) throw new Error(generationSourceUnavailableMessage());
       const originals: PlanApprovalRuntimeReceipt[] = [];

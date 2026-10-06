@@ -75,9 +75,9 @@ The default approval gate presents two options:
 
 Answer in your own words, the way you would answer a colleague. You drive: the
 agent reads your reply and does what you said, at every question (this gate, the
-summary confirmation, a construction policy or verification command, a
-Construction checkpoint, Plan Approval, and a recovery question). You never
-retype an option label or say the same thing twice:
+summary confirmation, a verification command, a Construction checkpoint, Plan
+Approval, and a recovery question). You never retype an option label or say the
+same thing twice:
 
 - `1`, `a` (where the options are lettered), `approved`, `looks good`, or
   `aprove` all approve.
@@ -93,14 +93,14 @@ retype an option label or say the same thing twice:
   question back.
 
 AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
-Construction policy decisions with your words beside them (`Person Reply` in
+Construction setting changes with your words beside them (`Person Reply` in
 the audit trail), as your harness passed them and trimmed. At a stage gate that
 is every message since the gate was shown, up to 8: if a ninth arrives, or one
 message is over 8000 characters, none of them is attached, and a change request
 records the agent's `--reason` instead; at Plan Approval, your latest 8
-replies, each cut to 8000 characters; at a checkpoint,
-verification-command, or Construction policy question, your replies joined in
-order, keeping the last 8000 characters. The summary confirmation records the
+replies, each cut to 8000 characters; at a checkpoint or verification-command
+question, your replies joined in order, keeping the last 8000 characters; for a
+Construction setting you asked to change, the message that asked. The summary confirmation records the
 choice the agent read and, for a change request, what you asked to change. A
 decision needs a reply from you after the question was shown: the agent cannot
 answer for you.
@@ -268,7 +268,7 @@ When you are told a file changed and the run is continuing, that is the whole re
 
 An edit to a finished stage's files is not reviewed or approved again unless you ask for it:
 
-- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning and shows only as untracked in `/aidlc --status`.
+- **What warns you.** When you edit one of the stage documents AIDLC tracks for a finished stage, the next step says once which finished stage is now behind and what to say to redo it; `/aidlc --status` lists the stages affected downstream. Moving, renaming or copying the project folder changes none of those documents, so it brings no warning (see the [Artifacts Reference](14-artifacts-reference.md) for when it still can). The warning is advice, not a stop. A stage finished without a validation record (for example, by an older AIDLC release) gets no warning, and `/aidlc --status` does not list it.
 - **What does not.** Your application code is not tracked this way, so changing it after Code Generation raises no warning.
 - **Getting it checked again.** Jump back with `/aidlc --stage <name>` to the earliest affected stage (Code Generation for application code). That reopens it and every later stage in your plan. The files stay, so each reopened stage that finds its earlier files asks you to **Keep** them, **Modify** them, or **Redo from scratch**. Keep skips regenerating the files, not the checks: any review or approval the stage needs still happens. Choose Modify or Redo where your change should be carried through. Code Generation's review covers only the application files listed in a Unit's source manifest, so a file you added or moved by hand is not reviewed until it is listed there. When you choose Modify, name the files you added or moved and the Unit they belong to. Work without Units (for example a bugfix or refactor scope) has no source manifest, so check hand edits to application code yourself before you approve. Construction checkpoints you set to run automatically stay automatic.
 

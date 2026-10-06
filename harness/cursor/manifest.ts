@@ -75,6 +75,8 @@ const manifest: HarnessManifest = {
           "sha256:2ef8a8cd1b72e59d017013b8d261721b1c5dedb82499b44dc9a97be01b6a73cb",
           // The pre-neutral shipped variant (#1268 made the root block harness-neutral).
           "sha256:eeabf9f9555124da3f5ad34eb3a26b9fcbf3e2ccd65610cb9f0182701cf3ef48",
+          // The variant shipped before the onboarding waited for the person to invoke AI-DLC.
+          "sha256:6de1298dfa4c2b6916f66d372b844faf23481c8f258eedd595c1423dab8e106d",
         ],
       },
     },
@@ -153,6 +155,13 @@ const manifest: HarnessManifest = {
   runnerFrontmatterAdditions: ["disable-model-invocation: true"],
 
   emit: null,
+
+  // The standing rule names the doctor the way each install runs it: a copied
+  // install through its own Bun dispatcher, the native release as `aidlc`.
+  nativeReplacements: [{
+    from: "run `bun .cursor/tools/aidlc.ts doctor` (after installing Bun from https://bun.sh/install if `bun` is not found),",
+    to: "run `aidlc doctor`,",
+  }],
 
   plugin: { manifestDir: ".cursor-plugin", kind: "cursor" },
 };

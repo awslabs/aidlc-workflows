@@ -43,7 +43,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 
 function completedStartupProbe<T extends { error?: Error }>(result: T): T {
   if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") throw result.error;
@@ -143,6 +143,7 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
 
 function execCodex(proj: string, home: string, prompt: string): { rc: number; out: string } {
   const argv = codexHeadlessArgs("exec", prompt);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
@@ -151,7 +152,7 @@ function execCodex(proj: string, home: string, prompt: string): { rc: number; ou
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`, signal: r.signal, error: r.error?.message };
-  recordCodexExec("memory-include", proj, [CODEX_BIN, ...argv], result);
+  recordCodexExec("memory-include", proj, [CODEX_BIN, ...argv], result, turn);
   return result;
 }
 

@@ -7,10 +7,16 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ClaudeCodeHookInput } from "../tools/aidlc-lib.ts";
-import { isCompiledModuleUrl, resolveHarnessRoot, runtimeHarnessDir } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
+  isCompiledModuleUrl,
+  resolveHarnessRoot,
+  runtimeHarnessDir,
+  runtimeProjectDir,
+} from "../tools/aidlc-runtime-paths.ts";
+import {
   shellCommandInvocationDetails,
+  shellDirectoryChanges,
   shellWriteTargets,
   writeTargets,
 } from "./review-freeze-command.ts";
@@ -36,7 +42,7 @@ const AUDIT_TRAIL_PATH =
 const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
 // The variables that carry AI-DLC's authority or turn a guard off: the session
-// and presence overrides, the direct state and audit authorities, the
+// and presence overrides (Codex's thread id is one), the direct state and audit authorities, the
 // human-turn token, and every recordable bypass. Only the person sets them,
 // outside the agent. A terminal can set one many ways, so each is recognized:
 // POSIX assignments and builtins, PowerShell's env: drive, .NET calls, and
@@ -45,6 +51,8 @@ const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human
 const HARNESS_CONTROL_NAME = `(?:${[
   "AIDLC_SESSION_OVERRIDE",
   "AIDLC_SESSION_OVERRIDE_SOURCE",
+  "CODEX_THREAD_ID",
+  "CODEX_SESSION_ID",
   "AIDLC_UNATTENDED",
   "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
   "AIDLC_STATE_TRANSITION_OWNER",
@@ -863,6 +871,8 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
   if (depth > MAX_EXECUTION_DEPTH) return false;
   let quote = "";
   let visible = "";
+  // Open `${` parameter expansions: their braces are part of a word, not a group.
+  let parameter = 0;
   for (let index = 0; index < command.length; index++) {
     const ch = command[index];
     if (ch === "\\" && quote !== "'") {
@@ -929,6 +939,18 @@ function protectedShell(command: string, cwd: string, depth = 0, expansionsOnly 
         }
       }
     }
+    // `${ cmd; }` and `${| cmd; }` (bash 5.3) run a command, as `$(...)` does,
+    // so their braces stay separators.
+    if (!quote && ch === "{" && visible.endsWith("$") && !/[\s|]/.test(command[index + 1] ?? "")) {
+      parameter++;
+      visible += ch;
+      continue;
+    }
+    if (!quote && ch === "}" && parameter > 0) {
+      parameter--;
+      visible += ch;
+      continue;
+    }
     visible += !quote && !expansionsOnly && "(){}".includes(ch) ? ";" : ch;
   }
   if (expansionsOnly) return false;
@@ -993,7 +1015,6 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
 // PowerShell host resolves but the POSIX parser does not, is refused outright.
 // A false refusal only points at the owning commands.
 const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
-const DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 // protectedShell replaces a command substitution it cannot evaluate with this
 // placeholder, so it marks a computed word as surely as `$` does.
 const UNRESOLVED_WORD = /[$`*?]|__substitution__/;
@@ -1106,10 +1127,11 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
   // Every directory the shell could be in when a write runs.
   const roots = [cwd];
   let computedRoot = false;
-  for (const { name, args } of [...shellCommandInvocationDetails(visible), ...shellCommandInvocationDetails(command)]) {
-    if (!DIRECTORY_CHANGES.has(name.toLowerCase())) continue;
-    const target = args.find((arg) => !arg.startsWith("-"));
-    const expansions = target === undefined ? [null] : expandWord(target, values);
+  // The shared reading of each directory change; $HOME and a directory the
+  // command cannot see both stay undecided here.
+  for (const move of [...shellDirectoryChanges(visible), ...shellDirectoryChanges(command)]) {
+    if (move === "stay") continue;
+    const expansions = typeof move === "object" ? expandWord(move.operand, values) : [null];
     for (const expanded of expansions) {
       if (expanded === null || roots.length > MAX_ROOTS) computedRoot = true;
       else roots.push(...roots.map((root) => resolve(root, expanded)));
@@ -1180,6 +1202,15 @@ function authoredRuntimeRoot(root: string): boolean {
   return basename(root) === "core" && existsSync(resolve(root, "../scripts/package.ts"));
 }
 
+// The payload's cwd is where the tool call runs, and relative targets resolve
+// from it. A shell can run in a project subdirectory, so the project the
+// installed tree, its entrypoints and the authored source belong to is also
+// looked for at the hook's own project (AIDLC_PROJECT_DIR, which every adapter
+// sets).
+function integrityProjectRoots(cwd: string): string[] {
+  return [...new Set([resolve(cwd), resolve(runtimeProjectDir())])];
+}
+
 function installedRoots(cwd: string): string[] {
   return harnessInstallRoots(cwd).filter((root) => !authoredRuntimeRoot(root));
 }
@@ -1208,8 +1239,10 @@ function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): 
   }
   // These native hook entrypoints live beside the shared .aidlc engine.
   const entrypoints = [
-    resolve(cwd, ".opencode/plugin/aidlc-opencode-adapter.ts"),
-    resolve(cwd, ".github/hooks/aidlc.json"),
+    ...integrityProjectRoots(cwd).flatMap((root) => [
+      resolve(root, ".opencode/plugin/aidlc-opencode-adapter.ts"),
+      resolve(root, ".github/hooks/aidlc.json"),
+    ]),
     ...(isCompiledModuleUrl(import.meta.url) ? [process.execPath] : []),
   ];
   return entrypoints.some((entry) => absolute === entry || canonical === canonicalExistingPath(entry) ||
@@ -1218,8 +1251,9 @@ function protectedInstalledPath(path: unknown, cwd: string, ancestors = false): 
 
 function trustedInstalledScript(path: string, cwd: string): boolean {
   const canonical = canonicalExistingPath(path);
-  if (isAuthoredDevelopmentPath(path, cwd)) {
-    const rel = relative(resolve(cwd, "core/tools"), resolve(cwd, path)).replaceAll("\\", "/");
+  const authoredRoot = authoredDevelopmentRoot(path, cwd);
+  if (authoredRoot !== null) {
+    const rel = relative(resolve(authoredRoot, "core/tools"), resolve(cwd, path)).replaceAll("\\", "/");
     if (TRUSTED_RUNTIME_ENTRYPOINTS.has(rel)) return true;
   }
   for (const root of installedRoots(cwd)) {
@@ -1229,24 +1263,33 @@ function trustedInstalledScript(path: string, cwd: string): boolean {
   return false;
 }
 
+function authoredDevelopmentRoot(path: string, cwd: string): string | null {
+  const absolute = resolve(cwd, path);
+  return integrityProjectRoots(cwd).find((root) =>
+    existsSync(resolve(root, "scripts/package.ts")) &&
+    ["core", "harness", "tests", "docs"].some((tree) => pathWithin(absolute, resolve(root, tree)))
+  ) ?? null;
+}
+
 function isAuthoredDevelopmentPath(path: string, cwd: string): boolean {
-  if (!existsSync(resolve(cwd, "scripts/package.ts"))) return false;
-  return ["core", "harness", "tests", "docs"].some((tree) => pathWithin(resolve(cwd, path), resolve(cwd, tree)));
+  return authoredDevelopmentRoot(path, cwd) !== null;
 }
 
 function harnessInstallRoots(cwd: string): string[] {
-  const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
-    .map((dir) => resolve(cwd, dir));
-  try {
-    const harnessDir = runtimeHarnessDir(cwd);
-    return [...new Set([
-      resolveHarnessRoot({ projectDir: cwd, harnessDir, mutable: true }),
-      resolveHarnessRoot({ projectDir: cwd, harnessDir }),
-      ...conventional,
-    ])];
-  } catch {
-    return conventional;
-  }
+  return [...new Set(integrityProjectRoots(cwd).flatMap((projectDir) => {
+    const conventional = [".claude", ".codex", ".kiro", ".cursor", ".aidlc"]
+      .map((dir) => resolve(projectDir, dir));
+    try {
+      const harnessDir = runtimeHarnessDir(projectDir);
+      return [
+        resolveHarnessRoot({ projectDir, harnessDir, mutable: true }),
+        resolveHarnessRoot({ projectDir, harnessDir }),
+        ...conventional,
+      ];
+    } catch {
+      return conventional;
+    }
+  }))];
 }
 
 function protectedScriptFile(
@@ -1335,7 +1378,12 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
     // The shell removes a backslash-newline continuation before it parses
     // anything, so `au\<newline>dit` is `audit` to it and must be to us.
     const command = raw.replace(/\\\r?\n/g, "");
-    if (!protectedShell(command, cwd)) return null;
+    // A command the adapter marks as PowerShell (outside the agent's input) is
+    // also read as PowerShell; the POSIX reading below stays, so the mark can
+    // only add targets.
+    const powerShellWrite = input.aidlc_shell === "powershell" &&
+      shellWriteTargets(raw, cwd, undefined, "powershell").some((path) => protectedWriteTarget(path, cwd));
+    if (!powerShellWrite && !protectedShell(command, cwd)) return null;
     return auditTrailMatched ? "audit" : "runtime";
   }
   if (!["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) return null;

@@ -62,7 +62,9 @@ function assertNoSymlinks(
   }
   const label = relative(root, candidate).replaceAll("\\", "/") || ".";
   if (stat.isSymbolicLink()) {
-    throw new Error(`${label}: symlinked installer targets are not allowed`);
+    throw new Error(
+      `${label}: symlinked installer targets are not allowed. Replace that link with a regular file or folder, then run the installer again.`,
+    );
   }
   if (!recursive || !stat.isDirectory()) return;
   for (const name of readdirSync(candidate)) {
@@ -1213,7 +1215,8 @@ export async function install(targetDir: string): Promise<void> {
 
   if (collisions.length > 0) {
     throw new Error(
-      `refusing to overwrite existing files that differ:\n${collisions.map((path) => `  ${path}`).join("\n")}`,
+      `refusing to overwrite existing files that differ:\n${collisions.map((path) => `  ${path}`).join("\n")}\n` +
+        "To keep your changes, move these files somewhere else, then run the installer again.",
     );
   }
 

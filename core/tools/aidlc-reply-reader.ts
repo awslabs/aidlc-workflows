@@ -106,5 +106,14 @@ export function isOneOfChoices(label: string, choices: readonly string[]): boole
 export function isAidlcCommandPrompt(prompt: string): boolean {
   return /^[/$]aidlc(?:[-\s]|$)/i.test(prompt.trim());
 }
+
+// What the person typed after a plain `/aidlc` or `$aidlc` entry; null for any
+// other prompt, a `/aidlc-<runner>` entry included. Whether those words are a
+// command or a reply is the engine's reading of them (nextArgsAreOnlyWords).
+export function aidlcEntryWords(prompt: string): string | null {
+  const text = prompt.trim();
+  const entry = /^[/$]aidlc(?:\s+|$)/i.exec(text);
+  return entry === null ? null : text.slice(entry[0].length).trim();
+}
 export const ACCEPT_AS_IS_CHOICE = "Accept as-is";
 export const SUMMARY_CONFIRMATION_CHOICES = ["Looks correct", "Request changes"] as const;

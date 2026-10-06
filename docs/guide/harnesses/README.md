@@ -53,7 +53,7 @@ Pick your harness:
 | Harness | Invoke | Chapter |
 |---------|--------|---------|
 | **Claude Code** | `/aidlc` | Covered throughout the [User Guide](../00-introduction.md) (its examples run on Claude Code); install in [Getting Started](../01-getting-started.md). |
-| **Kiro IDE** (1.x) and **Kiro CLI** (v3 engine) | `/aidlc` | [Running AI-DLC on Kiro IDE and Kiro CLI](kiro-ide.md) — one tree for both surfaces: prerequisites (Opus 4.8), install, hooks, what's different on Kiro. |
+| **Kiro IDE** (≥ 1.1.70) and **Kiro CLI** (≥ 2.24.1, v3 engine) | `/aidlc` | [Running AI-DLC on Kiro IDE and Kiro CLI](kiro-ide.md) — one tree for both surfaces: prerequisites (Opus 4.8), install, hooks, what's different on Kiro. |
 | **Kiro CLI** (≥ 2.6) | `/aidlc` | [Running AI-DLC on Kiro CLI](kiro-cli.md) — prerequisites, install, what's different on Kiro. |
 | **Codex CLI** (≥ 0.145.0) | `$aidlc` | [AI-DLC on Codex CLI](codex-cli.md) — prerequisites, trust pre-seed, Bedrock config, the git-repo requirement. |
 | **Cursor** | `/aidlc` | [AI-DLC on Cursor](cursor.md) — one tree for the Cursor IDE and CLI, native subagents and skills, the hooks.json adapter, what's different on Cursor. |
@@ -74,9 +74,9 @@ Do not copy generated trees from a repository checkout. Framework developers may
 instructions under a clearly labeled alternative.
 
 After `aidlc update`, run `aidlc doctor` to see project/runtime version skew
-and refresh each project with `aidlc config` between workflows. Config refuses an
-active-workflow refresh, protecting running work from changed stage or graph
-definitions.
+and refresh each project with `aidlc config`. A refresh while a workflow is open
+is done, says whether that work carries on, and names the command that goes
+back to the earlier release.
 
 This set is open: a new harness gets its own chapter here, added from the same
 template. For *building* a new harness (the source contract — manifest, hook

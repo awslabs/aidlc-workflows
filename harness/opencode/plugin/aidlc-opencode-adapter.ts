@@ -209,7 +209,8 @@ function shellDialect(configured: string | null | false, platform: NodeJS.Platfo
  * PowerShell a word may be double- or single-quoted (with '' for an
  * apostrophe), line breaks included; under cmd.exe, which reads a single quote
  * as a plain character and ends the command at a line break, only plain words
- * and double-quoted text on one line are read.
+ * and double-quoted text on one line are read, and $ and the backtick, which
+ * cmd.exe never expands, are plain characters.
  */
 function directShellWords(command: string, dialect: ShellDialect = "posix"): string[] | null {
   if (dialect === "strict") return null;
@@ -266,7 +267,8 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
         if (powerShell && !wordEnds(i + 1)) return null;
         continue;
       }
-      if (ch === "`" || ch === "$") return null;
+      // cmd.exe expands neither: they are text there.
+      if ((ch === "`" || ch === "$") && dialect !== "cmd") return null;
       if (posix && ch === "\\" && i + 1 < command.length) {
         const next = command[i + 1];
         if (next === "\n" || next === "\r") return null;
@@ -294,6 +296,12 @@ function directShellWords(command: string, dialect: ShellDialect = "posix"): str
       const next = command[++i];
       if (next === "\n" || next === "\r") return null;
       word += next;
+      wordStarted = true;
+      continue;
+    }
+    // cmd.exe expands neither $ nor the backtick: they are plain text there.
+    if (dialect === "cmd" && (ch === "$" || ch === "`")) {
+      word += ch;
       wordStarted = true;
       continue;
     }
@@ -338,17 +346,39 @@ const UNKNOWN_SHELL =
   "and could not confirm that here. Run the command again; if it is refused again, set \"shell\" in " +
   "opencode's settings to one of these, or remove that setting.";
 
+// A request `next` takes from a file instead of the command line, so no shell
+// reads the person's words on the way.
+const REQUEST_FILE = "aidlc/.aidlc-request-text/request.txt";
+const REQUEST_FILE_STEP =
+  "Write the person's request, exactly as they typed it, with your file tool to " +
+  `${REQUEST_FILE} in this project, and run the same command with --request-file ${REQUEST_FILE} ` +
+  "in place of the request's words. AI-DLC reads the file and removes it.";
+const NEXT_COMMAND = new RegExp(
+  `^(?:aidlc|bun[ \\t]+\\.aidlc/tools/aidlc\\.ts)[ \\t]+${PROJECTED_TRUSTED_NAMESPACE}[ \\t]+orchestrate[ \\t]+next(?:[ \\t]|$)`,
+);
+const CMD_REQUEST_REFUSAL =
+  `A line break or a %NAME% or !NAME! pair cannot reach AI-DLC through cmd.exe. ${REQUEST_FILE_STEP}`;
+
+// cmd.exe ends a command at a line break and replaces a %NAME% pair, and a
+// !NAME! pair with delayed expansion on, even inside quotes.
+function cmdCannotCarry(command: string): boolean {
+  const pair = (ch: string) => command.indexOf(ch) !== command.lastIndexOf(ch);
+  return /[\r\n]/.test(command) || pair("%") || pair("!");
+}
+
 // On Windows `aidlc` is the aidlc.cmd launcher. PowerShell hands it one command
 // line with a word that has no space unquoted (PowerShell 7 too, for a .cmd
 // file), and cmd.exe reads & | < > ^, a line break, a %NAME% pair and, with
 // delayed expansion on, a !NAME! pair in what it is handed. cmd.exe itself
 // keeps & | < > ^ inside double quotes; nothing on Windows keeps the rest, or
-// a " inside a word or a trailing backslash, through that command line.
-function launcherRefusal(args: string[], dialect: ShellDialect): string | null {
+// a " inside a word or a trailing backslash, through that command line, so a
+// request goes through a file.
+function launcherRefusal(args: string[], dialect: ShellDialect, next: boolean): string | null {
   const line = args.join(" ");
-  const kept =
-    "Ask the person how to write the text, since the launcher cannot carry it as written on Windows, " +
-    "and run the command again with their words.";
+  const kept = next
+    ? REQUEST_FILE_STEP
+    : "Ask the person how to write the text, since the launcher cannot carry it as written on Windows, " +
+      "and run the command again with their words.";
   if (args.some((arg) => /[\r\n]/.test(arg)) || /%[^%]*%/.test(line) || /![^!]*!/.test(line)) {
     return `A line break or a %NAME% or !NAME! pair cannot reach AI-DLC through the aidlc launcher. ${kept}`;
   }
@@ -379,7 +409,10 @@ function aidlcBashBoundaryViolation(
     const words = directShellWords(command, dialect);
     if (words?.[0] === "aidlc") {
       if (dialect !== "windows-powershell" && dialect !== "windows-pwsh") return null;
-      return launcherRefusal(words.slice(1), dialect);
+      return launcherRefusal(words.slice(1), dialect, NEXT_COMMAND.test(command));
+    }
+    if (dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
+      return CMD_REQUEST_REFUSAL;
     }
     return (
       "AIDLC bash permission allows one direct invocation of a framework tool only. " +
@@ -399,6 +432,9 @@ function aidlcBashBoundaryViolation(
     allowedEntrypoints.has(`${target[1]}/${target[2]}`)
   ) {
     return null;
+  }
+  if (words === null && dialect === "cmd" && NEXT_COMMAND.test(command) && cmdCannotCarry(command)) {
+    return CMD_REQUEST_REFUSAL;
   }
   return (
     "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
-import { codexExecTimeout, recordCodexExec } from "./codex-test-lifecycle.ts";
+import { codexExecTimeout, codexPersonTurn, recordCodexExec } from "./codex-test-lifecycle.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -170,6 +170,7 @@ export function execCodex(
   prompt: string,
 ): ExecResult {
   const argv = codexHeadlessArgs("exec", prompt);
+  const turn = codexPersonTurn(proj, prompt);
   const result = spawnSync(CODEX_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
@@ -183,7 +184,7 @@ export function execCodex(
     signal: result.signal,
     error: result.error?.message,
   };
-  recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured);
+  recordCodexExec("status", proj, [CODEX_BIN, ...argv], captured, turn);
   return captured;
 }
 

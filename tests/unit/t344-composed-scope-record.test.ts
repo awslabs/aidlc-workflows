@@ -1,4 +1,4 @@
-// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack
+// covers: function:parseComposedScopeRecord, function:renderComposedScopeRecord, function:composedFoldBack, function:isScopeName, function:SCOPE_NAME_RULE, function:scopeArg
 //
 // t344 - the durable composed-scope RECORD contract.
 //
@@ -27,18 +27,27 @@
 //      scope, and resurrecting it would re-create the phantom).
 //
 // Mechanism = in-process: all three functions are pure, so they are called
-// directly against literal inputs. No temp project, no env seams needed.
+// directly against literal inputs. No temp project, no env seams needed. The
+// last block also runs an installed engine once, to pin what a redo prints.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  __resetGraphCache,
+  backfillComposedScopeRecords,
   composedFoldBack,
   parseComposedScopeRecord,
   renderComposedScopeRecord,
   type ComposedScopeRecord,
 } from "../../core/tools/aidlc-graph.ts";
+import { discoverScopes } from "../../core/tools/aidlc-runner-gen.ts";
+import { loadScopeMetadataAll, scopeArg } from "../../core/tools/aidlc-lib.ts";
+import { cleanupTestProject, REPO_ROOT } from "../harness/fixtures.ts";
+import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 const IDENTITY = [
   "---",
@@ -345,6 +354,26 @@ describe("t344 record parse failures name the file and never degrade silently", 
       withRegion("---\nname: x\n---", '{"stages":{"a":"MAYBE"}}'),
       /invalid action "MAYBE"/,
     ],
+    [
+      "a name with a folder separator",
+      withRegion("---\nname: x/../../other\n---", '{"stages":{}}'),
+      /has a name a scope cannot have/,
+    ],
+    [
+      "a name with a Windows folder separator",
+      withRegion("---\nname: x\\..\\other\n---", '{"stages":{}}'),
+      /has a name a scope cannot have/,
+    ],
+    ...(["x;id", "x$(id)", "x id", "x|y", "x&y", "x`id`", "x'y", "x%PATH%", "a:b", "a,b", "a=b"].map((name) => [
+      `the shell-reading name ${JSON.stringify(name)}`,
+      withRegion(`---\nname: ${name}\n---`, '{"stages":{}}'),
+      /has a name a scope cannot have\. Rename the scope to/,
+    ] as [string, string, RegExp])),
+    ...([".", "..", ".hidden"].map((name) => [
+      `the name ${JSON.stringify(name)}`,
+      withRegion(`---\nname: ${name}\n---`, '{"stages":{}}'),
+      /starting with a letter or digit/,
+    ] as [string, string, RegExp])),
   ];
   for (const [what, body, diagnostic] of cases) {
     test(`throws on ${what}`, () => {
@@ -355,6 +384,13 @@ describe("t344 record parse failures name the file and never degrade silently", 
       );
     });
   }
+
+  test("a name that was safe as a file name and a command word still parses", () => {
+    for (const name of ["Lean_Feature.v2", "release+candidate", "team@2"]) {
+      const body = withRegion(`---\nname: ${name}\n---`, '{"stages":{}}');
+      expect(parseComposedScopeRecord(body, "aidlc/scopes/x.md").name, name).toBe(name);
+    }
+  });
 
   test("the missing-region message names the recovery path", () => {
     // The record is committed user work, so aborting compile has to tell the
@@ -465,5 +501,140 @@ describe("t344 composedFoldBack source priority", () => {
     const r = composedFoldBack({}, null, STOCK, installed);
     expect(JSON.parse(r.json)).toEqual({});
     expect([...r.names]).toEqual([]);
+  });
+});
+
+describe("t344 a scope name that is not one is never written or run", () => {
+  function withScopesDirs<T>(run: (root: string, scopes: string, records: string) => T): T {
+    const root = mkdtempSync(join(tmpdir(), "t344-inside-"));
+    const scopes = join(root, "project", ".claude", "scopes");
+    const records = join(root, "project", "aidlc", "scopes");
+    const saved = { scopes: process.env.AIDLC_SCOPES_DIR, records: process.env.AIDLC_COMPOSED_SCOPES_DIR };
+    try {
+      mkdirSync(scopes, { recursive: true });
+      process.env.AIDLC_SCOPES_DIR = scopes;
+      process.env.AIDLC_COMPOSED_SCOPES_DIR = records;
+      return run(root, scopes, records);
+    } finally {
+      if (saved.scopes === undefined) delete process.env.AIDLC_SCOPES_DIR;
+      else process.env.AIDLC_SCOPES_DIR = saved.scopes;
+      if (saved.records === undefined) delete process.env.AIDLC_COMPOSED_SCOPES_DIR;
+      else process.env.AIDLC_COMPOSED_SCOPES_DIR = saved.records;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  for (const name of ["x/../../../other", "x/../other", "x;id"]) {
+    test(`a back-fill for the grid-only name ${JSON.stringify(name)} writes no record`, () => {
+      withScopesDirs((root, scopes, records) => {
+        writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", `name: ${name}`));
+        const written = backfillComposedScopeRecords(join(root, "project"), new Set([name]), JSON.stringify({ [name]: { stages: STAGES } }));
+        expect(written).toEqual([]);
+        expect(existsSync(records) ? readdirSync(records) : []).toEqual([]);
+        expect(existsSync(join(root, "project", "other.md"))).toBe(false);
+      });
+    });
+  }
+
+  test("a grid column whose name is not a scope name is not folded back", () => {
+    const r = composedFoldBack({}, JSON.stringify({ "x;id": { stages: STAGES } }), STOCK, new Set(["x;id"]));
+    expect([...r.names]).toEqual([]);
+  });
+
+  test("a scope file whose name is not a scope name is refused before it becomes a scope", () => {
+    withScopesDirs((_root, scopes) => {
+      writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", "name: x;id"));
+      __resetGraphCache();
+      try {
+        expect(() => loadScopeMetadataAll()).toThrow(/has a name a scope cannot have/);
+      } finally {
+        __resetGraphCache();
+      }
+    });
+  });
+
+  test("a scope file whose name is not a scope name gets no runner", () => {
+    withScopesDirs((_root, scopes) => {
+      writeFileSync(join(scopes, "aidlc-x.md"), IDENTITY.replace("name: lean-feature", "name: x;id\nrunner: true"));
+      expect(() => discoverScopes()).toThrow(/has a name a scope cannot have/);
+    });
+  });
+
+  test("a scope read back from the workflow's files is printed into a command only when it is a scope name", () => {
+    for (const name of ["bugfix", "Lean_Feature.v2", "team@2"]) expect(scopeArg(name)).toBe(name);
+    for (const name of ["x%USERNAME%", "x;id", "x id", "../x"]) {
+      let message = "";
+      try {
+        scopeArg(name);
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message, name).toContain("is not a scope name, so no command was printed for it");
+      expect(message, name).not.toContain(name);
+    }
+  });
+
+  // cmd.exe fills in %NAME% inside a command before AI-DLC sees it, so a
+  // printed command must never carry a scope like this one.
+  test("a redo on a workflow whose saved scope is not a scope name prints no command", () => {
+    const proj = mkdtempSync(join(tmpdir(), "t344-resume-"));
+    try {
+      cpSync(join(REPO_ROOT, "dist", "claude"), proj, { recursive: true });
+      spawnSync("git", ["init", "-q"], { cwd: proj });
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      for (const key of ["AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "AIDLC_SESSION_OVERRIDE"]) delete env[key];
+      const tool = (name: string, args: string[]) => spawnSync(process.execPath, [join(proj, ".claude", "tools", name), ...args], {
+        cwd: proj,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const created = tool("aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--label", "redo", "--arguments", "fix the parser"]);
+      expect(created.status, created.stderr).toBe(0);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const intent = readdirSync(intents).find((name) => existsSync(join(intents, name, "aidlc-state.md")));
+      const state = join(intents, String(intent), "aidlc-state.md");
+      const redo = () => tool("aidlc-orchestrate.ts", ["report", "--result", "resumed", "--user-input", "2"]);
+      const kept = redo();
+      expect(kept.status, kept.stderr).toBe(0);
+      expect(kept.stdout).toContain("--direction redo --scope bugfix");
+      writeFileSync(state, readFileSync(state, "utf-8").replace("- **Scope**: bugfix", "- **Scope**: x%USERNAME%"));
+      const refused = redo();
+      expect(refused.status).not.toBe(0);
+      expect(refused.stdout).toBe("");
+      expect(refused.stderr).toContain("is not a scope name, so no command was printed for it");
+      expect(refused.stderr).not.toContain("USERNAME");
+      // New work named with a real scope is not taken as a switch of this one.
+      const newWork = tool("aidlc-orchestrate.ts", ["next", "--new-intent", "--scope", "feature", "add billing"]);
+      expect(newWork.stdout).not.toContain("scope change");
+      expect(readFileSync(state, "utf-8")).toContain("- **Scope**: x%USERNAME%");
+      // A switch with a plan change typed alongside carries both.
+      const withPlan = tool("aidlc-orchestrate.ts", ["next", "--scope", "feature", "--skip", "user-stories"]);
+      expect(withPlan.status, withPlan.stderr).toBe(0);
+      expect(JSON.parse(withPlan.stdout).message).toContain("scope change --scope feature");
+      expect(JSON.parse(withPlan.stdout).message).toContain("user-stories");
+      // The way out the refusal names, /aidlc --scope <name>, switches to a
+      // real scope, and the switch offers no way back to the bad one.
+      const asked = tool("aidlc-orchestrate.ts", ["next", "--scope", "feature"]);
+      expect(asked.status, asked.stderr).toBe(0);
+      const command = /`([^`]+)`/.exec(JSON.parse(asked.stdout).message ?? "")?.[1] ?? "";
+      expect(command).toEndWith("scope change --scope feature");
+      const [runner, ...argv] = command.split(" ");
+      expect(runner).toBe("bun");
+      const switched = spawnSync(process.execPath, argv, {
+        cwd: proj,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(switched.status, switched.stdout + switched.stderr).toBe(0);
+      expect(switched.stdout).toContain("Switched to feature");
+      expect(switched.stdout).not.toContain("To go back");
+      expect(switched.stdout + switched.stderr).not.toContain("USERNAME");
+      expect(readFileSync(state, "utf-8")).toContain("- **Scope**: feature");
+      expect(redo().stdout).toContain("--direction redo --scope feature");
+    } finally {
+      cleanupTestProject(proj);
+    }
   });
 });

@@ -1,4 +1,4 @@
-// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard)
+// covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard), file:hooks/aidlc-kiro-adapter.ts
 //
 // The hook provides immediate PreToolUse feedback and the state CLI repeats the
 // same ownership boundary as the harness-independent hard floor.
@@ -10,7 +10,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
@@ -1033,6 +1033,222 @@ describe("t242 state-transition ownership guard", () => {
     expect(relativeWrite.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
+  // A shell can run in a project subdirectory (Kiro and Cursor pass the call's
+  // own cwd). Relative targets resolve from there, but the installed tree, its
+  // entrypoints and the authored source are found at the hook's project too.
+  // HOOK runs from dist/, outside the project, so its own path cannot supply it.
+  test("runtime integrity finds the project from AIDLC_PROJECT_DIR when the call runs in a subdirectory", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const shellCwd = join(project, "src");
+    const hookImport = 'import "./aidlc-guard-switch.ts";\n';
+    for (const dir of ["src", "scripts", ".kiro/tools"]) mkdirSync(join(project, dir), { recursive: true });
+    writeFileSync(join(project, "scripts", "package.ts"), "export {};\n");
+    writeFileSync(join(project, ".kiro", "tools", "aidlc-lib.ts"), hookImport);
+    writeFileSync(join(project, ".kiro", "tools", "helper.ts"), hookImport);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [tool_name, tool_input, status] of [
+      ["Bash", { command: "echo x > ../.kiro/hooks/y.json" }, 2],
+      ["Bash", { command: "echo x > ../.github/hooks/aidlc.json" }, 2],
+      ["Bash", { command: "echo x > ../.opencode/plugin/aidlc-opencode-adapter.ts" }, 2],
+      ["Bash", { command: "bun ../.kiro/tools/helper.ts" }, 2],
+      ["Bash", { command: "echo x > local.txt" }, 0],
+      ["Bash", { command: "bun ../.kiro/tools/aidlc-lib.ts" }, 0],
+      ["Write", { file_path: "../core/hooks/example.ts", content: hookImport }, 0],
+      ["Write", { file_path: "../scripts/helper.ts", content: hookImport }, 2],
+    ] as const) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: shellCwd, tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, JSON.stringify(tool_input)).toBe(status);
+    }
+  });
+
+  // The shared target reader resolves a relative write from every directory a
+  // literal cd or pushd in the command names, and from $HOME for a bare cd or a
+  // leading ~, not only from the call's cwd.
+  test("runtime integrity follows a literal cd or pushd to the write it guards", () => {
+    const project = createTestProject();
+    projects.push(project);
+    for (const dir of [".kiro/hooks", "src", "docs"]) mkdirSync(join(project, dir), { recursive: true });
+    const home = dirname(project);
+    const name = basename(project);
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project, HOME: home };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd .kiro && echo x > hooks/y.json", 2],
+      [`cd; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd --; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd -P; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>/dev/null; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd 2>"/dev/null"''; echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      [`cd "$HOME/${name}/.kiro" && echo x > hooks/y.json`, 2],
+      ["cd $" + `{HOME}/${name}/.kiro && echo x > hooks/y.json`, 2],
+      [`echo x > $HOME/${name}/.kiro/hooks/y.json`, 2],
+      // A > inside a quoted operand is not a redirection. (The directory need
+      // not exist, and Windows cannot create it.)
+      [`cd "x >y/../.kiro"; echo x > hooks/y.json`, 2],
+      // $HOME from a bare cd never pushes out a directory collected earlier.
+      // (.kiro and five doublings collect 63; one absolute cd makes the cap's 64.)
+      [`cd .kiro; echo x > hooks/y.json; cd a; cd b; cd c; cd d; cd e; cd '${project}/z'; cd`, 2],
+      [`cd ~ && echo x > '${name}/.kiro/hooks/y.json'`, 2],
+      // $HOME from `cd ~` stays when six doublings pass the cap.
+      [`cd ~; echo x > '${name}/.kiro/hooks/y.json'; cd a; cd b; cd c; cd d; cd e; cd f`, 2],
+      // bash 5.3 runs `${ cmd; }` and `${| cmd; }` as commands.
+      ["echo $" + "{ rm -rf .kiro/hooks; }", 2],
+      ["echo $" + "{| rm -rf .kiro/hooks; }", 2],
+      [`echo x > ~/'${name}/.kiro/hooks/y.json'`, 2],
+      ["pushd .kiro && echo x > hooks/y.json", 2],
+      ["cd .kiro && cd hooks && rm y.json", 2],
+      ["(cd .kiro && tee hooks/y.json < /dev/null)", 2],
+      ["cd src; echo x > ../.kiro/hooks/y.json", 2],
+      // Six relative cds fill the collected directories; a later absolute one still counts.
+      [`cd a; cd b; cd c; cd d; cd e; cd f; cd '${project}/.kiro'; echo x > hooks/y.json`, 2],
+      ["cd -- .kiro && echo x > hooks/y.json", 2],
+      // Redirection forms the separators must not split, and writes that run
+      // again after a later cd (a loop, a function).
+      ["printf x >|.kiro/hooks/y.json", 2],
+      ["printf x >&.kiro/hooks/y.json", 2],
+      ["for i in 1 2; do rm -f hooks/y.json; cd .kiro; done", 2],
+      ["f(){ printf x > hooks/y.json; }; cd .kiro; f", 2],
+      // Order is not modelled: a cd after a write also counts for it, which
+      // only refuses more, and only for a protected path.
+      ["echo x > hooks/y.json; cd .kiro", 2],
+      // `pushd -n` adds to the stack and stays in the directory, for the
+      // audit-trail reading too.
+      ["pushd -n .kiro; echo x > hooks/y.json", 0],
+      ["pushd -n aidlc/spaces/s/intents/i/audit; echo x > notes.md", 0],
+      ["cd docs && echo x > README.md", 0],
+      ["cd src && echo x > hooks/y.json", 0],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
+    // A quoted ~ is a file named ~ in the call's cwd, here the hooks directory.
+    const quoted = spawnSync(process.execPath, [HOOK], {
+      cwd: project,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        cwd: join(project, ".kiro", "hooks"),
+        tool_name: "Bash",
+        tool_input: { command: "printf x > '~'" },
+      }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(quoted.status).toBe(2);
+  });
+
+  // bash's cd takes +1 as a directory name (only pushd reads it as a stack
+  // entry), here a link to .kiro. Skipped on Windows, where creating the link
+  // can need privileges.
+  test.skipIf(process.platform === "win32")("runtime integrity reads `cd +1` as the directory +1", () => {
+    const project = createTestProject();
+    projects.push(project);
+    mkdirSync(join(project, ".kiro", "hooks"), { recursive: true });
+    symlinkSync(".kiro", join(project, "+1"));
+    // After `--` a word is the directory, for the audit-trail pass too: here
+    // `+1` and `-n` link to an audit directory and the write names it through
+    // a variable.
+    const audit = join(project, "aidlc", "spaces", "s", "intents", "i", "audit");
+    mkdirSync(audit, { recursive: true });
+    mkdirSync(join(project, "a"));
+    symlinkSync(audit, join(project, "a", "+1"));
+    symlinkSync(audit, join(project, "a", "-n"));
+    symlinkSync(audit, join(project, "x"));
+    const env: NodeJS.ProcessEnv = { ...unownedEnv(), AIDLC_PROJECT_DIR: project, CLAUDE_PROJECT_DIR: project };
+    delete env.AIDLC_RUNTIME_PROJECT_DIR;
+    delete env.AIDLC_HARNESS_DIR;
+    for (const [command, status] of [
+      ["cd +1 && echo x > hooks/y.json", 2],
+      ["pushd +1 && echo x > hooks/y.json", 0],
+      ['cd a; pushd -- +1; f=shard.md; echo x >> "$f"', 2],
+      ['cd a; pushd -- -n; f=shard.md; echo x >> "$f"', 2],
+      ['cd a; f=shard.md; echo x >> "$f"', 0],
+      // A redirection on the cd is not its operand, and `cd -- -` is $OLDPWD.
+      ['cd 2>/dev/null x; f=shard.md; echo x >> "$f"', 2],
+      ['cd >/dev/null x; f=shard.md; echo x >> "$f"', 2],
+      ['cd -- -; f=audit/shard.md; echo x >> "$f"', 2],
+    ] as Array<[string, number]>) {
+      const r = spawnSync(process.execPath, [HOOK], {
+        cwd: project,
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, command).toBe(status);
+    }
+  });
+
+  // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
+  // its shell execute_bash; the adapter hands each to the guard in the shared
+  // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.
+  test("the Kiro IDE adapter route refuses runtime writes and lifecycle verbs", () => {
+    const project = createTestProject();
+    projects.push(project);
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
+    seedAuditFile(project);
+    const runIde = (tool_name: string, tool_input: Record<string, unknown>) => {
+      const env: NodeJS.ProcessEnv = {
+        ...unownedEnv(),
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_COMPILED_EXECUTABLE: "",
+        HOME: dirname(project),
+        // PowerShell's ~ and $HOME on Windows.
+        USERPROFILE: dirname(project),
+      };
+      delete env.USER_PROMPT;
+      return spawnSync(process.execPath, [join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "state-transition-guard"], {
+        input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: project, session_id: "sess_t242-ide", tool_name, tool_input }),
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+    };
+    const runtime = "AIDLC runtime records and hooks belong to the harness";
+    for (const [tool_name, tool_input, refusal] of [
+      ["fs_write", { path: join(project, "aidlc", ".aidlc-sessions", "foo.json"), text: "{}" }, runtime],
+      ["str_replace", { path: join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), oldStr: "a", newStr: "b" }, runtime],
+      ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
+      ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
+      ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
+      // A bare cd goes to $HOME, here the project's parent.
+      ["execute_bash", { command: `cd; echo x > '${basename(project)}/.kiro/hooks/y.json'` }, runtime],
+      // execute_pwsh reaches the guard marked as PowerShell: backslash paths
+      // and Set-Location read the way PowerShell runs them.
+      ["execute_pwsh", { command: "Set-Content .kiro\\hooks\\y.json x" }, runtime],
+      ["execute_pwsh", { command: "'x' | Tee-Object .kiro\\hooks\\y.json" }, runtime],
+      ["execute_pwsh", { command: "Set-Location .kiro\\hooks; Set-Content y.json x" }, runtime],
+      // $HOME, ${HOME} and ~ with backslashes and in any case (HOME and USERPROFILE are the project's parent).
+      ["execute_pwsh", { command: `Set-Content $HOME\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: "Set-Content $" + `{home}\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+      ["execute_pwsh", { command: `Set-Content ~\\${basename(project)}\\.kiro\\hooks\\y.json x` }, runtime],
+    ] as const) {
+      const r = runIde(tool_name, tool_input);
+      expect(r.status, tool_name).toBe(2);
+      expect(r.stderr, tool_name).toContain(refusal);
+    }
+    for (const [tool_name, tool_input] of [
+      ["fs_write", { path: join(project, "notes.md"), text: "x" }],
+      ["read_file", { path: seededAuditShard(project) }],
+      ["execute_bash", { command: 'bun .kiro/tools/aidlc-state.ts get "Current Stage"' }],
+      ["execute_pwsh", { command: "Set-Location docs; Set-Content notes.md x" }],
+    ] as const) {
+      expect(runIde(tool_name, tool_input).status, tool_name).toBe(0);
+    }
+  });
+
   // The words the human-turn hook keeps for a stage gate become the Feedback a
   // Request Changes records as the person's own, so a tool call may not write
   // or remove them; the rest of the engine directory stays writable.
@@ -1979,6 +2195,98 @@ describe("t242 state-transition ownership guard", () => {
     expect(rows[0]).toContain("**Details**: aidlc-state.ts checkbox");
   });
 
+  test("under Guard Policy off the state CLI carries a direct transition through without a line", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project],
+      {
+        encoding: "utf-8",
+        env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" },
+      },
+    );
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout).updated).toBe(true);
+    // Off means off: the row records the pass and nothing is said.
+    expect(r.stderr).not.toContain("Continuing past");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+  });
+
+  test("a conversation that has not joined the workflow is not stopped by the hook with an offer to turn off a check that is off", () => {
+    // The hook kept the check up for a chat outside the workflow and offered to
+    // turn it off, though Guard Policy off already had. The state tool's own
+    // check reads the same policy, so it decides.
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    // No cursor names the record, so this chat stands outside it.
+    const cursor = join(dirname(dirname(statePath)), "active-intent");
+    if (existsSync(cursor)) writeFileSync(cursor, "");
+    const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts approve feasibility" },
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).not.toContain("offer to turn the state-transition check off");
+  });
+
+  test("under Guard Policy off the hook lets a direct state command through without a line", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"),
+    );
+    const r = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts approve feasibility" },
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    // Off means off: the row records the pass and nothing is said.
+    expect(`${r.stdout}${r.stderr}`).not.toContain("Continuing past");
+    const rows = readFileSync(seededAuditShard(project), "utf-8")
+      .split("\n## ")
+      .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("**Guard**: state-transition");
+    expect(rows[0]).toContain("**Tool**: Bash");
+  });
+
   test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {
     const project = createTestProject();
     projects.push(project);
@@ -2070,7 +2378,8 @@ describe("t242 state-transition ownership guard", () => {
         { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env },
       );
       expect(r.status, `${result}: ${r.stdout}${r.stderr}`).toBe(0);
-      expect(r.stdout, result).toContain('"kind":"error"');
+      // Either way it goes back to the agent as its next step.
+      expect(r.stdout, result).toContain('"kind":"print"');
       expect(r.stdout, result).toContain(
         result === "approved" ? "names no choice" : "Request Changes requires nonblank revision feedback",
       );

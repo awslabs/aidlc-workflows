@@ -73,9 +73,13 @@ export type RootIntegration = {
    * Merge policy used by `aidlc config`; never inferred from the filename.
    * jsonc-settings edits a team's JSONC settings file in place: it adds each
    * shipped top-level key that is absent, never changes a key someone else
-   * set, and keeps other keys, comments, and layout.
+   * set, and keeps other keys, comments, and layout. json-entries does the
+   * same at any depth for a team's JSON file (opencode.json): AI-DLC's values
+   * and array strings are added when absent and followed or removed only
+   * while unchanged; its part ships in root-blocks, and a copy leaves the file
+   * out.
    */
-  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings";
+  policy: "managed-block" | "json-map" | "json-array" | "whole-file" | "jsonc-settings" | "json-entries";
   /** Stable marker identity for managed-block integrations. */
   marker?: string;
   /**
@@ -143,14 +147,34 @@ export type HarnessManifest = {
    * this tree's hook registrations): what to tell them.
    */
   hookActivation?: {
-    /** Doctor's fix when the hooks are not running. */
+    /**
+     * Doctor's fix when the hooks are not running: only the person's own
+     * step, in the tool's words. `<entry>` and `<folder>` are filled in.
+     */
     recovery: string;
-    /** Sentence added to the engine's attended "no new human reply" refusals. */
-    missedReply: string;
+    /**
+     * Sentence added to the engine's attended "no new human reply" refusals,
+     * for a harness without `agentStep` (which gives that sentence instead).
+     */
+    missedReply?: string;
+    /**
+     * `missedReply` for one host this tree runs in, told apart by environment
+     * variables that host sets for the agent's shell commands (any one
+     * non-empty). Without them, `missedReply` stands.
+     */
+    missedReplyInHost?: { env: string[]; text: string };
+    /**
+     * Set when a session can run without this tree's hooks after they ran in
+     * an earlier one, so a reply can go unrecorded even with a heartbeat on
+     * record. A host with `missedReply` is one already.
+     */
+    missesReplies?: true;
     /**
      * Doctor's fix when no hook heartbeat exists yet. Set only when this
-     * harness's hooks leave a heartbeat on the first chat message; doctor then
-     * warns with this text instead of passing.
+     * harness's hooks leave a heartbeat on every chat message, the first one
+     * before any workflow included; doctor then warns with this text instead
+     * of passing, and with `agentStep` the first `next` stops when there is
+     * none. `<entry>` and `<folder>` are filled in.
      */
     notRunYet?: string;
     /**
@@ -160,6 +184,26 @@ export type HarnessManifest = {
      * before the engine runs, so an install whose hooks run never sees it.
      */
     notRunInWorkflow?: string;
+    /**
+     * What the agent does itself, then the one line it shows the person, when
+     * this harness's hooks are not running (the person's lines quoted
+     * exactly). `next` stops with it before any work, and the refusal for a
+     * reply that was not recorded carries it. Set only when a hook on the
+     * agent's own shell command leaves a heartbeat in the record before the
+     * engine runs, even with its own check switched off, so a record with
+     * stage progress and no heartbeat at all proves the hooks did not run.
+     * `<entry>`, `<folder>` and `<next>` are filled in. `<next>` is the
+     * engine's `next` command in backticks; in `next`'s stop it is fixed
+     * words saying to run the stopped command again, so its request is kept.
+     */
+    agentStep?: string;
+    /**
+     * The project file `agentStep` has the agent change, relative to the
+     * project. When it, or a folder on the way to it, is a link, or it is
+     * not one plain file, the agent changes nothing and shows the person
+     * `recovery` instead.
+     */
+    agentStepEdits?: string;
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;

@@ -1191,7 +1191,11 @@ function pruneOwnedPlugin(
     const target = assertOwnedPath(stagedProject, file.path);
     if (!existsSync(target)) continue;
     if (!lstatSync(target).isFile() || sha256File(target) !== file.sha256) {
-      throw new Error(`cannot prune ${key}: owned path changed since composition: ${file.path}`);
+      throw new Error(
+        `cannot prune ${key}: owned path changed since composition: ${file.path}. To keep your ` +
+          `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync ` +
+          `--prune-missing\` again.`,
+      );
     }
   }
   pruneContributions(stagedProject, harnessDir, key);
@@ -1217,7 +1221,11 @@ function replaceOwnedPluginPrimitives(
     ownedPaths.add(file.path);
     if (!existsSync(target)) continue;
     if (!lstatSync(target).isFile() || sha256File(target) !== file.sha256) {
-      throw new Error(`cannot sync ${key}: owned path changed since composition: ${file.path}`);
+      throw new Error(
+        `cannot sync ${key}: owned path changed since composition: ${file.path}. To keep your ` +
+          `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync\` ` +
+          `again; it puts the plugin's own version back.`,
+      );
     }
   }
   pruneContributions(stagedProject, harnessDir, key);

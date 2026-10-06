@@ -91,6 +91,30 @@ itself. It is a 26-stage run, not a readiness check.
 
 ---
 
+## Before the workshop: bring a vision note and a tech-environment note
+
+Ask each team to bring two short notes to the first session. They turn the
+first hour from answering questions into checking answers.
+
+- **A vision note**: one paragraph on what they are building and for whom,
+  the features in the first release, what is not in it, and the questions
+  they already know are open. On the day it goes into the first request:
+  `/aidlc workshop Read ./vision.md and build what it describes`
+  (`$aidlc workshop ...` on Codex CLI). See [Writing a Vision Document](writing-inputs/vision-document-guide.md).
+- **A tech-environment note**: language and version, framework, test tool,
+  cloud and deployment model (or "local only"), prohibited libraries with the
+  reason and what to use instead, the security basics, and one short example
+  of a typical endpoint, function and test. Before the first run, save it as
+  `aidlc/spaces/default/knowledge/aidlc-shared/technical-environment.md`, where
+  every stage reads it. See
+  [Writing a Technical Environment Document](writing-inputs/technical-environment-guide.md).
+
+Each guide starts with a short version; for a workshop that is enough. Teams
+working on an existing codebase add what this work must not change to the
+vision note.
+
+---
+
 ## Keep side tasks small: name the scope
 
 A plain `/aidlc <description>` suggests a scope from its words or offers to
@@ -161,8 +185,9 @@ If that is refused with `Select Construction Execution: serial`, the work is
 set to build Units in parallel: run
 `aidlc engine state set-construction-execution serial` first, then switch.
 
-Once Construction has started, the change needs your explicit approval of
-that exact change, and the Units already finished keep their work. See
+Once Construction has started, say it in the chat ("from here on, build one
+unit at a time"): the agent switches it at once and says how to undo it, and
+the Units already finished keep their work. See
 [Construction order and execution](12-cli-commands.md#construction-order-and-execution).
 
 ---
@@ -272,12 +297,12 @@ following its instructions, and a failure is easier to miss.
 
 | Harness | How questions appear | Can AI-DLC refuse an agent's action? | At the end of a turn | Hooks run only when | Gaps to know |
 |---|---|---|---|---|---|
-| Claude Code | Native picker; picker answers count as your turn | Yes, every check | Keeps the workflow going until the step is reported | Project hooks are approved with `/hooks` and Claude Code restarted; an organization policy can block them (the doctor checks) | None noted |
+| Claude Code | Native picker; picker answers count as your turn | Yes, every check | Keeps the workflow going until the step is reported | Claude Code was started in the folder after setup, and no `"disableAllHooks": true` setting or organization policy stops them (the doctor checks) | None noted |
 | Codex CLI | Picker, with numbered prose as the fallback; picker answers count | Yes, every check | Keeps the workflow going | The project's hooks are trusted (one interactive trust pass, or the shipped trust seed) | No custom status line |
-| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | In VS Code, the workspace is trusted and Chat: Use Hooks is on (an organization can switch it off). For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor warns until a Copilot chat has started in the folder, and once a stage starts with no hook run, the chat says so; a real stage and your reply are still the full readiness check |
+| GitHub Copilot (CLI and VS Code) | Numbered prose; type your answer. Pickers are refused while a workflow runs, because their answers do not count | Yes, through Copilot's deny channel. Live-verified on the CLI; on VS Code documented but not yet verified live | Keeps the workflow going | In VS Code, the workspace is trusted and Chat: Use Hooks is on (an organization can switch it off). For the Copilot CLI, the folder is in `trustedFolders`; headless `copilot -p` also needs `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1`. `aidlc` must be on the PATH the host starts with | No status line. The doctor warns until a Copilot chat has started in the folder, and when no hook has run for your message, the chat says so; a real stage and your reply are still the full readiness check |
 | Cursor | Numbered prose | Yes | Cannot hold the turn; the reminder arrives as a follow-up message | The project is in a git repository and the folder is trusted (the doctor checks the repository) | Headless `agent -p` runs cannot pass approval gates. No status line |
 | Kiro CLI | Numbered prose | Yes | Keeps the workflow going in interactive sessions, not in `--no-interactive` runs | The `aidlc` agent is active | No status line; no session-end or pre-compaction hooks |
-| Kiro IDE | Numbered prose | Partly: the approval floor, Plan Approval, and the terminal command check. No reviewer read-scope, state-transition, or review-freeze check | Cannot hold the turn; the agent's own instructions keep the workflow going | The folder is trusted, the window was reloaded, and the `aidlc` agent is chosen (the doctor warns until hooks have run) | No status line |
+| Kiro IDE | Numbered prose | Partly: the approval floor, Plan Approval, review-freeze, the state-transition check, and the terminal command check. No reviewer read-scope check | Cannot hold the turn; the agent's own instructions keep the workflow going | The folder is trusted, the window was reloaded, and the `aidlc` agent is chosen (the doctor warns until hooks have run) | No status line |
 | opencode | Numbered prose | Yes | Cannot hold the turn; the reminder is sent as a new prompt | The AI-DLC plugin is installed (the doctor checks it) | No session-end event. No status line |
 
 Where there is no status line, use `/aidlc --status` (`$aidlc --status` on
@@ -326,4 +351,5 @@ For the rest of the Copilot setup, see
 - [Onboarding](onboarding.md) - the participant's first week
 - [Multi-Team Construction and Workshop Mode](workshop-mode.md) - several teams building Units of one intent
 - [Workflow Profiles](workflow-profiles.md) - every scope and when to use it
+- [Writing a Vision Document](writing-inputs/vision-document-guide.md) and [Writing a Technical Environment Document](writing-inputs/technical-environment-guide.md) - the two pre-work notes
 - [Troubleshooting](15-troubleshooting.md) - symptoms and fixes

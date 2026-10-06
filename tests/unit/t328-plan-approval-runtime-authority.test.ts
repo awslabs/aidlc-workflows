@@ -758,6 +758,40 @@ describe("t328 Plan Approval runtime authority", () => {
     expect(evaluateCodeGenerationApproval(project, { unit: null }).ok).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // With Guard Policy off a file that moves while the build starts is no
+  // different from one that moved before it: the start goes ahead.
+  test("with Guard Policy off, a write crossing generation publication does not stop the start", async () => {
+    const project = createProject();
+    const statePath = join(seededRecordDir(project), "aidlc-state.md");
+    const off = readFileSync(statePath, "utf-8")
+      .replace("- **Change Control**: strict (from scope feature)", "- **Guard Policy**: off (set by you)");
+    expect(off).toContain("- **Guard Policy**: off (set by you)");
+    writeFileSync(statePath, off, "utf-8");
+    writeActiveDirectiveMarker(project, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(off) });
+    const questions = seedPlan(project);
+    approve(project, questions, "publication-race-off");
+    const barrier = publicationBarrier();
+    const begin = Bun.spawn(
+      [BUN, join(DIST_ROOT, "tools", "aidlc-testing-posture.ts"), "begin", "--stage-level", "--project-dir", project],
+      {
+        cwd: project,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_TEST_PLAN_APPROVAL_PUBLICATION_BARRIER: barrier },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const publicationDeadline = Date.now() + remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!;
+    while (!existsSync(`${barrier}.published`) && Date.now() < publicationDeadline) {
+      await Bun.sleep(10);
+    }
+    expect(existsSync(`${barrier}.published`)).toBe(true);
+    writeFileSync(join(project, "src", "zz-written-during-start.ts"), "export const raced = true;\n");
+    writeFileSync(`${barrier}.release`, "release\n");
+    const [exit, stderr] = await Promise.all([begin.exited, new Response(begin.stderr).text()]);
+    expect(exit, stderr).toBe(0);
+    expect(stderr).not.toContain("Source files changed while code generation was starting");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("active directive publication cannot retire authority during generation start", async () => {
     const project = createProject();
     const questions = seedPlan(project);
@@ -1747,7 +1781,7 @@ describe("t328 decision refuses while hooks are provably not firing", () => {
     expect(refused.exitCode).not.toBe(0);
     const stderr = refused.stderr?.toString() ?? "";
     expect(stderr).toContain("hooks are not firing in this session");
-    expect(stderr).toContain("Run /hooks to check hook approval and policy state");
+    expect(stderr).toContain("false in this project's .claude/settings.local.json; it works in the same chat");
     const runtimeDir = join(sessionsDir(project), "plan-approval");
     expect(
       existsSync(runtimeDir) && readdirSync(runtimeDir).some((name) => name.startsWith("challenge-")),

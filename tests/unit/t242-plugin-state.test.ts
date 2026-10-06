@@ -952,10 +952,20 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "construction",
       "test-pro-integration.md",
     );
-    writeFileSync(stage, `${readFileSync(stage, "utf-8")}\nlocal edit\n`);
+    const shipped = readFileSync(stage, "utf-8");
+    writeFileSync(stage, `${shipped}\nlocal edit\n`);
     await expect(syncPlugins(project, [], ".claude"))
       .rejects.toThrow("cannot sync test-pro: owned path changed since composition");
+    await expect(syncPlugins(project, [], ".claude"))
+      .rejects.toThrow("To keep your change, move that file somewhere else, then run");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
+    // The step it names: with the edit moved aside, the same sync goes
+    // through and puts the plugin's own version back.
+    const aside = join(project, "my-test-pro-integration.md");
+    renameSync(stage, aside);
+    await syncPlugins(project, [], ".claude");
+    expect(readFileSync(stage, "utf-8")).toBe(shipped);
+    expect(readFileSync(aside, "utf-8")).toContain("local edit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("plain sync retains missing content; explicit prune removes only hash-proven ownership", async () => {
@@ -1288,7 +1298,16 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     writeFileSync(stage, `${readFileSync(stage, "utf-8")}\nlocal edit\n`);
     await expect(syncPlugins(project, ["--prune-missing", "--yes"], ".claude"))
       .rejects.toThrow("owned path changed since composition");
+    await expect(syncPlugins(project, ["--prune-missing", "--yes"], ".claude"))
+      .rejects.toThrow("move that file somewhere else, then run");
     expect(readFileSync(stage, "utf-8")).toContain("local edit");
+    // The step it names: with the edit moved aside, the same prune goes through.
+    const aside = join(project, "my-test-pro-integration.md");
+    renameSync(stage, aside);
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
+    expect(existsSync(stage)).toBe(false);
+    expect(readFileSync(aside, "utf-8")).toContain("local edit");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("at a terminal, prune names what goes and how to get it back, then proceeds without a question", () => {

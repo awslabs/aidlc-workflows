@@ -14,7 +14,7 @@ export interface RetryRecord {
   file: string;
   name: string;
   passedOnRetry: boolean;
-  firstAttempt: { failedCases: number; wallTimeMs: number; log: string | null };
+  firstAttempt: { failedCases: number; wallTimeMs: number; log: string | null; caseTimeoutsOnly?: boolean };
   secondAttempt: { status: string; failedCases: number; wallTimeMs: number };
 }
 

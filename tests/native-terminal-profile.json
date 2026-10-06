@@ -654,6 +654,14 @@
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
             {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
+            {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
             },
@@ -1484,6 +1492,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"
@@ -2343,6 +2359,14 @@
         {
           "path": "tests/unit/t-tui-screen.test.ts",
           "cases": [
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "a row that is only a rule is still no menu"
+            },
+            {
+              "classname": "menus a Windows repaint left rule cells in",
+              "name": "read as the menu they show"
+            },
             {
               "classname": "native TUI bounds and lifetime",
               "name": "dispose is idempotent and settles a queued snapshot even during a pending write"

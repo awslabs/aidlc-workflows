@@ -558,14 +558,16 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.status).toBe(1);
   });
 
-  test("16: heartbeat advisory on fresh install -> 'not yet fired'", () => {
+  // Claude Code's hooks leave a heartbeat on the person's first chat message,
+  // so before any heartbeat doctor names its first-chat step instead.
+  test("16: heartbeat advisory on fresh install -> 'have not run in this project yet'", () => {
     const p = track(createTestProject());
     // No .aidlc-engine/hooks-health/ dir -> fresh-install advisory branch.
     const r = doctor(p);
-    expect(r.out).toContain("Hook heartbeats: not yet fired");
+    expect(r.out).toContain("warn  AIDLC hooks have not run in this project yet");
   });
 
-  test("16b: empty health dir before STAGE_STARTED -> 'not yet fired' pass row", () => {
+  test("16b: empty health dir before STAGE_STARTED -> 'have not run in this project yet' warn row", () => {
     const p = track(setupIntegrationProject({
       withState: STATE_MID_IDEATION,
       withAudit: true,
@@ -573,7 +575,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     // audit-sample.md intentionally has no STAGE_STARTED.
     mkdirSync(hooksHealthDir(p), { recursive: true });
     const r = doctor(p);
-    expect(r.out).toContain("ok    Hook heartbeats: not yet fired");
+    expect(r.out).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(r.status).toBe(0);
   });
 
@@ -601,7 +603,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     mkdirSync(beforeHealthDir, { recursive: true });
     writeFileSync(join(beforeHealthDir, "hook-debug.log"), "debug enabled\n", "utf-8");
     const beforeResult = doctor(before);
-    expect(beforeResult.out).toContain("ok    Hook heartbeats: not yet fired");
+    expect(beforeResult.out).toContain("warn  AIDLC hooks have not run in this project yet");
     expect(beforeResult.status).toBe(0);
 
     const after = track(setupIntegrationProject({
@@ -1053,5 +1055,42 @@ describe("t37 aidlc-lib / aidlc-utility — exports + constants", () => {
     const merged = findAllEvents(crlf, "WORKTREE_MERGED");
     expect(created).toHaveLength(1);
     expect(merged).toHaveLength(1);
+  });
+});
+
+describe("t37 aidlc-utility doctor: project checks only", () => {
+  test("24: an update check through the utility refuses and contacts no host", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requests++;
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const installRoot = mkdtempSync(join(tmpdir(), "aidlc-t37-install-"));
+    tempDirs.push(installRoot);
+    const p = track(createTestProject());
+    try {
+      for (const flags of [
+        ["--check-updates", "--release-base-url", `http://127.0.0.1:${server.port}/x`],
+        [`--release-base-url=http://127.0.0.1:${server.port}/x`],
+        ["--check-updates", "--ca-bundle", join(p, "bundle.pem")],
+      ]) {
+        const child = Bun.spawn([BUN, UTIL, "doctor", ...flags, "--project-dir", p], {
+          env: { ...process.env, AIDLC_OFFLINE: "0", AIDLC_INSTALL_ROOT: installRoot },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const out = `${await new Response(child.stdout).text()}${await new Response(child.stderr).text()}`;
+        expect(await child.exited, out).not.toBe(0);
+        expect(out).toContain("doctor --check-updates`");
+      }
+      expect(requests).toBe(0);
+      expect(existsSync(join(installRoot, "update-check.json"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
   });
 });

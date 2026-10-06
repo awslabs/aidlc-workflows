@@ -34,6 +34,17 @@ what they say, in their own words and in context, and do it.
 - A rule the team recorded in memory (a strict Guard Policy, say) wins over one
   person's request in chat. Say in one line that the team's rule holds, in which
   file, and that changing that line changes it.
+- When they ask for a review of a stage or of a Unit ("review Unit 1 again",
+  "have the reviewer look at the design"), record it through AI-DLC the first
+  time they ask, under every Guard Policy: run `{{INVOKE}} engine log review
+  --stage <slug> --reviewer <the stage's reviewer> --iteration <next>` (add
+  `--unit <unit>` for a Unit; the stage file's `reviewer` field names the
+  reviewer, and a wrong iteration is answered with the right one), then
+  dispatch the reviewer and record its verdict as
+  `{{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-reviewer.md` says.
+  Never review it in chat yourself, never write a review file by hand, never
+  start the stage again with `next --stage` to get one, and never offer to
+  change the Guard Policy for it.
 - The workflow's checks protect them from mistakes made on their behalf; they
   never stand between the person and what they asked for.
 
@@ -53,7 +64,13 @@ orchestration engine is resolving the compiled scope grid" does not.
 for chat narration:** engine, directive, dispatch, conductor, harness, verb,
 scope grid, steering, forwarding loop, mint, swarm, entropy, and the
 ARS component names (IAE, CSU, VE, R, UA). The user's project has none of
-these things.
+these things. The same holds for the record-keeping words: receipt, pipeline
+link, store generation, source fingerprint, compare-and-swap, fence, stand
+aside, bookkeeping, ritual, ceremony, and grounding contract. A step that only
+records something and leaves the person nothing to do or know (a link, a
+receipt, publishing the knowledge base, closing a stage after its approvals)
+is silent: say nothing about it. A message this protocol gives you to say,
+such as what a saved snapshot keeps, is still said as written.
 
 Say this instead:
 
@@ -165,11 +182,11 @@ question MUST use unordered bullets, never numbered items.
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for every lifecycle transition** — before the prompt, `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`; after the response, report `approved` or `rejected`; after revision work, report `revised`. A blocking-sensor refusal is a separate logged non-gate decision: offer Fix findings / Override blocking sensors, and only retry with the override after the exact human-backed answer receipt exists. Autonomous mode never offers or accepts that override. When the active stage's own condition proves it does not apply, report `skipped --reason "<reason>"`. Never call lifecycle verbs on `aidlc-state.ts` directly. The engine emits the correct audit events and routes only on approval, completion, or a justified skip. Do NOT call `aidlc-audit.ts append` separately. (§2)
-2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
-3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them, and never paraphrase their words in an answer or note. (§1, §2, §3)
-4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool your skill maps them to, is in your tool list; otherwise skip task transitions silently. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
+2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
+3. [ ] **Record the choice the person made**: read their reply and record their choice; the human-turn hook keeps their exact words with it. Never choose for them unless they leave the choice to you (§3, `--on-instruction`), and never paraphrase their words in an answer or note. (§1, §2, §3)
+4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. Only when `TaskCreate`/`TaskUpdate`, or the plan or todo tool your skill maps them to, is in your tool list; otherwise skip task transitions silently. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input '<exact choice>'` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
 5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings (only when the directive lists the `learnings` protocol module) → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes only when the directive lists the `learnings` protocol module. EXCEPTION: the Build-and-Test failure loop-back in the construction protocol module (`aidlc-common/protocols/stage-protocol-construction.md`) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
-6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
+6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage; with it, record each answer with `--on-instruction` (§3).
 
 ---
 
@@ -257,7 +274,9 @@ policy or verification-command question, a Construction checkpoint, Plan
 Approval, or a recovery question, you read the person's reply and record the
 choice they made. The human-turn hook keeps that they replied and their exact
 words; the receipt carries those words beside your choice, so never paraphrase
-them in a record and never choose for them.
+them in a record and never choose for them. A reply that asks to redo the whole
+stage, jump to a stage, or start fresh is not a gate answer: report it as the
+recovery protocol's Session resume says, never as Request Changes.
 
 - **They chose:** record that choice by its label (`--user-input "Approve"`,
   `--details "Request Changes"`, `--details "Approve Plan"`). A number, a letter,
@@ -283,7 +302,13 @@ them in a record and never choose for them.
   quotes, never double quotes, so no shell runs a `$(...)`, a backtick, or a
   `$NAME` they typed. Inside the quotes write a single quote as `'\''` in bash
   or zsh, or as `''` in PowerShell:
-  `` --details 'Request changes: don'\''t rename `foo`' ``.
+  `` --details 'Request changes: don'\''t rename `foo`' ``. An answer whose
+  text holds any of `$`, a backtick, a quote, `%`, `&`, `|`, `<`, `>`, `^`, `!`
+  or a line break goes in a file instead, so no shell reads it at all: write it
+  with your file tool to `<record>/.aidlc-engine/answer-text/answer.txt` and
+  pass `--details-file .aidlc-engine/answer-text/answer.txt` (or
+  `--on-instruction-file` for their words that left a choice to you); the
+  engine reads the file and removes it.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   park, and tell them how to resume.
 
@@ -346,7 +371,7 @@ Entering the gate:
    - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` quotes their words: revise from that quote. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve, with `--user-input "Accept as-is"`.
 
-**Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. The developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. A rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery.
+**Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. The developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. Under Guard Policy `strict`, a rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery. Under `relaxed` or `off`, a rejection keeps the earlier links' receipts current, so the ledger may show none missing: re-dispatch, with the exact feedback, each link whose work the person's words ask to redo ("scan the payments module again", "start the analysis over"), and apply a change limited to the final artifact through its own link. A fresh run of every link is `/aidlc --stage <stage>`.
 
 ### Part 1: Announcement (mandatory)
 ```markdown
@@ -477,15 +502,16 @@ numbered lines: `1. Guide me`, `2. I'll edit the file`, `3. Chat`, and the final
 `4. Other`. Mentioning Other in a nearby tip or sentence does not satisfy the
 structured-question contract.
 
-Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details "<exact choice>"` after the response. The tool stamps the row. Never write the audit shard yourself.
+Record the mode question and the user's mode choice through the log tool, the same pair every non-gate question uses (section 2 checklist item 2): `{{INVOKE}} engine log decision --stage <slug> --decision "How would you like to answer the questions?" --options "Guide me,I'll edit the file,Chat"` before presenting it, then `{{INVOKE}} engine log answer --stage <slug> --details '<exact choice>'` after the response. When their request already said how they want to answer ("guide me through it"), do not ask it again: log the question as usual, record that choice with `--on-instruction '<their words>'` (in single quotes, as **Their words on a command line** above says), and say **SAY:** "You asked to be guided, so I'll ask the questions here. Say if you'd rather edit the file or chat." The tool stamps the row. Never write the audit shard yourself.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
-- Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch: "Select 'Other' on any question to answer in your own words or to discuss it."
+- Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
-- Record each batch through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details "<the exact selections>"` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
+- Record each batch through the same log pair: `{{INVOKE}} engine log decision --stage <slug> --decision "<question numbers presented>" --options "<csv of the options shown>"` before the batch and `{{INVOKE}} engine log answer --stage <slug> --details '<the exact selections>'` after it. The tool stamps every row with its own fresh timestamp; there is no `date -u` call and no hand-written entry.
 - Continue until all questions are answered
+- When the `run-stage` directive carries `kept_replies`, the person already replied to these questions in a chat that ended before their answers were written down: do what its `note` says, recording each answer they gave before asking anything, and never ask them again what they already answered
 - **Consolidated summary before generation**: The checkpoint below applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers with no confirmation prompt, confirmation entry, or receipt. With it on, after all questions have been
   answered, present a consolidated summary of all answers as unordered bullets (never a numbered list). Then run
   `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
@@ -647,7 +673,7 @@ When contradictions are detected:
   - Answers that dodge the question or change the subject
   - Relaxing, lowering, or disabling a previously defined quality target (e.g.
     a test coverage threshold) instead of meeting it
-- When a user leaves a choice to you ("up to you", "whatever you think is best"), decide: pick the option that best fits what they have said so far, record it as their answer with a note that they left it to you, and say in one line what you chose, why, and that they can change it.
+- When a user leaves a choice to you ("up to you", "whatever you think is best", or "choose the recommended answers" for this stage), decide: pick the option that best fits what they have said so far and record it with `{{INVOKE}} engine log answer --stage <slug> --details '<your choice>' --on-instruction '<their words that left it to you>'`, each in single quotes as **Their words on a command line** above says (a choice's text can come from the project), so the record shows you chose it as they asked. Then say one line. For one question: **SAY:** "You left <the question> to me, so I chose <the choice>. Say if you want something else." For several: **SAY:** "You left <Stage>'s <N> questions to me, so I chose the recommended answers: <question: choice; ...>. Say if you want any of them changed." The first time in a piece of work, also say once: **SAY:** "Approvals are still yours: I'll stop at each stage for you to approve." A checkpoint or an approval is never left to you: ask the person.
 
 ### Plan and question file location
 Plan files and question files are co-located with their stage artifacts, not in a centralized `plans/` directory. For example, user story plan questions live at `<record>/inception/user-stories/user-stories-questions.md` alongside the user story artifacts. This co-location improves discoverability — all inputs, questions, and outputs for a stage are found in the same directory.
@@ -693,7 +719,7 @@ These `report` calls are the approval gate's only logging path. Never call `aidl
 
 At each non-gate question interaction:
 1. BEFORE presenting the question: `{{INVOKE}} engine log decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
-2. AFTER response: `{{INVOKE}} engine log answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
+2. AFTER response: `{{INVOKE}} engine log answer --stage <slug> --details '<summary of answers>'` (emits `QUESTION_ANSWERED`).
 
 This pair is also a deterministic human-wait signal for the forwarding-loop Stop
 hook, including learning prompts that do not add a blank tag to the stage
@@ -708,7 +734,7 @@ answer; only the human's next interaction may be followed by `answer`.
 - `[x]` — Completed (approved by user)
 - `[S]` — Skipped via `--stage` or `--phase` jump (not executed, excluded from progress counts)
 
-**Enforcement:** State file updates happen automatically via the PostToolUse hook when `TaskUpdate` sets a stage task to `in_progress` with a `[slug]` suffix in `activeForm`. At stage END, `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "<exact choice>"` marks the completed stage `[x]`, auto-advances to the next in-scope stage, and handles completion bookkeeping. Do not skip the intermediate `[-]` state by going directly from `[ ]` to `[x]`.
+**Enforcement:** State file updates happen automatically via the PostToolUse hook when `TaskUpdate` sets a stage task to `in_progress` with a `[slug]` suffix in `activeForm`. At stage END, `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input '<exact choice>'` marks the completed stage `[x]`, auto-advances to the next in-scope stage, and handles completion bookkeeping. Do not skip the intermediate `[-]` state by going directly from `[ ]` to `[x]`.
 
 **`[S]` behavior:**
 - Set by the Stage/Phase Jump handler (`aidlc-jump.ts execute`) for in-scope stages before the jump target, or by `aidlc-orchestrate.ts report --result skipped` when the active stage's own applicability check justifies a skip
@@ -778,7 +804,7 @@ unit owes it; otherwise it completes through its normal approval, which names
 the skipped units. A unit whose files for the stage are already written cannot
 be skipped.
 
-**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`; a one-unit skip (`UNIT_SKIPPED`) is the state tool's, reached through `aidlc-orchestrate.ts report --result skipped --unit` or the forward jump's `aidlc-jump.ts execute --units` the engine prints. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact` (and `aidlc-jump.ts reopen --via redo` for a Redo the person chose on the resume menu); approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch for events without a specific owning path; it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, and the Bolt, fork and worktree lifecycle rows `BOLT_*`, `AUDIT_FORKED`/`AUDIT_MERGED`, `STATE_FORKED`/`STATE_MERGED`, `WORKTREE_*`) and the commit-provenance anchor `SOURCE_COMMITTED`; those are emitted only by their owning tool or hook through the library path.
+**Event emission is tool-owned.** State transitions (`advance`, `approve`, `reject`, `skip`, `complete-workflow`, etc.) emit the correct audit events internally. Config changes (`scope-change`, `config-change`, `detect-scope`) likewise. Construction bolts use `aidlc-bolt.ts`; a one-unit skip (`UNIT_SKIPPED`) is the state tool's, reached through `aidlc-orchestrate.ts report --result skipped --unit` or the forward jump's `aidlc-jump.ts execute --units` the engine prints. Non-gate questions, decisions, reviews, and pipeline-link receipts use `aidlc-log.ts`; artifact reuse receipts use `aidlc-state.ts reuse-artifact` (and `aidlc-jump.ts reopen --via redo` for a Redo the person asked for on re-entry); approval gates use the state transition emitted by `aidlc-orchestrate.ts report`. The `aidlc-audit.ts append` CLI is a narrow diagnostic escape hatch for events without a specific owning path; it REFUSES authority-bearing receipts (`HUMAN_TURN`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED`, `ARTIFACT_REUSED`, `SWARM_STARTED`, `SWARM_UNIT_CONVERGED`, `SWARM_SOURCE_MERGED`, `AUTONOMY_MODE_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, and the Bolt, fork and worktree lifecycle rows `BOLT_*`, `AUDIT_FORKED`/`AUDIT_MERGED`, `STATE_FORKED`/`STATE_MERGED`, `WORKTREE_*`) and the commit-provenance anchor `SOURCE_COMMITTED`; those are emitted only by their owning tool or hook through the library path.
 
 **Stage graph lookups** (no state file needed):
 ```bash
@@ -798,9 +824,9 @@ Both levels MUST stay in sync. NO EXCEPTIONS. If a step is done, its checkbox is
 ### Generating ISO timestamps
 CLI tools (`aidlc-state.ts`, `aidlc-audit.ts`, `aidlc-jump.ts`) auto-generate fresh ISO timestamps for each call. The audit trail never needs a timestamp from you: every row is stamped by the tool or hook that appends it.
 
-When an artifact template asks for a UTC timestamp (a review file's `Date` field, for example), generate it via:
+When an artifact template asks for a UTC timestamp (a review file's `Date` field, for example), take it from the engine's clock and paste what it prints:
 ```bash
-date -u +"%Y-%m-%dT%H:%M:%SZ"
+{{INVOKE}} engine now
 ```
 NEVER use date-only format (e.g. `2026-02-17`). Always include the time component and Z suffix.
 
@@ -833,6 +859,10 @@ Each stage specifies its lead and supporting agents. To load a persona:
 5. `aidlc/spaces/<active-space>/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
 6. Prior stage artifacts as required by the current stage
 
+On inline stages and for the inline lead of a mob, `inline_context_paths` lists
+the team's knowledge (4 and 5) right after the personas and before the shipped
+methodology (2 and 3): read it in the order listed.
+
 ### For inline stages and the inline lead of a mob:
 1. Before `run-stage`, apply every `load-steering.rules_content` entry in order
    and follow each opaque continuation immediately. The sequence delivers every
@@ -841,17 +871,19 @@ Each stage specifies its lead and supporting agents. To load a persona:
    completed bundle.
 2. Read every path in `inline_context_paths`. On `inline`, the engine expands
    the lead and every support agent into exact persona + existing knowledge
-   files. On `mob`, the roster contains the lead only because supports are
-   dispatched. An agent name by itself is not loaded context. Knowledge remains
-   path-loaded until the retrieval layer lands. Show any `context_warnings`
-   verbatim and continue with the readable roster.
+   files. On `mob`, the roster holds the lead's persona and knowledge only,
+   because supports are dispatched: read all of it. An agent name by itself
+   is not loaded context. Knowledge remains path-loaded until the retrieval
+   layer lands. Show any `context_warnings` verbatim and continue with the
+   readable roster.
 3. This is a blocking precondition, not a manifest hint. The first tool calls
    after `run-stage` must read these paths only; do not batch them with stage or
    consume reads. A listed path is not delivered content: explicitly read it
    with the harness file-read tool and wait for the result. Do not read the
    stage file or consumes, initialize the diary, run the body, dispatch mob
    supports, or write artifacts until every required inline-context read has
-   completed. In particular, a mob must load its lead persona first.
+   completed. In particular, a mob must load its lead persona first, then every
+   knowledge path after it.
 4. Do not silently omit any listed path. Apply each loaded inline perspective
    when executing the stage.
 
@@ -1111,12 +1143,12 @@ Loaded as the `learnings` protocol module when the directive lists it. When the 
 
 ### Artifact Re-use (backward jump / redo)
 
-When the directive carries `artifact_reuse` (the person chose Redo on the resume menu for this Unit's step, and the engine recorded that answer), do not ask: redo the stage from scratch for `directive.unit`, ignoring its existing artifacts, and do not record the choice again. It covers that Unit and step only; any other step or Unit, and any later jump, asks as below.
+When the directive carries `artifact_reuse` (the person asked to redo this Unit's step on re-entry, and the engine recorded that answer), do not ask: redo the stage from scratch for `directive.unit`, ignoring its existing artifacts, and do not record the choice again. It covers that Unit and step only; any other step or Unit, and any later jump, asks as below.
 
 When a stage detects existing output artifacts in its artifact directory:
 
 1. List the existing artifacts found
-2. When the person's request already chose (they picked "Redo the current stage" on the resume menu, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
+2. When the person's request already chose (they asked to redo the current stage on re-entry, or said "redo it from scratch", "keep what is there", or what to change in it), record that choice below and go on. Otherwise present a 3-option structured question:
    - **Keep** — Accept existing artifacts as-is, skip this stage's generation steps, proceed to approval gate
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.
@@ -1133,8 +1165,8 @@ When a stage detects existing output artifacts in its artifact directory:
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts`
 fields, optional `Repo`, and isolated `Workflow` when `--single` is used —
 never hand-write `**Event**:` markdown blocks. (`aidlc-jump.ts reopen --via redo`
-also emits it, with `Unit` and `Source`, when the person chose Redo on the
-resume menu; that is the `artifact_reuse` answer above.)
+also emits it, with `Unit` and `Source`, when the person asked to redo the step
+on re-entry; that is the `artifact_reuse` answer above.)
 For a reviewer-backed stage, Keep and Modify retain the engine-owned findings
 list and every human decision. Redo from scratch starts a fresh list for that
 stage scope, resets numbering to `R-01`, and inherits no earlier decision.

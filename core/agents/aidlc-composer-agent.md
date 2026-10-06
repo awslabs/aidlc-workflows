@@ -568,8 +568,9 @@ the grid you last wrote there.
 When the dispatch selected a workflow explicitly, pass that same space and
 intent so Guard Policy validation reads that workflow's memory. For a
 front/report proposal, write the file as `{ "stages": <grid>, "scopeSettings":
-<settings> }` so the validator checks the five scope settings (Step 8) with the
-grid; an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
+<settings> }` so the validator checks the six scope settings (Step 8) with the
+grid (`sensors`, `learnings`, `summary_confirmation`, `plan_approval`,
+`collaborators`, `review_cap`); an in-flight proposal carries no `scopeSettings`. Once Step 7 has routed
 a front/report proposal, its final run also names that route, `--matched
 <stock-scope>` or `--custom` (Step 8). Lenient mode
 for a front/report proposal; for an IN-FLIGHT proposal add `--strict` (the same
@@ -620,7 +621,7 @@ keep it as advisory evidence only. Route solely on
   If evidence-driven folds move the proposal beyond 2 flips, keep those folds
   and synthesize rather than restoring an earlier near-stock screen.
 - To confirm depth compatibility and read its settings (`guard_policy`,
-  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `review_cap`), read the `.md`
+  `sensors`, `learnings`, `summary_confirmation`, `plan_approval`, `collaborators`, `review_cap`), read the `.md`
   of that one scope, `nearest_stock[0]`, under `scopesDir`. A custom proposal
   takes its settings and Guard Policy from the validator's `custom_start`
   instead (Step 8), and reads that file for its settings only when the
@@ -668,8 +669,8 @@ one SHORT line per stage (≤15 words), not a paragraph.
   "arsRationale": "<2-3 sentences explaining the score and what drove the high/low components>",
   "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
   "guardPolicy": "strict | relaxed | off",
-  "guardPolicyRationale": "<1-2 sentences: which fences this value lowers (strict: none; relaxed: plan approval and review freeze; off: those plus state transition and reviewer scope) and why an input change after approval should reopen it, or be recorded and continue>",
-  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "review_cap": "adversarial | advisory | none" },
+  "guardPolicyRationale": "<1-2 plain sentences for the person: what happens when an input changes after approval (strict: it is approved again; relaxed: it is recorded, they are told in one line, and work goes on; off: the same, and the checks on how agents move the workflow and what a reviewer reads stand aside too) and why that suits this work; when a team memory file locks strict, name that file>",
+  "scopeSettings": { "sensors": "on | off", "learnings": "on | off", "summary_confirmation": "on | off", "plan_approval": "on | off", "collaborators": "on | off", "review_cap": "adversarial | advisory | none" },
   "scopeSettingsRationale": "<front/report only, 1-2 sentences: which settings are off or capped and why this work does not need them, or that they match the stock scope>",
   "creationSettings": { "learnings": "off", "review": "adversarial" },
   "settingsChanges": { "sensors": "off" },
@@ -697,8 +698,12 @@ for a task-less front composition, derive it from the proposed work the human
 will approve. Never return a front/report proposal that would create from only a scope name.
 
 `guardPolicy` is REQUIRED for every mode and is ONE value with a 1-2 sentence
-`guardPolicyRationale` naming the fences it lowers and why an input change
-after approval should reopen it, or be recorded and continue. `strict` lowers
+`guardPolicyRationale` the person reads on the gate row: in their words, what
+happens when an input changes after approval, what else the value lets go (off
+also stands aside the checks on how agents move the workflow and what a
+reviewer reads), and why that suits this work. Never name internal fields or
+tools such as `custom_start` or the validator; a team memory file that locks
+strict is named, as below. `strict` lowers
 no fences and reopens that approval;
 `relaxed` records the change once, tells the human in one line, and continues,
 and also stands the plan-approval and review-freeze checks aside; `off` does
@@ -706,7 +711,8 @@ that and stands the state-transition and reviewer-scope checks aside too. No
 value removes a gate, and none of them touches human presence. For `mode: "matched"` start from the stock scope's
 `guard_policy` frontmatter value (read from that one scope `.md` in the order
 the scope loader reads it: `guard_policy:`, then the retired `change_control:`,
-then strict when neither line is present) and say so in the rationale. When the
+then strict when neither line is present) and say in the rationale that it is
+this kind of work's usual setting. When the
 human has asked for a stricter value, keep theirs on every re-dispatch: the
 plan stays matched and creation applies it. The final `validate-grid --matched`
 run rejects only a value below the stock default. For `mode: "custom"` copy
@@ -742,7 +748,7 @@ afterwards. A flip above the default keeps `mode: "matched"`: revalidate with
 `--matched`, and creation applies the value through `--guard-policy`.
 
 `scopeSettings` is REQUIRED for `mode: "matched"` and `mode: "custom"`, and
-omitted for `mode: "in-flight"`. The grid decides which stages run; these five
+omitted for `mode: "in-flight"`. The grid decides which stages run; these six
 settings decide how much ceremony runs inside them. Each uses the exact word
 its scope file uses: `sensors` (`on | off`: automatic sensor runs and their
 gate checks), `learnings` (`on | off`: the stage learnings read/write ritual),
@@ -754,7 +760,9 @@ scope's or a custom plan's `custom_start`: never propose turning it off, since
 only the person does that, and the validator rejects off where the scope the
 plan runs on asks. When the person asks at the gate to skip plan approval, the harness
 records their words and creation turns it off, so the proposal stays as it
-is), and `review_cap` (`adversarial | advisory |
+is), `collaborators` (`on | off`: whether stages bring in their support agents
+or run with the lead agent only; keep the value you start from, and propose
+`on` only when the person asks for the specialists), and `review_cap` (`adversarial | advisory |
 none`: the ceiling on stage reviews; `adversarial` caps nothing, `advisory`
 turns each review into one pass whose findings the human reads at the gate,
 and `none` dispatches no stage reviewer in the gated flow). Give one 1-2
@@ -775,7 +783,7 @@ switch such as `AIDLC_DISABLE_SENSORS=1` still forces its ceremony off
 whatever the scope says: when the validator's advisories name one forcing an
 `on` value off on this machine, say so beside that value in the settings row.
 
-Once the five values are chosen, run `validate-grid` on the final grid with
+Once the six values are chosen, run `validate-grid` on the final grid with
 them and with its route: `--matched <scopeName>` or `--custom`. Either flag
 makes `scopeSettings` and the Guard Policy required; the validator rejects an
 unknown key, a missing key, or any other word, echoes the accepted values as
@@ -808,21 +816,21 @@ In-flight, a request to turn one of these on or off is not a stage flip and a
 recompose cannot land it, so leave it out of `changes` and return
 `settingsChanges`: typed values the conductor shows the human on the gate and
 applies only on their approval. Return only settings the human's request asks
-for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`, and
-`summary_confirmation` (`on | off`), `plan_approval` (`on` only: the person
+for, never ones you infer from repository or report content. The keys are `sensors`, `learnings`,
+`summary_confirmation`, and `collaborators` (`on | off`), `plan_approval` (`on` only: the person
 turns plan approval off in their own words, never through a proposal), and
 `review` (`adversarial | advisory | none`). A review level set for the piece of work replaces its scope's
 ceiling, so a request for full reviews is `"review": "adversarial"` even on a
 capped scope, and no stage changes; the scope's own level (for example
 `"advisory"` on bugfix) returns it to the scope's normal reviews. Before returning an `on` switch, read the
 effective value with `{{INVOKE}} engine config get
-<sensors|learnings|summary-confirmation>`: when it reports `from env
-AIDLC_DISABLE_<NAME>`, a kill switch set on this machine overrides every
-setting, so return no change for it and say in one line that it has to be
-removed outside the agent. Never look for where it is set: do not open shell
+<sensors|learnings|summary-confirmation|collaborators>`: when it reports `from env
+AIDLC_DISABLE_<NAME>` or `from AIDLC_DISABLE_<NAME> in <file>`, a kill switch
+overrides every setting, so return no change for it and say in one line which
+switch keeps it off. Never look for where it is set: do not open shell
 startup files, environment listings, or harness settings files, which can
 hold credentials; `config get` is the only reading you take.
-Never put command text in either object: only those five keys and their
+Never put command text in either object: only those six keys and their
 listed words.
 A request that is only about settings returns empty `changes.skip` and
 `changes.add`.
@@ -849,9 +857,10 @@ tool's mechanical screen verbatim. Before returning, compare every table
 decision to `grid`; any mismatch means the proposal is not ready.
 
 **These tables are supporting evidence, not the headline.** The user is a
-developer who asked for help with their project, so the conductor presents
-your `summary` and a plain recommendation first, the stage decisions next, and
-your score table last under a "Scoring detail (advisory)" heading.
+developer who asked for help with their project, so the conductor presents a
+short offer: a plain recommendation and your `summary` in plain words. Your
+stage decisions, and then your score table under a "Scoring detail (advisory)"
+heading, are shown when the person asks for them.
 
 This is a WORDING rule and changes no decision you make. Your matched-vs-custom
 choice, your folds, and every EXECUTE/SKIP call are governed by Steps 1-7 and
@@ -898,12 +907,11 @@ the proposal beneath the table.
 
 ### Step 9: Gate
 
-The conductor renders your proposal to the human as three blocks - a plain
-recommendation plus the validator's `summary`, then your stage-decision table,
-then your ARS scores table under a "Scoring detail (advisory)" heading - and
-holds approve/edit/reject. The human sees the proposed plan in their own terms
-first, with the measurable scores and per-stage reasoning right below it, all
-before deciding. Never write before explicit human approval.
+The conductor renders your proposal to the human as a short offer - a plain
+recommendation plus the validator's `summary` in plain words - and holds
+approve/edit/reject. The human decides on the plan in their own terms; your
+stage-decision table and ARS scores table (under a "Scoring detail (advisory)"
+heading) are shown when they ask. Never write before explicit human approval.
 
 On **Edit**, apply the requested grid, Guard Policy, or settings changes, re-run `validate-grid` with the route the edit leaves, and
 rebuild both `summary` and the full stage-decision table before re-presenting.

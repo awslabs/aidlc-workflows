@@ -169,8 +169,8 @@ directive it returns; when the reply says neither, ask again. `claim` follows th
 claim contract and
 `execute-remedy` follows only the human-selected executable guard remedy's
 command or action; empty remedies remain terminal. These routes do not fall
-back to reporting an ask answer. The prompt-rendered resume menu alone uses
-non-stage `report --result resumed --user-input "<answer>"`; explicit
+back to reporting an ask answer. A redo, jump, or start-fresh request on re-entry alone
+uses non-stage `report --result resumed --choice <redo|jump|fresh>`; explicit
 guard-remedy stage reports retain their existing contract.
 
 ## Mandatory consolidated-summary checkpoint

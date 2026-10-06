@@ -55,7 +55,13 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { engineDirFor, promptMovesSelection, takeSessionSelectionNotice } from "../tools/aidlc-lib.ts";
+import {
+  decideFence,
+  engineDirFor,
+  enterHookWorkflow,
+  promptMovesSelection,
+  takeSessionSelectionNotice,
+} from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -96,8 +102,8 @@ export async function run(
           permission: "deny",
           agent_message:
             "AIDLC could not read this tool call's hook input, so its safety checks could not run and the call " +
-            "was stopped. Retry it once; if it is stopped again, tell the person to run " +
-            `\`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`,
+            "was stopped. Retry it once; if it is stopped again, tell the person to quit Cursor fully and open " +
+            "this folder again, since Cursor sends this input itself.",
         })}\n`);
       }
       return 0;
@@ -567,6 +573,27 @@ export async function run(
   function attributed(): string {
     attributedAgent ??= activeSubagent();
     return attributedAgent;
+  }
+
+  // A delegate's identity serves two checks: the reviewer read scope and the
+  // state-transition check. When both stand aside for this work, as Guard
+  // Policy off makes them, the identity checks below protect nothing, so a
+  // delegate runs its builds, tests and searches as the main chat does and
+  // Cursor's own approval applies. Read once per call, through the same
+  // decision the core checks make.
+  let delegateChecksStandAsideCache: boolean | undefined;
+  function delegateChecksStandAside(): boolean {
+    if (delegateChecksStandAsideCache !== undefined) return delegateChecksStandAsideCache;
+    const workflow = enterHookWorkflow(projectDir, sessionId);
+    try {
+      delegateChecksStandAsideCache = (["reviewer-scope", "state-transition"] as const)
+        .every((fence) => decideFence(projectDir, fence).decision === "stand-aside");
+    } catch {
+      delegateChecksStandAsideCache = false;
+    } finally {
+      workflow.restore();
+    }
+    return delegateChecksStandAsideCache;
   }
 
   let effectiveCwdCache: string | undefined;
@@ -2827,7 +2854,8 @@ export async function run(
         ? r.stderr.trim() || "blocked by AIDLC guard hook"
         : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
           "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
-          `\`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`;
+          `\`${aidlcInvocation()} config --harness cursor\` in a terminal, which puts AI-DLC's Cursor files ` +
+          "back, then try again.";
     process.stdout.write(`${JSON.stringify({ permission: "deny", agent_message: reason })}\n`);
     return true;
   }
@@ -3007,12 +3035,14 @@ export async function run(
         if (
           typeof sub === "string" &&
           sub.length > 0 &&
-          !recordSpawn(sub)
+          !recordSpawn(sub) &&
+          !delegateChecksStandAside()
         ) {
           process.stdout.write(`${JSON.stringify({
             permission: "deny",
             agent_message:
-              "AIDLC could not establish protected delegated-agent attribution, so the Task was not started.",
+              "AI-DLC could not start this specialist. Start it again; if it is stopped again, tell the person " +
+              `to run \`${aidlcInvocation()} doctor\` in a terminal, which names what is broken.`,
           })}\n`);
           return 0;
         }
@@ -3025,7 +3055,8 @@ export async function run(
         agent &&
         toolName === "Bash" &&
         typeof command === "string" &&
-        await shellInvokesDynamicEvaluation(command, effectiveCwd())
+        await shellInvokesDynamicEvaluation(command, effectiveCwd()) &&
+        !delegateChecksStandAside()
       ) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
@@ -3037,7 +3068,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent && await touchesProtectedReviewerState()) {
+      if (agent && await touchesProtectedReviewerState() && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:
@@ -3045,7 +3076,7 @@ export async function run(
         })}\n`);
         return 0;
       }
-      if (agent === AMBIGUOUS_REVIEWER) {
+      if (agent === AMBIGUOUS_REVIEWER && !delegateChecksStandAside()) {
         process.stdout.write(`${JSON.stringify({
           permission: "deny",
           agent_message:

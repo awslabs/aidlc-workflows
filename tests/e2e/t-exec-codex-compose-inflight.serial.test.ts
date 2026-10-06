@@ -64,7 +64,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { codexBedrockConfig, codexHeadlessArgs, codexWindowsSandboxConfig } from "../harness/exec-drive.ts";
-import { codexExecDiagnostic, codexExecTimeout, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
+import { codexExecDiagnostic, codexExecTimeout, codexPersonTurn, recordCodexExec, withCodexFixture } from "../harness/codex-test-lifecycle.ts";
 import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
@@ -199,6 +199,7 @@ function codexTurn(
 ): { rc: number; stdout: string; stderr: string } {
   const argv = opts.resume ? ["exec", "resume", "--last", prompt] : ["exec", prompt];
   const commandArgs = codexHeadlessArgs(...argv);
+  const turn = codexPersonTurn(proj, prompt);
   const r = spawnSync(CODEX_BIN, commandArgs, {
     cwd: proj,
     encoding: "utf-8",
@@ -207,7 +208,7 @@ function codexTurn(
     timeout: codexExecTimeout(TEST_TIMEOUT_MS),
   });
   const result = { rc: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "", signal: r.signal, error: r.error?.message };
-  recordCodexExec("compose-inflight", proj, [CODEX_BIN, ...commandArgs], result);
+  recordCodexExec("compose-inflight", proj, [CODEX_BIN, ...commandArgs], result, turn);
   return result;
 }
 

@@ -31,10 +31,13 @@ import {
   claimAttemptFields,
   collectStalePlanApprovalReceipts,
   errorMessage,
+  fenceSwitchSentence,
   getField,
   isReplyTurn,
+  personAtOwnTerminal,
   personRepliedAfter,
   latestMainWorkflowStageRunFloorForProject,
+  memoryStrictHoldsGuardPolicy,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
@@ -46,6 +49,7 @@ import {
   steeringPayloadAuthenticAt,
   steeringTokenKeyPathFor,
   toPosix,
+  UNBINDABLE_FINGERPRINT,
   visibleMarkdownLines,
   withActiveDirectiveLock,
   withAuditLock,
@@ -60,6 +64,7 @@ import {
 } from "./aidlc-lib.ts";
 import {
   approvalFingerprint,
+  codeGenerationBuildsWithoutSource,
   codeGenerationExecutionAllowed,
   codeGenerationRecordDir,
   codeGenerationTargetId,
@@ -358,7 +363,7 @@ export function codeGenerationPlanReadiness(projectDir: string, unit: string | n
   }
   const read = readTestingContract(plan);
   if ("defect" in read) {
-    return { ready: false, note: testingContractDefectMessage(read.defect, read.detail, "run next") };
+    return { ready: false, note: testingContractDefectMessage(read.defect, "run next") };
   }
   const current = resolveTestingPosture(projectDir);
   if (read.contract.contract_sha256 !== current.contract_sha256) {
@@ -686,8 +691,13 @@ export function routeCodeGenerationPlanApproval(projectDir: string, directive: D
   }
   const asking = states.filter((state): state is Extract<TargetState, { kind: "ask" }> => state.kind === "ask");
   // Approval needs a workspace source that can be read, or generation could
-  // never start from it. Say so before asking, never after.
-  if (workspaceSourceState(projectDir) === null) {
+  // never start from it. Say so before asking, never after. With the
+  // plan-approval check standing aside the build starts without that record,
+  // so the question is asked (and plan approval off builds) as usual.
+  if (
+    workspaceSourceState(projectDir) === null &&
+    !units.every((unit) => codeGenerationBuildsWithoutSource(projectDir, { unit }, asking.length === 0))
+  ) {
     return { kind: "error", message: new PlanApprovalUnbindableError("presented").message };
   }
   if (asking.length === 0 && setting !== null) {
@@ -880,8 +890,10 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
   const read = readTestingContract(plan);
   if (!("contract" in read) || !instructions.trim()) return;
+  // Plan approval off asks nothing; a project whose files cannot all be read
+  // builds without a record of where it started.
   const source = workspaceSourceState(projectDir);
-  if (source === null) return;
+  const sourceFingerprint = source?.fingerprint ?? UNBINDABLE_FINGERPRINT;
   const authority = resolveCodeGenerationAuthority(projectDir, { unit });
   const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
   const view = targetView(projectDir, unit);
@@ -889,7 +901,7 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
     `Built without asking: ${reason}.`,
-    view, [], fingerprint, source.fingerprint, PLAN_APPROVAL_OFF_ANSWER, BUILT_WITHOUT_ASKING_INTRO,
+    view, [], fingerprint, sourceFingerprint, PLAN_APPROVAL_OFF_ANSWER, BUILT_WITHOUT_ASKING_INTRO,
   );
   const questionsFile = toPosix(relative(projectDir, questionsPath));
   const receipt: PlanApprovalRuntimeReceipt = {
@@ -903,19 +915,19 @@ function recordPlanApprovalSkipped(projectDir: string, unit: string | null, sett
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
-    plannedSourceSha256: source.fingerprint,
+    plannedSourceSha256: sourceFingerprint,
     session: "engine",
     challengeId: "plan-approval-off",
     choice: "Approve Plan",
     questionsSha256: createHash("sha256").update(questions, "utf-8").digest("hex"),
-    certifiedSourceSha256: source.fingerprint,
+    certifiedSourceSha256: sourceFingerprint,
     status: "approved",
     skipped: { source: setting.source },
   };
   withActiveDirectiveLock(projectDir, () => {
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
-    writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
+    if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });
   appendAuditEntryUnlocked("PLAN_APPROVAL_SKIPPED", {
     Stage: STAGE,
@@ -966,6 +978,46 @@ function currentPlanApprovalAsk(
   return same ? { marker, record } : null;
 }
 
+/**
+ * The engine's Plan Approval question while it is the open step: whether every
+ * plan it asks about has an answer, whether the person is editing the files,
+ * whether `words` are exactly one of its choices ("1", "Approve Plan"), the
+ * choice they pick, and, when they pick against the recorded answer, that
+ * answer ("approve" or "request-changes", or null when they pick what is
+ * recorded). Null when it is not the open step.
+ */
+export function openPlanApprovalQuestion(
+  projectDir: string,
+  words: string,
+): {
+  answered: boolean;
+  editing: boolean;
+  isChoice: boolean;
+  picked: PlanApprovalAnswerChoice | null;
+  overrules: "approve" | "request-changes" | null;
+} | null {
+  try {
+    const open = currentPlanApprovalAsk(projectDir, "all");
+    if (open === null) return null;
+    const { record } = open;
+    const pick = exactOptionPick(words, record.choices);
+    const picked: PlanApprovalAnswerChoice | null =
+      pick === 0 ? "approve" : pick === 1 ? "request-changes" : pick === 2 ? "edit" : null;
+    const recorded = record.mode === "editing" ? null
+      : (record.results ?? []).find((result) => (result.choice === "request-changes" ? "request-changes" : "approve") !== picked);
+    return {
+      answered: record.targets.every((target) => record.results?.some((result) => result.unit === target.unit)),
+      editing: record.mode === "editing",
+      isChoice: pick !== null,
+      picked,
+      overrules: picked === null || recorded === undefined || recorded === null ? null
+        : recorded.choice === "request-changes" ? "request-changes" : "approve",
+    };
+  } catch {
+    return null;
+  }
+}
+
 type TargetApproval =
   | { ok: true; result: PlanApprovalAskResult; changed: boolean }
   | { ok: false; result?: PlanApprovalAskResult; notice: string };
@@ -1004,19 +1056,20 @@ function approveTarget(
     return repair(`the Testing Contract in ${view.plan_path} has missing or inconsistent executable fields.`);
   }
   const source = workspaceSourceState(projectDir);
-  if (source === null) {
+  if (source === null && !codeGenerationBuildsWithoutSource(projectDir, { unit })) {
     return {
       ok: false,
       notice: `AIDLC Plan Approval: nothing was recorded because the workspace source cannot be read right now` +
         `${workspaceSourceFailureSuffix()}. Run next for the repair.`,
     };
   }
+  const sourceFingerprint = source?.fingerprint ?? UNBINDABLE_FINGERPRINT;
   const authority = resolveCodeGenerationAuthority(projectDir, { unit });
   const fingerprint = approvalFingerprint(plan, instructions, read.contract.contract_sha256, authority);
   const asked = record.targets.find((target) => target.unit === unit)?.fingerprint;
   const questionsPath = join(dir, QUESTIONS_FILE);
   const questions = questionsFileContent(
-    record.question, view, record.choices, fingerprint, source.fingerprint, APPROVED_ANSWER,
+    record.question, view, record.choices, fingerprint, sourceFingerprint, APPROVED_ANSWER,
   );
   const questionsFile = toPosix(relative(projectDir, questionsPath));
   const receipt: PlanApprovalRuntimeReceipt = {
@@ -1030,18 +1083,18 @@ function approveTarget(
     directiveEpoch: authority.directiveEpoch,
     sourceFloor: authority.sourceFloor,
     markerRevision: authority.markerRevision,
-    plannedSourceSha256: source.fingerprint,
+    plannedSourceSha256: sourceFingerprint,
     session,
     challengeId: record.askId,
     choice: "Approve Plan",
     questionsSha256: createHash("sha256").update(questions, "utf-8").digest("hex"),
-    certifiedSourceSha256: source.fingerprint,
+    certifiedSourceSha256: sourceFingerprint,
     status: "approved",
   };
   withActiveDirectiveLock(projectDir, () => {
     writeFileAtomic(questionsPath, questions);
     writePlanApprovalReceipt(projectDir, receipt);
-    writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
+    if (source !== null) writeWorkspaceSourceSnapshot(projectDir, STAGE, source);
   });
   appendAuditEntryUnlocked("PLAN_APPROVAL_RECORDED", {
     Stage: STAGE,
@@ -1189,6 +1242,27 @@ export function notePlanApprovalAskReply(
 }
 
 export type PlanApprovalAnswerChoice = "approve" | "request-changes" | "edit";
+
+// The person edits the plan files themselves: the question waits in edit mode,
+// with no answer recorded, until they say done. Caller holds the audit lock.
+function startEditing(projectDir: string, record: PlanApprovalAskRecord): PlanApprovalAnswerResult {
+  const next: PlanApprovalAskRecord = { ...record, bound: false, mode: "editing" };
+  delete next.lastNotice;
+  delete next.replies;
+  delete next.results;
+  // Their "done" comes in a later reply.
+  next.repliesFrom = auditMark(projectDir);
+  writePlanApprovalAsk(projectDir, next);
+  const files = record.targets.flatMap((target) => {
+    const view = targetView(projectDir, target.unit);
+    return [view.plan_path, view.instructions_path];
+  });
+  return {
+    complete: false,
+    message: `Recorded that the person will edit ${files.join(", ")} themselves. Tell them where the files ` +
+      "are, end the turn, and wait for them to say done; then read what they changed and record their choice.",
+  };
+}
 
 export interface PlanApprovalAnswer {
   choice: PlanApprovalAnswerChoice;
@@ -1361,6 +1435,19 @@ export function recordPlanApprovalAnswer(
         if (theirs === answer.choice) {
           return { complete: true, message: `The person's choice, "${ANSWER_LABELS[theirs]}", is already recorded. Run next.` };
         }
+        // Nothing is built while the question is open: "I'll edit the files"
+        // after an answer is their latest word, and the editing starts now. It
+        // needs a reply of theirs after that answer was recorded.
+        if (answer.choice === "edit") {
+          const turns = humanTurnCount(projectDir);
+          if (recorded.some((result) => result.turns === undefined || result.turns >= turns)) {
+            throw new Error(
+              `The person's choice, "${ANSWER_LABELS[theirs]}", is recorded and they have not replied since. ` +
+                "Record \"I'll edit the files\" when they say so in a reply after it.",
+            );
+          }
+          return startEditing(projectDir, record);
+        }
         const corrected = answer.choice === "approve"
           ? correctReadRequestChanges(projectDir, session, named
             .filter((result) => result.choice === "request-changes").map((result) => result.unit))
@@ -1371,10 +1458,21 @@ export function recordPlanApprovalAnswer(
             'they meant something else, record "Review the plan" and the question comes back.',
         );
       }
-      throw new Error(
-        "The person has not replied to the plan question since it was shown. End the turn, wait for their " +
-          "reply, then record the choice they made.",
-      );
+      // From their own terminal no reply can be kept, so name the step that
+      // works there: they read the plan and build it without the question.
+      // A team's strict Guard Policy keeps plan approval on, so the switch
+      // would be refused: name that line, and answering in a chat.
+      throw new Error(!personAtOwnTerminal(projectDir)
+        ? "The person has not replied to the plan question since it was shown. End the turn, wait for their " +
+          "reply, then record the choice they made."
+        : memoryStrictHoldsGuardPolicy(projectDir)
+        ? "AI-DLC cannot see a chat in this terminal, so it cannot keep your answer to the plan question. " +
+          `${fenceSwitchSentence(projectDir, "plan-approval")} To answer the question, open this folder in your ` +
+          "AI tool and reply to it there."
+        : "AI-DLC cannot see a chat in this terminal, so it cannot keep your answer to the plan question. To build " +
+          "the plan from this terminal, read it, then turn plan approval off for this work: run " +
+          `\`${aidlcDispatcherInvocation("config set guard.plan-approval off")}\` with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 ` +
+          "set, then run next.");
     }
     // Words kept since the question can be a question or a command to AIDLC
     // ("skip plan approval?"), which answers nothing: a choice needs a reply.
@@ -1421,23 +1519,7 @@ export function recordPlanApprovalAnswer(
     }
     const next: PlanApprovalAskRecord = { ...record, bound: false };
     delete next.lastNotice;
-    if (answer.choice === "edit") {
-      next.mode = "editing";
-      delete next.replies;
-      delete next.results;
-      // Their "done" comes in a later reply.
-      next.repliesFrom = auditMark(projectDir);
-      writePlanApprovalAsk(projectDir, next);
-      const files = record.targets.flatMap((target) => {
-        const view = targetView(projectDir, target.unit);
-        return [view.plan_path, view.instructions_path];
-      });
-      return {
-        complete: false,
-        message: `Recorded that the person will edit ${files.join(", ")} themselves. Tell them where the files ` +
-          "are, end the turn, and wait for them to say done; then read what they changed and record their choice.",
-      };
-    }
+    if (answer.choice === "edit") return startEditing(projectDir, record);
     const results: PlanApprovalAskResult[] = (record.results ?? []).filter((result) => !chosen.includes(result.unit));
     const approved: Array<string | null> = [];
     const edited: Array<string | null> = [];

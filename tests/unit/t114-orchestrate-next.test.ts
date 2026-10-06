@@ -92,6 +92,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { engineTouchMarkerPath } from "../../core/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -587,6 +588,20 @@ describe("t114 help-request routing", () => {
     expect(out).not.toContain("aidlc.ts engine space help");
   });
 
+  // Live (Claude Code, poc and express): the request printed AI-DLC's version
+  // and started nothing, so the person had to say it again.
+  test("a utility flag inside a description stays part of the request", () => {
+    for (const flag of ["--version", "--status", "--help", "--doctor"]) {
+      proj = createOrchestrationTestProject();
+      const said = `add a ${flag} flag that prints the version from package.json`;
+      const out = runNext(proj, said.split(" ")).out;
+      expect(out, flag).toContain('"kind":"ask"');
+      expect(out, flag).not.toContain(" version`, print its output verbatim");
+      cleanupTestProject(proj);
+      proj = "";
+    }
+  });
+
   test("`help` inside a longer description stays freeform intent text", () => {
     // Only the SOLE token is a help request; a description mentioning help
     // still reaches the freeform funnel (Branch 8 ask on a fresh workspace).
@@ -948,6 +963,37 @@ describe("t114 parked branch (#367)", () => {
     expect(out).not.toContain('"kind":"parked"');
     expect(out).toContain('"kind":"run-stage"');
   });
+
+  // The person parked ("stop for now"), then came back in the same chat with a
+  // bare /aidlc: the work carries on, with no "resume with --resume" retype.
+  // The reply that asked for the park came before it, so the agent's own loop
+  // never carries on past a park; the Stop hook's probe still sees the park.
+  test("a bare next after the person came back to a parked workflow carries on", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    park(proj);
+    expect(runNext(proj, []).out).toContain('"kind":"parked"');
+    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
+    const back = JSON.parse(runNext(proj, []).out) as { kind: string; message: string };
+    expect(back.kind).toBe("print");
+    expect(back.message).toContain("aidlc-state.ts unpark");
+    expect(back.message).toContain("then re-run `next` to continue");
+    expect(runNext(proj, [], { AIDLC_STOP_HOOK_PROBE: "1" }).out).toContain('"kind":"parked"');
+    // A setting typed after the park is not dropped for a plain carry-on.
+    expect(runNext(proj, ["--depth", "minimal"]).out).not.toContain("then re-run `next` to continue");
+  });
+
+  test("the person's words after a park are read, never answered with the park", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+    expect(runNext(proj, ["take me back to intent capture"]).out).toContain('"kind":"parked"');
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const read = JSON.parse(runNext(proj, ["take me back to intent capture"]).out) as { kind: string; message: string };
+    expect(read.kind).toBe("print");
+    expect(read.message).toContain("report --result resumed --choice <redo|jump|fresh>");
+  });
 });
 
 // ===========================================================================
@@ -958,10 +1004,49 @@ describe("t114 parked branch (#367)", () => {
 // into the active intent's stage. The engine now surfaces the question.
 // ===========================================================================
 describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
+  // Words alone over active work may ask to redo, jump, or start fresh: the
+  // engine hands the conductor both readings, and `next --request` is the
+  // routing ask with the words kept.
+  function askedAbout(words: string): string {
+    const read = JSON.parse(runNext(proj, [words]).out) as { kind: string; message: string };
+    expect(read.kind, read.message).toBe("print");
+    const request = /`[^`]* next (--request [0-9a-f]{8})`/.exec(read.message)?.[1];
+    expect(request, read.message).toBeDefined();
+    return runNext(proj, request!.split(" ")).out;
+  }
+
+  test("words alone over an active workflow may be a redo, jump, or fresh start: both readings, the words kept", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const read = JSON.parse(runNext(proj, ["take me back to intent capture"]).out) as { kind: string; message: string };
+    expect(read.kind).toBe("print");
+    expect(read.message).toContain("may ask to redo, jump to a stage, or start fresh");
+    expect(read.message).toContain("report --result resumed --choice <redo|jump|fresh>");
+    expect(read.message).toContain("--target <stage slug>");
+    expect(read.message).toMatch(/next --request [0-9a-f]{8}`/);
+    // When the agent cannot tell, the engine's own question asks the person, so
+    // the turn ends at a question the Stop hook honours.
+    expect(read.message).toContain("or you cannot tell which, run");
+    expect(read.message).not.toContain("ask the person in one short question");
+    // None of the person's words ride the directive.
+    expect(read.message).not.toContain("intent capture");
+    // The same words asked about as work keep them.
+    const ask = JSON.parse(askedAbout("take me back to intent capture")) as { ask_type?: string; new_work_description?: string };
+    expect(ask.ask_type).toBe("new-work-routing");
+    expect(ask.new_work_description).toBe("take me back to intent capture");
+  });
+
+  test("a setting typed with the words is asked about with them, as before", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--depth", "minimal", "a completely separate standalone metrics dashboard"]).out;
+    expect(out).toContain('"ask_type":"new-work-routing"');
+  });
+
   test("freeform prose over an active workflow -> ask carrying both texts", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
-    const out = runNext(proj, ["a completely separate standalone metrics dashboard"]).out;
+    const out = askedAbout("a completely separate standalone metrics dashboard");
     const directive = JSON.parse(out) as {
       ask_type?: string;
       response_route?: string;
@@ -999,7 +1084,7 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
   test("keyword-matching prose names the scope a confirmed new intent would get", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
-    const out = runNext(proj, ["fix the broken login button"]).out;
+    const out = askedAbout("fix the broken login button");
     expect(out).toContain('"kind":"ask"');
     expect(out).toContain('as \\"bugfix\\" work');
     expect(out).toContain('"proposed_scope":"bugfix"');
@@ -1013,10 +1098,76 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).not.toContain('"kind":"ask"');
   });
 
-  test("prose WITH an explicit --scope stays a scope-change, never the ask", () => {
+  // Arden decision 6: words typed with a differing --scope over open work are
+  // never dropped. One question, new work first (what the words most often
+  // mean): new work with that scope, or a scope change for the open work.
+  test("prose WITH a differing --scope asks once: new work with it first, or change the open work's scope", () => {
     proj = createOrchestrationTestProject();
-    seedStateFile(proj, MID_IDEATION); // state scope differs from bugfix
+    seedStateFile(proj, MID_IDEATION); // scope: feature
     const out = runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out;
+    const directive = JSON.parse(out) as {
+      kind?: string; ask_type?: string; proposed_scope?: string; question?: string; numbered_prose_question?: string;
+      new_intent_command?: string; continue_command?: string; new_work_description?: string;
+    };
+    expect(directive.kind).toBe("ask");
+    expect(directive.ask_type).toBe("new-work-routing");
+    expect(directive.new_work_description).toBe("fix the login flow");
+    expect(directive.proposed_scope).toBe("bugfix");
+    expect(directive.new_intent_command).toContain("--new-intent --scope bugfix");
+    expect(directive.continue_command).toContain("--continue --request ");
+    expect(directive.continue_command).toContain("--scope bugfix");
+    expect(directive.question).toContain('(1) a separate new piece of work - start new "bugfix" work for it');
+    expect(directive.question).toContain('(2) part of that work - change it to "bugfix"');
+    expect(directive.numbered_prose_question).toContain(
+      '1. **Separate new piece of work** — Start new "bugfix" work for it; the current work stays as it is',
+    );
+    expect(directive.numbered_prose_question).toContain(
+      '2. **Part of the active work** — Change the current workflow to "bugfix" and continue it',
+    );
+  });
+
+  test("a bare 1 to that question starts the new work with the typed scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    runNext(proj, ["--scope", "bugfix", "fix the login flow"]);
+    const out = runNext(proj, ["1"]).out;
+    expect(out).toContain("intent create --scope bugfix --request ");
+    expect(out).not.toContain("scope change");
+  });
+
+  // A prose harness hands the reply to `next` as the person typed it.
+  for (const reply of ["2", "Part of the active work"]) {
+    test(`a reply of "${reply}" to that question changes the open work's scope`, () => {
+      proj = createOrchestrationTestProject();
+      seedStateFile(proj, MID_IDEATION);
+      runNext(proj, ["--scope", "bugfix", "fix the login flow"]);
+      const out = runNext(proj, [reply]).out;
+      expect(out).toContain('"kind":"print"');
+      expect(out).toContain("scope change --scope bugfix");
+    });
+  }
+
+  test("only the open-work answer carries the scope change", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const asked = JSON.parse(runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out) as { compose_command?: string };
+    expect(asked.compose_command).not.toContain("--scope");
+  });
+
+  test("the open-work answer to that question changes its scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const asked = JSON.parse(runNext(proj, ["--scope", "bugfix", "fix the login flow"]).out) as { continue_command?: string };
+    const args = (asked.continue_command ?? "").split(" ");
+    const out = runNext(proj, args.slice(args.indexOf("next") + 1)).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("scope change --scope bugfix");
+  });
+
+  test("a differing --scope with no words still changes scope", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["--scope", "bugfix"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("scope change --scope bugfix");
   });
@@ -1144,13 +1295,22 @@ describe("t114 Branch 9c: replies that are not new work", () => {
   // The engine's own command, run as emitted (every word after `next`).
   const runCommand = (command: string) =>
     directive(command.slice(command.indexOf(" next ") + " next ".length).split(" ").filter(Boolean));
+  const requestCommand = (message: string): string =>
+    (message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? "";
+  // Words alone over active work first get the re-entry readings (a redo,
+  // jump, or fresh start, or else this); their `next --request` asks about
+  // them as work, the words kept.
+  const asWork = (args: string[]): Directive => {
+    const read = directive(args);
+    expect(read.kind, JSON.stringify(read).slice(0, 300)).toBe("print");
+    expect(read.message).toContain("may ask to redo, jump to a stage, or start fresh");
+    return runCommand(requestCommand(read.message!));
+  };
   const routingAsk = (): Directive => {
-    const ask = directive([NEW_WORK]);
+    const ask = asWork([NEW_WORK]);
     expect(ask.ask_type).toBe("new-work-routing");
     return ask;
   };
-  const requestCommand = (message: string): string =>
-    (message.match(/`([^`]*next --request [0-9a-f]{8})`/) ?? [])[1] ?? "";
 
   test("prose over the [-] stage's open logged question gets a command for each reading", () => {
     proj = createOrchestrationTestProject();
@@ -1232,14 +1392,14 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       "utf-8",
     );
     seedAudit(openDecision);
-    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+    expect(asWork([ANSWER]).ask_type).toBe("new-work-routing");
   });
 
   test("control: an answered question leaves prose to the routing ask", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     seedAudit([...openDecision, { event: "QUESTION_ANSWERED", stage: "feasibility" }]);
-    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+    expect(asWork([ANSWER]).ask_type).toBe("new-work-routing");
   });
 
   test("control: another stage's open question leaves prose to the routing ask", () => {
@@ -1249,10 +1409,23 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       { event: "STAGE_STARTED", stage: "scope-definition" },
       { event: "DECISION_RECORDED", stage: "scope-definition" },
     ]);
-    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+    expect(asWork([ANSWER]).ask_type).toBe("new-work-routing");
   });
 
   test("control: a stage that is not [-] leaves prose to the routing ask", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const statePath = seededStateFile(proj);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace("- [-] feasibility — EXECUTE", "- [ ] feasibility — EXECUTE"),
+      "utf-8",
+    );
+    seedAudit(openDecision);
+    expect(asWork([ANSWER]).ask_type).toBe("new-work-routing");
+  });
+
+  test("a stage held at its approval gate [?] reads prose as the gate's answer first", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const statePath = seededStateFile(proj);
@@ -1262,7 +1435,10 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       "utf-8",
     );
     seedAudit(openDecision);
-    expect(directive([ANSWER]).ask_type).toBe("new-work-routing");
+    const read = directive([ANSWER]);
+    expect(read.kind).toBe("print");
+    expect(read.ask_type).toBeUndefined();
+    expect(String((read as { message?: string }).message)).toContain("report --stage feasibility --result approved");
   });
 
   const numberedLine = (ask: Directive, n: number): string =>
@@ -1313,7 +1489,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     test(`an option with no routing question asked (${JSON.stringify(reply)}) is asked about, never acted on`, () => {
       proj = createOrchestrationTestProject();
       seedStateFile(proj, MID_IDEATION);
-      const d = directive([reply]);
+      const d = asWork([reply]);
       expect(d.ask_type).toBe("new-work-routing");
       expect(d.new_work_description).toBe(reply);
     });
@@ -1364,7 +1540,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       { event: "HUMAN_TURN", at: "2099-01-01T00:01:00Z" },
     ]);
     expect(directive(["Separate new piece of work"])).toEqual(runCommand(ask.new_intent_command!));
-    expect(directive(["2"]).ask_type).toBe("new-work-routing");
+    expect(asWork(["2"]).ask_type).toBe("new-work-routing");
   });
 
   test("a bare number answers a question logged after the routing question", () => {
@@ -1390,7 +1566,7 @@ describe("t114 Branch 9c: replies that are not new work", () => {
       proj = createOrchestrationTestProject();
       seedStateFile(proj, MID_IDEATION);
       routingAsk();
-      const d = directive([reply]);
+      const d = asWork([reply]);
       expect(d.ask_type).toBe("new-work-routing");
       expect(d.new_work_description).toBe(reply);
     });
@@ -1444,6 +1620,21 @@ describe("t114 retired flags are consumed, not description text", () => {
     const file = join(project, "aidlc", ".aidlc-sessions", "questions", `${id}.json`);
     return JSON.parse(readFileSync(file, "utf-8")).text;
   };
+
+  // The entry word is how the person reaches AI-DLC, never part of the work's
+  // name: an agent that passes `/aidlc` or Codex's `$aidlc` on as an argument
+  // still records only what the person asked for.
+  test.each([
+    [["/aidlc", "--new-intent", "--scope", "poc", "build auth across both repos"]],
+    [["$aidlc", "--new-intent", "--scope", "poc", "build auth across both repos"]],
+    [["--new-intent", "--scope", "poc", "/aidlc build auth across both repos"]],
+  ])("the entry word never becomes part of the work's description: %j", (args) => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, args).out;
+    expect(out).toContain("intent create");
+    expect(pendingDescription(proj, out)).toBe("build auth across both repos");
+  });
 
   test("genuinely unknown flag-looking tokens remain lossless task text (#847)", () => {
     proj = createOrchestrationTestProject();

@@ -589,6 +589,32 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
+  test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
+    // It runs under strict only; relaxed and off accept the change with one line.
+    const stale = /exception holds under every (?:Guard Policy|value)/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common", "protocols"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
+  });
+
+  test("a review the person asks for is recorded under every Guard Policy, and no copy reads as needing strict", () => {
+    const reviewer = readFileSync(at("core", "aidlc-common", "protocols", "stage-protocol-reviewer.md"), "utf8")
+      .replace(/\s+/g, " ");
+    expect(reviewer).toContain(
+      "**A review the person asks for.** When the person asks for a review of a stage, or of a Unit they already " +
+        "approved, record it through AI-DLC the first time they ask, under every Guard Policy",
+    );
+    expect(reviewer).toContain("Never write a review file by hand, and never offer to change the Guard Policy to get a review.");
+    expect(reviewer).toContain(
+      "the engine asks for no recovery review on its own (a review the person asks for still runs, as above)",
+    );
+    // A live agent read this pairing as "no recorded review under relaxed or off".
+    const stale = /the receipt stays valid and no recovery review is requested/;
+    const copies = [...filesBelow(at("docs"), ".md"), ...filesBelow(at("core", "aidlc-common"), ".md")]
+      .filter((file) => stale.test(readFileSync(file, "utf8").replace(/\s+/g, " ")));
+    expect(copies).toEqual([]);
+  });
+
   test("documented Guard Policy defaults match every core scope's frontmatter", () => {
     const policies = new Map(scopeNames.map((scope) => [scope, scopeGuardPolicy(scope)]));
     const byPolicy = (value: string): string[] =>

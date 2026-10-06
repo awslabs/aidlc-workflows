@@ -859,8 +859,8 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       remedy:
         `The compiled runtime graph is out of date. Re-run \`${
           aidlcToolInvocation("runtime")
-        } compile\`; if this recurs, the ` +
-        "rebuild-stage-graph hook may not be firing on this harness (check hook heartbeats).",
+        } compile\`. If it goes out of date again, AI-DLC's hooks are not running here: ` +
+        "doctor's hooks check says what to do.",
       safeToAutomate: true,
     });
   } else if (
@@ -879,7 +879,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       evidence: { runtimeGraphExists: false },
       remedy:
         `No compiled runtime graph. Re-run \`${aidlcToolInvocation("runtime")} compile\`. ` +
-        "If it never appears, the rebuild-stage-graph hook is not firing on this harness.",
+        "If it goes missing again, AI-DLC's hooks are not running here: doctor's hooks check says what to do.",
       safeToAutomate: true,
     });
   }

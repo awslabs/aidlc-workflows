@@ -44,7 +44,7 @@
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   aidlcToolInvocation,
@@ -106,6 +106,8 @@ import {
   stageEnabledBySelection,
   toPosix,
   validScopes,
+  isScopeName,
+  SCOPE_NAME_RULE,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -539,6 +541,17 @@ export interface ComposedScopeRecord {
   stages: Record<string, "EXECUTE" | "SKIP">;
 }
 
+export { isScopeName };
+
+/** `file` inside `dir`, or a throw when the joined path would land anywhere else. */
+function fileInside(dir: string, file: string): string {
+  const path = join(dir, file);
+  if (dirname(resolve(path)) !== resolve(dir)) {
+    throw new Error(`Refusing to write ${path}: it is not inside ${dir}.`);
+  }
+  return path;
+}
+
 /** Split a record body into its harness projection and its grid. Throws with the
  *  offending path named on any malformed input: a record is user data whose whole
  *  purpose is to survive, so a silent skip would reintroduce exactly the quiet
@@ -552,6 +565,11 @@ export function parseComposedScopeRecord(
   const name = scalarField(fm, "name");
   if (!name) {
     throw new Error(`Composed scope record ${filePath} missing required frontmatter: name`);
+  }
+  if (!isScopeName(name)) {
+    throw new Error(
+      `Composed scope record ${filePath} has a name a scope cannot have. Rename the scope to ${SCOPE_NAME_RULE}.`,
+    );
   }
   // Exactly one sentinel pair, or refuse. Duplicates would make the split
   // ambiguous, and an ambiguous split is how a wrong grid gets adopted silently —
@@ -755,7 +773,7 @@ export function materializeComposedScopeIdentities(projectDir: string): string[]
     if (harnessScopeFileFor(projectDir, name) !== null) continue;
     const dir = mutableScopesDir(projectDir);
     mkdirSync(dir, { recursive: true });
-    writeFileAtomic(join(dir, `aidlc-${name}.md`), records[name].identity);
+    writeFileAtomic(fileInside(dir, `aidlc-${name}.md`), records[name].identity);
     written.push(name);
   }
   return written;
@@ -784,11 +802,12 @@ export function backfillComposedScopeRecords(
   const dir = mutableComposedScopesDir(projectDir);
   const written: string[] = [];
   for (const name of [...gridOnlyNames].sort()) {
+    if (!isScopeName(name)) continue;
     const stages = grid[name]?.stages;
     if (stages === undefined) continue;
     const identityPath = harnessScopeFileFor(projectDir, name);
     if (identityPath === null) continue;
-    const recordPath = join(dir, `${name}.md`);
+    const recordPath = fileInside(dir, `${name}.md`);
     if (existsSync(recordPath)) continue;
     mkdirSync(dir, { recursive: true });
     writeFileAtomic(
@@ -1776,6 +1795,7 @@ export function scopeSettingsOf(scope: string): ScopeSettings | null {
     learnings: meta.ceremony?.learnings ?? "on",
     summary_confirmation: meta.ceremony?.summary_confirmation ?? "on",
     plan_approval: meta.ceremony?.plan_approval ?? "on",
+    collaborators: meta.ceremony?.collaborators ?? "on",
     review_cap: meta.reviewCap ?? "adversarial",
   };
 }
@@ -2226,7 +2246,7 @@ export function composedFoldBack(
   );
   const gridOnlyNames = new Set(
     [...composedScopeNames(onDiskJson, stockScopeNames)].filter(
-      (name) => installedScopeNames.has(name) && !recordNames.has(name),
+      (name) => isScopeName(name) && installedScopeNames.has(name) && !recordNames.has(name),
     ),
   );
   let onDisk: Record<string, unknown> = {};

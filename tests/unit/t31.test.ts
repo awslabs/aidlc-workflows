@@ -351,13 +351,19 @@ function refusal(r: CliResult): string {
 // free-text flag (--decision for decision, --details for answer), so an agent
 // copying it into the same subcommand is not refused again for the flag. The
 // single-quote clause keeps an agent from writing \" in a value holding one of
-// & | < > ^, which the Kiro IDE hook refuses on its way to cmd.exe.
+// & | < > ^, which the Kiro IDE hook refuses on its way to cmd.exe. An answer
+// also names the file channel, which no shell reads.
 function howToPass(textFlag: "--decision" | "--details", example: string): string {
   return (
     "Run the command again with each value as one argument, in the person's exact words; " +
     "in Windows PowerShell write each double quote inside a value as \\\" " +
     `(for example ${textFlag} '${example}'), ` +
-    "or as a single quote ('') when the value also holds &, |, <, > or ^."
+    "or as a single quote ('') when the value also holds &, |, <, > or ^." +
+    (textFlag === "--details"
+      ? " An answer holding any of those, or a quote, $, %, ! or a line break, goes in a file instead: write it to " +
+        "<record>/.aidlc-engine/answer-text/answer.txt with your file tool and pass " +
+        "--details-file .aidlc-engine/answer-text/answer.txt."
+      : "")
   );
 }
 const CHOSE = 'Chose \\"Option A\\" for auth';

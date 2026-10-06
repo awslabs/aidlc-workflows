@@ -75,6 +75,7 @@ import {
   remainingOperationTimeoutMs,
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
+import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -179,6 +180,8 @@ export interface DriveResult {
   turns?: DriveTurnEnd[];
   /** Stop hook verdicts, when captureStopHooks was set. */
   stopHooks?: CapturedStopHook[];
+  /** What each SessionStart hook printed for the session (the SDK always reports it). */
+  sessionStarts?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +708,7 @@ export async function driveAidlc(
   const askedQuestions: CapturedAskUserQuestion[] = [];
   const turns: DriveTurnEnd[] = [];
   const stopHooks: CapturedStopHook[] = [];
+  const sessionStarts: string[] = [];
   // toolUseID -> { toolName, input } so we can join tool_use to its later
   // synthetic-user tool_result block.
   const pendingTools = new Map<
@@ -718,6 +722,9 @@ export async function driveAidlc(
   let turn = 1;
   let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
+  // The person's turns: the opening prompt now, each menu answer as it is given.
+  const personTurns = new PersonTurnLedger(projectDir);
+  personTurns.sent(prompt);
   let stopAfterAskUserQuestionToolUseId: string | undefined;
   writeSdkTrace(tracePath, "start", {
     prompt,
@@ -763,6 +770,7 @@ export async function driveAidlc(
     } else {
       turn++;
       writeSdkTrace(tracePath, "next_message", { turn, message: next });
+      personTurns.sent(next);
       input.send(next);
     }
   };
@@ -838,6 +846,9 @@ export async function driveAidlc(
             const chat = opts.chatAboutQuestionWhen?.({ questions, answers: {} }) === true;
             const answers = chat ? {} : buildAnswers(questions, answerScript, askMenuIndex);
             askMenuIndex++;
+            // "Chat about this" answers nothing: the person's reply comes in
+            // their next message.
+            if (!chat) personTurns.sent(JSON.stringify(answers), Object.keys(answers).length);
             const captured: CapturedAskUserQuestion = { questions, answers };
             askedQuestions.push(captured);
             if (chat) {
@@ -902,6 +913,9 @@ export async function driveAidlc(
       if (msg.type === "system") {
         const m = msg as Record<string, unknown>;
         trackDriveTask(pendingTasks, m, settledTasks);
+        if (m.subtype === "hook_response" && m.hook_event === "SessionStart" && typeof m.stdout === "string") {
+          sessionStarts.push(m.stdout);
+        }
         if (m.subtype === "hook_response" && m.hook_event === "Stop") {
           const stop = capturedStopHook(m, turn);
           stopHooks.push(stop);
@@ -1132,6 +1146,12 @@ export async function driveAidlc(
   // A drive that leaves descendants behind is a failure even when its own
   // assertions could pass: the next fixture removal would hit them as EBUSY.
   if (containmentFailure) throw containmentFailure;
+  // So is a decision recorded as the person's that no turn they sent backs.
+  const unbacked = personTurns.unbacked();
+  if (unbacked.length > 0) {
+    writeSdkTrace(tracePath, "unbacked_decision", { decisions: unbacked });
+    throw unbackedFailure("The SDK drive", unbacked);
+  }
 
   const result: DriveResult = {
     toolResults,
@@ -1144,6 +1164,7 @@ export async function driveAidlc(
     stoppedWhen,
     turns,
     stopHooks,
+    sessionStarts,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the

@@ -286,9 +286,42 @@ describe("the answers an open recovery ask admits", () => {
       op: "record-unit-completion",
       interaction: "command",
       executableNow: true,
-      requiresHuman: false,
+      requiresHuman: true,
       operation,
     });
+  });
+
+  test("one Unit's step starts again, and reviews go advisory, each by one exact command", () => {
+    const reopen: GuardRecoveryOperation = { kind: "reopen-unit", stage: "code-generation", unit: "beta" };
+    expect(isGuardRecoveryOperation(reopen)).toBe(true);
+    expect(isGuardRecoveryOperation({ ...reopen, unit: "../other" })).toBe(false);
+    expect(renderGuardOperation(reopen, { mode: "native", shell: "posix" }))
+      .toBe("aidlc engine jump reopen --target code-generation --units beta");
+    expect(renderGuardOperation(reopen, { mode: "source", harnessDir: ".claude", shell: "posix" }))
+      .toBe("bun .claude/tools/aidlc-jump.ts reopen --target code-generation --units beta");
+    const reopenArgs = ["engine", "jump", "reopen", "--target", "code-generation", "--units", "beta"];
+    expect(guardOperationMatchesEngineArgs(reopen, reopenArgs)).toBe(true);
+    expect(guardOperationMatchesEngineArgs(reopen, [...reopenArgs.slice(0, -1), "alpha,beta"])).toBe(false);
+    expect(sameGuardOperation(reopen, { ...reopen })).toBe(true);
+    expect(sameGuardOperation(reopen, { ...reopen, unit: "alpha" })).toBe(false);
+    const picked = askMarker([{
+      op: "reopen-unit-step", action: "Start it again.", interaction: "command", operation: reopen,
+    }], "beta");
+    expect(guardRecoveryAnswerAdmits(picked, reopenArgs)).toBe(true);
+    expect(guardRecoveryAnswerAdmits({ ...picked, delivery: "issued" }, reopenArgs)).toBe(false);
+
+    const advisory: GuardRecoveryOperation = { kind: "review-advisory" };
+    expect(isGuardRecoveryOperation(advisory)).toBe(true);
+    expect(isGuardRecoveryOperation({ ...advisory, review: "none" })).toBe(false);
+    expect(renderGuardOperation(advisory, { mode: "native", shell: "posix" }))
+      .toBe("aidlc engine config set review advisory");
+    expect(renderGuardOperation(advisory, { mode: "source", harnessDir: ".claude", shell: "posix" }))
+      .toBe("bun .claude/tools/aidlc-utility.ts config-change --review advisory");
+    expect(guardOperationMatchesEngineArgs(advisory, ["engine", "config", "set", "review", "advisory"])).toBe(true);
+    expect(guardOperationMatchesEngineArgs(advisory, ["engine", "config", "set", "review", "none"])).toBe(false);
+    // Neither is one of the Plan Approval recovery shapes.
+    expect(isGuardRecoveryEngineInvocation(reopenArgs)).toBe(false);
+    expect(isGuardRecoveryEngineInvocation(["engine", "config", "set", "review", "advisory"])).toBe(false);
   });
 
   test("only the answer the person picked, for the ask's own stage, Unit, and project", () => {
