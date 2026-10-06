@@ -1468,10 +1468,13 @@ const SHORT_CELL_MAX = 48;
 function shortCell(text: string): string {
   return text.length > SHORT_CELL_MAX ? `${text.slice(0, SHORT_CELL_MAX - 3).trimEnd()}...` : text;
 }
-function shortWhere(location: string): string {
+function whereText(location: string): string {
   const [path, ...rest] = location.split(" > ");
   const file = path.split("/").filter((part) => part.length > 0).at(-1) ?? path;
-  return shortCell([file, ...rest].join(" > "));
+  return [file, ...rest].join(" > ");
+}
+function shortWhere(location: string): string {
+  return shortCell(whereText(location));
 }
 
 // `gate` is what the person reads before they decide: a narrow table that stays
@@ -1577,12 +1580,18 @@ export function renderFindingsContext(
       if (context.findings.length === 0) {
         lines.push("| - | - | - | No findings |");
       }
+      // A place or status too long for its cell (the person's own reason for
+      // a decision, say) is written out in full here, so nothing is cut.
       for (const finding of context.findings) {
+        const where = whereText(finding.location);
+        const status = displayStatus(finding);
         lines.push(
           "",
           `> ${finding.id} Finding: ${markdownCell(displayFinding(finding))}`,
+          ...(where.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Where: ${markdownCell(where)}`] : []),
           "",
           `> ${finding.id} Required action: ${markdownCell(finding.requiredAction)}`,
+          ...(status.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Status: ${markdownCell(status)}`] : []),
         );
       }
     }
@@ -2203,7 +2212,7 @@ export function renderSummaryConfirmationBrief(
     "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
     "- **Looks correct** - record this confirmation and generate the named artifacts.",
-    "- **Request changes** - nothing is written yet; say what to change in your answers, and they are updated first.",
+    "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
   ].join("\n");
 }
 

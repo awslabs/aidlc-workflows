@@ -1679,7 +1679,7 @@ describe("t304 executable review brief scenarios", () => {
       );
       // What happens and what the person does next, in plain words.
       expect(rendered).toContain(
-        "- **Request changes** - nothing is written yet; say what to change in your answers, and they are updated first.",
+        "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",
       );
       expect(rendered).not.toContain("ungenerated");
     }
@@ -1725,6 +1725,30 @@ describe("t304 engine-owned findings experience", () => {
     );
     expect(brief).toContain("**Review outcome:** No open findings remain.");
     expect(brief).not.toContain("Not re-checked this round");
+  });
+
+  // The narrow table cuts a long cell; the person's own reason for a decision,
+  // or a long place, is still written out in full below it.
+  test("A decision reason too long for its cell is shown in full below the narrow table", () => {
+    const project = engineOwnedFindingProject();
+    const reason = "Internal milestones never carry a public date, the launch plan owns that";
+    expect(requestChanges(project, [`${project.relativeArtifact}#R-01=${reason}`]).status).toBe(0);
+    recordReviewViaRecord(
+      project.proj,
+      reviewReportMarkdown(
+        "READY",
+        [],
+        [`| Minor | ${project.relativeArtifact} > Success Criteria and the adoption targets for the first release | Concern 2 | Fix concern 2 |`],
+      ),
+      { gate: "revise" },
+    );
+    const brief = renderReviewBrief(project.proj, findStageBySlug("requirements-analysis")!, "revision");
+    for (const line of brief.split("\n").filter((row) => row.startsWith("|"))) {
+      for (const cell of line.slice(1, -1).split("|")) expect(cell.trim().length, line).toBeLessThanOrEqual(48);
+    }
+    expect(brief).toContain(`> R-01 Status: Rejected: ${reason}`);
+    const file = project.relativeArtifact.split("/").at(-1);
+    expect(brief).toContain(`> R-02 Where: ${file} > Success Criteria and the adoption targets for the first release`);
   });
 
   test("The reviewer comments on a decided finding at the same or lower severity: it becomes a note, not a question", () => {
