@@ -373,10 +373,20 @@ export interface DocumentExtractorSpec {
   timeoutMs?: number;
 }
 
+// A host-specific missed-reply line from harness.json, kept only when well formed.
+function missedReplyInHost(value: unknown): { missedReplyInHost?: { env: string[]; text: string } } {
+  const host = value as { env?: unknown; text?: unknown } | null | undefined;
+  return Array.isArray(host?.env) && host.env.length > 0 &&
+      host.env.every((name) => typeof name === "string" && name !== "") && typeof host.text === "string"
+    ? { missedReplyInHost: { env: [...host.env as string[]], text: host.text } }
+    : {};
+}
+
 /** A harness's advice for a host that runs no project hooks until the person acts (trust, reload, engine). */
 export interface HookActivation {
   recovery: string;
   missedReply?: string;
+  missedReplyInHost?: { env: string[]; text: string };
   missesReplies?: true;
   notRunYet?: string;
   notRunInWorkflow?: string;
@@ -556,6 +566,7 @@ function readShippedHarnessData(): ShippedHarnessData {
         ? {
           recovery: activation.recovery,
           ...(typeof activation.missedReply === "string" ? { missedReply: activation.missedReply } : {}),
+          ...(missedReplyInHost(activation.missedReplyInHost)),
           ...(activation.missesReplies === true ? { missesReplies: true as const } : {}),
           ...(typeof activation.notRunYet === "string" ? { notRunYet: activation.notRunYet } : {}),
           ...(typeof activation.notRunInWorkflow === "string"
@@ -27817,7 +27828,10 @@ export function unattendedHumanPresenceHint(projectDir?: string): string {
     return " If the person already replied, that reply was not recorded because AI-DLC's hooks are not " +
       `running here, so do not ask them to answer again; do this instead: ${agentStep}`;
   }
-  const missedReply = hookActivation()?.missedReply ??
+  const activation = hookActivation();
+  const host = activation?.missedReplyInHost;
+  const inHost = host?.env.some((name) => Boolean(process.env[name]?.trim())) === true;
+  const missedReply = (inHost ? host?.text : activation?.missedReply) ??
     "If the person already replied, that reply was not recorded for this question. Tell them " +
       `that, and that ${entrySkillInvocation()} --doctor shows whether AI-DLC's hooks run here.`;
   return ` ${missedReply}`;

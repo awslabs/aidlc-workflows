@@ -154,6 +154,12 @@ export type HarnessManifest = {
      */
     missedReply?: string;
     /**
+     * `missedReply` for one host this tree runs in, told apart by environment
+     * variables that host sets for the agent's shell commands (any one
+     * non-empty). Without them, `missedReply` stands.
+     */
+    missedReplyInHost?: { env: string[]; text: string };
+    /**
      * Set when a session can run without this tree's hooks after they ran in
      * an earlier one, so a reply can go unrecorded even with a heartbeat on
      * record. A host with `missedReply` is one already.

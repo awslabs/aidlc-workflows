@@ -131,6 +131,14 @@ const KIRO_IDE_TRUST_STEP =
   "Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), and say " +
   "carry on.";
 
+// The same step outside Kiro IDE, for Kiro CLI and an ACP client on this tree.
+const KIRO_CLI_ACP_STEP =
+  "In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder. If you drive Kiro from an ACP client, " +
+  "the Kiro IDE guide names what that client must send.";
+
+// The words the agent relays when the person's answer was not recorded.
+const ANSWER_NOT_RECORDED = "Your answer was not recorded, so you don't need to answer again.";
+
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   productName: "Kiro IDE",
@@ -172,14 +180,22 @@ const manifest: HarnessManifest = {
   // (hooks/aidlc-kiro-adapter.ts) gives a Kiro IDE person the text before
   // " In Kiro CLI," alone, so that sentence keeps its place and spelling.
   hookActivation: {
-    recovery:
-      `${KIRO_IDE_TRUST_STEP} In Kiro CLI, quit Kiro and start \`kiro-cli\` again in this folder. If you drive ` +
-      "Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
-    // Says what happened, asks for nothing again, and gives the person the same
-    // Kiro IDE step, in fixed words the agent relays without explaining why.
+    recovery: `${KIRO_IDE_TRUST_STEP} ${KIRO_CLI_ACP_STEP}`,
+    // Says what happened, asks for nothing again, and gives the person the step
+    // for the tool they are in, in fixed words the agent relays without
+    // explaining why. Inside Kiro IDE (VSCODE_IPC_HOOK or VSCODE_PID set, the
+    // adapter's own signal) that is the Kiro IDE step alone; elsewhere Kiro
+    // CLI and an ACP client, which nothing tells apart, each get their line.
     missedReply:
       "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
-      `Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don't need to answer again. ${KIRO_IDE_TRUST_STEP}"`,
+      "Tell them exactly this, with nothing about why, then only the line below for the tool they are in: " +
+      `"${ANSWER_NOT_RECORDED}" ${KIRO_CLI_ACP_STEP}`,
+    missedReplyInHost: {
+      env: ["VSCODE_IPC_HOOK", "VSCODE_PID"],
+      text:
+        "If the person already replied, that reply was not recorded. Do not ask them to answer again. " +
+        `Tell them exactly this, with nothing about why: "${ANSWER_NOT_RECORDED} ${KIRO_IDE_TRUST_STEP}"`,
+    },
     // hooks/aidlc-kiro-adapter.ts leaves a heartbeat on every chat message
     // before the first workflow, so doctor warns only while none exists.
     notRunYet:
