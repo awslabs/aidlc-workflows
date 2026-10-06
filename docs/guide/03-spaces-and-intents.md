@@ -241,9 +241,10 @@ delivery remains future work.
 
 On POSIX, the Codex adapter pins the validated hook payload session into every
 core-hook child and Bash command, so macOS sandbox denial of `ps` does not weaken
-Codex workflow selection. When Codex already gives the command that session as
-`CODEX_THREAD_ID` (Codex 0.160 and later), the command is left as written and
-the tools read the id from there. On Windows x64 and arm64, native process handles,
+Codex workflow selection. Codex 0.160 and later also give every command the
+session as `CODEX_THREAD_ID` (but not the hooks), so once an AI-DLC tool has
+seen it there, that session's later commands are left as written and the tools
+read the id from there. On Windows x64 and arm64, native process handles,
 creation times, and parent PIDs identify the owning session within the same
 50 ms / 64-ancestor budget. Reused PID generations and unverified ancestry do not
 select a session; the POSIX command rewrite remains unavailable on Windows.

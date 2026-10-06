@@ -809,9 +809,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   });
 
   // Codex 0.160 gives every command it runs CODEX_THREAD_ID, the same id its hooks
-  // carry. The command then needs no `export AIDLC_SESSION_OVERRIDE=...` prefix,
+  // carry, but not the hooks themselves. Once a tool has seen the id in its
+  // command, the command needs no `export AIDLC_SESSION_OVERRIDE=...` prefix,
   // which Codex showed on every "Ran" line (a live run).
-  test("0b: a Bash command Codex already gives the session keeps its own words", () => {
+  test("0b: once a tool saw Codex give the session, later commands keep their own words", () => {
     const dir = scratchProject(true);
     try {
       const command = "bun .codex/tools/aidlc-orchestrate.ts next";
@@ -822,21 +823,41 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_name: "Bash",
         tool_input: { command },
       };
-      // Each call is its own tool call: the adapter replays a repeated delivery.
-      const kept = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-kept" }, {
-        CODEX_THREAD_ID: "codex-command-session",
-      });
-      expect(kept.code, kept.stderr).toBe(0);
-      expect(kept.stdout).toBe("");
-      if (process.platform !== "win32") {
-        // Another thread's id, or none, still gets the prefix.
-        for (const thread of ["codex-other-thread", undefined]) {
-          const wrapped = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: `call-${thread ?? "none"}` }, {
+      const runTool = (thread: string) =>
+        spawnSync("bun", [join(dir, ".codex", "tools", "aidlc-orchestrate.ts"), "next"], {
+          cwd: dir,
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            AIDLC_SESSION_OVERRIDE: "codex-command-session",
+            AIDLC_SESSION_OVERRIDE_SOURCE: "payload",
+            CLAUDE_PROJECT_DIR: undefined,
+            CODEX_SESSION_ID: undefined,
             CODEX_THREAD_ID: thread,
-          });
-          expect(wrapped.code, wrapped.stderr).toBe(0);
-          expect(wrapped.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-command-session'");
-        }
+          } as NodeJS.ProcessEnv,
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+      // Each call is its own tool call: the adapter replays a repeated delivery.
+      const first = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-first" });
+      expect(first.code, first.stderr).toBe(0);
+      if (process.platform !== "win32") {
+        expect(first.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-command-session'");
+        // A tool whose command carries another thread's id notes nothing.
+        runTool("codex-other-thread");
+        const still = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-other" });
+        expect(still.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-command-session'");
+      }
+      // The tool sees Codex give its command this session.
+      runTool("codex-command-session");
+      const later = runAdapter(dir, "bind-bash-session", { ...payload, tool_use_id: "call-later" });
+      expect(later.code, later.stderr).toBe(0);
+      expect(later.stdout).toBe("");
+      // Another session in the same project still gets the prefix.
+      if (process.platform !== "win32") {
+        const other = runAdapter(dir, "bind-bash-session", {
+          ...payload, session_id: "codex-second-session", tool_use_id: "call-second",
+        });
+        expect(other.stdout).toContain("export AIDLC_SESSION_OVERRIDE='codex-second-session'");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
