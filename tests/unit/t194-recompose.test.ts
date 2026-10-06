@@ -569,6 +569,20 @@ describe("t194 recompose - the jump readers honour the recomposed plan", () => {
     expect(readState(proj)).toContain("- **Current Stage**: code-generation");
   });
 
+  // With no chat to hold the line for the next step, the jump's own output
+  // carries it, and the jump still goes through.
+  test("a backward jump with no chat to hold the way back puts it in its output", () => {
+    const proj = createdProject("bugfix");
+    const before = /- \*\*Current Stage\*\*: ([a-z-]+)/.exec(readState(proj))?.[1];
+    expect(run(proj, "aidlc-jump.ts", ["execute", "--target", "code-generation", "--direction", "forward"]).status).toBe(0);
+    const back = run(proj, "aidlc-jump.ts", ["execute", "--target", String(before), "--direction", "backward"]);
+    expect(back.status, back.out).toBe(0);
+    expect((JSON.parse(back.out) as { notice?: string }).notice).toMatch(
+      /^Moved back to [A-Z][^.;`]*\. To return to Code Generation, type `\/aidlc --stage code-generation`\.$/,
+    );
+    expect(readState(proj)).toContain(`- **Current Stage**: ${before}`);
+  });
+
   // Working one Unit at a time, Current Stage names the block's first step
   // while the person answers a later one (a Unit's code plan): the way back
   // names the step they were shown.
