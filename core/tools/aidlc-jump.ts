@@ -701,12 +701,22 @@ function handleExecute(args: string[]): void {
 
   writeStateFile(pd, content);
 
+  // The jump is done, so the way back can never fail it. When no chat can
+  // hold the line for the next step, it rides the tool's output instead.
+  const from = graph.find((node) => node.slug === cameFrom);
+  let backNotice: string | undefined;
+  if (direction === "backward" && from) {
+    backNotice = backwardJumpNotice(targetStage, from);
+    try {
+      const session = resolveWorkflowSelection(pd).sessionId;
+      if (session && addPendingPersonLines(pd, session, [backNotice])) backNotice = undefined;
+    } catch {
+      // No chat to hold it: the output carries it.
+    }
+  }
   const notice = direction === "forward"
     ? forwardJumpNotice(targetStage, graph.filter((node) => stagesSkipped.includes(node.slug)), cameFrom)
-    : undefined;
-  const from = graph.find((node) => node.slug === cameFrom);
-  const session = direction === "backward" && from ? resolveWorkflowSelection(pd).sessionId : null;
-  if (session && from) addPendingPersonLines(pd, session, [backwardJumpNotice(targetStage, from)]);
+    : backNotice;
 
   console.log(
     JSON.stringify({
