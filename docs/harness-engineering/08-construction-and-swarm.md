@@ -66,8 +66,8 @@ Before presenting the command, write it to
 (Write/edit), never a shell `echo` or heredoc. Repo-derived command text must never
 be interpolated into a shell line, where substitutions could run before approval.
 Use `--command-file verification-command.txt` for `log decision`,
-`log answer`, and `state set-construction-verification-command`; use the invoking
-SessionStart session ID for both log calls via `--session "<session ID>"`. Copy the
+`log answer`, and `state set-construction-verification-command`; both log calls
+find their own session, so pass no `--session` and never look one up. Copy the
 complete canonical command exactly from the `command` field in the `decision`
 tool's JSON output into the verification-command question's code span; never
 abbreviate it. Choose a delimiter that preserves any command backticks. The human

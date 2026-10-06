@@ -1041,8 +1041,12 @@ describe("t341 verification command consent", () => {
       return /\.(md|ts)$/.test(entry.name) ? [rel] : [];
     });
     const asksForSession = /--checkpoint verification-command\b.*--session/;
-    const hits = ["core", "harness", "docs"].flatMap(files).filter((rel) =>
-      readFileSync(join(root, rel), "utf-8").split("\n").some((line) => asksForSession.test(line)));
+    // The guides say it in prose that wraps, so the old wording is matched across lines too.
+    const proseAsksForSession = /session ID\s+for\s+both\s+log\s+calls/;
+    const hits = ["core", "harness", "docs"].flatMap(files).filter((rel) => {
+      const text = readFileSync(join(root, rel), "utf-8");
+      return text.split("\n").some((line) => asksForSession.test(line)) || proseAsksForSession.test(text);
+    });
     expect(hits).toEqual([]);
   });
 
